@@ -18,7 +18,7 @@ describe('AccountDeskJournalCureComponent', () => {
           confirm_label: 'Append journal cure', required_token: '',
         },
       }),
-      recheckAccountClerk: vi.fn().mockResolvedValue({
+      accountServiceStatus: vi.fn().mockResolvedValue({
         account_id: 'DU1234567', generation: 4, checked_at_ms: 1_780_000_000_000,
       }),
     };
@@ -61,7 +61,7 @@ describe('AccountDeskJournalCureComponent', () => {
           confirm_label: 'Append journal cure', required_token: '',
         },
       }),
-      recheckAccountClerk: vi.fn().mockRejectedValue({
+      accountServiceStatus: vi.fn().mockRejectedValue({
         error: {
           detail: {
             reason_code: 'ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING',

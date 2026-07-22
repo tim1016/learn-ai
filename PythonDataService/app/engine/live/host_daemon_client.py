@@ -27,11 +27,10 @@ from typing import Literal
 import httpx
 from pydantic import ValidationError
 
-from app.engine.live.account_registry import AccountInstanceBinding
 from app.engine.live.daemon_auth import TOKEN_HEADER, read_daemon_token
 from app.engine.live.daemon_transport import DaemonResult
 from app.schemas.broker_session import GatewaySocketsSnapshot
-from app.schemas.live_runs import HostRunnerHealth, HostRunnerProcessStatus
+from app.schemas.live_runs import HostRunnerHealth
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +46,7 @@ _SOCKET_PROBE_TIMEOUT = httpx.Timeout(10.0)
 # call at its slot. A startability probe can afford to wait longer than a liveness
 # GET; keep it bounded so a genuinely wedged daemon still surfaces.
 _INSTANCE_PROBE_TIMEOUT = httpx.Timeout(10.0)
-# Starting a cohort member and ensuring its account Clerk can both wait behind
+# Starting a run and ensuring its account Clerk can both wait behind
 # the host daemon's broker reconciliation work. They are admission operations,
 # not low-latency liveness reads: keep a bounded deadline so a busy but healthy
 # daemon does not turn a safe launch into a false ``connect_timeout``.
@@ -229,22 +228,6 @@ async def stop_run(base_url: str, run_id: str, payload: dict) -> dict:
     return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/stop", payload)
 
 
-async def emergency_flatten_run(base_url: str, run_id: str, payload: dict) -> dict:
-    """POST /runs/{run_id}/emergency-flatten.
-
-    Same contract as :func:`start_run` but with a longer timeout — the
-    daemon round-trips to the broker synchronously. A read-timeout here
-    is far more likely than for the lighter mutations, and the
-    consequence (broker positions in an unknown post-mutation state) is
-    the highest-stakes ambiguous-outcome case 619-C5 surfaces.
-    """
-    return await _post_action(
-        f"{base_url.rstrip('/')}/runs/{run_id}/emergency-flatten",
-        payload,
-        timeout=_FLATTEN_TIMEOUT,
-    )
-
-
 async def emergency_flatten_account(base_url: str, account_id: str, payload: dict) -> dict:
     """POST an account-scoped emergency flatten with the broker timeout."""
 
@@ -283,52 +266,6 @@ async def release_account_clerk(base_url: str, account_id: str) -> dict:
         {},
         timeout=_CLERK_RELEASE_TIMEOUT,
     )
-
-
-async def apply_operator_adjustment(base_url: str, account_id: str, payload: dict) -> dict:
-    """Relay a cure to the host-local Account Clerk."""
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-adjustment",
-        payload,
-        timeout=_START_ADMISSION_TIMEOUT,
-    )
-
-
-async def submit_operator_recovery_flatten(base_url: str, account_id: str, payload: dict) -> dict:
-    """Relay a retired-namespace recovery flatten to the host-local Clerk."""
-
-    return await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-recovery-flatten",
-        payload,
-        timeout=_FLATTEN_TIMEOUT,
-    )
-
-
-async def retire_account_binding(
-    base_url: str,
-    account_id: str,
-    payload: dict,
-) -> AccountInstanceBinding:
-    """Ask the host lifecycle authority to retire one stale binding.
-
-    This is the authority boundary for the append-only registry receipt: a
-    successful host response must already be a valid binding, never a loose
-    JSON object that a downstream recovery flow has to interpret again.
-    """
-
-    response = await _post_action(
-        f"{base_url.rstrip('/')}/accounts/{account_id}/bindings/retire",
-        payload,
-        timeout=_START_ADMISSION_TIMEOUT,
-    )
-    try:
-        return AccountInstanceBinding.model_validate(response)
-    except ValidationError as exc:
-        raise HostDaemonError(
-            502,
-            "host daemon returned an invalid stale-binding retirement receipt",
-        ) from exc
 
 
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
@@ -376,11 +313,24 @@ async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIM
         )
 
     if result.response_status is not None and result.response_status >= 400:
-        raise HostDaemonError(
-            result.response_status,
+        detail = (
             _error_detail_of(response)
             if response is not None
-            else (result.detail or f"host daemon returned {result.response_status}"),
+            else (result.detail or f"host daemon returned {result.response_status}")
+        )
+        if (
+            result.response_status == 409
+            and isinstance(detail, dict)
+            and detail.get("reason_code") == "IDEMPOTENCY_OUTCOME_UNKNOWN"
+        ):
+            message = detail.get("message")
+            raise HostDaemonOutcomeUnknownError(
+                error_category="idempotency_outcome_unknown",
+                detail=message if isinstance(message, str) else None,
+            )
+        raise HostDaemonError(
+            result.response_status,
+            detail,
         )
 
     raise HostDaemonError(
@@ -438,34 +388,9 @@ async def fetch_instance_process(
 
 async def fetch_run_process(
     base_url: str, run_id: str
-) -> tuple[DaemonResult, HostRunnerProcessStatus | None]:
-    """GET a schema-validated host process proof for one immutable run."""
-
-    result, response = await _classify_http(
-        f"{base_url.rstrip('/')}/runs/{run_id}/process",
-        method="GET",
-    )
-    if response is None:
-        return result, None
-    try:
-        process = HostRunnerProcessStatus.model_validate_json(response.content)
-    except ValidationError as exc:
-        return (
-            DaemonResult.incompatible_contract(
-                status=response.status_code,
-                detail=str(exc),
-            ),
-            None,
-        )
-    except ValueError as exc:
-        return (
-            DaemonResult.malformed_body(
-                status=response.status_code,
-                detail=str(exc),
-            ),
-            None,
-        )
-    return DaemonResult.connected(status=response.status_code), process
+) -> tuple[DaemonResult, dict | None]:
+    """GET /runs/{id}/process for proof about one immutable run identity."""
+    return await _typed_get_json(f"{base_url.rstrip('/')}/runs/{run_id}/process")
 
 
 async def fetch_qc_audit_copies(base_url: str) -> tuple[DaemonResult, dict | None]:

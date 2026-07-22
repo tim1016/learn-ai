@@ -13,14 +13,14 @@ import type {
   LegacyStaleClaimCandidate,
   LegacyStaleClaimRetirementReceipt,
   OperatorRecoveryFlattenResponse,
-  StaleBindingRetirementCandidate,
-  StaleBindingRetirementReceipt,
 } from '../../../api/account-reconciliation.types';
+import type { AccountClerkRestoreReceipt, JournalRecoveryReceipt } from '../../../api/account-cockpit.types';
 import type { OperatorConfirmationCopy } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
-import { extractServerMessage, extractServerReasonCode } from '../operation-error';
+import { extractServerMessage } from '../operation-error';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
+import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 
 export type AccountDeskRecoveryCommand =
@@ -30,9 +30,10 @@ export type AccountDeskRecoveryCommand =
   | 'exposure_override'
   | 'journal_cure'
   | 'legacy_retire'
-  | 'stale_binding_retire'
   | 'recovery_flatten'
-  | 'emergency_flatten';
+  | 'emergency_flatten'
+  | 'restore_clerk'
+  | 'journal_recovery';
 
 export interface AccountDeskRecoveryConfirmation {
   readonly command: AccountDeskRecoveryCommand;
@@ -47,8 +48,9 @@ export interface AccountDeskRecoveryConfirmation {
   readonly reason: string;
   readonly journalCure: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest } | null;
   readonly legacyCandidate: LegacyStaleClaimCandidate | null;
-  readonly staleBindingCandidate: StaleBindingRetirementCandidate | null;
   readonly recoveryFlatten: AccountRecoveryFlattenCandidate | null;
+  readonly emergencyOperationId: string | null;
+  readonly restoreOperationId: string | null;
 }
 
 export type AccountDeskRecoverySuccess =
@@ -58,9 +60,10 @@ export type AccountDeskRecoverySuccess =
   | { readonly kind: 'exposure_override'; readonly receipt: AccountAcceptExposureOverrideResponse }
   | { readonly kind: 'journal_cure'; readonly receipt: JournalCureReceipt }
   | { readonly kind: 'legacy_retire'; readonly receipt: LegacyStaleClaimRetirementReceipt }
-  | { readonly kind: 'stale_binding_retire'; readonly receipt: StaleBindingRetirementReceipt }
   | { readonly kind: 'recovery_flatten'; readonly receipt: OperatorRecoveryFlattenResponse }
-  | { readonly kind: 'emergency_flatten'; readonly receipt: AccountEmergencyFlattenResponse };
+  | { readonly kind: 'emergency_flatten'; readonly receipt: AccountEmergencyFlattenResponse }
+  | { readonly kind: 'restore_clerk'; readonly receipt: AccountClerkRestoreReceipt }
+  | { readonly kind: 'journal_recovery'; readonly receipt: JournalRecoveryReceipt };
 
 /**
  * Executes only exact account-desk requests declared by backend projections.
@@ -72,31 +75,24 @@ export class AccountDeskRecoveryStore {
   private readonly broker = inject(BrokerService);
   private readonly surface = inject(AccountDeskSurfaceStore);
   private readonly events = inject(AccountDeskEventsStore);
+  private readonly directory = inject(AccountDeskDirectoryStore);
   private requestGeneration = 0;
   private readonly accountKey = signal<string | null>(null);
   private readonly confirmationState = signal<AccountDeskRecoveryConfirmation | null>(null);
   private readonly busyState = signal(false);
   private readonly errorMessageState = signal<string | null>(null);
-  private readonly errorReasonCodeState = signal<string | null>(null);
   private readonly successState = signal<AccountDeskRecoverySuccess | null>(null);
   private readonly legacyCandidatesState = signal<readonly LegacyStaleClaimCandidate[]>([]);
   private readonly legacyLoadingState = signal(false);
   private readonly legacyErrorMessageState = signal<string | null>(null);
-  private readonly staleBindingCandidatesState = signal<readonly StaleBindingRetirementCandidate[]>([]);
-  private readonly staleBindingLoadingState = signal(false);
-  private readonly staleBindingErrorMessageState = signal<string | null>(null);
 
   readonly confirmation = this.confirmationState.asReadonly();
   readonly busy = this.busyState.asReadonly();
   readonly errorMessage = this.errorMessageState.asReadonly();
-  readonly errorReasonCode = this.errorReasonCodeState.asReadonly();
   readonly success = this.successState.asReadonly();
   readonly legacyCandidates = this.legacyCandidatesState.asReadonly();
   readonly legacyLoading = this.legacyLoadingState.asReadonly();
   readonly legacyErrorMessage = this.legacyErrorMessageState.asReadonly();
-  readonly staleBindingCandidates = this.staleBindingCandidatesState.asReadonly();
-  readonly staleBindingLoading = this.staleBindingLoadingState.asReadonly();
-  readonly staleBindingErrorMessage = this.staleBindingErrorMessageState.asReadonly();
   readonly canConfirm = computed(() => {
     const confirmation = this.confirmationState();
     return confirmation !== null &&
@@ -112,16 +108,11 @@ export class AccountDeskRecoveryStore {
     this.confirmationState.set(null);
     this.busyState.set(false);
     this.errorMessageState.set(null);
-    this.errorReasonCodeState.set(null);
     this.successState.set(null);
     this.legacyCandidatesState.set([]);
     this.legacyLoadingState.set(false);
     this.legacyErrorMessageState.set(null);
-    this.staleBindingCandidatesState.set([]);
-    this.staleBindingLoadingState.set(false);
-    this.staleBindingErrorMessageState.set(null);
     void this.loadLegacyCandidates(accountId, generation);
-    void this.loadStaleBindingCandidates(accountId, generation);
   }
 
   requestDeclaredMove(event: OperatorBlockerMoveEvent): void {
@@ -148,6 +139,24 @@ export class AccountDeskRecoveryStore {
     this.openConfirmation(accountId, command, confirmation);
   }
 
+  requestCockpitMove(event: OperatorBlockerMoveEvent): void {
+    const accountId = this.accountKey();
+    const confirmation = event.move.confirmation;
+    const cockpit = this.directory.cockpit();
+    if (
+      this.busyState() ||
+      accountId === null ||
+      cockpit === null ||
+      (cockpit.mode !== 'CLERK_DOWN' && cockpit.mode !== 'JOURNAL_CORRUPT') ||
+      event.move.action.kind !== 'confirm_in_form' ||
+      (event.move.action.anchor !== 'account-clerk-restore-action' && event.move.action.anchor !== 'account-journal-recovery-action') ||
+      confirmation === null ||
+      confirmation === undefined ||
+      !cockpit.blockers.some((blocker) => blocker.condition.id === event.blocker.condition.id)
+    ) return;
+    this.openConfirmation(accountId, cockpit.mode === 'JOURNAL_CORRUPT' ? 'journal_recovery' : 'restore_clerk', confirmation);
+  }
+
   requestAutomationChange(policy: AccountReconciliationAutomationPolicy): void {
     const accountId = this.accountKey();
     if (this.busyState() || accountId === null || policy.account_id !== accountId) return;
@@ -165,11 +174,11 @@ export class AccountDeskRecoveryStore {
       reason: '',
       journalCure: null,
       legacyCandidate: null,
-      staleBindingCandidate: null,
       recoveryFlatten: null,
+      emergencyOperationId: null,
+      restoreOperationId: null,
     });
     this.errorMessageState.set(null);
-    this.errorReasonCodeState.set(null);
   }
 
   requestJournalCure(
@@ -217,32 +226,15 @@ export class AccountDeskRecoveryStore {
     this.openConfirmation(accountId, 'legacy_retire', candidate.confirmation, { legacyCandidate: candidate });
   }
 
-  requestStaleBindingRetirement(candidate: StaleBindingRetirementCandidate): void {
-    const accountId = this.accountKey();
-    if (
-      this.busyState() ||
-      accountId === null ||
-      !this.staleBindingCandidatesState().includes(candidate)
-    ) return;
-    this.openConfirmation(accountId, 'stale_binding_retire', candidate.confirmation, {
-      staleBindingCandidate: candidate,
-    });
-  }
-
   requestEmergencyFlatten(confirmation: OperatorConfirmationCopy): void {
     const accountId = this.accountKey();
-    if (this.busyState() || accountId === null || confirmation.required_token === '') return;
+    if (this.busyState() || accountId === null || confirmation.required_token !== 'FLATTEN') return;
     this.openConfirmation(accountId, 'emergency_flatten', confirmation);
   }
 
   refreshLegacyCandidates(): void {
     const accountId = this.accountKey();
     if (accountId !== null && !this.busyState()) void this.loadLegacyCandidates(accountId, this.requestGeneration);
-  }
-
-  refreshStaleBindingCandidates(): void {
-    const accountId = this.accountKey();
-    if (accountId !== null && !this.busyState()) void this.loadStaleBindingCandidates(accountId, this.requestGeneration);
   }
 
   setExposureOverrideReason(reason: string): void {
@@ -261,7 +253,6 @@ export class AccountDeskRecoveryStore {
     if (this.busyState()) return;
     this.confirmationState.set(null);
     this.errorMessageState.set(null);
-    this.errorReasonCodeState.set(null);
   }
 
   async confirm(): Promise<void> {
@@ -271,7 +262,6 @@ export class AccountDeskRecoveryStore {
     if (!this.canConfirm()) return;
     this.busyState.set(true);
     this.errorMessageState.set(null);
-    this.errorReasonCodeState.set(null);
     let success: AccountDeskRecoverySuccess;
     try {
       success = await this.execute(confirmation);
@@ -280,7 +270,6 @@ export class AccountDeskRecoveryStore {
         this.errorMessageState.set(
           recoveryErrorMessage(error, 'Account recovery was not accepted. Review the current proof and try again.'),
         );
-        this.errorReasonCodeState.set(extractServerReasonCode(error));
         this.busyState.set(false);
       }
       return;
@@ -292,13 +281,12 @@ export class AccountDeskRecoveryStore {
       await Promise.all([
         this.surface.load(confirmation.accountId),
         this.events.load(confirmation.accountId),
+        this.directory.loadServiceStatus(confirmation.accountId),
         this.loadLegacyCandidates(confirmation.accountId, generation),
-        this.loadStaleBindingCandidates(confirmation.accountId, generation),
       ]);
     } catch {
       if (!this.isCurrent(confirmation.accountId, generation)) return;
       this.errorMessageState.set('Account recovery was accepted, but fresh desk evidence is unavailable. Retry to refresh it.');
-      this.errorReasonCodeState.set(null);
     } finally {
       if (this.isCurrent(confirmation.accountId, generation)) this.busyState.set(false);
     }
@@ -311,7 +299,6 @@ export class AccountDeskRecoveryStore {
     details: {
       readonly journalCure?: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest };
       readonly legacyCandidate?: LegacyStaleClaimCandidate;
-      readonly staleBindingCandidate?: StaleBindingRetirementCandidate;
       readonly recoveryFlatten?: AccountRecoveryFlattenCandidate;
     } = {},
   ): void {
@@ -328,11 +315,11 @@ export class AccountDeskRecoveryStore {
       reason: '',
       journalCure: details.journalCure ?? null,
       legacyCandidate: details.legacyCandidate ?? null,
-      staleBindingCandidate: details.staleBindingCandidate ?? null,
       recoveryFlatten: details.recoveryFlatten ?? null,
+      emergencyOperationId: command === 'emergency_flatten' ? crypto.randomUUID() : null,
+      restoreOperationId: (command === 'restore_clerk' || command === 'journal_recovery') ? crypto.randomUUID() : null,
     });
     this.errorMessageState.set(null);
-    this.errorReasonCodeState.set(null);
   }
 
   private async execute(confirmation: AccountDeskRecoveryConfirmation): Promise<AccountDeskRecoverySuccess> {
@@ -379,18 +366,6 @@ export class AccountDeskRecoveryStore {
             requested_by: 'account-desk.operator',
           }),
         };
-      case 'stale_binding_retire':
-        if (confirmation.staleBindingCandidate === null) {
-          throw new Error('Stale binding retirement confirmation is incomplete.');
-        }
-        return {
-          kind: 'stale_binding_retire',
-          receipt: await this.broker.retireStaleBinding(confirmation.accountId, {
-            strategy_instance_id: confirmation.staleBindingCandidate.strategy_instance_id,
-            run_id: confirmation.staleBindingCandidate.run_id,
-            requested_by: 'account-desk.operator',
-          }),
-        };
       case 'recovery_flatten':
         if (confirmation.recoveryFlatten === null) throw new Error('Recovery flatten confirmation is incomplete.');
         return {
@@ -401,9 +376,40 @@ export class AccountDeskRecoveryStore {
           }),
         };
       case 'emergency_flatten':
+        if (confirmation.providedToken !== 'FLATTEN' || confirmation.emergencyOperationId === null) {
+          throw new Error('Emergency flatten confirmation is incomplete.');
+        }
         return {
           kind: 'emergency_flatten',
-          receipt: await this.broker.emergencyFlattenAccount(confirmation.accountId),
+          receipt: await this.broker.emergencyFlattenAccount(confirmation.accountId, {
+            account: confirmation.accountId,
+            confirmation_token: 'FLATTEN',
+            idempotency_key: confirmation.emergencyOperationId,
+          }),
+        };
+      case 'restore_clerk':
+        if (confirmation.providedToken !== 'RESTORE' || confirmation.restoreOperationId === null) {
+          throw new Error('Clerk restore confirmation is incomplete.');
+        }
+        return {
+          kind: 'restore_clerk',
+          receipt: await this.broker.restoreAccountClerk(confirmation.accountId, {
+            confirmation_token: 'RESTORE',
+            idempotency_key: confirmation.restoreOperationId,
+          }),
+        };
+      case 'journal_recovery':
+        if (
+          confirmation.restoreOperationId === null ||
+          (confirmation.providedToken !== 'QUARANTINE' && confirmation.providedToken !== 'REBASELINE')
+        ) throw new Error('Journal recovery confirmation is incomplete.');
+        return {
+          kind: 'journal_recovery',
+          receipt: await this.broker.recoverAccountJournal(
+            confirmation.accountId,
+            confirmation.providedToken === 'QUARANTINE' ? 'quarantine' : 'rebaseline',
+            { confirmation_token: confirmation.providedToken, idempotency_key: confirmation.restoreOperationId },
+          ),
         };
     }
   }
@@ -425,26 +431,6 @@ export class AccountDeskRecoveryStore {
       }
     } finally {
       if (this.isCurrent(accountId, generation)) this.legacyLoadingState.set(false);
-    }
-  }
-
-  private async loadStaleBindingCandidates(accountId: string, generation: number): Promise<void> {
-    if (!this.isCurrent(accountId, generation)) return;
-    this.staleBindingLoadingState.set(true);
-    this.staleBindingErrorMessageState.set(null);
-    try {
-      const response = await this.broker.staleBindingRetirementCandidates(accountId);
-      if (!this.isCurrent(accountId, generation)) return;
-      this.staleBindingCandidatesState.set(response.account_id === accountId ? response.candidates : []);
-    } catch (error) {
-      if (this.isCurrent(accountId, generation)) {
-        this.staleBindingCandidatesState.set([]);
-        this.staleBindingErrorMessageState.set(
-          recoveryErrorMessage(error, 'Stale binding evidence is unavailable. Review account proof and retry.'),
-        );
-      }
-    } finally {
-      if (this.isCurrent(accountId, generation)) this.staleBindingLoadingState.set(false);
     }
   }
 

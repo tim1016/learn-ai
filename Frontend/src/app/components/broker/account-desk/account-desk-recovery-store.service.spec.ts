@@ -8,12 +8,13 @@ import type {
   AccountTriageResponse,
   JournalCurePreview,
   LegacyStaleClaimCandidate,
-  StaleBindingRetirementCandidate,
 } from '../../../api/account-reconciliation.types';
+import type { AccountCockpitResponse } from '../../../api/account-cockpit.types';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { BrokerService } from '../../../services/broker.service';
 import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
+import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 
@@ -27,21 +28,23 @@ describe('AccountDeskRecoveryStore', () => {
     applyJournalCure: vi.fn(),
     legacyStaleClaimCandidates: vi.fn(),
     retireLegacyStaleClaim: vi.fn(),
-    staleBindingRetirementCandidates: vi.fn(),
-    retireStaleBinding: vi.fn(),
     submitOperatorRecoveryFlatten: vi.fn(),
     emergencyFlattenAccount: vi.fn(),
+    restoreAccountClerk: vi.fn(),
+    recoverAccountJournal: vi.fn(),
   };
   const surface = { load: vi.fn(), triage: signal<AccountTriageResponse | null>(null) };
   const events = { load: vi.fn() };
+  const directory = { cockpit: signal<AccountCockpitResponse | null>(null), loadServiceStatus: vi.fn() };
 
   beforeEach(() => {
     Object.values(broker).forEach((method) => method.mockReset());
     broker.legacyStaleClaimCandidates.mockResolvedValue({ account_id: 'DU1234567', candidates: [] });
-    broker.staleBindingRetirementCandidates.mockResolvedValue({ account_id: 'DU1234567', candidates: [] });
     surface.load.mockReset().mockResolvedValue(undefined);
     surface.triage = signal(null);
     events.load.mockReset().mockResolvedValue(undefined);
+    directory.cockpit = signal(null);
+    directory.loadServiceStatus.mockReset().mockResolvedValue(undefined);
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
@@ -49,6 +52,7 @@ describe('AccountDeskRecoveryStore', () => {
         { provide: BrokerService, useValue: broker },
         { provide: AccountDeskSurfaceStore, useValue: surface },
         { provide: AccountDeskEventsStore, useValue: events },
+        { provide: AccountDeskDirectoryStore, useValue: directory },
       ],
     });
   });
@@ -178,6 +182,61 @@ describe('AccountDeskRecoveryStore', () => {
     expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
   });
 
+  it('restores only the backend-declared Clerk card with its typed token, durable receipt, and re-observation', async () => {
+    const cockpit = restoreCockpit();
+    directory.cockpit.set(cockpit);
+    broker.restoreAccountClerk.mockResolvedValue({
+      schema_version: 1, receipt_id: 'account-clerk-restore:opaque/1', account_id: 'DU1234567',
+      clerk_generation: 3, recorded_at_ms: 1_780_000_000_000,
+    });
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    const [blocker] = cockpit.blockers;
+    if (blocker.primary_move === null) throw new Error('Expected the backend restore move.');
+
+    store.requestCockpitMove({ blocker, move: blocker.primary_move });
+    expect(store.confirmation()?.command).toBe('restore_clerk');
+    await store.confirm();
+    expect(broker.restoreAccountClerk).not.toHaveBeenCalled();
+
+    store.setConfirmationToken('RESTORE');
+    await store.confirm();
+
+    expect(broker.restoreAccountClerk).toHaveBeenCalledWith('DU1234567', {
+      confirmation_token: 'RESTORE',
+      idempotency_key: expect.any(String),
+    });
+    expect(store.success()?.kind).toBe('restore_clerk');
+    expect(directory.loadServiceStatus).toHaveBeenCalledWith('DU1234567');
+  });
+
+  it('executes the ordered journal ceremony only from its backend-declared card and token', async () => {
+    const cockpit = journalRecoveryCockpit();
+    directory.cockpit.set(cockpit);
+    broker.recoverAccountJournal.mockResolvedValue({
+      receipt_id: 'journal-recovery-quarantine:opaque/1', account_id: 'DU1234567', phase: 'REBASELINE_REQUIRED',
+      recorded_at_ms: 1_780_000_000_000, quarantined_journal_name: 'clerk_journal.jsonl.corrupt-opaque',
+      broker_evidence_positions: [],
+    });
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    const [blocker] = cockpit.blockers;
+    if (blocker.primary_move === null) throw new Error('Expected the backend journal recovery move.');
+
+    store.requestCockpitMove({ blocker, move: blocker.primary_move });
+    expect(store.confirmation()?.command).toBe('journal_recovery');
+    await store.confirm();
+    expect(broker.recoverAccountJournal).not.toHaveBeenCalled();
+
+    store.setConfirmationToken('QUARANTINE');
+    await store.confirm();
+
+    expect(broker.recoverAccountJournal).toHaveBeenCalledWith('DU1234567', 'quarantine', {
+      confirmation_token: 'QUARANTINE', idempotency_key: expect.any(String),
+    });
+    expect(store.success()?.kind).toBe('journal_recovery');
+  });
+
   it('confirms the exact fresh journal preview, preserves its receipt, and refreshes shared proof', async () => {
     const store = TestBed.inject(AccountDeskRecoveryStore);
     const preview = journalPreview();
@@ -225,23 +284,6 @@ describe('AccountDeskRecoveryStore', () => {
     expect(events.load).not.toHaveBeenCalled();
   });
 
-  it('keeps a Clerk cure failure code beside the actionable confirmation so retry reuses its idempotency key', async () => {
-    const store = TestBed.inject(AccountDeskRecoveryStore);
-    broker.applyJournalCure.mockRejectedValue({
-      error: { detail: { reason_code: 'ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING', message: 'Host Clerk is unavailable.' } },
-    });
-    store.load('DU1234567');
-    store.requestJournalCure(journalPreview(), -2, 'Operator reviewed the fresh claim.', 'receipt:opaque/1');
-
-    await store.confirm();
-    const firstRequest = broker.applyJournalCure.mock.calls[0]?.[1];
-    await store.confirm();
-
-    expect(store.errorReasonCode()).toBe('ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING');
-    expect(store.confirmation()?.command).toBe('journal_cure');
-    expect(broker.applyJournalCure.mock.calls[1]?.[1].idempotency_key).toBe(firstRequest.idempotency_key);
-  });
-
   it('requires a currently returned legacy candidate and allows cancellation without a mutation', async () => {
     const candidate = legacyCandidate();
     broker.legacyStaleClaimCandidates.mockResolvedValue({
@@ -256,32 +298,6 @@ describe('AccountDeskRecoveryStore', () => {
     store.cancelConfirmation();
 
     expect(broker.retireLegacyStaleClaim).not.toHaveBeenCalled();
-  });
-
-  it('submits only a currently returned stale binding candidate and refreshes its proof after retirement', async () => {
-    const candidate = staleBindingCandidate();
-    broker.staleBindingRetirementCandidates.mockResolvedValue({
-      account_id: 'DU1234567', generated_at_ms: 1_780_000_000_000, candidates: [candidate],
-    });
-    broker.retireStaleBinding.mockResolvedValue({
-      schema_version: 1, receipt_id: 'stale-binding:1', account_id: 'DU1234567',
-      strategy_instance_id: candidate.strategy_instance_id, run_id: candidate.run_id,
-      bot_order_namespace: candidate.bot_order_namespace, requested_by: 'account-desk.operator',
-      retired_at_ms: 1_780_000_000_000, source: 'operator.stale_binding_retirement',
-    });
-    const store = TestBed.inject(AccountDeskRecoveryStore);
-    store.load('DU1234567');
-    await Promise.resolve();
-
-    store.requestStaleBindingRetirement(candidate);
-    await store.confirm();
-
-    expect(broker.retireStaleBinding).toHaveBeenCalledWith('DU1234567', {
-      strategy_instance_id: candidate.strategy_instance_id,
-      run_id: candidate.run_id,
-      requested_by: 'account-desk.operator',
-    });
-    expect(store.success()?.kind).toBe('stale_binding_retire');
   });
 
   it('submits recovery flatten only when its backend action target matches a current exact candidate', async () => {
@@ -332,7 +348,11 @@ describe('AccountDeskRecoveryStore', () => {
     store.setConfirmationToken('FLATTEN');
     await store.confirm();
 
-    expect(broker.emergencyFlattenAccount).toHaveBeenCalledWith('DU1234567');
+    expect(broker.emergencyFlattenAccount).toHaveBeenCalledWith('DU1234567', {
+      account: 'DU1234567',
+      confirmation_token: 'FLATTEN',
+      idempotency_key: expect.any(String),
+    });
     expect(store.success()?.kind).toBe('emergency_flatten');
   });
 });
@@ -350,6 +370,86 @@ function move(anchor: string, target: string | null = null, requiredToken = ''):
         title: 'Backend authored title', body: 'Backend authored body', consequence: 'Backend authored consequence', confirm_label: 'Confirm', required_token: requiredToken,
       },
     },
+  };
+}
+
+function restoreCockpit(): AccountCockpitResponse {
+  const confirmation = {
+    title: 'Restore Account Clerk', body: 'Backend preview.', consequence: 'Backend consequence.',
+    confirm_label: 'Restore Clerk', required_token: 'RESTORE',
+  };
+  return {
+    schema_version: 1,
+    account_id: 'DU1234567',
+    generated_at_ms: 1_780_000_000_000,
+    mode: 'CLERK_DOWN',
+    clerk: {
+      schema_version: 3, account_id: 'DU1234567', attachment: 'UNATTACHED', phase: null, generation: null,
+      generation_recorded_at_ms: null, source: null,
+      binding: {
+        state: 'UNATTACHED', generation: null, lease_generation: null, pending_retirement_proposals: 0,
+        ledger_read_authority: 'legacy_registry', ledger_parity: 'clean', ledger_parity_issue_count: 0,
+      },
+      gate_authority: {
+        requested_authority: 'account_truth', effective_authority: 'account_truth', promotion_state: 'SAFE_DEFAULT',
+        reason_code: 'ACCOUNT_GATE_SAFE_DEFAULT', disposition: null, action_authority: 'account_truth',
+        action_gate: {
+          gate_id: 'account.account_truth', status: 'block', source: 'test', operator_reason: 'ACCOUNT_TRUTH_NOT_AVAILABLE',
+          operator_next_step: 'Refresh Account Truth.', evidence_at_ms: 1_780_000_000_000,
+        }, observed_session_dates: [], lease_weaker_comparison_count: 0, restart_smoke_recorded_at_ms: null,
+      },
+      session_policy: {
+        allow_outside_live_session: false,
+        gate_result: {
+          gate_id: 'account.live_session', status: 'block', source: 'test', operator_reason: 'OUTSIDE_LIVE_TRADABLE_SESSION',
+          operator_next_step: 'Wait for a live session.', evidence_at_ms: 1_780_000_000_000,
+        },
+      },
+      lease: null, journal: { last_seq: null, last_write_ms: null }, operating_state: 'ATTENTION',
+      headline: 'Account Clerk is unavailable', detail: 'Backend-authored posture.',
+    },
+    daemon: {
+      availability: 'AVAILABLE', reason_code: 'DAEMON_CONNECTED', detail: 'The host daemon is reachable.',
+      observed_at_ms: 1_780_000_000_000,
+    },
+    blockers: [{
+      condition: { id: 'ACCOUNT_CLERK_UNAVAILABLE', severity: 'blocking', scope: 'account', evidence: {} },
+      host: 'account_desk', anchor: { kind: 'surface', subject_key: null }, audience: 'both',
+      disposition: 'fix_here', headline: 'Account Clerk is unavailable', detail: 'Backend-authored guidance.',
+      primary_move: {
+        label: 'Restore Clerk', action: { kind: 'confirm_in_form', anchor: 'account-clerk-restore-action' },
+        target: null, confirmation,
+      },
+      secondary_moves: [], applies_to: 'both',
+    }],
+  };
+}
+
+function journalRecoveryCockpit(): AccountCockpitResponse {
+  const clerkDown = restoreCockpit();
+  return {
+    ...clerkDown,
+    mode: 'JOURNAL_CORRUPT',
+    clerk: {
+      ...clerkDown.clerk,
+      attachment: 'ATTACHED',
+      journal: {
+        last_seq: null, last_write_ms: null, integrity: 'corrupt',
+        corruption_detail: 'invalid row at line 1', recovery_phase: 'QUARANTINE_REQUIRED',
+      },
+    },
+    blockers: [{
+      condition: { id: 'ACCOUNT_CLERK_JOURNAL_CORRUPT', severity: 'blocking', scope: 'account', evidence: {} },
+      host: 'account_desk', anchor: { kind: 'surface', subject_key: null }, audience: 'operator', disposition: 'fix_here',
+      headline: 'Account Clerk journal is corrupt — broker writes are blocked', detail: 'Backend-authored guidance.', applies_to: 'both', secondary_moves: [],
+      primary_move: {
+        label: 'Begin journal recovery ceremony', action: { kind: 'confirm_in_form', anchor: 'account-journal-recovery-action' }, target: null,
+        confirmation: {
+          title: 'Quarantine corrupt Clerk journal', body: 'Backend preview.', consequence: 'Backend consequence.',
+          confirm_label: 'Quarantine journal', required_token: 'QUARANTINE',
+        },
+      },
+    }],
   };
 }
 
@@ -372,19 +472,6 @@ function legacyCandidate(): LegacyStaleClaimCandidate {
     confirmation: {
       title: 'Retire legacy stale claim', body: 'Backend candidate body.', consequence: 'Backend consequence.',
       confirm_label: 'Retire stale claim', required_token: '',
-    },
-  };
-}
-
-function staleBindingCandidate(): StaleBindingRetirementCandidate {
-  return {
-    strategy_instance_id: 'audit-dep-only-0717', run_id: 'run-audit-dep-only-0717',
-    bot_order_namespace: 'learn-ai/audit-dep-only-0717/v1', lifecycle_state: 'DEPLOYED',
-    source: 'deploy.strategy', proof_summary: 'STALE_BINDING_BROKER_FLAT_AND_PROCESS_EXITED',
-    proved_at_ms: 1_780_000_000_000,
-    confirmation: {
-      title: 'Retire stale deployment binding', body: 'Backend candidate body.', consequence: 'Backend consequence.',
-      confirm_label: 'Retire stale binding', required_token: '',
     },
   };
 }

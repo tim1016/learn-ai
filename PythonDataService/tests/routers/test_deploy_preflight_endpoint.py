@@ -17,7 +17,6 @@ def patch_signals(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
     def install(**overrides: object) -> None:
         base = {
             "daemon_reachable": True,
-            "daemon_code_current": True,
             "broker_connection_state": "connected",
             "account_frozen": False,
             "account_proven": True,

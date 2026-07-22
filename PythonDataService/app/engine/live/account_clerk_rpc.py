@@ -19,9 +19,10 @@ from app.engine.live.account_clerk import (
     AccountClerkBrokerAckReceipt,
     AccountClerkCancelNamespaceReceipt,
     AccountClerkCancelNamespaceUncertainError,
+    AccountClerkEmergencyFlattenIncompleteError,
+    AccountClerkEmergencyFlattenReceipt,
     AccountClerkGenerationFencedError,
     AccountClerkIntentRejected,
-    AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
     account_clerk_socket_path,
     read_account_clerk_journal,
@@ -31,6 +32,7 @@ from app.engine.live.account_clerk_cursor import (
     AccountClerkEventCursorRepo,
 )
 from app.engine.live.account_clerk_journal import normalize_broker_event
+from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
 from app.engine.live.account_clerk_rpc_protocol import (
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
@@ -68,10 +70,13 @@ from app.engine.live.account_clerk_rpc_protocol import (
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
+    AccountInstanceBinding,
+    BindingRetirementFoldResult,
     index_account_instance_bindings,
     read_account_instance_registry,
 )
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
+from app.services.bot_deletion import BotDeletionCorruptError, bot_retirement_is_pending
 from app.services.journal_cures import JournalCureError, JournalCureHandler
 
 logger = logging.getLogger(__name__)
@@ -168,22 +173,27 @@ class AccountClerkRpcClient:
                 request_identity=request_identity({"intent": intent.model_dump(mode="json")}),
             ) from exc
 
-    async def register_emergency_flatten(
+    async def authorize_emergency_flatten(
         self,
-        intent: AccountOwnerSubmitIntent,
-    ) -> AccountClerkRecordedReceipt:
-        """Register a panic-path liquidation before its separate broker write."""
+        *,
+        operation_id: str,
+        reconciliation_evidence_version: str,
+    ) -> AccountClerkEmergencyAuthorization:
+        """Ask the Clerk to issue a short-lived, exact-confirmation receipt."""
 
         request = {
-            "operation": "register_emergency_flatten",
-            "intent": intent.model_dump(mode="json"),
+            "operation": "authorize_emergency_flatten",
+            "operation_id": operation_id,
+            "confirmation_token": "FLATTEN",
+            "reconciliation_evidence_version": reconciliation_evidence_version,
+            "no_exact_recovery_candidate": True,
         }
         payload = await self._request(request)
         try:
-            return AccountClerkRecordedReceipt.model_validate(payload["recorded"])
+            return AccountClerkEmergencyAuthorization.model_validate(payload["authorization"])
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
-                operation="register_emergency_flatten",
+                operation="authorize_emergency_flatten",
                 request_identity=request_identity(request),
             ) from exc
 
@@ -283,6 +293,32 @@ class AccountClerkRpcClient:
             raise AccountClerkRpcMalformedResponseError(
                 operation="operator_adjustment",
                 request_identity=request_identity(rpc_request),
+            ) from exc
+
+    async def fold_binding_retirements(self) -> BindingRetirementFoldResult:
+        """Ask an already-running Clerk to fold queued daemon liveness facts."""
+
+        request = {"operation": "fold_binding_retirements"}
+        payload = await self._request(request)
+        try:
+            result = payload["binding_retirement_fold"]
+            if not isinstance(result, dict):
+                raise TypeError("binding retirement fold payload must be an object")
+            values = {
+                field: result[field]
+                for field in (
+                    "proposals_seen",
+                    "retirements_applied",
+                    "superseded_proposals",
+                )
+            }
+            if any(type(value) is not int or value < 0 for value in values.values()):
+                raise TypeError("binding retirement fold counters must be non-negative integers")
+            return BindingRetirementFoldResult(**values)
+        except (KeyError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="fold_binding_retirements",
+                request_identity=request_identity(request),
             ) from exc
 
     async def drain_events(
@@ -450,6 +486,94 @@ class AccountClerkRpcClient:
         return generation.generation
 
 
+class AccountClerkHostRpcClient(AccountClerkRpcClient):
+    """Host-only Clerk client carrying the daemon's private binding capability."""
+
+    def __init__(self, *, artifacts_root: Path, account_id: str, host_capability: str) -> None:
+        super().__init__(artifacts_root=artifacts_root, account_id=account_id)
+        if not host_capability:
+            raise ValueError("host_capability must not be empty")
+        self._host_capability = host_capability
+
+    async def record_binding_decision(
+        self,
+        binding: AccountInstanceBinding,
+    ) -> AccountInstanceBinding:
+        """Request a Clerk binding transition with the host-only capability."""
+
+        request = {
+            "operation": "record_binding_decision",
+            "binding": binding.model_dump(mode="json"),
+            "host_capability": self._host_capability,
+        }
+        payload = await self._request(request)
+        try:
+            return AccountInstanceBinding.model_validate(payload["binding_decision"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="record_binding_decision",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def emergency_flatten_account(
+        self,
+        *,
+        operation_id: str,
+        authorization_id: str,
+    ) -> AccountClerkEmergencyFlattenReceipt:
+        """Ask the current Clerk—not a daemon subprocess—to flatten its account."""
+
+        request = {
+            "operation": "emergency_flatten_account",
+            "operation_id": operation_id,
+            "authorization_id": authorization_id,
+            "host_capability": self._host_capability,
+        }
+        payload = await self._request(request)
+        try:
+            return AccountClerkEmergencyFlattenReceipt.model_validate(payload["emergency_flatten"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="emergency_flatten_account",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def prepare_emergency_flatten(self, *, operation_id: str, authorization_id: str) -> None:
+        """Close Clerk intake before this daemon pauses bot processes."""
+
+        request = {
+            "operation": "prepare_emergency_flatten",
+            "operation_id": operation_id,
+            "authorization_id": authorization_id,
+            "host_capability": self._host_capability,
+        }
+        await self._request(request)
+
+    async def mark_emergency_bots_paused(self, *, operation_id: str, authorization_id: str) -> None:
+        """Persist host-proven termination of every on-duty account bot."""
+
+        await self._request(
+            {
+                "operation": "mark_emergency_bots_paused",
+                "operation_id": operation_id,
+                "authorization_id": authorization_id,
+                "host_capability": self._host_capability,
+            }
+        )
+
+    async def mark_emergency_requires_reconciliation(self, *, operation_id: str, reason: str) -> None:
+        """Persist a host pause failure without attempting any broker action."""
+
+        await self._request(
+            {
+                "operation": "mark_emergency_requires_reconciliation",
+                "operation_id": operation_id,
+                "reason": reason,
+                "host_capability": self._host_capability,
+            }
+        )
+
+
 class AccountClerkRpcServer:
     """Clerk-process RPC server; the broker stays exclusively behind this seam."""
 
@@ -483,10 +607,17 @@ class AccountClerkRpcServer:
             self._socket_path.unlink()
         # Restore durable attribution before the Clerk starts broker streaming.
         await self._clerk.rebuild_attribution()
+        # Daemon liveness is evidence, not a binding-state authority. Fold its
+        # ordered proposals before publishing this Clerk socket to any bot.
+        await self._clerk.fold_binding_retirement_proposals()
         self._callback_worker = asyncio.create_task(
             self._persist_broker_callbacks(),
             name="account-clerk-broker-callback-writer",
         )
+        # Reconciliation happens while the callback durability worker is live
+        # but before the socket is published. No bot can race a recovery
+        # classification into a broker write.
+        await self._clerk.recover_account_state()
         self._server = await asyncio.start_unix_server(self._handle, path=str(self._socket_path))
         self._socket_path.chmod(0o600)
 
@@ -537,6 +668,17 @@ class AccountClerkRpcServer:
             response = AccountClerkRpcErrorEnvelope(
                 reason_code="ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN"
             )
+        except AccountClerkEmergencyFlattenIncompleteError as exc:
+            response = rejected_envelope(str(exc))
+        except RuntimeError as exc:
+            # Clerk policy rejections are intentionally stable, public reason
+            # codes. Unexpected runtime failures continue to the internal
+            # error path below rather than exposing implementation details.
+            reason = str(exc)
+            if reason.startswith("CLERK_"):
+                response = rejected_envelope(reason)
+            else:
+                response = AccountClerkRpcErrorEnvelope(reason_code="ACCOUNT_CLERK_INTERNAL_ERROR")
         except (json.JSONDecodeError, ValidationError):
             response = rejected_envelope("INVALID_REQUEST")
         except asyncio.CancelledError:
@@ -544,6 +686,7 @@ class AccountClerkRpcServer:
         except Exception as exc:
             logger.error(
                 "Account Clerk RPC server failure",
+                exc_info=True,
                 extra={
                     "rpc_operation": operation,
                     "account_id": self._clerk._account_id,
@@ -587,11 +730,47 @@ class AccountClerkRpcServer:
                     "broker_acked": broker_acked.model_dump(mode="json"),
                 }
             )
-        if operation == "register_emergency_flatten":
-            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
-            recorded = await self._clerk.register_emergency_flatten_intent(intent)
+        if operation == "emergency_flatten_account":
+            receipt = await self._clerk.emergency_flatten_account(
+                operation_id=required_string(request, "operation_id"),
+                authorization_id=required_string(request, "authorization_id"),
+                host_capability=required_string(request, "host_capability"),
+            )
             return AccountClerkRpcSuccessEnvelope(
-                payload={"recorded": recorded.model_dump(mode="json")}
+                payload={"emergency_flatten": receipt.model_dump(mode="json")}
+            )
+        if operation == "prepare_emergency_flatten":
+            await self._clerk.prepare_emergency_flatten(
+                operation_id=required_string(request, "operation_id"),
+                authorization_id=required_string(request, "authorization_id"),
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(payload={})
+        if operation == "mark_emergency_bots_paused":
+            await self._clerk.mark_emergency_bots_paused(
+                operation_id=required_string(request, "operation_id"),
+                authorization_id=required_string(request, "authorization_id"),
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(payload={})
+        if operation == "mark_emergency_requires_reconciliation":
+            await self._clerk.mark_emergency_requires_reconciliation(
+                operation_id=required_string(request, "operation_id"),
+                reason=required_string(request, "reason"),
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(payload={})
+        if operation == "authorize_emergency_flatten":
+            if request.get("confirmation_token") != "FLATTEN" or request.get("no_exact_recovery_candidate") is not True:
+                raise _AccountClerkRpcRequestRejected("INVALID_EMERGENCY_AUTHORIZATION")
+            authorization = await self._clerk.authorize_emergency_flatten(
+                operation_id=required_string(request, "operation_id"),
+                confirmation_token="FLATTEN",
+                reconciliation_evidence_version=required_string(request, "reconciliation_evidence_version"),
+                no_exact_recovery_candidate=True,
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"authorization": authorization.model_dump(mode="json")}
             )
         if operation == "recovery_flatten":
             intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
@@ -640,6 +819,26 @@ class AccountClerkRpcServer:
             return AccountClerkRpcSuccessEnvelope(
                 payload={"operator_adjustment": receipt.model_dump(mode="json")}
             )
+        if operation == "record_binding_decision":
+            binding = AccountInstanceBinding.model_validate(request_object(request, "binding"))
+            recorded = await self._clerk.record_binding_decision(
+                binding,
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"binding_decision": recorded.model_dump(mode="json")}
+            )
+        if operation == "fold_binding_retirements":
+            folded = await self._clerk.fold_binding_retirement_proposals()
+            return AccountClerkRpcSuccessEnvelope(
+                payload={
+                    "binding_retirement_fold": {
+                        "proposals_seen": folded.proposals_seen,
+                        "retirements_applied": folded.retirements_applied,
+                        "superseded_proposals": folded.superseded_proposals,
+                    }
+                }
+            )
         consumer = self._validated_event_consumer(request)
         after_seq = required_nonnegative_int(request, "after_seq")
         events = await asyncio.to_thread(self._journal_events_after, consumer, after_seq)
@@ -663,6 +862,14 @@ class AccountClerkRpcServer:
         )
         if consumer.account_id != self._clerk._account_id:
             raise _AccountClerkRpcRequestRejected("EVENT_CONSUMER_ACCOUNT_MISMATCH")
+        try:
+            if bot_retirement_is_pending(
+                self._clerk._artifacts_root,
+                consumer.strategy_instance_id,
+            ):
+                raise _AccountClerkRpcRequestRejected("RETIREMENT_PENDING")
+        except (BotDeletionCorruptError, ValueError) as exc:
+            raise _AccountClerkRpcRequestRejected("RETIREMENT_TRANSITION_UNREADABLE") from exc
         binding_index = index_account_instance_bindings(
             read_account_instance_registry(self._clerk._artifacts_root, self._clerk._account_id),
             account_id=self._clerk._account_id,
@@ -780,6 +987,7 @@ __all__ = [
     "AccountClerkDeliveredEvent",
     "AccountClerkEventConsumerIdentity",
     "AccountClerkEventCursorRepo",
+    "AccountClerkHostRpcClient",
     "AccountClerkRpcClient",
     "AccountClerkRpcError",
     "AccountClerkRpcErrorEnvelope",

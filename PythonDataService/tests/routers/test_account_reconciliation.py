@@ -1,8 +1,11 @@
 """Router tests for account reconciliation read endpoints."""
 
+
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,16 +25,11 @@ from app.broker.ibkr.models import (
 from app.engine.live.account_artifacts import (
     AccountClerkLease,
     AccountFreezeEvidence,
-    CohortBatchLaunchMemberOutcome,
-    CohortBatchLaunchOutcomesReceipt,
-    CohortBatchLaunchReceipt,
     account_artifacts_root,
     advance_account_clerk_generation,
     append_account_event,
     read_account_events,
     read_account_freeze,
-    record_cohort_batch_launch_outcomes,
-    record_cohort_batch_launch_receipt,
     write_account_clerk_lease,
     write_account_freeze,
 )
@@ -40,7 +38,9 @@ from app.engine.live.account_clerk_journal import (
     AccountClerkJournal,
     AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
+    account_clerk_journal_path,
 )
+from app.engine.live.account_clerk_rpc import AccountClerkRpcRejectedError, AccountClerkRpcRequestIdentity
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -49,20 +49,22 @@ from app.engine.live.account_registry import (
     write_account_instance_binding,
 )
 from app.engine.live.daemon_transport import DaemonResult
+from app.engine.live.journal_recovery_state import journal_recovery_state_path
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
-from app.routers import account_reconciliation, cohort_batch_launch
-from app.schemas.journal_cures import JournalCureReceipt
-from app.schemas.live_runs import HostRunnerProcessStatus
-from app.services import cohort_batch_launch as cohort_batch_launch_service
+from app.routers import account_reconciliation
+from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
+from app.schemas.live_runs import HostRunnerProcessState, HostRunnerProcessStatus
 from app.services.account_directory import AccountDirectoryService, CurrentBrokerAccount
 from app.services.account_event_journal import AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
-from app.services.cohort_batch_launch import CohortBatchLaunchService
-from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
+from app.services.journal_recovery import JournalRecoveryService
 from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetirementService
-from app.services.stale_binding_retirement import StaleBindingRetirementError
 from app.utils.timestamps import now_ms_utc
+
+
+async def _async_value(value: object) -> object:
+    return value
 
 
 def _health() -> IbkrConnectionHealth:
@@ -163,17 +165,21 @@ def _seed_legacy_claim(root: Path, *, binding_state: str = "RETIRED") -> None:
 
 
 async def _dead_run_process(
-    _base_url: str,
-    _run_id: str,
+    _base_url: str, _run_id: str
 ) -> tuple[DaemonResult, HostRunnerProcessStatus]:
-    return DaemonResult.connected(), HostRunnerProcessStatus(state="exited", run_id=_run_id)
+    return DaemonResult.connected(), HostRunnerProcessStatus(
+        state=HostRunnerProcessState.exited,
+        run_id=_run_id,
+    )
 
 
 async def _live_run_process(
-    _base_url: str,
-    _run_id: str,
+    _base_url: str, _run_id: str
 ) -> tuple[DaemonResult, HostRunnerProcessStatus]:
-    return DaemonResult.connected(), HostRunnerProcessStatus(state="running", run_id=_run_id)
+    return DaemonResult.connected(), HostRunnerProcessStatus(
+        state=HostRunnerProcessState.running,
+        run_id=_run_id,
+    )
 
 
 async def test_latest_reconciliation_returns_404_when_missing(tmp_path: Path) -> None:
@@ -190,6 +196,81 @@ async def test_latest_reconciliation_returns_404_when_missing(tmp_path: Path) ->
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
+
+
+async def test_journal_recovery_routes_require_each_typed_ceremony_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The browser can only invoke the designated quarantine/rebaseline ceremony."""
+
+    from app.main import app
+
+    journal = account_clerk_journal_path(tmp_path, "DU1234567")
+    journal.parent.mkdir(parents=True)
+    journal.write_text("not-json\n", encoding="utf-8")
+    service = JournalRecoveryService(artifacts_root=tmp_path, now_ms=lambda: 1_780_000_000_000)
+    snapshot_calls: list[bool] = []
+
+    async def fresh_snapshot(_client: object, *, allow_cache_fallback: bool) -> IbkrPositionsSnapshot:
+        snapshot_calls.append(allow_cache_fallback)
+        return _positions_snapshot()
+
+    monkeypatch.setattr(account_reconciliation.ibkr_account, "fetch_positions", fresh_snapshot)
+    app.dependency_overrides[account_reconciliation.get_journal_recovery_service] = lambda: service
+    app.dependency_overrides[account_reconciliation.require_connected_client] = lambda: object()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            rejected_quarantine = await client.post(
+                "/api/accounts/DU1234567/journal-recovery/quarantine",
+                json={"confirmation_token": "REBASELINE", "idempotency_key": "quarantine-1"},
+            )
+            quarantined = await client.post(
+                "/api/accounts/DU1234567/journal-recovery/quarantine",
+                json={"confirmation_token": "QUARANTINE", "idempotency_key": "quarantine-1"},
+            )
+            rejected_rebaseline = await client.post(
+                "/api/accounts/DU1234567/journal-recovery/rebaseline",
+                json={"confirmation_token": "QUARANTINE", "idempotency_key": "rebaseline-1"},
+            )
+            rebaselined = await client.post(
+                "/api/accounts/DU1234567/journal-recovery/rebaseline",
+                json={"confirmation_token": "REBASELINE", "idempotency_key": "rebaseline-1"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert rejected_quarantine.status_code == 409
+    assert rejected_quarantine.json()["detail"]["reason_code"] == "JOURNAL_RECOVERY_QUARANTINE_CONFIRMATION_REQUIRED"
+    assert quarantined.status_code == 200
+    assert quarantined.json()["phase"] == "REBASELINE_REQUIRED"
+    assert rejected_rebaseline.status_code == 409
+    assert rejected_rebaseline.json()["detail"]["reason_code"] == "JOURNAL_RECOVERY_REBASELINE_CONFIRMATION_REQUIRED"
+    assert rebaselined.status_code == 200
+    assert rebaselined.json()["phase"] == "COMPLETE"
+    assert snapshot_calls == [False]
+
+
+async def test_journal_recovery_route_keeps_malformed_ceremony_state_fail_closed(tmp_path: Path) -> None:
+    from app.main import app
+
+    account_id = "DU1234567"
+    state_path = journal_recovery_state_path(tmp_path, account_id)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("not-json", encoding="utf-8")
+    service = JournalRecoveryService(artifacts_root=tmp_path)
+    app.dependency_overrides[account_reconciliation.get_journal_recovery_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                f"/api/accounts/{account_id}/journal-recovery/quarantine",
+                json={"confirmation_token": "QUARANTINE", "idempotency_key": "quarantine-1"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "JOURNAL_RECOVERY_STATE_CORRUPT"
 
 
 async def test_reconciliation_bootstraps_clerk_before_refreshing_account_truth(
@@ -310,223 +391,16 @@ async def test_legacy_stale_claim_route_refuses_live_process_with_specific_reaso
     assert response.json()["detail"]["reason_code"] == "LEGACY_CLAIM_RUN_PROCESS_LIVE"
 
 
-async def test_stale_binding_candidates_preserve_structured_retirement_reason_code(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.main import app
-
-    async def candidates(**_kwargs: object) -> list[object]:
-        raise StaleBindingRetirementError(
-            "STALE_BINDING_BROKER_NOT_FLAT",
-            "The broker account is not flat, so stale deployment bindings cannot be retired.",
-        )
-
-    app.dependency_overrides[account_reconciliation.require_connected_client] = lambda: object()
-    app.dependency_overrides[account_reconciliation.get_stale_binding_retirement_service] = lambda: SimpleNamespace(
-        candidates=candidates
-    )
-    monkeypatch.setattr(account_reconciliation, "refresh_account_truth_now", lambda *_args, **_kwargs: _async_truth())
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get("/api/accounts/DU1234567/stale-bindings/candidates")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == {
-        "reason_code": "STALE_BINDING_BROKER_NOT_FLAT",
-        "message": "The broker account is not flat, so stale deployment bindings cannot be retired.",
-    }
-
-
 async def _async_truth():
     return _truth()
 
 
-async def test_latest_cohort_status_reloads_exact_persisted_blocker(tmp_path: Path) -> None:
-    from app.main import app
-
-    receipt = CohortBatchLaunchReceipt(
-        account_id="DU1234567",
-        cohort_id="opening-batch-1",
-        member_strategy_instance_ids=("spy-a", "spy-b"),
-        window_start_ms=1_780_000_000_000,
-        window_end_ms=1_780_000_030_000,
-        authorized_by="local-operator",
-        recorded_at_ms=1_780_000_000_000,
-    )
-    record_cohort_batch_launch_receipt(tmp_path, receipt)
-    record_cohort_batch_launch_outcomes(
-        tmp_path,
-        CohortBatchLaunchOutcomesReceipt(
-            account_id="DU1234567",
-            cohort_id="opening-batch-1",
-            outcomes=(
-                CohortBatchLaunchMemberOutcome(
-                    strategy_instance_id="spy-a",
-                    state="accepted",
-                    reason="COHORT_START_ACCEPTED",
-                    next_safe_action="Monitor receipt state.",
-                ),
-                CohortBatchLaunchMemberOutcome(
-                    strategy_instance_id="spy-b",
-                    state="blocked",
-                    reason="COHORT_START_REJECTED",
-                    next_safe_action="Clear the account freeze.",
-                ),
-            ),
-            recorded_at_ms=1_780_000_000_001,
-        ),
-    )
-    service = CohortBatchLaunchService(artifacts_root=tmp_path)
-    app.dependency_overrides[
-        cohort_batch_launch.get_cohort_batch_launch_service
-    ] = lambda: service
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(
-                "/api/accounts/DU1234567/cohort-batch-launches/latest",
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["cohort_id"] == "opening-batch-1"
-    assert body["outcomes_state"] == "recorded"
-    assert body["outcomes"][1] == {
-        "strategy_instance_id": "spy-b",
-        "state": "blocked",
-        "reason": "COHORT_START_REJECTED",
-        "next_safe_action": "Clear the account freeze.",
-    }
 
 
-async def test_latest_cohort_status_fails_closed_for_unreadable_newest_authorization(
-    monkeypatch,
-) -> None:
-    receipt = CohortBatchLaunchReceipt(
-        account_id="DU1234567",
-        cohort_id="valid-earlier-cohort",
-        member_strategy_instance_ids=("spy-a",),
-        window_start_ms=1_780_000_000_000,
-        window_end_ms=1_780_000_030_000,
-        authorized_by="local-operator",
-        recorded_at_ms=1_780_000_000_000,
-    )
-    events = [
-        {
-            "event_type": "cohort_batch_launch_authorized",
-            "seq": 1,
-            **receipt.model_dump(mode="json"),
-        },
-        {
-            "event_type": "cohort_batch_launch_authorized",
-            "cohort_id": "unreadable-newest-cohort",
-            "seq": 2,
-        },
-    ]
-    monkeypatch.setattr(cohort_batch_launch_service, "read_account_events", lambda *_args: events)
-    service = CohortBatchLaunchService(artifacts_root=Path("/unused"))
-
-    try:
-        await service.get_status(account_id="DU1234567", cohort_id=None)
-    except ValueError as exc:
-        assert str(exc) == "cohort authorization is unreadable: unreadable-newest-cohort"
-    else:
-        raise AssertionError("latest cohort retrieval must not skip unreadable authorization")
 
 
-async def test_latest_cohort_status_projects_durable_server_evidence(tmp_path: Path) -> None:
-    now_ms = now_ms_utc()
-    receipt = CohortBatchLaunchReceipt(
-        account_id="DU1234567",
-        cohort_id="evidence-cohort",
-        member_strategy_instance_ids=("spy-a",),
-        window_start_ms=now_ms,
-        window_end_ms=now_ms + 30_000,
-        authorized_by="local-operator",
-        recorded_at_ms=now_ms,
-    )
-    record_cohort_batch_launch_receipt(tmp_path, receipt)
-    service = CohortBatchLaunchService(artifacts_root=tmp_path)
-    await service.record_evidence_sample(
-        account_id=receipt.account_id,
-        cohort_id=receipt.cohort_id,
-        sample=CohortEvidenceSample(
-            expected_at_ms=now_ms,
-            observed_at_ms=now_ms,
-                account_truth="healthy",
-                fleet="healthy",
-                members=(CohortMemberSample("spy-a", "run-spy-a", "healthy", orders_used=0, orders_cap=4),),
-                broker_net_positions={},
-                broker_residual={},
-        ),
-    )
-
-    status = await service.get_status(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
-
-    assert status is not None
-    assert status.evidence.model_dump() == {
-        "sample_count": 1,
-        "cadence_ms": 5_000,
-        "healthy_overlap_ms": 5_000,
-        "verdict": "healthy",
-        "reason": None,
-        "source": "account_event.cohort_evidence_sample",
-        "members": [
-            {
-                "strategy_instance_id": "spy-a",
-                "run_id": "run-spy-a",
-                "verdict": "healthy",
-                "reason": None,
-                "orders_used": 0,
-                "orders_cap": 4,
-            }
-        ],
-    }
-    evidence_event = next(
-        event for event in read_account_events(tmp_path, receipt.account_id)
-        if event["event_type"] == "cohort_evidence_sample"
-    )
-    assert evidence_event["broker_net_positions"] == {}
-    assert evidence_event["broker_residual"] == {}
 
 
-async def test_malformed_cohort_evidence_fails_closed(tmp_path: Path) -> None:
-    now_ms = now_ms_utc()
-    receipt = CohortBatchLaunchReceipt(
-        account_id="DU1234567",
-        cohort_id="malformed-evidence-cohort",
-        member_strategy_instance_ids=("spy-a",),
-        window_start_ms=now_ms,
-        window_end_ms=now_ms + 30_000,
-        authorized_by="local-operator",
-        recorded_at_ms=now_ms,
-    )
-    record_cohort_batch_launch_receipt(tmp_path, receipt)
-    append_account_event(
-        tmp_path,
-        receipt.account_id,
-        {
-            "event_type": "cohort_evidence_sample",
-            "cohort_id": receipt.cohort_id,
-            "expected_at_ms": now_ms,
-            "observed_at_ms": now_ms,
-            "account_truth": "healthy",
-            "fleet": "healthy",
-            "members": "not-a-list",
-        },
-    )
-
-    status = await CohortBatchLaunchService(artifacts_root=tmp_path).get_status(
-        account_id=receipt.account_id,
-        cohort_id=receipt.cohort_id,
-    )
-
-    assert status is not None
-    assert status.evidence.verdict == "failed"
-    assert status.evidence.reason == "COHORT_EVIDENCE_UNREADABLE"
 
 
 async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
@@ -680,7 +554,10 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
 
     async def flatten(_base_url: str, account_id: str, payload: dict) -> dict:
         assert account_id == "DU1234567"
-        assert payload == {"account": "DU1234567", "confirm": True}
+        assert payload["account"] == "DU1234567"
+        assert payload["confirmation_token"] == "FLATTEN"
+        assert payload["authorization_id"] == "a" * 16
+        assert payload["idempotency_key"] == "account-emergency-flatten-1"
         return {
             "accepted": True,
             "account_id": account_id,
@@ -690,21 +567,38 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
 
     monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
     monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
+    monkeypatch.setattr(
+        account_reconciliation.AccountClerkRpcClient,
+        "authorize_emergency_flatten",
+        lambda *_args, **_kwargs: _async_value(SimpleNamespace(authorization_id="a" * 16)),
+    )
     app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
     app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: SimpleNamespace(
-        triage=lambda **_: SimpleNamespace(emergency_flatten_confirmation=object())
+        triage=lambda **_: SimpleNamespace(
+            emergency_flatten_confirmation=object(),
+            account_reconciliation_receipt=SimpleNamespace(
+                receipt_id="reconciliation-1",
+                account_truth_generated_at_ms=1_780_000_000_000,
+            ),
+            recovery_flatten_candidates=[],
+        )
     )
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
                 "/api/accounts/DU1234567/emergency-flatten",
-                json={"account": "DU1234567", "confirm": True},
+                json={
+                    "account": "DU1234567",
+                    "confirmation_token": "FLATTEN",
+                    "idempotency_key": "account-emergency-flatten-1",
+                },
             )
     finally:
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
     assert response.json()["audit_run_id"] == "eflat-audit-1"
+    assert response.json()["idempotency_key"].startswith("account-emergency-flatten-")
     assert any(
         event.get("event_type") == "account_emergency_flatten_completed"
         for event in read_account_events(tmp_path, "DU1234567")
@@ -722,13 +616,21 @@ async def test_account_emergency_flatten_fails_closed_without_declared_confirmat
     monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
     app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
     app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: SimpleNamespace(
-        triage=lambda **_: SimpleNamespace(emergency_flatten_confirmation=None)
+        triage=lambda **_: SimpleNamespace(
+            emergency_flatten_confirmation=None,
+            account_reconciliation_receipt=None,
+            recovery_flatten_candidates=[],
+        )
     )
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
                 "/api/accounts/DU1234567/emergency-flatten",
-                json={"account": "DU1234567", "confirm": True},
+                json={
+                    "account": "DU1234567",
+                    "confirmation_token": "FLATTEN",
+                    "idempotency_key": "account-emergency-flatten-2",
+                },
             )
     finally:
         app.dependency_overrides.clear()
@@ -979,7 +881,7 @@ async def test_false_crash_backfill_endpoint_repairs_disproven_registry_row(
     assert repaired.source == "host_daemon.process_halted"
 
 
-async def test_journal_cure_endpoint_relays_to_the_host_clerk_before_appending_adjustment(
+async def test_journal_cure_endpoint_ensures_clerk_before_appending_adjustment(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1014,57 +916,54 @@ async def test_journal_cure_endpoint_relays_to_the_host_clerk_before_appending_a
             ts_ms=100,
         )
     )
-    relayed: list[tuple[str, dict]] = []
+    ensured: list[str] = []
 
-    async def apply_operator_adjustment(_base_url: str, account_id: str, payload: dict) -> dict:
-        relayed.append((account_id, payload))
-        return JournalCureReceipt(
-            account_id="DU1234567",
-            bot_order_namespace=namespace,
-            symbol="SPY",
-            signed_quantity=-1,
-            request_provenance=payload["request_provenance"],
-            reason=payload["reason"],
-            evidence_refs=tuple(payload["evidence_refs"]),
-            idempotency_key=payload["idempotency_key"],
-            recorded_at_ms=101,
-            journal_seq=3,
-        ).model_dump(mode="json")
+    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
+        ensured.append(account_id)
+        return {}
 
-    monkeypatch.setattr(
-        account_reconciliation.host_daemon_client,
-        "apply_operator_adjustment",
-        apply_operator_adjustment,
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/accounts/DU1234567/journal-cures",
-            json={
-                "bot_order_namespace": namespace,
-                "symbol": "SPY",
-                "signed_quantity": -1,
-                "reason": "operator verified stale claim",
-                "evidence_refs": ["account-reconciliation:receipt-1"],
-                "request_provenance": "account-monitor/cure",
-                "idempotency_key": "cure-route-1",
-            },
-        )
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def apply_operator_adjustment(self, request: JournalCureRequest) -> JournalCureReceipt:
+            assert request.idempotency_key == "cure-route-1"
+            return JournalCureReceipt(
+                account_id="DU1234567",
+                bot_order_namespace=namespace,
+                symbol="SPY",
+                signed_quantity=-1,
+                request_provenance=request.request_provenance,
+                reason=request.reason,
+                evidence_refs=request.evidence_refs,
+                idempotency_key=request.idempotency_key,
+                recorded_at_ms=101,
+                journal_seq=3,
+            )
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/journal-cures",
+                json={
+                    "bot_order_namespace": namespace,
+                    "symbol": "SPY",
+                    "signed_quantity": -1,
+                    "reason": "operator verified stale claim",
+                    "evidence_refs": ["account-reconciliation:receipt-1"],
+                    "request_provenance": "account-monitor/cure",
+                    "idempotency_key": "cure-route-1",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 201
-    assert relayed == [
-        (
-            "DU1234567",
-            {
-                "bot_order_namespace": namespace,
-                "symbol": "SPY",
-                "signed_quantity": -1.0,
-                "reason": "operator verified stale claim",
-                "evidence_refs": ["account-reconciliation:receipt-1"],
-                "request_provenance": "account-monitor/cure",
-                "idempotency_key": "cure-route-1",
-            },
-        )
-    ]
+    assert ensured == ["DU1234567"]
     assert response.json()["signed_quantity"] == -1
 
 
@@ -1076,81 +975,43 @@ async def test_journal_cure_endpoint_preserves_clerk_rejection_reason(
 
     from app.main import app
 
-    async def apply_operator_adjustment(_base_url: str, _account_id: str, _payload: dict) -> dict:
-        from app.engine.live.host_daemon_client import HostDaemonError
+    async def _ensure_clerk(_base_url: str, _account_id: str) -> dict:
+        return {}
 
-        raise HostDaemonError(
-            409,
-            {
-                "reason_code": "JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
-                "message": "The Clerk already has a conflicting adjustment.",
-            },
-        )
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
 
-    monkeypatch.setattr(
-        account_reconciliation.host_daemon_client,
-        "apply_operator_adjustment",
-        apply_operator_adjustment,
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/accounts/DU1234567/journal-cures",
-            json={
-                "bot_order_namespace": "learn-ai/bot-a/v1",
-                "symbol": "SPY",
-                "signed_quantity": -1,
-                "reason": "operator verified stale claim",
-                "evidence_refs": ["account-reconciliation:receipt-1"],
-                "request_provenance": "account-monitor/cure",
-                "idempotency_key": "cure-route-1",
-            },
-        )
+        async def apply_operator_adjustment(self, _request: JournalCureRequest) -> JournalCureReceipt:
+            raise AccountClerkRpcRejectedError(
+                reason="JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
+                operation="operator_adjustment",
+                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
+            )
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/journal-cures",
+                json={
+                    "bot_order_namespace": "learn-ai/bot-a/v1",
+                    "symbol": "SPY",
+                    "signed_quantity": -1,
+                    "reason": "operator verified stale claim",
+                    "evidence_refs": ["account-reconciliation:receipt-1"],
+                    "request_provenance": "account-monitor/cure",
+                    "idempotency_key": "cure-route-1",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
-
-
-async def test_recheck_clerk_endpoint_requires_host_health_for_the_requested_account(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.main import app
-
-    async def ensure_account_clerk(_base_url: str, account_id: str) -> dict:
-        assert account_id == "DU1234567"
-        return {
-            "ok": True,
-            "repo_root": "/repo",
-            "live_runs_root": "/repo/artifacts/live_runs",
-            "fetched_at_ms": 123,
-            "process": {"state": "idle"},
-            "clerks": [
-                {
-                    "account_id": "DU1234567",
-                    "generation": 52,
-                    "pid": 4147,
-                    "status": "RUNNING",
-                    "started_at_ms": 100,
-                    "renewed_at_ms": 123,
-                    "valid_until_ms": 60_123,
-                    "lease_valid": True,
-                }
-            ],
-        }
-
-    monkeypatch.setattr(
-        account_reconciliation.host_daemon_client,
-        "ensure_account_clerk",
-        ensure_account_clerk,
-    )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/accounts/DU1234567/clerk/recheck", json={})
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "account_id": "DU1234567",
-        "generation": 52,
-        "checked_at_ms": 123,
-    }
 
 
 async def test_journal_cure_preview_honors_artifact_root_dependency_override(
@@ -1198,7 +1059,7 @@ async def test_journal_cure_preview_honors_artifact_root_dependency_override(
     assert observed_roots == [tmp_path]
 
 
-async def test_operator_recovery_flatten_endpoint_relays_through_host_clerk_and_appends_audit_event(
+async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audit_event(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1238,17 +1099,26 @@ async def test_operator_recovery_flatten_endpoint_relays_through_host_clerk_and_
         ),
         cancelled_order_ids=(11,),
     )
-    relayed: list[tuple[str, dict]] = []
+    ensured: list[str] = []
 
-    async def submit_operator_recovery_flatten(_base_url: str, account_id: str, payload: dict) -> dict:
-        relayed.append((account_id, payload))
-        return {"recovery_flatten": receipt.model_dump(mode="json")}
+    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
+        ensured.append(account_id)
+        return {}
 
-    monkeypatch.setattr(
-        account_reconciliation.host_daemon_client,
-        "submit_operator_recovery_flatten",
-        submit_operator_recovery_flatten,
-    )
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def submit_operator_recovery_flatten(
+            self,
+            submitted_intent: AccountOwnerSubmitIntent,
+        ) -> AccountClerkRecoveryFlattenReceipt:
+            assert submitted_intent == intent
+            return receipt
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
     app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -1265,16 +1135,7 @@ async def test_operator_recovery_flatten_endpoint_relays_through_host_clerk_and_
 
     assert response.status_code == 200
     assert replay.status_code == 200
-    assert relayed == [
-        (
-            "DU1234567",
-            {"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
-        ),
-        (
-            "DU1234567",
-            {"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
-        ),
-    ]
+    assert ensured == ["DU1234567", "DU1234567"]
     [event] = read_account_events(tmp_path, "DU1234567")
     assert {
         key: event[key]
@@ -1584,16 +1445,60 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
     }
     assert status_response.status_code == 200
     assert status_response.json() == {
-        "schema_version": 2,
+        "schema_version": 3,
         "account_id": "DU1234567",
         "attachment": "UNATTACHED",
         "phase": None,
         "generation": None,
         "generation_recorded_at_ms": None,
         "source": None,
-        "binding": {"state": "UNATTACHED", "generation": None, "lease_generation": None},
+        "binding": {
+            "state": "UNATTACHED",
+            "generation": None,
+            "lease_generation": None,
+            "pending_retirement_proposals": 0,
+            "ledger_read_authority": "legacy_registry",
+            "ledger_parity": "clean",
+            "ledger_parity_issue_count": 0,
+        },
+        "gate_authority": {
+            "requested_authority": "account_truth",
+            "effective_authority": "account_truth",
+            "promotion_state": "SAFE_DEFAULT",
+            "reason_code": "ACCOUNT_GATE_SAFE_DEFAULT",
+            "disposition": None,
+            "action_authority": "account_truth",
+            "action_gate": {
+                "gate_id": "account.account_truth",
+                "status": "block",
+                "source": "account_truth_snapshot",
+                "operator_reason": "ACCOUNT_TRUTH_NOT_AVAILABLE",
+                "operator_next_step": "Refresh Account Truth from broker evidence before treating submit readiness as safe.",
+                "evidence_at_ms": 1_780_000_000_000,
+            },
+            "observed_session_dates": [],
+            "lease_weaker_comparison_count": 0,
+            "restart_smoke_recorded_at_ms": None,
+        },
+        "session_policy": {
+            "allow_outside_live_session": False,
+            "gate_result": {
+                "gate_id": "account.live_session",
+                "status": "block",
+                "source": "account_session_policy",
+                "operator_reason": "OUTSIDE_LIVE_TRADABLE_SESSION",
+                "operator_next_step": "WAIT_FOR_LIVE_TRADABLE_SESSION",
+                "evidence_at_ms": 1_780_000_000_000,
+            },
+        },
         "lease": None,
-        "journal": {"last_seq": None, "last_write_ms": None},
+            "journal": {
+                "last_seq": None,
+                "last_write_ms": None,
+                "integrity": "healthy",
+                "corruption_detail": None,
+                "recovery_phase": None,
+            },
         "operating_state": "ATTENTION",
         "headline": "Account service needs attention",
         "detail": "Account verification cannot stay current until the account service is attached.",
@@ -1779,14 +1684,52 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
 
     assert response.status_code == 200
     assert response.json() == {
-        "schema_version": 2,
+        "schema_version": 3,
         "account_id": account_id,
         "attachment": "ATTACHED",
         "phase": "accepting",
         "generation": 1,
         "generation_recorded_at_ms": 1_780_000_000_100,
         "source": "host_daemon.clerk_spawn",
-        "binding": {"state": "ATTACHED", "generation": 1, "lease_generation": 1},
+        "binding": {
+            "state": "ATTACHED",
+            "generation": 1,
+            "lease_generation": 1,
+            "pending_retirement_proposals": 0,
+            "ledger_read_authority": "legacy_registry",
+            "ledger_parity": "clean",
+            "ledger_parity_issue_count": 0,
+        },
+        "gate_authority": {
+            "requested_authority": "account_truth",
+            "effective_authority": "account_truth",
+            "promotion_state": "SAFE_DEFAULT",
+            "reason_code": "ACCOUNT_GATE_SAFE_DEFAULT",
+            "disposition": None,
+            "action_authority": "account_truth",
+            "action_gate": {
+                "gate_id": "account.account_truth",
+                "status": "block",
+                "source": "account_truth_snapshot",
+                "operator_reason": "ACCOUNT_TRUTH_NOT_AVAILABLE",
+                "operator_next_step": "Refresh Account Truth from broker evidence before treating submit readiness as safe.",
+                "evidence_at_ms": 1_780_000_000_200,
+            },
+            "observed_session_dates": [],
+            "lease_weaker_comparison_count": 0,
+            "restart_smoke_recorded_at_ms": None,
+        },
+        "session_policy": {
+            "allow_outside_live_session": False,
+            "gate_result": {
+                "gate_id": "account.live_session",
+                "status": "block",
+                "source": "account_session_policy",
+                "operator_reason": "OUTSIDE_LIVE_TRADABLE_SESSION",
+                "operator_next_step": "WAIT_FOR_LIVE_TRADABLE_SESSION",
+                "evidence_at_ms": 1_780_000_000_200,
+            },
+        },
         "lease": {
             "status": "RUNNING",
             "generation": 1,
@@ -1794,7 +1737,13 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
             "renewed_at_ms": 1_780_000_000_102,
             "valid_until_ms": 1_780_000_060_102,
         },
-        "journal": {"last_seq": 1, "last_write_ms": 1_780_000_000_104},
+        "journal": {
+            "last_seq": 1,
+            "last_write_ms": 1_780_000_000_104,
+            "integrity": "healthy",
+            "corruption_detail": None,
+            "recovery_phase": None,
+        },
         "operating_state": "READY",
         "headline": "Ready — 1 bot is on duty",
         "detail": "The account service is attached and continuously verifying this account.",
@@ -1826,3 +1775,380 @@ async def test_account_service_status_endpoint_rejects_unknown_and_corrupt_artif
     assert corrupt.status_code == 409
     assert corrupt.json()["detail"]["reason_code"] == "ACCOUNT_SERVICE_ARTIFACT_CORRUPT"
     assert artifact.read_text(encoding="utf-8") == "{not valid json"
+
+
+async def test_account_service_status_endpoint_projects_corrupt_s5_session_evidence_as_typed_error(
+    tmp_path: Path,
+) -> None:
+    """The new session artifact keeps the existing account-desk error contract."""
+
+    from app.main import app
+
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),
+    )
+    evidence = tmp_path / "accounts" / "DU1234567" / "account_live_feed_evidence.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("{not valid json", encoding="utf-8")
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/clerk")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_SERVICE_ARTIFACT_CORRUPT"
+    assert evidence.read_text(encoding="utf-8") == "{not valid json"
+
+
+async def test_account_cockpit_projects_restore_clerk_only_when_daemon_is_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Degraded-mode choices are backend-authored, not inferred by Angular."""
+
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+
+    async def daemon_is_reachable() -> tuple[DaemonResult, object]:
+        return DaemonResult.connected(), object()
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_reachable())
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            clerk_down = await client.get("/api/accounts/DU1234567/cockpit")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert clerk_down.status_code == 200
+    assert clerk_down.json()["mode"] == "CLERK_DOWN"
+    assert clerk_down.json()["blockers"] == [
+        {
+            "condition": {
+                "id": "ACCOUNT_CLERK_UNAVAILABLE",
+                "severity": "blocking",
+                "scope": "account",
+                "evidence": {},
+            },
+            "host": "account_desk",
+            "anchor": {"kind": "surface", "subject_key": None},
+            "audience": "both",
+            "disposition": "fix_here",
+            "headline": "Account Clerk is unavailable",
+            "detail": "Restore the Clerk through the host daemon. No bypass broker writer is available.",
+            "primary_move": {
+                "label": "Restore Clerk",
+                "action": {"kind": "confirm_in_form", "anchor": "account-clerk-restore-action"},
+                "target": None,
+                "confirmation": {
+                    "title": "Restore Account Clerk",
+                    "body": "Ask the host daemon to restore the sole Account Clerk for this account.",
+                    "consequence": "The daemon records a new Clerk generation if it must replace the process. The cockpit will re-observe account evidence after the restore.",
+                    "confirm_label": "Restore Clerk",
+                    "required_token": "RESTORE",
+                },
+            },
+            "secondary_moves": [],
+            "applies_to": "both",
+        }
+    ]
+
+    async def daemon_is_down() -> tuple[DaemonResult, None]:
+        return DaemonResult(kind="UNREACHABLE", detail="connection refused", error_category="connect_error"), None
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_down())
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            daemon_down = await client.get("/api/accounts/DU1234567/cockpit")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert daemon_down.status_code == 200
+    assert daemon_down.json()["mode"] == "DAEMON_DOWN"
+    [blocker] = daemon_down.json()["blockers"]
+    assert blocker["condition"]["id"] == "DAEMON_UNREACHABLE"
+    assert blocker["primary_move"]["label"] == "Open host recovery guidance"
+    assert "restart" not in blocker["primary_move"]["label"].lower()
+
+
+async def test_account_cockpit_authors_the_only_journal_corruption_ceremony(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Corrupt Clerk evidence gets typed desk guidance, never a writer bypass."""
+
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    account_id = "DU1234567"
+    journal = account_clerk_journal_path(tmp_path, account_id)
+    journal.parent.mkdir(parents=True)
+    journal.write_text("not-json\n", encoding="utf-8")
+    directory = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id=account_id, is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+
+    async def daemon_is_reachable() -> tuple[DaemonResult, object]:
+        return DaemonResult.connected(), object()
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_reachable())
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: directory
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            cockpit = await client.get(f"/api/accounts/{account_id}/cockpit")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert cockpit.status_code == 200
+    assert cockpit.json()["mode"] == "JOURNAL_CORRUPT"
+    [blocker] = cockpit.json()["blockers"]
+    assert blocker["condition"]["id"] == "ACCOUNT_CLERK_JOURNAL_CORRUPT"
+    assert blocker["primary_move"]["action"] == {
+        "kind": "confirm_in_form",
+        "anchor": "account-journal-recovery-action",
+    }
+    assert blocker["primary_move"]["confirmation"]["required_token"] == "QUARANTINE"
+    assert "terminal procedure" in blocker["detail"]
+    assert "bypass" in blocker["detail"]
+
+    async def daemon_is_down() -> tuple[DaemonResult, None]:
+        return DaemonResult(kind="UNREACHABLE", detail="connection refused", error_category="connect_error"), None
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_down())
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: directory
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            daemon_down_during_recovery = await client.get(f"/api/accounts/{account_id}/cockpit")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert daemon_down_during_recovery.status_code == 200
+    assert daemon_down_during_recovery.json()["mode"] == "JOURNAL_CORRUPT"
+    assert [blocker["condition"]["id"] for blocker in daemon_down_during_recovery.json()["blockers"]] == [
+        "ACCOUNT_CLERK_JOURNAL_CORRUPT",
+        "DAEMON_UNREACHABLE",
+    ]
+
+
+async def test_restore_account_clerk_writes_a_durable_receipt_and_reobserves_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    account_id = "DU1234567"
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id=account_id, is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+    ensure_calls = 0
+
+    async def ensure_clerk(_base_url: str, restored_account_id: str) -> dict:
+        nonlocal ensure_calls
+        assert restored_account_id == account_id
+        ensure_calls += 1
+        generation = advance_account_clerk_generation(
+            tmp_path,
+            account_id,
+            phase="accepting",
+            recorded_at_ms=1_780_000_000_000,
+            source="test.restore",
+        )
+        write_account_clerk_lease(
+            tmp_path,
+            AccountClerkLease(
+                account_id=account_id,
+                generation=generation.generation,
+                pid=42,
+                ibkr_client_id=90,
+                status="RUNNING",
+                started_at_ms=1_780_000_000_000,
+                renewed_at_ms=1_780_000_000_000,
+                valid_until_ms=1_780_000_060_000,
+            ),
+        )
+        return {}
+
+    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                f"/api/accounts/{account_id}/clerk/restore",
+                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-1"},
+            )
+            retry = await client.post(
+                f"/api/accounts/{account_id}/clerk/restore",
+                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-1"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["receipt_id"] == "account-clerk-restore:restore-1"
+    assert response.json()["clerk_generation"] == 1
+    assert retry.status_code == 200
+    assert retry.json() == response.json()
+    assert ensure_calls == 1
+    events = read_account_events(tmp_path, account_id)
+    event = events[-1]
+    assert event["event_type"] == "account_clerk_restore_completed"
+    assert event["receipt_id"] == "account-clerk-restore:restore-1"
+    assert sum(event.get("receipt_id") == "account-clerk-restore:restore-1" for event in events) == 1
+
+
+async def test_restore_account_clerk_concurrent_duplicate_never_repeats_the_daemon_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    account_id = "DU1234567"
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id=account_id, is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+    started = threading.Event()
+    release = threading.Event()
+    ensure_calls = 0
+
+    async def ensure_clerk(_base_url: str, restored_account_id: str) -> dict:
+        nonlocal ensure_calls
+        assert restored_account_id == account_id
+        ensure_calls += 1
+        started.set()
+        await asyncio.to_thread(release.wait)
+        generation = advance_account_clerk_generation(
+            tmp_path,
+            account_id,
+            phase="accepting",
+            recorded_at_ms=1_780_000_000_000,
+            source="test.restore.concurrent",
+        )
+        write_account_clerk_lease(
+            tmp_path,
+            AccountClerkLease(
+                account_id=account_id,
+                generation=generation.generation,
+                pid=42,
+                ibkr_client_id=90,
+                status="RUNNING",
+                started_at_ms=1_780_000_000_000,
+                renewed_at_ms=1_780_000_000_000,
+                valid_until_ms=1_780_000_060_000,
+            ),
+        )
+        return {}
+
+    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            first = asyncio.create_task(
+                client.post(
+                    f"/api/accounts/{account_id}/clerk/restore",
+                    json={"confirmation_token": "RESTORE", "idempotency_key": "restore-concurrent-1"},
+                )
+            )
+            await asyncio.to_thread(started.wait)
+            concurrent = await client.post(
+                f"/api/accounts/{account_id}/clerk/restore",
+                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-concurrent-1"},
+            )
+            release.set()
+            completed = await first
+            retry = await client.post(
+                f"/api/accounts/{account_id}/clerk/restore",
+                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-concurrent-1"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert concurrent.status_code == 409
+    assert concurrent.json()["detail"]["reason_code"] == "IDEMPOTENCY_OUTCOME_UNKNOWN"
+    assert completed.status_code == 200
+    assert retry.status_code == 200
+    assert retry.json() == completed.json()
+    assert ensure_calls == 1
+
+
+async def test_account_session_policy_endpoint_persists_explicit_outside_session_override(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.put(
+                "/api/accounts/DU1234567/session-policy",
+                json={"allow_outside_live_session": True},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "DU1234567"
+    assert body["allow_outside_live_session"] is True
+    assert isinstance(body["updated_at_ms"], int)
+
+
+async def test_clerk_restart_smoke_endpoint_records_current_accepting_generation(tmp_path: Path) -> None:
+    from app.main import app
+
+    account_id = "DU1234567"
+    now_ms = now_ms_utc()
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        account_id,
+        phase="accepting",
+        recorded_at_ms=now_ms,
+        source="test",
+    )
+    write_account_clerk_lease(
+        tmp_path,
+        AccountClerkLease(
+            account_id=account_id,
+            generation=generation.generation,
+            pid=123,
+            ibkr_client_id=80,
+            status="RUNNING",
+            started_at_ms=now_ms,
+            renewed_at_ms=now_ms,
+            valid_until_ms=now_ms + 60_000,
+        ),
+    )
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                f"/api/accounts/{account_id}/gate-promotion/restart-smoke",
+                json={"confirmation": "CLERK_RESTART_SMOKE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == account_id
+    assert body["clerk_generation"] == generation.generation
+    assert isinstance(body["recorded_at_ms"], int)

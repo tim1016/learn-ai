@@ -14,7 +14,9 @@ from app.engine.live.account_registry import (
     AccountInstanceBinding,
     compute_reconcile_namespaces,
     crash_retired_restart_blocking_binding,
+    evaluate_account_instance_binding,
     latest_account_instance_binding,
+    pending_account_binding_retirements,
     read_account_instance_registry,
     retire_unmanaged_active_bindings_on_daemon_boot,
     write_account_instance_binding,
@@ -45,11 +47,11 @@ def _active_binding() -> AccountInstanceBinding:
 
 
 @pytest.mark.asyncio
-async def test_host_daemon_boot_retires_orphaned_active_binding(
+async def test_host_daemon_boot_proposes_orphaned_active_binding_for_clerk(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A new daemon cannot trust an ACTIVE row it does not process-own."""
+    """A new daemon records unowned liveness as a Clerk-only retirement proposal."""
     from app.engine.live import host_daemon
 
     live_runs_root = tmp_path / "live_runs"
@@ -72,8 +74,9 @@ async def test_host_daemon_boot_retires_orphaned_active_binding(
         )
 
     assert latest is not None
-    assert latest.lifecycle_state == "RETIRED"
-    assert latest.source == LIVENESS_UNPROVEN_REGISTRY_SOURCE
+    assert latest.lifecycle_state == "ACTIVE"
+    [proposal] = pending_account_binding_retirements(tmp_path, account_id=ACCOUNT_ID)
+    assert proposal.source == LIVENESS_UNPROVEN_REGISTRY_SOURCE
     owned, siblings = compute_reconcile_namespaces(
         artifacts_root=tmp_path,
         account_id=ACCOUNT_ID,
@@ -100,10 +103,17 @@ def test_crash_retired_restart_blocking_binding_blocks_after_reboot(
         strategy_instance_id=INSTANCE_ID,
     )
 
-    assert result.bindings_retired == 1
-    assert blocking is not None
-    assert blocking.lifecycle_state == "RETIRED"
-    assert blocking.source == LIVENESS_UNPROVEN_REGISTRY_SOURCE
+    assert result.retirement_proposals_recorded == 1
+    assert blocking is None
+    gate = evaluate_account_instance_binding(
+        tmp_path,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=INSTANCE_ID,
+        run_id=RUN_ID,
+        bot_order_namespace=NAMESPACE,
+    )
+    assert gate.status == "block"
+    assert gate.operator_reason == "ACCOUNT_BINDING_RETIREMENT_PENDING"
 
 
 def test_boot_reconcile_preserves_process_owned_active_binding(tmp_path: Path) -> None:
@@ -121,7 +131,7 @@ def test_boot_reconcile_preserves_process_owned_active_binding(tmp_path: Path) -
         strategy_instance_id=INSTANCE_ID,
     )
 
-    assert result.bindings_retired == 0
+    assert result.retirement_proposals_recorded == 0
     assert result.preserved_managed_run_ids == (RUN_ID,)
     assert latest is not None
     assert latest.lifecycle_state == "ACTIVE"
@@ -202,12 +212,13 @@ async def test_process_reaper_retires_post_boot_crash_without_status_reads(
                     account_id=ACCOUNT_ID,
                     strategy_instance_id=INSTANCE_ID,
                 )
-                if latest is not None and latest.lifecycle_state == "RETIRED":
+                if pending_account_binding_retirements(tmp_path, account_id=ACCOUNT_ID):
                     break
 
             assert latest is not None
-            assert latest.lifecycle_state == "RETIRED"
-            assert latest.source == "host_daemon.process_crashed"
+            assert latest.lifecycle_state == "ACTIVE"
+            [proposal] = pending_account_binding_retirements(tmp_path, account_id=ACCOUNT_ID)
+            assert proposal.source == "host_daemon.process_crashed"
             _owned, siblings = compute_reconcile_namespaces(
                 artifacts_root=tmp_path,
                 account_id=ACCOUNT_ID,
@@ -220,7 +231,7 @@ async def test_process_reaper_retires_post_boot_crash_without_status_reads(
                     account_id=ACCOUNT_ID,
                     strategy_instance_id=INSTANCE_ID,
                 )
-                == latest
+                is None
             )
     finally:
         if process.poll() is None:

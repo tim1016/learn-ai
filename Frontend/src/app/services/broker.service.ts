@@ -7,7 +7,6 @@ import type {
   AccountEmergencyFlattenResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
-  AccountClerkTransportStatus,
   JournalCurePreview,
   JournalCureReceipt,
   JournalCureRequest,
@@ -16,15 +15,19 @@ import type {
   LegacyStaleClaimCandidatesResponse,
   LegacyStaleClaimRetireRequest,
   LegacyStaleClaimRetirementReceipt,
-  StaleBindingRetirementCandidatesResponse,
-  StaleBindingRetirementReceipt,
-  StaleBindingRetirementRequest,
   AccountReconciliationAutomationPolicy,
   AccountReconciliationAutomationPolicyUpdate,
   AccountReconciliationReceipt,
   AccountTriageResponse,
 } from '../api/account-reconciliation.types';
 import type { AccountsRosterResponse, AccountServiceStatusResponse } from '../api/account-directory.types';
+import type {
+  AccountClerkRestoreReceipt,
+  AccountClerkRestoreRequest,
+  AccountCockpitResponse,
+  JournalRecoveryReceipt,
+  JournalRecoveryRequest,
+} from '../api/account-cockpit.types';
 import type { AccountEventsRequest, AccountEventsResponse } from '../api/account-events.types';
 import type {
   AccountTruthResponse,
@@ -189,6 +192,39 @@ export class BrokerService {
     );
   }
 
+  accountCockpit(accountId: string): Promise<AccountCockpitResponse> {
+    return firstValueFrom(
+      this.http.get<AccountCockpitResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/cockpit`,
+      ),
+    );
+  }
+
+  restoreAccountClerk(
+    accountId: string,
+    payload: AccountClerkRestoreRequest,
+  ): Promise<AccountClerkRestoreReceipt> {
+    return firstValueFrom(
+      this.http.post<AccountClerkRestoreReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk/restore`,
+        payload,
+      ),
+    );
+  }
+
+  recoverAccountJournal(
+    accountId: string,
+    step: 'quarantine' | 'rebaseline',
+    payload: JournalRecoveryRequest,
+  ): Promise<JournalRecoveryReceipt> {
+    return firstValueFrom(
+      this.http.post<JournalRecoveryReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-recovery/${step}`,
+        payload,
+      ),
+    );
+  }
+
   accountEvents(accountId: string, request: AccountEventsRequest): Promise<AccountEventsResponse> {
     const params: Record<string, string | number | readonly (string | number | boolean)[]> = {
       view: request.view,
@@ -225,26 +261,6 @@ export class BrokerService {
     );
   }
 
-  staleBindingRetirementCandidates(accountId: string): Promise<StaleBindingRetirementCandidatesResponse> {
-    return firstValueFrom(
-      this.http.get<StaleBindingRetirementCandidatesResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/stale-bindings/candidates`,
-      ),
-    );
-  }
-
-  retireStaleBinding(
-    accountId: string,
-    payload: StaleBindingRetirementRequest,
-  ): Promise<StaleBindingRetirementReceipt> {
-    return firstValueFrom(
-      this.http.post<StaleBindingRetirementReceipt>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/stale-bindings/retire`,
-        payload,
-      ),
-    );
-  }
-
   previewJournalCure(
     accountId: string,
     botOrderNamespace: string,
@@ -267,15 +283,6 @@ export class BrokerService {
     );
   }
 
-  recheckAccountClerk(accountId: string): Promise<AccountClerkTransportStatus> {
-    return firstValueFrom(
-      this.http.post<AccountClerkTransportStatus>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk/recheck`,
-        {},
-      ),
-    );
-  }
-
   submitOperatorRecoveryFlatten(
     accountId: string,
     payload: OperatorRecoveryFlattenRequest,
@@ -288,11 +295,14 @@ export class BrokerService {
     );
   }
 
-  emergencyFlattenAccount(accountId: string): Promise<AccountEmergencyFlattenResponse> {
+  emergencyFlattenAccount(
+    accountId: string,
+    request: { account: string; confirmation_token: 'FLATTEN'; idempotency_key: string },
+  ): Promise<AccountEmergencyFlattenResponse> {
     return firstValueFrom(
       this.http.post<AccountEmergencyFlattenResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/emergency-flatten`,
-        { account: accountId, confirm: true },
+        request,
       ),
     );
   }

@@ -12,6 +12,7 @@ from app.engine.live.bot_lifecycle_state import (
 )
 from app.schemas.live_runs import (
     BotDailyLifecycleProjection,
+    BotDutyOutcomeView,
     BotLifecycleAction,
     BotLifecycleCondition,
     HostProcessStartCapability,
@@ -28,6 +29,7 @@ class BotDailyLifecycleEvidence:
     active_run_id: str | None
     persisted_state: BotLifecycleStateRecord | None = None
     roll_call_offer: BotRollCallOfferRecord | None = None
+    clock_out_in_progress: bool = False
     conditions: tuple[BotLifecycleCondition, ...] = ()
     now_ms: int = 0
 
@@ -45,6 +47,7 @@ def project_bot_daily_lifecycle(evidence: BotDailyLifecycleEvidence) -> BotDaily
     display_status = _display_status(
         phase=phase,
         process_state=evidence.process.state,
+        clock_out_in_progress=evidence.clock_out_in_progress,
         on_roster=on_roster,
         condition_count=len(evidence.conditions),
         start_enabled=evidence.start_capability.enabled,
@@ -59,6 +62,14 @@ def project_bot_daily_lifecycle(evidence: BotDailyLifecycleEvidence) -> BotDaily
         display_status=display_status.value,
         attention_badge=attention_badge.value if attention_badge is not None else None,
         reason=_reason(display_status, evidence),
+        carryover_policy=(
+            evidence.persisted_state.carryover_policy if evidence.persisted_state is not None else "FORBID"
+        ),
+        duty_outcome=(
+            BotDutyOutcomeView.model_validate(evidence.persisted_state.duty_outcome.model_dump())
+            if evidence.persisted_state is not None and evidence.persisted_state.duty_outcome is not None
+            else None
+        ),
         on_roster=on_roster,
         active_run_id=evidence.active_run_id,
         latest_run_id=evidence.latest_run_id,
@@ -91,6 +102,7 @@ def _display_status(
     *,
     phase: BotLifecyclePhase,
     process_state: str,
+    clock_out_in_progress: bool,
     on_roster: bool,
     condition_count: int,
     start_enabled: bool,
@@ -99,7 +111,11 @@ def _display_status(
     if phase == BotLifecyclePhase.RETIRED:
         return BotDisplayStatus.RETIRED
     if phase == BotLifecyclePhase.ON_DUTY:
-        return BotDisplayStatus.CLOCKING_OUT if process_state == "stopping" else BotDisplayStatus.ON_DUTY
+        return (
+            BotDisplayStatus.CLOCKING_OUT
+            if process_state == "stopping" or clock_out_in_progress
+            else BotDisplayStatus.ON_DUTY
+        )
     if condition_count > 0:
         return BotDisplayStatus.SICK_BAY
     if not on_roster:
@@ -120,6 +136,15 @@ def _attention_badge(display_status: BotDisplayStatus) -> BotDisplayStatus | Non
 
 
 def _reason(display_status: BotDisplayStatus, evidence: BotDailyLifecycleEvidence) -> str | None:
+    # A daemon-recorded terminal fact must remain visible after the process has
+    # gone away. Generic start-capability copy is useful only until there is a
+    # durable explanation for why this duty finished.
+    if (
+        display_status == BotDisplayStatus.OFF_DUTY
+        and evidence.persisted_state is not None
+        and evidence.persisted_state.duty_outcome is not None
+    ):
+        return evidence.persisted_state.reason or evidence.persisted_state.duty_outcome.reason_code
     if display_status == BotDisplayStatus.READY:
         return "Roll call offered a fresh start before stop-time."
     if display_status == BotDisplayStatus.OFF_ROSTER:

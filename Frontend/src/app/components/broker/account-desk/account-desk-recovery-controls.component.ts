@@ -9,12 +9,11 @@ import { CardModule } from "primeng/card";
 
 import { AccountDeskGuidanceComponent } from "./account-desk-guidance.component";
 import { AccountDeskGuidanceStore } from "./account-desk-guidance-store.service";
-import { AccountDeskRecoveryConfirmDialogComponent } from "./account-desk-recovery-confirm-dialog.component";
 import { AccountDeskRecoveryReceiptComponent } from "./account-desk-recovery-receipt.component";
 import { AccountDeskJournalCureComponent } from "./account-desk-journal-cure.component";
 import { AccountDeskLegacyClaimCureComponent } from "./account-desk-legacy-claim-cure.component";
-import { AccountDeskStaleBindingCureComponent } from "./account-desk-stale-binding-cure.component";
 import { AccountDeskRecoveryStore } from "./account-desk-recovery-store.service";
+import { AccountDeskDirectoryStore } from "./account-desk-directory-store.service";
 import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
 
 /** Operator-only controls for backend-declared ordinary account recovery. */
@@ -25,8 +24,6 @@ import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
     AccountDeskGuidanceComponent,
     AccountDeskJournalCureComponent,
     AccountDeskLegacyClaimCureComponent,
-    AccountDeskStaleBindingCureComponent,
-    AccountDeskRecoveryConfirmDialogComponent,
     AccountDeskRecoveryReceiptComponent,
     ButtonModule,
     CardModule,
@@ -36,6 +33,7 @@ import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
 })
 export class AccountDeskRecoveryControlsComponent {
   readonly surface = inject(AccountDeskSurfaceStore);
+  readonly directory = inject(AccountDeskDirectoryStore, { optional: true });
   readonly recovery = inject(AccountDeskRecoveryStore);
   private readonly guidance = inject(AccountDeskGuidanceStore);
   readonly cureBlockers = computed(() =>
@@ -43,6 +41,9 @@ export class AccountDeskRecoveryControlsComponent {
   );
   readonly hasActionableCure = computed(() =>
     this.cureBlockers().some((blocker) => blocker.primary_move !== null),
+  );
+  readonly ordinaryCuresAvailable = computed(() =>
+    this.directory === null || this.directory.cockpit()?.mode === 'NORMAL',
   );
 
   requestAutomationChange(): void {

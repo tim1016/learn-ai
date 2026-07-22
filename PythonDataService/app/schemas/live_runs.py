@@ -23,6 +23,7 @@ from app.operator.notices.schema import (
     validate_actionability_action_pairing,
 )
 from app.schemas.account_condition_actions import AccountCureAction
+from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 
 
@@ -350,19 +351,31 @@ class HostRunnerHealth(BaseModel):
 class EmergencyFlattenRequest(BaseModel):
     """Body for the account-wide emergency flatten (§ 7.2 #6).
 
-    Reaches the daemon's one-shot ``emergency-flatten`` CLI independent of any
-    live binding, so an operator can flatten after a halt/poison (when the
-    binding-gated console FLATTEN command is unavailable). ``account`` must echo
-    the IBKR account id — defense-in-depth mirroring the CLI ``--account`` gate,
-    which refuses if it does not match the connected account.
+    Reaches the held Account Clerk independent of any live binding, so an
+    operator can flatten after a halt/poison. The Clerk closes intake, records
+    cancellation uncertainty, writes any liquidations under its own broker
+    session, and only completes after a fresh paper-account snapshot is flat.
     """
 
     account: str = Field(..., min_length=2, max_length=32)
-    confirm: bool = Field(..., description="Must be true; typo-proofing gate.")
+    confirmation_token: Literal["FLATTEN"] = Field(
+        ..., description="Exact typed confirmation required for the destructive account action."
+    )
+    idempotency_key: str = Field(
+        ..., min_length=1, max_length=128, description="Public emergency operation identity."
+    )
+
+
+class AccountEmergencyFlattenDispatchRequest(EmergencyFlattenRequest):
+    """Host-only envelope carrying the Clerk-issued authorization receipt id."""
+
+    authorization_id: str = Field(
+        ..., min_length=16, max_length=128, description="Short-lived Clerk reconciliation authorization."
+    )
 
 
 class AccountEmergencyFlattenResponse(BaseModel):
-    """Receipt returned after the account-scoped emergency CLI completes."""
+    """Receipt returned after the Clerk re-observes the account flat."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -370,6 +383,8 @@ class AccountEmergencyFlattenResponse(BaseModel):
     account_id: str = Field(min_length=2, max_length=32)
     audit_run_id: str = Field(min_length=2, max_length=128)
     completed_at_ms: int = Field(ge=0)
+    idempotency_key: str | None = None
+    idempotency_replayed: bool = False
 
 
 class HostRunnerInstance(BaseModel):
@@ -429,7 +444,7 @@ class HostRunnerStartRequest(BaseModel):
     max_orders_per_day: int = Field(default=DEFAULT_MAX_ORDERS_PER_DAY, ge=0, le=100_000)
     ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
     roll_call_offer_id: str | None = Field(default=None, min_length=1, max_length=128)
-    cohort_id: str | None = Field(default=None, min_length=1, max_length=128)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
 
     @field_validator("ibkr_host")
     @classmethod
@@ -441,6 +456,7 @@ class HostRunnerStopRequest(BaseModel):
     """Request body for stopping the active host runner subprocess."""
 
     force: bool = False
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class MutationOutcomeUnknownResponse(BaseModel):
@@ -448,7 +464,7 @@ class MutationOutcomeUnknownResponse(BaseModel):
     could not be proven (PRD #619-C5).
 
     Surfaced by ``deploy_instance`` / ``start_run`` / ``stop_run`` /
-    ``emergency_flatten_instance`` / ``renew_daemon_lease`` when the typed daemon POST returns
+    ``renew_daemon_lease`` when the typed daemon POST returns
     ``DaemonResult.kind == "UNREACHABLE"`` with
     ``outcome_ambiguous=True`` — i.e., the request was (partly or
     fully) sent but the response was lost.  The mutation may or may not
@@ -475,14 +491,13 @@ class MutationOutcomeUnknownResponse(BaseModel):
     # underlying exception carried no message).
     detail: str | None = None
     # Canonical endpoint label so the cockpit can show the right copy
-    # ("deploy" / "start_run" / "stop_run" / "emergency_flatten" /
+    # ("deploy" / "start_run" / "stop_run" / "end_day_now" /
     # "renew_daemon_lease").
     endpoint: Literal[
         "deploy",
         "start_run",
         "stop_run",
         "end_day_now",
-        "emergency_flatten",
         "renew_daemon_lease",
     ]
     # ``int64 ms UTC`` of the failure.
@@ -636,6 +651,8 @@ class HostRunnerActionResponse(BaseModel):
     rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
     mutation_attempt_id: str | None = None
     mutation_dispatch_state: MutationAttemptDispatchState | None = None
+    idempotency_key: str | None = None
+    idempotency_replayed: bool = False
 
 
 class IdentityCoherenceConfirmation(BaseModel):
@@ -2507,6 +2524,17 @@ class BotLifecycleCondition(BaseModel):
     cure_label: str
 
 
+class BotDutyOutcomeView(BaseModel):
+    """Durable terminal duty evidence rendered by the operator surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: BotDutyOutcomeKind
+    reason_code: str
+    recorded_at_ms: int
+    run_id: str | None = None
+
+
 class BotDailyLifecycleProjection(BaseModel):
     """Rev-3 daily lifecycle projection for one bot.
 
@@ -2522,6 +2550,8 @@ class BotDailyLifecycleProjection(BaseModel):
     display_status: BotLifecycleDisplayStatus
     attention_badge: Literal["Sick bay", "Ready", "Off roster"] | None = None
     reason: str | None = None
+    carryover_policy: Literal["FORBID"] = "FORBID"
+    duty_outcome: BotDutyOutcomeView | None = None
     on_roster: bool = True
     active_run_id: str | None = None
     latest_run_id: str | None = None

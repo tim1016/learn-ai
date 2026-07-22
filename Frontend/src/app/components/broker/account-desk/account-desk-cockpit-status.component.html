@@ -1,0 +1,47 @@
+<section class="cockpit-status" aria-label="Account Clerk cockpit status" aria-live="polite">
+  @if (directory.serviceStatusLoading() && !directory.serviceStatusHasLastGood()) {
+    <p class="state">Loading Account Clerk posture…</p>
+  } @else if (directory.serviceStatusErrorMessage() && !directory.serviceStatusHasLastGood()) {
+    <div class="state state-error" role="alert">
+      <p>{{ directory.serviceStatusErrorMessage() }}</p>
+      <button type="button" (click)="retry()">Retry</button>
+    </div>
+  } @else if (directory.cockpit(); as cockpit) {
+    <header>
+      <div>
+        <p class="eyebrow">Account Clerk</p>
+        <h2>{{ cockpit.clerk.headline }}</h2>
+        <p>{{ cockpit.clerk.detail }}</p>
+      </div>
+      <p class="mode" [attr.data-mode]="cockpit.mode">{{ cockpit.mode | receiptLabel }}</p>
+    </header>
+    <dl>
+      <div>
+        <dt>Clerk generation</dt>
+        <dd>{{ cockpit.clerk.generation ?? '—' }}</dd>
+      </div>
+      <div>
+        <dt>Clerk phase</dt>
+        <dd>{{ cockpit.clerk.phase === null ? '—' : (cockpit.clerk.phase | receiptLabel) }}</dd>
+      </div>
+      <div>
+        <dt>Host daemon</dt>
+        <dd>{{ cockpit.daemon.availability | receiptLabel }}</dd>
+      </div>
+      <div>
+        <dt>Daemon observed</dt>
+        <dd><app-timestamp-display [value]="cockpit.daemon.observed_at_ms" mode="local" /></dd>
+      </div>
+    </dl>
+    @if (cockpit.blockers.length > 0) {
+      <app-operator-blocker-list
+        [blockers]="cockpit.blockers"
+        ariaLabel="Account Clerk recovery guidance"
+        (moveSelected)="followMove($event)"
+      />
+    }
+  }
+  @if (directory.serviceStatusShowingStaleLastGood()) {
+    <p class="state state-stale">Showing the last account cockpit posture. A fresh observation is unavailable.</p>
+  }
+</section>

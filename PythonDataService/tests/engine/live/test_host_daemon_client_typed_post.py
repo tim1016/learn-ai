@@ -1,7 +1,7 @@
 """PRD #619-C5 — typed POST + ambiguous-outcome classification.
 
-Exercises the four mutation forwarders (``deploy`` / ``start_run`` /
-``stop_run`` / ``emergency_flatten_run``) end-to-end through the typed
+Exercises the control-plane mutation forwarders (``deploy`` / ``start_run`` /
+``stop_run``) end-to-end through the typed
 POST core. Mocks the daemon HTTP layer with respx so the real
 ``httpx.AsyncClient`` exercises the request/response path.
 
@@ -31,10 +31,8 @@ from app.engine.live.host_daemon_client import (
     HostDaemonError,
     HostDaemonOutcomeUnknownError,
     deploy,
-    emergency_flatten_run,
     ensure_account_clerk,
     release_account_clerk,
-    retire_account_binding,
     start_run,
     stop_run,
 )
@@ -144,51 +142,6 @@ async def test_release_account_clerk_uses_timeout_beyond_daemon_shutdown_budget(
     assert observed_timeout[0].read > 4.0
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_retire_account_binding_returns_a_validated_receipt() -> None:
-    respx.post(f"{BASE}/accounts/DU123/bindings/retire").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "account_id": "DU123",
-                "strategy_instance_id": "stale-bot",
-                "run_id": "stale-run",
-                "bot_order_namespace": "learn-ai/stale-bot/v1",
-                "lifecycle_state": "RETIRED",
-                "recorded_at_ms": 100,
-                "source": "operator.stale_binding_retirement",
-            },
-        )
-    )
-
-    receipt = await retire_account_binding(
-        BASE,
-        "DU123",
-        {"strategy_instance_id": "stale-bot", "run_id": "stale-run"},
-    )
-
-    assert receipt.lifecycle_state == "RETIRED"
-    assert receipt.run_id == "stale-run"
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_retire_account_binding_rejects_an_invalid_host_receipt() -> None:
-    respx.post(f"{BASE}/accounts/DU123/bindings/retire").mock(
-        return_value=httpx.Response(200, json={"not": "a binding"})
-    )
-
-    with pytest.raises(HostDaemonError) as exc_info:
-        await retire_account_binding(
-            BASE,
-            "DU123",
-            {"strategy_instance_id": "stale-bot", "run_id": "stale-run"},
-        )
-
-    assert exc_info.value.status_code == 502
-
-
 # ---------------------------------------------------------------------------
 # OUTCOME_UNKNOWN — ambiguous transport
 # ---------------------------------------------------------------------------
@@ -237,16 +190,26 @@ async def test_remote_protocol_error_raises_outcome_unknown() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_emergency_flatten_read_timeout_raises_outcome_unknown() -> None:
-    """The 130s flatten timeout is the most common place a ReadTimeout
-    fires; the broker round-trip means an ambiguous outcome here has
-    the highest stakes."""
-    respx.post(f"{BASE}/runs/run-A/emergency-flatten").mock(
-        side_effect=httpx.ReadTimeout("read")
+async def test_persisted_daemon_idempotency_unknown_maps_to_outcome_unknown() -> None:
+    """A daemon crash after command execution is not a normal 409 rejection."""
+
+    respx.post(f"{BASE}/runs/run-A/stop").mock(
+        return_value=httpx.Response(
+            409,
+            json={
+                "detail": {
+                    "reason_code": "IDEMPOTENCY_OUTCOME_UNKNOWN",
+                    "message": "reconcile before retrying",
+                    "idempotency_key": "opaque-key",
+                }
+            },
+        )
     )
 
-    with pytest.raises(HostDaemonOutcomeUnknownError):
-        await emergency_flatten_run(BASE, "run-A", {})
+    with pytest.raises(HostDaemonOutcomeUnknownError) as exc_info:
+        await stop_run(BASE, "run-A", {"idempotency_key": "opaque-key"})
+
+    assert exc_info.value.error_category == "idempotency_outcome_unknown"
 
 
 # ---------------------------------------------------------------------------

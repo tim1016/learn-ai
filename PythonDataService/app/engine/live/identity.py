@@ -88,11 +88,17 @@ def safe_strategy_instance_path_segment(value: str) -> str:
 
 
 def confine_path_to_root(path: Path, root: Path, *, label: str) -> Path:
-    """Return ``path`` only after proving its real path stays under ``root``."""
+    """Return ``path`` only after proving its real path stays under ``root``.
+
+    ``path`` is always a file or directory strictly below ``root`` here (a
+    per-instance artifact directory or a WAL file), so a single
+    ``startswith`` prefix check is the whole boundary — the shape CodeQL
+    documents as its py/path-injection sanitizer.
+    """
     root_real = os.path.realpath(os.fspath(root))
     candidate = os.path.realpath(os.fspath(path))
     root_prefix = root_real.rstrip(os.sep) + os.sep
-    if candidate != root_real and not candidate.startswith(root_prefix):
+    if not candidate.startswith(root_prefix):
         raise ValueError(f"{label} path {candidate} escapes root {root_real}")
     return Path(candidate)
 

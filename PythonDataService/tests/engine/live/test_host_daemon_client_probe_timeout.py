@@ -10,23 +10,14 @@ to the dedicated (longer) timeout so it is not reverted to the health default.
 
 from __future__ import annotations
 
-from typing import Literal
-
-import httpx
-import pytest
-
 from app.engine.live import host_daemon_client
 from app.engine.live.host_daemon_client import DaemonResult
 
 
-async def test_fetch_instance_process_uses_instance_probe_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_instance_process_uses_instance_probe_timeout(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_typed_get_json(
-        url: str,
-        *,
-        timeout: httpx.Timeout = host_daemon_client._TIMEOUT,
-    ) -> tuple[DaemonResult, dict[str, str]]:
+    async def fake_typed_get_json(url, *, timeout=host_daemon_client._TIMEOUT):
         captured["url"] = url
         captured["timeout"] = timeout
         return DaemonResult.connected(status=200), {"state": "idle"}
@@ -42,15 +33,10 @@ async def test_fetch_instance_process_uses_instance_probe_timeout(monkeypatch: p
     assert host_daemon_client._INSTANCE_PROBE_TIMEOUT.read > host_daemon_client._TIMEOUT.read
 
 
-async def test_fetch_startability_health_uses_instance_probe_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fetch_startability_health_uses_instance_probe_timeout(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_classify_http(
-        url: str,
-        *,
-        method: Literal["GET", "POST"],
-        timeout: httpx.Timeout = host_daemon_client._TIMEOUT,
-    ) -> tuple[DaemonResult, None]:
+    async def fake_classify_http(url, *, method, timeout=host_daemon_client._TIMEOUT):
         captured["url"] = url
         captured["method"] = method
         captured["timeout"] = timeout

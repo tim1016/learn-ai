@@ -17,14 +17,30 @@ from app.engine.live.account_artifacts import (
     read_account_clerk_generation,
     read_account_clerk_lease,
 )
+from app.engine.live.account_binding_ledger import account_binding_ledger_read_enabled
 from app.engine.live.account_clerk_journal import inspect_account_clerk_journal
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalCorruptError
 from app.engine.live.account_identity import normalize_account_id
+from app.engine.live.account_observation_lease import (
+    account_observation_lease_gate_result,
+    assess_account_observation_lease,
+)
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
     AccountInstanceBinding,
+    account_binding_ledger_parity,
     index_account_instance_bindings,
+    pending_account_binding_retirements,
     read_account_instance_registry,
+)
+from app.engine.live.account_session_policy import (
+    assess_account_live_session,
+    read_account_live_feed_evidence,
+    read_account_session_policy,
+)
+from app.engine.live.journal_recovery_state import (
+    JournalRecoveryStateCorruptError,
+    assess_journal_recovery_fence,
 )
 from app.schemas.account_directory import (
     AccountEffectivePosture,
@@ -32,14 +48,26 @@ from app.schemas.account_directory import (
     AccountRosterVerdictSummary,
     AccountServiceAttachmentState,
     AccountServiceBinding,
+    AccountServiceGateAuthority,
     AccountServiceJournalWatermark,
     AccountServiceLease,
     AccountServiceOperatingState,
+    AccountServiceSessionPolicy,
     AccountServiceStatusResponse,
     AccountServiceSummary,
     AccountsRosterResponse,
 )
+from app.schemas.live_runs import GateResult
+from app.services.account_gate_promotion import (
+    AccountGateAuthority,
+    resolve_account_gate_authority,
+    resolve_action_gate,
+)
 from app.services.account_reconciliation import AccountReconciliationService
+from app.services.account_truth_snapshot import (
+    account_truth_gate_result,
+    get_account_truth_snapshot_provider,
+)
 from app.utils.timestamps import now_ms_utc
 
 
@@ -67,10 +95,12 @@ class AccountDirectoryService:
         *,
         artifacts_root: Path,
         current_account: CurrentBrokerAccount | None,
+        requested_account_gate_authority: AccountGateAuthority = "account_truth",
         now_ms: Callable[[], int] = now_ms_utc,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._current_account = current_account
+        self._requested_account_gate_authority = requested_account_gate_authority
         self._now_ms = now_ms
         self._reconciliation = AccountReconciliationService(artifacts_root=artifacts_root)
 
@@ -107,22 +137,101 @@ class AccountDirectoryService:
         try:
             generation = read_account_clerk_generation(self._artifacts_root, account_id)
             lease = read_account_clerk_lease(self._artifacts_root, account_id)
-            journal = inspect_account_clerk_journal(self._artifacts_root, account_id)
+            ledger_parity = account_binding_ledger_parity(
+                self._artifacts_root,
+                account_id=account_id,
+            )
         except (
             AccountArtifactError,
-            AccountClerkJournalCorruptError,
             OSError,
             json.JSONDecodeError,
             ValidationError,
             ValueError,
         ) as exc:
             raise AccountDirectoryError(str(exc)) from exc
+        try:
+            journal = inspect_account_clerk_journal(self._artifacts_root, account_id)
+            journal_integrity = "healthy"
+            journal_corruption_detail = None
+        except AccountClerkJournalCorruptError as exc:
+            # This is a designated account state, not an unreadable directory.
+            # Keeping the rest of the Clerk projection visible is essential for
+            # the operator-only quarantine ceremony.
+            journal = []
+            journal_integrity = "corrupt"
+            journal_corruption_detail = exc.detail
+        try:
+            recovery_fence = assess_journal_recovery_fence(self._artifacts_root, account_id)
+            recovery_state = recovery_fence.state
+        except JournalRecoveryStateCorruptError as exc:
+            recovery_state = None
+            journal_integrity = "corrupt"
+            journal_corruption_detail = f"journal recovery state is corrupt: {exc.detail}"
+        else:
+            if recovery_fence.reason_code == "CLERK_JOURNAL_RECOVERY_REQUIRED":
+                journal_integrity = "corrupt"
+                journal_corruption_detail = f"operator recovery is at {recovery_state.phase}"
+            elif recovery_fence.reason_code == "CLERK_BROKER_EVIDENCE_ONLY_HOLD":
+                journal_integrity = "broker_evidence_only"
+                journal_corruption_detail = "fresh broker evidence remains unowned and held for reconciliation"
 
-        attachment = _attachment_state(generation, lease, now_ms=self._now_ms())
+        try:
+            now_ms = self._now_ms()
+            attachment = _attachment_state(generation, lease, now_ms=now_ms)
+            gate_authority = resolve_account_gate_authority(
+                self._artifacts_root,
+                account_id=account_id,
+                requested_authority=self._requested_account_gate_authority,
+                now_ms=now_ms,
+            )
+            action_authority, action_gate = _effective_account_action_gate(
+                self._artifacts_root,
+                account_id=account_id,
+                promoted_authority=gate_authority.effective_authority,
+                now_ms=now_ms,
+            )
+            session_policy = read_account_session_policy(self._artifacts_root, account_id)
+            read_account_live_feed_evidence(self._artifacts_root, account_id)
+            session_assessment = assess_account_live_session(
+                self._artifacts_root,
+                account_id=account_id,
+                now_ms=now_ms,
+            )
+            pending_retirement_proposals = len(
+                pending_account_binding_retirements(
+                    self._artifacts_root,
+                    account_id=account_id,
+                )
+            )
+        except (
+            AccountArtifactError,
+            OSError,
+            json.JSONDecodeError,
+            ValidationError,
+            ValueError,
+        ) as exc:
+            raise AccountDirectoryError(str(exc)) from exc
+        ledger_parity_issue_count = sum(
+            len(instances)
+            for instances in (
+                ledger_parity.legacy_only_instances,
+                ledger_parity.ledger_only_instances,
+                ledger_parity.mismatched_instances,
+            )
+        )
+        ledger_parity_state = "clean" if ledger_parity.is_clean else "dirty"
+        ledger_read_authority = (
+            "clerk_ledger"
+            if account_binding_ledger_read_enabled() and ledger_parity.is_clean
+            else "legacy_registry"
+        )
         operating_state, headline, detail = self._operating_copy(
             account_id,
             attachment,
             bindings=bindings,
+            pending_retirement_proposals=pending_retirement_proposals,
+            ledger_parity_issue_count=ledger_parity_issue_count,
+            gate_authority_state=gate_authority.state,
         )
         return AccountServiceStatusResponse(
             account_id=account_id,
@@ -135,6 +244,34 @@ class AccountDirectoryService:
                 state=attachment,
                 generation=None if generation is None else generation.generation,
                 lease_generation=None if lease is None else lease.generation,
+                pending_retirement_proposals=pending_retirement_proposals,
+                ledger_read_authority=ledger_read_authority,
+                ledger_parity=ledger_parity_state,
+                ledger_parity_issue_count=ledger_parity_issue_count,
+            ),
+            gate_authority=AccountServiceGateAuthority(
+                requested_authority=gate_authority.requested_authority,
+                effective_authority=gate_authority.effective_authority,
+                promotion_state=gate_authority.state,
+                reason_code=gate_authority.reason_code,
+                disposition=gate_authority.disposition,
+                action_authority=action_authority,
+                action_gate=action_gate,
+                observed_session_dates=(
+                    [] if gate_authority.parity is None else list(gate_authority.parity.observed_session_dates)
+                ),
+                lease_weaker_comparison_count=(
+                    0
+                    if gate_authority.parity is None
+                    else len(gate_authority.parity.lease_weaker_comparisons)
+                ),
+                restart_smoke_recorded_at_ms=(
+                    None if gate_authority.restart_smoke is None else gate_authority.restart_smoke.recorded_at_ms
+                ),
+            ),
+            session_policy=AccountServiceSessionPolicy(
+                allow_outside_live_session=session_policy.allow_outside_live_session,
+                gate_result=session_assessment.to_gate_result(),
             ),
             lease=None if lease is None else AccountServiceLease(
                 status=lease.status,
@@ -146,6 +283,9 @@ class AccountDirectoryService:
             journal=AccountServiceJournalWatermark(
                 last_seq=None if not journal else journal[-1].seq,
                 last_write_ms=None if not journal else journal[-1].recorded_at_ms,
+                integrity=journal_integrity,
+                corruption_detail=journal_corruption_detail,
+                recovery_phase=None if recovery_state is None else recovery_state.phase,
             ),
             operating_state=operating_state,
             headline=headline,
@@ -158,12 +298,38 @@ class AccountDirectoryService:
         attachment: AccountServiceAttachmentState,
         *,
         bindings: list[AccountInstanceBinding] | None = None,
+        pending_retirement_proposals: int = 0,
+        ledger_parity_issue_count: int = 0,
+        gate_authority_state: str = "SAFE_DEFAULT",
     ) -> tuple[AccountServiceOperatingState, str, str]:
+        if ledger_parity_issue_count:
+            suffix = "difference" if ledger_parity_issue_count == 1 else "differences"
+            return (
+                "ATTENTION",
+                "Binding ledger parity needs attention",
+                f"{ledger_parity_issue_count} binding ledger {suffix} require operator repair; bot admission and Clerk intake remain fail-closed.",
+            )
+        if pending_retirement_proposals:
+            suffix = "proposal is" if pending_retirement_proposals == 1 else "proposals are"
+            return (
+                "ATTENTION",
+                "Binding retirement reconciliation pending",
+                f"{pending_retirement_proposals} daemon liveness {suffix} waiting for the Account Clerk to reconcile before bot admission can resume.",
+            )
         if attachment != "ATTACHED":
             return (
                 "ATTENTION",
                 "Account service needs attention",
                 "Account verification cannot stay current until the account service is attached.",
+            )
+        if gate_authority_state in {
+            "WAITING_FOR_SHADOW_PARITY",
+            "WAITING_FOR_CLERK_RESTART_SMOKE",
+        }:
+            return (
+                "ATTENTION",
+                "Account gate promotion pending",
+                "The proven Account Truth gate remains active until the Clerk proof promotion evidence is complete.",
             )
         if bindings is None:
             try:
@@ -246,6 +412,34 @@ class AccountDirectoryService:
         if self._current_account is None or self._current_account.account_id != account_id:
             return "UNKNOWN"
         return "PAPER_EXECUTION" if self._current_account.is_paper else "UNSAFE"
+
+
+def _effective_account_action_gate(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    promoted_authority: AccountGateAuthority,
+    now_ms: int,
+) -> tuple[AccountGateAuthority, GateResult]:
+    """Project the proof that would enforce a normal action right now."""
+
+    truth_gate = account_truth_gate_result(
+        get_account_truth_snapshot_provider().get(account_id),
+        now_ms=now_ms,
+    )
+    if promoted_authority == "account_truth":
+        return "account_truth", truth_gate
+    lease_gate = account_observation_lease_gate_result(
+        assess_account_observation_lease(artifacts_root, account_id, now_ms=now_ms)
+    )
+    resolution = resolve_action_gate(
+        promoted_authority,
+        account_truth_gate=truth_gate,
+        observation_lease_gate=lease_gate,
+    )
+    if resolution.gate is None:
+        raise AccountDirectoryError("account action gate resolution omitted its selected gate")
+    return resolution.authority, resolution.gate
 
 
 def _attachment_state(

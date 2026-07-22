@@ -42,14 +42,6 @@
         <div><dt>Symbol</dt><dd><code>{{ candidate.symbol }}</code></dd></div>
         <div><dt>Proved</dt><dd><app-timestamp-display [value]="candidate.proved_at_ms" mode="local" /></dd></div>
       }
-      @if (confirmation.command === 'stale_binding_retire' && confirmation.staleBindingCandidate; as candidate) {
-        <div><dt>Strategy</dt><dd><code>{{ candidate.strategy_instance_id }}</code></dd></div>
-        <div><dt>Run</dt><dd><code>{{ candidate.run_id }}</code></dd></div>
-        <div><dt>Namespace</dt><dd><code>{{ candidate.bot_order_namespace }}</code></dd></div>
-        <div><dt>Lifecycle</dt><dd><span class="mono">{{ candidate.lifecycle_state | receiptLabel }}</span></dd></div>
-        <div><dt>Proof</dt><dd><span class="mono">{{ candidate.proof_summary | receiptLabel }}</span></dd></div>
-        <div><dt>Proved</dt><dd><app-timestamp-display [value]="candidate.proved_at_ms" mode="local" /></dd></div>
-      }
       @if (confirmation.command === 'recovery_flatten' && confirmation.recoveryFlatten; as recoveryFlatten) {
         <div><dt>Strategy</dt><dd><code>{{ recoveryFlatten.intent.strategy_instance_id }}</code></dd></div>
         <div><dt>Run</dt><dd><code>{{ recoveryFlatten.intent.run_id }}</code></dd></div>
@@ -103,9 +95,6 @@
     }
     @if (errorMessage(); as errorMessage) {
       <p class="error" role="alert">{{ errorMessage }}</p>
-    }
-    @if (errorReasonCode(); as errorReasonCode) {
-      <p class="error-reason">Reason: <span class="mono">{{ errorReasonCode | receiptLabel }}</span>.</p>
     }
     <footer>
       <button type="button" class="secondary" (click)="cancel()" [disabled]="busy()">Cancel</button>

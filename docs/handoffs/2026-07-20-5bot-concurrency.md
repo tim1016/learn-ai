@@ -1,5 +1,7 @@
 # Handoff — Concurrent-bot (5-bot cohort) research, 2026-07-20
 
+> Historical record: Slice 1 of the Account Clerk PRD (#1154) retired the cohort launcher and its monitor. Do not run this handoff as an operational procedure; launch and observe bots one at a time.
+
 **For:** a fresh agent (or the user) continuing the "run N concurrent bots" work on
 learn-ai in a new session.
 **Repo:** `/Users/inkant/learn-ai`; implementation baseline is merged `master`
@@ -42,10 +44,7 @@ standalone acceptance PRD #1142.
   `7e22f1dce` **Fix A** · `357609b9d` probe-timeout (symptom band-aid) ·
   `2320da708`/`9a4b5da5a`/`b34e255ac` design+diagnosis docs.
 - **Runbook:** `docs/runbooks/cross-client-execution.md` (the outside_mutation class).
-- **Monitor script (reusable):** `PythonDataService/scripts/cohort_monitor.py` — polls the latest cohort;
-  `until_all_up` mode exits on ALL_UP(0) / MEMBER_BLOCKED(1) / MEMBER_DROPPED(2, crash) /
-  TIMEOUT(3). Run: `PythonDataService/.venv/bin/python PythonDataService/scripts/cohort_monitor.py until_all_up`
-  as a background task.
+- **Retired monitor:** the former cohort monitor was removed with the cohort launcher in #1154. Use the rolling per-bot operator surfaces instead.
 
 ---
 
@@ -123,17 +122,16 @@ correctness invariant; #1149 owns the separate sub-second performance target.
   `podman restart polygon-data-service`. Bot subprocess code (`live_engine`/`halt`) loads
   fresh on each spawn (no restart needed). Daemon code needs `./bootstrap-host-daemon.sh --restart`.
 - **After a data-plane restart, wait for Account Truth offers:** the cache is honestly empty
-  until the refresh loop completes its first sweep (normally about 15 seconds). Do not authorize
-  a cohort until roll call exposes the expected offers.
+  until the refresh loop completes its first sweep (normally about 15 seconds). Do not start a
+  bot until roll call exposes its expected offer.
 - **Deploy a bot (UI `/broker/deploy`):** name → Strategy "Deployment Validation" → signal
   symbol → add ON-ENTER stock leg via ticker search (pick NASDAQ/ARCA primary) → SIZING "One
   share per signal" (=FixedShares 1) → LAUNCH SETTINGS **"Paper orders"** (= submit-to-paper;
-  "Read-only"=observe, "Live"=blocked) → **"Prepare for cohort"** (deploys WITHOUT starting).
-- **Launch a cohort:** `/broker/bots` → "Select ready cohort" → "Select 5-bot stagger preset"
-  → Authorize. Or API: `POST /api/live-instances/accounts/DUM284968/cohort-launch`
-  `{"member_strategy_instance_ids":[...5...],"launch_profile":"paper_five_bot_stagger_v2"}`.
-- **Cohort ≈ 1 restart-intensity group** (won't trip the 3-starts/5-min freeze). Crash
-  restarts are excluded from the gate.
+  "Read-only"=observe, "Live"=blocked) → prepare it without starting.
+- **Launch one bot:** `/broker/bots` → run fresh roll call → start exactly one ready bot. The
+  retired cohort endpoint and stagger presets must not be used.
+- **Restart intensity is per bot:** consecutive starts count individually; crash restarts are
+  excluded from the gate.
 - **Current 5 deployable bots:** `cohort5-aapl/nvda/qqq/spy` + `cohort5-msft2` (fresh MSFT
   replacement; original `cohort5-msft` is poisoned/`STOPPED_REQUIRES_REDEPLOY`, leave it).
 - **Env now:** account DUM284968 **CLEAN + flat**, all bots stopped, git tree clean, monitor

@@ -31,6 +31,8 @@
     (valueChange)="selectLens($event)"
   />
 
+  <app-account-desk-cockpit-status />
+
   @if (displayAccountId(); as accountId) {
     <app-account-desk-broker-session [accountId]="accountId" [lens]="lens()" />
   }
@@ -71,4 +73,13 @@
       }
     }
   </section>
+  <app-account-desk-recovery-confirm-dialog
+    [confirmation]="recovery.confirmation()"
+    [busy]="recovery.busy()"
+    [errorMessage]="recovery.errorMessage()"
+    (cancelled)="recovery.cancelConfirmation()"
+    (confirmed)="recovery.confirm()"
+    (exposureReasonChanged)="recovery.setExposureOverrideReason($event)"
+    (confirmationTokenChanged)="recovery.setConfirmationToken($event)"
+  />
 </main>

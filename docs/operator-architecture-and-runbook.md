@@ -235,11 +235,15 @@ The runner keeps the process alive (PAUSED, not STOPPED) so the operator can ins
 
 ### 8.2 Emergency flatten without ownership proof
 
-This is an explicit out-of-process path with operator confirmation. Today it is gated by Phase 5C — the durable-submit ownership-query work hasn't shipped. The CLI variant exists; the bot control page-confirmed button is deferred.
+This is an account-wide Clerk operation, not a per-run CLI escape hatch. The
+operator must provide the exact `FLATTEN` confirmation after fresh Account
+Truth reconciliation proves the requested paper account and no recovery
+candidate is present. The Clerk durably records that authorization, closes
+intake, pauses managed bots, cancels known work, and re-observes the broker
+before it reports the account flat.
 
-When invoked with `force=True`, it liquidates broker-account-net positions and writes an `EMERGENCY_FLATTEN_WITHOUT_OWNERSHIP_PROOF` audit event. Use only as a last resort — without ownership proof, foreign positions could also be touched.
-
-Phase 5C also adds the **cancel-then-liquidate** ordering that the current `cmd_emergency_flatten` is missing (VCR-0009). Until Phase 5C ships, an emergency flatten can race with an open bot order and over-sell. The mitigation is to PAUSE first, observe the open-order panel is empty, then flatten.
+Attributable exposure is held for recovery; unattributable exposure freezes
+admission. Do not use a local command or force flag to bypass those decisions.
 
 ### 8.3 Recovery flatten (`_recovery_flatten`)
 

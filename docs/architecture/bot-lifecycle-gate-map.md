@@ -14,6 +14,13 @@ state casing contract, and shipped/not-shipped status. When this map disagrees
 with the authority document, the authority document wins.
 It intentionally separates:
 
+**Slice 7 authority amendment (2026-07-21):** The Account Clerk owns account
+and broker authority; the lifecycle evaluator owns durable bot duty and roster
+transitions; and the host daemon only actuates processes and reports observed
+facts. Pause, Resume, and Stop are evaluator-owned durable control-plane
+commands, deliberately independent of Clerk or broker availability. Start
+consults account admission but cannot clear a `STOPPED` latch.
+
 - **Current gates**: checks already enforced by code.
 - **Partial gates**: checks that exist, but not at the scope Claude's design requires.
 - **Proposed gates**: new account/fleet substrate from the original design.
@@ -162,7 +169,7 @@ flowchart LR
 | Pause | Capability evaluator, then durable desired-state write, then optional live command. | Already paused, STOPPED, poisoned, mutation conflict. | `operator_capability.py`, desired-state endpoint. | Keep as safe durable write. |
 | Stop | Capability evaluator, then durable STOPPED write, then optional live command. | Already stopped, poisoned, mutation conflict. | `operator_capability.py`, desired-state endpoint. | Keep terminal: redeploy required to return. |
 | Flatten and pause | Capability evaluator, durable PAUSED write first, then FLATTEN_NOW command if live binding exists. | No live binding, no owned positions, mutation conflict. | `operator_capability.py`, `flatten_and_pause_instance`. | If no live binding and exposure exists, route operator to emergency flatten/account recovery. |
-| Emergency flatten | Account echo + confirm, daemon-mediated, independent of live binding. | Missing confirm, no run, daemon failure, account mismatch at CLI/broker path. | `live_instances.py`, `run.py`. | Clearing `UNRESOLVED_EXPOSURE` should require emergency flatten plus clean account reconcile. |
+| Emergency flatten | Account Desk declares fresh paper reconciliation evidence, requires `FLATTEN`, then dispatches a Clerk-owned operation through the host daemon. The Clerk closes intake, requires proved bot pause, cancels only Clerk-proven orders, and uses its existing fenced broker session. | Missing/expired canonical reconciliation receipt, exact recovery candidate, unproved pause, Clerk/daemon failure, foreign exposure, or a non-flat fresh snapshot. | `account_reconciliation.py`, `host_daemon.py`, `account_clerk.py`, `account_clerk_operations.py`. | No run-scoped route, CLI command, host-native emergency subprocess, or dedicated emergency IBKR identity remains. Clear an account freeze only after the Clerk's fresh-flat receipt and account reconciliation. |
 | Mark poisoned | Capability evaluator then command channel. | No live binding, already poisoned, mutation conflict. | `operator_capability.py`, one-shot command endpoint. | Poison remains run-scoped; unresolved exposure remains account-scoped. |
 
 ## Current Subgate Checklist

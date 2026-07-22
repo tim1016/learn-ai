@@ -18,9 +18,9 @@
         <h2 class="eyebrow"><i class="pi pi-check-circle" aria-hidden="true"></i>{{ deployment.created ? 'Deployment created' : 'Deployment already exists' }}</h2>
         <p>
           {{ deployment.created
-            ? deployment.start
-              ? 'The strategy is registered and started with the launch settings shown below.'
-              : 'The strategy is registered but has not started.'
+            ? (deployment.start
+                ? 'The strategy is registered and started with the launch settings shown below.'
+                : 'The strategy is registered without starting it.')
             : 'Nothing changed; the existing deployment already matches this ticket.' }}
         </p>
         @if (deployment.start) {
@@ -388,6 +388,17 @@
       <div class="launch-action">
         <button
           pButton
+          type="button"
+          class="secondary"
+          data-testid="deploy-only"
+          [disabled]="!canSubmit()"
+          [loading]="busy()"
+          (click)="deployOnly()"
+        >
+          <span class="p-button-label">Deploy only</span>
+        </button>
+        <button
+          pButton
           type="submit"
           class="primary"
           [disabled]="!canSubmit()"
@@ -395,18 +406,6 @@
         >
           <i class="pi pi-send" aria-hidden="true"></i>
           <span class="p-button-label">Deploy &amp; run</span>
-        </button>
-        <button
-          pButton
-          type="button"
-          severity="secondary"
-          [outlined]="true"
-          [disabled]="!canSubmit()"
-          [loading]="busy()"
-          (click)="deployOnly()"
-        >
-          <i class="pi pi-pause" aria-hidden="true"></i>
-          <span class="p-button-label">Deploy only</span>
         </button>
         <p
           class="command-status"

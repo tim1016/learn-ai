@@ -97,16 +97,6 @@ function recoveryReceiptView(success: AccountDeskRecoverySuccess): RecoveryRecei
           field("Recorded", "", "text", success.receipt.retired_at_ms),
         ],
       };
-    case "stale_binding_retire":
-      return {
-        message: "Stale deployment binding was retired.",
-        fields: [
-          field("Receipt", success.receipt.receipt_id, "code"),
-          field("Strategy", success.receipt.strategy_instance_id, "code"),
-          field("Run", success.receipt.run_id, "code"),
-          field("Recorded", "", "text", success.receipt.retired_at_ms),
-        ],
-      };
     case "recovery_flatten":
       return {
         message: "Clerk recovery flatten was accepted.",
@@ -124,6 +114,28 @@ function recoveryReceiptView(success: AccountDeskRecoverySuccess): RecoveryRecei
           field("Account", success.receipt.account_id, "code"),
           field("Audit run", success.receipt.audit_run_id, "code"),
           field("Completed", "", "text", success.receipt.completed_at_ms),
+        ],
+      };
+    case "restore_clerk":
+      return {
+        message: "Account Clerk restore completed.",
+        fields: [
+          field("Receipt", success.receipt.receipt_id, "code"),
+          field("Clerk generation", success.receipt.clerk_generation),
+          field("Recorded", "", "text", success.receipt.recorded_at_ms),
+        ],
+      };
+    case "journal_recovery":
+      return {
+        message: success.receipt.phase === "COMPLETE"
+          ? "Clerk journal was re-baselined from fresh broker evidence."
+          : "Corrupt Clerk journal was quarantined as retained audit evidence.",
+        fields: [
+          field("Receipt", success.receipt.receipt_id, "code"),
+          field("Quarantined journal", success.receipt.quarantined_journal_name ?? "", "code"),
+          field("Phase", success.receipt.phase, "label"),
+          field("Broker-evidence holdings", success.receipt.broker_evidence_positions.length),
+          field("Recorded", "", "text", success.receipt.recorded_at_ms),
         ],
       };
   }

@@ -285,58 +285,6 @@ class LegacyStaleClaimRetirementReceipt(BaseModel):
     retired_at_ms: int = Field(ge=0)
 
 
-class StaleBindingRetirementRequest(BaseModel):
-    """Identity of one stale active registry binding an operator wants retired."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
-    run_id: str = Field(min_length=1, max_length=128)
-    requested_by: str = Field(default="account-desk.operator", min_length=1, max_length=128)
-
-
-class StaleBindingRetirementCandidate(BaseModel):
-    """A stale binding whose retirement is freshly proven safe."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
-    run_id: str = Field(min_length=1, max_length=128)
-    bot_order_namespace: str = Field(min_length=1, max_length=256)
-    lifecycle_state: Literal["DEPLOYED", "ACTIVE"]
-    source: str = Field(min_length=1, max_length=256)
-    proof_summary: str = Field(min_length=1, max_length=512)
-    proved_at_ms: int = Field(ge=0)
-    confirmation: OperatorConfirmationCopy
-
-
-class StaleBindingRetirementCandidatesResponse(BaseModel):
-    """The Account desk's currently safe stale-binding recovery actions."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: int = 1
-    account_id: str = Field(min_length=1, max_length=64)
-    generated_at_ms: int = Field(ge=0)
-    candidates: list[StaleBindingRetirementCandidate] = Field(default_factory=list)
-
-
-class StaleBindingRetirementReceipt(BaseModel):
-    """Proof that the host daemon atomically retired one stale binding."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: int = 1
-    receipt_id: str = Field(min_length=1, max_length=256)
-    account_id: str = Field(min_length=1, max_length=64)
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
-    run_id: str = Field(min_length=1, max_length=128)
-    bot_order_namespace: str = Field(min_length=1, max_length=256)
-    requested_by: str = Field(min_length=1, max_length=128)
-    retired_at_ms: int = Field(ge=0)
-    source: str = Field(min_length=1, max_length=256)
-
-
 class AccountClearFreezeRequest(BaseModel):
     """Operator request to clear an active freeze using the latest clean receipt."""
 
@@ -360,6 +308,42 @@ class AccountClearFreezeResponse(BaseModel):
     receipt_id: str = Field(min_length=1, max_length=160)
     gate_result: GateResult
     triage: AccountTriageResponse
+
+
+class AccountSessionPolicyUpdateRequest(BaseModel):
+    """Explicit account-level future hook for outside-live-session actions."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    allow_outside_live_session: bool
+
+
+class AccountSessionPolicyUpdateResponse(BaseModel):
+    """Durable receipt for an account session-policy change."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str = Field(min_length=1, max_length=64)
+    allow_outside_live_session: bool
+    updated_at_ms: int = Field(ge=0)
+
+
+class AccountClerkRestartSmokeRequest(BaseModel):
+    """Typed acknowledgement that the current Clerk passed its restart smoke."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confirmation: Literal["CLERK_RESTART_SMOKE"]
+
+
+class AccountClerkRestartSmokeResponse(BaseModel):
+    """Durable Clerk-restart smoke receipt used by gate promotion."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str = Field(min_length=1, max_length=64)
+    clerk_generation: int = Field(ge=1)
+    recorded_at_ms: int = Field(ge=0)
 
 
 class AccountAcceptExposureOverrideRequest(BaseModel):

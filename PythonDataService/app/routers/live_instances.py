@@ -22,12 +22,11 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
-from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
 from app.config import settings as app_settings
@@ -44,8 +43,12 @@ from app.engine.live.account_artifacts import (
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_observation_lease import (
-    account_observation_lease_gate_result,
     assess_account_observation_lease,
+)
+from app.engine.live.bot_lifecycle_evaluator import (
+    BotLifecycleEvaluator,
+    LifecycleStartAdmissionEvidence,
+    LifecycleTransitionRefusedError,
 )
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
@@ -55,15 +58,16 @@ from app.engine.live.bot_lifecycle_state import (
     BotRollCallOfferRecord,
     stable_bot_lifecycle_state_path,
 )
+from app.engine.live.clock_out import clock_out_is_in_progress
 from app.engine.live.command_channel import CommandChannel, CommandVerb
-from app.engine.live.daemon_connectivity_monitor import get_monitor as get_daemon_connectivity_monitor
+from app.engine.live.daemon_connectivity_monitor import (
+    get_monitor as get_daemon_connectivity_monitor,
+)
 from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.desired_state import (
     DesiredState,
     DesiredStateCorruptError,
     DesiredStateRecord,
-    DesiredStateRepo,
-    stable_desired_state_path,
 )
 from app.engine.live.engine_runtime import (
     ENGINE_RUNTIME_FILENAME,
@@ -107,7 +111,6 @@ from app.routers.live_runs import (
 )
 from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
-from app.schemas.cohort_batch_launch import CohortBatchLaunchCommandRequest, CohortBatchLaunchStatusResponse
 from app.schemas.daemon_diagnostics import DaemonDiagnosticReport, DaemonDominantCondition
 from app.schemas.live_runs import (
     ActiveDateEntry,
@@ -135,7 +138,6 @@ from app.schemas.live_runs import (
     CommandView,
     DesiredStateAction,
     DesiredStateRecordResponse,
-    EmergencyFlattenRequest,
     EnqueueCommandRequest,
     FleetAccountSummary,
     FleetContamination,
@@ -187,8 +189,7 @@ from app.services.account_crash_recovery import (
     record_crash_recovery_override_evidence,
 )
 from app.services.account_fleet_read_context import AccountFleetReadContext
-from app.services.account_reconciliation import AccountReconciliationService
-from app.services.account_truth_refresh import refresh_account_truth_now
+from app.services.account_start_gate import AccountStartGateError, ensure_account_start_gate
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.services.activity_evidence_matching import (
     activity_evidence_ref_from_event,
@@ -216,12 +217,13 @@ from app.services.bot_deletion import (
     BOT_DELETION_FILENAME,
     BotDeletionCorruptError,
     BotDeletionRecord,
-    BotDeletionRegistryRetirementError,
-    bot_delete_response,
     bot_has_soft_deletion,
+    bot_lifecycle_operation_fence,
     bot_run_is_soft_deleted,
     read_bot_deletion,
-    soft_delete_and_retire_bot_runs,
+    retire_bot_lifecycle_and_bindings_under_operation_fence,
+    soft_delete_and_retire_bot_runs_under_operation_fence,
+    stable_bot_deletion_path,
 )
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
 from app.services.bot_lifecycle_conditions import lifecycle_conditions_for_instance
@@ -242,12 +244,6 @@ from app.services.broker_capability_service import get_broker_capability_service
 from app.services.broker_free_fleet_reads import (
     BrokerFreeFleetReadDependencies,
     BrokerFreeFleetReadService,
-)
-from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
-from app.services.cohort_launch import (
-    CohortLaunchCoordinator,
-    CohortTargetPosture,
-    get_cohort_launch_scheduler_registry,
 )
 from app.services.daemon_diagnostics import (
     DaemonHealthPayloadError,
@@ -343,17 +339,6 @@ _STATUS_DAEMON_DIAGNOSTICS_TIMEOUT_S = 1.5
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["live-instances"])
-_cohort_launch_locks: dict[str, asyncio.Lock] = {}
-
-
-def _cohort_launch_lock(account_id: str) -> asyncio.Lock:
-    """Return the one in-process admission lock for an account cohort."""
-
-    lock = _cohort_launch_locks.get(account_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        _cohort_launch_locks[account_id] = lock
-    return lock
 _SURFACE_HUBS = SurfaceHubRegistry[LiveInstanceStatus]()
 _SURFACE_RUNS_CACHE = VisibleRunsSnapshotCache()
 _FLEET_DAEMON_PROVIDER: FleetDaemonSnapshotProvider | None = None
@@ -463,14 +448,6 @@ def _resolve_bot_lifecycle_state(root: Path, sid: str) -> BotLifecycleStateRecor
             extra={"strategy_instance_id": sid, "exception": repr(exc)},
         )
         return None
-
-
-def _bot_lifecycle_state_repo(root: Path, sid: str) -> BotLifecycleStateRepo:
-    try:
-        path = stable_bot_lifecycle_state_path(root.parent, sid)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
-    return BotLifecycleStateRepo(path)
 
 
 def _active_roll_call_offer(root: Path, sid: str, *, now_ms: int) -> BotRollCallOfferRecord | None:
@@ -1214,46 +1191,6 @@ def _start_defaults(
     return InstanceStartDefaults(**start_default_payload)
 
 
-def _cohort_start_request_for_run(
-    run_dir: Path,
-    *,
-    readonly_default: bool,
-) -> HostRunnerStartRequest | None:
-    """Recover the exact safe start settings for a durable cohort slot."""
-
-    try:
-        defaults = _start_defaults(
-            run_dir.parent,
-            None,
-            [{"run_dir": str(run_dir)}],
-            readonly_default=readonly_default,
-        )
-    except ValidationError:
-        return None
-    if defaults is None or not defaults.strategy:
-        return None
-    try:
-        return HostRunnerStartRequest(
-            readonly=defaults.readonly,
-            hydrate_policy=defaults.hydrate_policy,
-            strategy=defaults.strategy,
-            max_orders_per_day=defaults.max_orders_per_day,
-            ibkr_host=defaults.ibkr_host,
-        )
-    except ValidationError:
-        return None
-
-
-def _cohort_live_config_for_run(run_dir: Path) -> dict[str, object] | None:
-    """Recover the immutable session policy that constrains a cohort window."""
-
-    try:
-        live_config = _read_ledger(run_dir).get("live_config")
-    except (OSError, ValueError, KeyError):
-        return None
-    return live_config if isinstance(live_config, dict) else None
-
-
 def _resolve_symbol_resolution(
     root: Path,
     live_binding: LiveBinding | None,
@@ -1908,6 +1845,7 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
             resolve_incident_headline=_resolve_incident_headline,
             resolve_bot_lifecycle_state=_resolve_bot_lifecycle_state,
             resolve_live_run_dir=_resolve_live_run_dir,
+            clock_out_in_progress=clock_out_is_in_progress,
             compute_operator_surface=compute_operator_surface,
             resolve_durable_control_write_failure_for_status=(_resolve_durable_control_write_failure_for_status),
             resolve_start_run_id=_resolve_start_run_id,
@@ -2169,78 +2107,79 @@ async def delete_instance(
 
     The deletion marker is durable and run-id scoped. It hides every run that
     currently belongs to the instance while preserving the artifacts for audit.
+    A later redeploy with a new run id is visible again.
     """
     sid = _validate_instance_id(strategy_instance_id)
     request = body or BotDeleteRequest()
     settings = get_settings()
     root = Path(settings.live_runs_root)
+    with bot_lifecycle_operation_fence(root.parent, sid):
+        _result, daemon = await host_daemon_client.fetch_instance_process(
+            settings.live_runner_daemon_url, sid
+        )
+        if daemon is None:
+            if not _is_retired_bot(root, sid):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={
+                        "reason_code": "HOST_SERVICE_OFFLINE",
+                        "message": "Cannot delete this bot because the bot service is offline; stopped state is unproven.",
+                    },
+                )
+        else:
+            process, _live_binding = _interpret_daemon_process(daemon, root)
+            if process.state in _LIVE_STATES:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={
+                        "reason_code": "BOT_PROCESS_ACTIVE",
+                        "message": "Stop the bot process before deleting it from the catalog.",
+                        "process_state": process.state,
+                        "bound_run_id": process.bound_run_id,
+                    },
+                )
 
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    if daemon is None:
-        if not _is_retired_bot(root, sid):
+        runs = _scan_runs_by_instance(root).get(sid, [])
+        existing = _read_bot_deletion_for_endpoint(root.parent, sid)
+        if not runs and existing is None:
             raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={
-                    "reason_code": "HOST_SERVICE_OFFLINE",
-                    "message": "Cannot delete this bot because the bot service is offline; stopped state is unproven.",
-                },
+                status.HTTP_404_NOT_FOUND,
+                detail={"reason_code": "BOT_NOT_FOUND", "message": f"No bot exists for {sid}."},
             )
-    else:
-        process, _live_binding = _interpret_daemon_process(daemon, root)
-        if process.state in _LIVE_STATES:
+
+        run_ids = [str(run["run_id"]) for run in runs]
+        try:
+            record = await asyncio.to_thread(
+                soft_delete_and_retire_bot_runs_under_operation_fence,
+                root.parent,
+                sid,
+                run_ids=run_ids,
+                deleted_by=request.deleted_by,
+                reason=request.reason,
+                now_ms=_now_ms(),
+            )
+        except OSError as exc:
+            logger.warning(
+                "could not retire bot bindings before soft delete",
+                extra={"strategy_instance_id": sid, "exception": repr(exc)},
+            )
             raise HTTPException(
-                status.HTTP_409_CONFLICT,
+                status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
-                    "reason_code": "BOT_PROCESS_ACTIVE",
-                    "message": "Stop the bot process before deleting it from the catalog.",
-                    "process_state": process.state,
-                    "bound_run_id": process.bound_run_id,
+                    "reason_code": "ACCOUNT_REGISTRY_RETIRE_UNAVAILABLE",
+                    "message": "The account registry could not prove this bot retired; it was not deleted.",
                 },
+            ) from exc
+        except (ValueError, BotDeletionCorruptError) as exc:
+            logger.warning(
+                "failed to soft-delete bot",
+                extra={"strategy_instance_id": sid, "exception": repr(exc)},
             )
-
-    runs = _scan_runs_by_instance(root).get(sid, [])
-    existing = _read_bot_deletion_for_endpoint(root.parent, sid)
-    if not runs and existing is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail={"reason_code": "BOT_NOT_FOUND", "message": f"No bot exists for {sid}."},
-        )
-
-    run_ids = [str(run["run_id"]) for run in runs]
-    try:
-        record = await asyncio.to_thread(
-            soft_delete_and_retire_bot_runs,
-            root.parent,
-            sid,
-            run_ids=run_ids,
-            deleted_by=request.deleted_by,
-            reason=request.reason,
-            now_ms=_now_ms(),
-        )
-    except (ValueError, BotDeletionCorruptError) as exc:
-        logger.warning(
-            "failed to soft-delete bot",
-            extra={"strategy_instance_id": sid, "exception": repr(exc)},
-        )
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="bot deletion marker could not be written",
-        ) from exc
-    except BotDeletionRegistryRetirementError as exc:
-        logger.error(
-            "soft delete marker was written but registry retirement could not be recorded",
-            extra={"strategy_instance_id": sid, "exception": repr(exc)},
-        )
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "reason_code": "ACCOUNT_REGISTRY_RETIRE_UNAVAILABLE",
-                "message": "The bot was hidden, but its account binding retirement is unconfirmed. Retry this action.",
-            },
-        ) from exc
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="bot deletion marker could not be written",
+            ) from exc
     await _SURFACE_RUNS_CACHE.invalidate(root)
-    # Stop the producer before unregistering the publisher so an in-flight
-    # snapshot observer cannot recreate publisher ownership after cleanup.
     for cleanup in (
         lambda: _SURFACE_HUBS.remove(sid),
         lambda: get_publisher_registry().unregister(sid),
@@ -2255,7 +2194,7 @@ async def delete_instance(
                     "exception": repr(cleanup_error),
                 },
             )
-    return bot_delete_response(root.parent, record)
+    return _bot_delete_response(root.parent, record)
 
 
 def _read_bot_deletion_for_endpoint(artifacts_root: Path, sid: str) -> BotDeletionRecord | None:
@@ -2270,6 +2209,18 @@ def _read_bot_deletion_for_endpoint(artifacts_root: Path, sid: str) -> BotDeleti
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="bot deletion marker could not be read",
         ) from exc
+
+
+def _bot_delete_response(artifacts_root: Path, record: BotDeletionRecord) -> BotDeleteResponse:
+    return BotDeleteResponse(
+        strategy_instance_id=record.strategy_instance_id,
+        deleted_at_ms=record.deleted_at_ms,
+        deleted_by=record.deleted_by,
+        reason=record.reason,
+        deleted_run_ids=list(record.deleted_run_ids),
+        marker_path=str(stable_bot_deletion_path(artifacts_root, record.strategy_instance_id)),
+    )
+
 
 def _raise_if_deploy_admission_blocks_start(
     live_runs_root: Path,
@@ -2471,36 +2422,6 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
     if not parsed.created:
         response.status_code = status.HTTP_200_OK
     if daemon_request.strategy_instance_id:
-        lifecycle_repo = _bot_lifecycle_state_repo(root, daemon_request.strategy_instance_id)
-        try:
-            lifecycle_state = lifecycle_repo.read()
-            if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
-                lifecycle_repo.reopen_for_deploy(
-                    now_ms=_now_ms(),
-                    updated_by="system",
-                    reason="deploy.replacement",
-                )
-        except (BotLifecycleStateCorruptError, OSError) as exc:
-            logger.error(
-                "failed to reopen retired bot lifecycle after deploy",
-                extra={
-                    "strategy_instance_id": daemon_request.strategy_instance_id,
-                    "run_id": parsed.run_id,
-                    "error": str(exc),
-                },
-            )
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "reason_code": "BOT_LIFECYCLE_REOPEN_FAILED",
-                    "message": (
-                        "The deploy was accepted, but the bot lifecycle marker could not be "
-                        "reopened. Retry deploy after repairing the lifecycle state."
-                    ),
-                    "strategy_instance_id": daemon_request.strategy_instance_id,
-                    "run_id": parsed.run_id,
-                },
-            ) from exc
         await _ensure_surface_hub_started(daemon_request.strategy_instance_id)
     return parsed
 
@@ -2594,69 +2515,18 @@ async def _ensure_account_observation_lease_allows_start(
     *,
     now_ms: int,
 ) -> None:
-    """Prepare and apply durable account proof at the Start mutation boundary."""
-
-    if settings.account_gate_authority != "observation_lease":
-        return
-    assessment = assess_account_observation_lease(
-        artifacts_root,
-        account_id,
-        now_ms=now_ms,
-    )
-    if assessment.state == "VERIFIED":
-        return
-
     try:
-        await host_daemon_client.ensure_account_clerk(
-            settings.live_runner_daemon_url,
-            account_id,
-        )
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "OUTCOME_UNKNOWN",
-                "message": exc.detail
-                or "The Clerk readiness request may have completed; refresh before retrying.",
-            },
-        ) from exc
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
-
-    service = AccountReconciliationService(artifacts_root=artifacts_root)
-    try:
-        await refresh_account_truth_now(
-            require_connected_client(),
+        await ensure_account_start_gate(
+            artifacts_root,
             account_id=account_id,
-            artifacts_root=artifacts_root,
-            context="start account verification",
-            account_truth_observer=service.observe_account_truth,
-            account_truth_failure_observer=service.observe_account_truth_failure,
+            daemon_url=settings.live_runner_daemon_url,
+            requested_authority=settings.account_gate_authority,
+            client=require_connected_client(),
+            now_ms=now_ms,
+            current_now_ms=_now_ms,
         )
-    except BrokerError:
-        logger.warning(
-            "start account verification refresh failed",
-            extra={"account_id": account_id},
-            exc_info=True,
-        )
-
-    assessment = assess_account_observation_lease(
-        artifacts_root,
-        account_id,
-        now_ms=_now_ms(),
-    )
-    if assessment.state == "VERIFIED":
-        return
-    gate = account_observation_lease_gate_result(assessment)
-    raise HTTPException(
-        status.HTTP_409_CONFLICT,
-        detail={
-            "reason_code": assessment.reason_code,
-            "message": assessment.reason,
-            "gate_result": gate.model_dump(mode="json"),
-            "operator_next_step": "RECONCILE_NOW",
-        },
-    )
+    except AccountStartGateError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
 
 def _start_request_with_ledger_strategy_default(
@@ -2698,27 +2568,31 @@ def _start_request_with_ledger_strategy_default(
         ) from exc
 
 
-def _start_intent_repo(root: Path, sid: str) -> DesiredStateRepo:
-    artifacts_root = _desired_state_root(root)
-    try:
-        sidecar_path = stable_desired_state_path(artifacts_root, sid)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
-    return DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
-
-
 def _persist_start_intent(root: Path, sid: str) -> DesiredStateRecord | None:
-    """Persist the single Start path's durable intent before daemon launch."""
+    """Read the Start latch without letting Start itself clear STOPPED."""
 
-    repo = _start_intent_repo(root, sid)
     try:
-        previous = repo.read()
-        repo.set(
-            DesiredState.RUNNING,
-            updated_by="system",
-            reason="daily_lifecycle.start",
-            now_ms=_now_ms(),
-        )
+        previous = BotLifecycleEvaluator(root.parent, sid).assert_start_latch_allows_start()
+        if previous is not None and previous.desired_state is DesiredState.STOPPED:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "STOPPED_REQUIRES_RESUME",
+                    "message": "This bot is durably STOPPED. Resume it before starting.",
+                    "gate_id": "desired_state.start",
+                    "strategy_instance_id": sid,
+                },
+            )
+    except LifecycleTransitionRefusedError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "STOPPED_REQUIRES_RESUME",
+                "message": "This bot is durably STOPPED. Resume it before starting.",
+                "gate_id": "desired_state.start",
+                "strategy_instance_id": sid,
+            },
+        ) from None
     except DesiredStateCorruptError as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -2734,33 +2608,12 @@ def _persist_start_intent(root: Path, sid: str) -> DesiredStateRecord | None:
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "reason_code": "DESIRED_STATE_WRITE_FAILED",
-                "message": "Could not persist the start intent before launching the bot.",
+                "message": "Could not read the start latch before launching the bot.",
                 "gate_id": "desired_state.start",
                 "strategy_instance_id": sid,
             },
         ) from exc
     return previous
-
-
-def _restore_start_intent(
-    root: Path,
-    sid: str,
-    previous: DesiredStateRecord | None,
-) -> None:
-    repo = _start_intent_repo(root, sid)
-    try:
-        if previous is None:
-            repo.delete()
-        else:
-            repo.write(previous)
-    except (OSError, ValueError) as exc:
-        logger.warning(
-            "failed to restore start intent after rejected start",
-            extra={
-                "strategy_instance_id": sid,
-                "error": str(exc),
-            },
-        )
 
 
 async def _interactive_start_observation_guard(
@@ -2779,6 +2632,31 @@ async def _interactive_start_observation_guard(
 
 async def _interactive_start_fleet_guard(root: Path, account_id: str) -> None:
     await _raise_if_fleet_contamination_blocks_start(root, account_id=account_id)
+
+
+async def _recover_prepared_start_from_daemon_observation(
+    settings: IbkrSettings,
+    *,
+    artifacts_root: Path,
+    strategy_instance_id: str,
+    run_id: str,
+) -> None:
+    """Resolve a response-loss Start only from the daemon's current process fact."""
+
+    _result, process = await host_daemon_client.fetch_instance_process(
+        settings.live_runner_daemon_url,
+        strategy_instance_id,
+    )
+    if process is None:
+        return
+    daemon_state = process.get("state")
+    if not isinstance(daemon_state, str):
+        return
+    BotLifecycleEvaluator(artifacts_root, strategy_instance_id).recover_prepared_start_from_daemon_observation(
+        run_id=run_id,
+        daemon_state=daemon_state,
+        observed_at_ms=_now_ms(),
+    )
 
 
 def _start_admission_service(settings: IbkrSettings) -> StartAdmissionService:
@@ -2801,7 +2679,6 @@ def _start_admission_service(settings: IbkrSettings) -> StartAdmissionService:
                 strategy_instance_id,
                 now_ms=now_ms,
             ),
-            read_account_events=read_account_events,
             live_config_for_run=_live_config_for_run_dir,
             start_boundary_allowed=start_boundary_verdict,
             now_ms=_now_ms,
@@ -2811,27 +2688,7 @@ def _start_admission_service(settings: IbkrSettings) -> StartAdmissionService:
 
 @router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
 async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActionResponse:
-    """Launch the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).
-
-    Start/Stop are routed through the data plane — not called from the browser —
-    because the daemon now enforces a mandatory ``X-Live-Runner-Token`` on every
-    actuation route, and the browser must never hold that shared secret. The data
-    plane reads the token from the artifacts bind mount and forwards it. The
-    daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
-    missing run -> 404, subprocess/daemon unreachable -> 503.
-
-    The typed admission policy selects the gate set. Interactive starts recheck
-    the complete fail-closed chain; a receipt-authorized cohort slot trusts its
-    durable pin and rechecks only named dynamic safety state. Recovery of an
-    already-running exact pinned run is an accepted idempotent replay.
-
-    Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
-    a successful start the broker-activity publisher is registered for
-    the running instance. Failure to bootstrap (broker disconnected,
-    envelope not yet visible) is logged but does NOT roll back the
-    start: the lazy ``_ensure_publisher`` fallback in
-    ``broker_activity.py`` re-attempts on the cockpit's first hit.
-    """
+    """Launch the host runner for ``run_id`` by forwarding to the daemon."""
     try:
         run_id = _validate_path_segment(run_id, field="run_id")
     except ValueError as exc:
@@ -2839,6 +2696,14 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
+    existing_sid = _strategy_instance_id_for_run(root, run_id)
+    if existing_sid is not None:
+        await _recover_prepared_start_from_daemon_observation(
+            settings,
+            artifacts_root=root.parent,
+            strategy_instance_id=existing_sid,
+            run_id=run_id,
+        )
     admission = await _start_admission_service(settings).admit(run_id, body)
     if admission.refusal is not None:
         raise HTTPException(admission.refusal.status_code, detail=admission.refusal.detail)
@@ -2852,7 +2717,24 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     scope = _operator_mutation_scope(root, instance_id=sid, action="start", run_id=run_id)
     with scope:
         scope.stage = "persist_start_intent"
-        previous_start_intent = _persist_start_intent(root, sid)
+        _persist_start_intent(root, sid)
+        admitted_at_ms = _now_ms()
+        start_admission = LifecycleStartAdmissionEvidence(
+            policy=admission.policy,
+            strategy_instance_id=sid,
+            run_id=run_id,
+            roll_call_offer_id=body.roll_call_offer_id,
+            admitted_at_ms=admitted_at_ms,
+        )
+        lifecycle_evaluator = BotLifecycleEvaluator(root.parent, sid)
+        scope.stage = "prepare_start_evaluator"
+        lifecycle_evaluator.prepare_start(
+            run_id=run_id,
+            now_ms=admitted_at_ms,
+            updated_by="system",
+            reason="start_actuation_prepared",
+            admission=start_admission,
+        )
         scope.stage = "idempotent_start" if admission.idempotent_process is not None else "daemon_start"
         try:
             result = (
@@ -2861,7 +2743,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
                 else await host_daemon_client.start_run(
                     settings.live_runner_daemon_url,
                     run_id,
-                    body.model_dump(exclude={"roll_call_offer_id"}),
+                    scope.daemon_payload(body, exclude={"roll_call_offer_id"}),
                 )
             )
         except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
@@ -2873,10 +2755,13 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
                 mutation_attempt_id=unknown.mutation_attempt_id,
             )
         except host_daemon_client.HostDaemonError as exc:
+            lifecycle_evaluator.abort_prepared_start(
+                run_id=run_id,
+                failure="daemon_start_rejected",
+            )
             rejected = scope.reject_not_observed(
                 outcome={"accepted": False, "status_code": exc.status_code},
             )
-            _restore_start_intent(root, sid, previous_start_intent)
             await _ensure_surface_hub_started(sid)
             raise HTTPException(
                 exc.status_code,
@@ -2884,18 +2769,16 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
             ) from exc
         scope.stage = "start_response_assembly"
         response = _parse_action_response(result)
-        if not response.accepted:
-            _restore_start_intent(root, sid, previous_start_intent)
         await _maybe_start_broker_activity_publisher(response)
         if response.accepted:
             if body.roll_call_offer_id is not None:
                 bot_roll_call_offer_repo(root, sid).consume(body.roll_call_offer_id)
-            _bot_lifecycle_state_repo(root, sid).set_phase(
-                BotLifecyclePhase.ON_DUTY,
-                now_ms=_now_ms(),
+            lifecycle_evaluator.record_start_accepted(
+                run_id=run_id,
+                now_ms=admitted_at_ms,
                 updated_by="system",
-                active_run_id=run_id,
                 reason="start_accepted",
+                admission=start_admission,
             )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
@@ -2915,60 +2798,6 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
         )
     await _ensure_surface_hub_started(sid)
     return response
-
-
-@router.post(
-    "/accounts/{account_id}/cohort-launch",
-    response_model=CohortBatchLaunchStatusResponse,
-)
-async def launch_cohort(
-    account_id: str,
-    body: CohortBatchLaunchCommandRequest,
-    request: Request,
-) -> CohortBatchLaunchStatusResponse:
-    """Atomically admit then start one exact, server-pinned cohort.
-
-    The browser provides only the member IDs it displayed.  The server refreshes
-    roll call under an account admission lock, rejects any changed candidate
-    set, persists the authorization before side effects, and derives every
-    outcome from its own ``start_run`` calls.  Starts are intentionally not
-    rolled back: an accepted sibling remains managed after a partial launch.
-    """
-
-    try:
-        normalized_account_id = normalize_account_id(account_id)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    async with _cohort_launch_lock(normalized_account_id):
-        identity_header = request.headers.get("X-Operator-Identity")
-        settings = get_settings()
-        readonly_default = _resolve_readonly_default(settings)
-        coordinator = CohortLaunchCoordinator(
-            artifacts_root=Path(settings.live_runs_root).parent,
-            live_runs_root=Path(settings.live_runs_root),
-            run_roll_call=run_roll_call,
-            start_run=start_run,
-            visible_runs_by_instance=_visible_runs_by_instance,
-            run_account_id=_run_dir_account_id,
-            run_live_config=_cohort_live_config_for_run,
-            start_request_for_run=lambda run_dir: _cohort_start_request_for_run(
-                run_dir,
-                readonly_default=readonly_default,
-            ),
-            target_account_posture=_cohort_target_account_posture,
-            now_ms=_now_ms,
-            evidence_samplers=get_cohort_evidence_sampler_registry(),
-            launch_schedulers=get_cohort_launch_scheduler_registry(),
-        )
-        return await coordinator.launch(
-            account_id=normalized_account_id,
-            requested_members=body.member_strategy_instance_ids,
-            operator_identity=(identity_header.strip() if identity_header and identity_header.strip() else "local-operator"),
-            identity_header_present=bool(identity_header),
-            client_host=request.client.host if request.client is not None else None,
-            launch_profile=body.launch_profile,
-        )
 
 
 async def _maybe_start_broker_activity_publisher(
@@ -3039,7 +2868,7 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
     with scope:
         scope.stage = "daemon_stop"
         try:
-            result = await host_daemon_client.stop_run(settings.live_runner_daemon_url, run_id, body.model_dump())
+            result = await host_daemon_client.stop_run(settings.live_runner_daemon_url, run_id, scope.daemon_payload(body))
         except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
             unknown = scope.unknown(error=exc)
             await _ensure_surface_hub_started(sid)
@@ -3059,14 +2888,6 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
             ) from exc
         scope.stage = "stop_response_assembly"
         response = _parse_action_response(result)
-        if response.accepted:
-            _bot_lifecycle_state_repo(root, sid).set_phase(
-                BotLifecyclePhase.OFF_DUTY,
-                now_ms=_now_ms(),
-                updated_by="system",
-                active_run_id=None,
-                reason="stop_accepted",
-            )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
             root,
@@ -3092,7 +2913,7 @@ async def end_day_now(
     strategy_instance_id: str,
     body: HostRunnerStopRequest | None = None,
 ) -> HostRunnerActionResponse:
-    """Instance-addressed clean exit request for the daily lifecycle toolbar."""
+    """Queue Clerk-owned clean exit; only broker evidence can finish the day."""
 
     sid = _validate_instance_id(strategy_instance_id)
     settings = get_settings()
@@ -3109,7 +2930,15 @@ async def end_day_now(
             },
         )
 
-    request = body or HostRunnerStopRequest()
+    live_run_dir = _visible_live_run_dir(root, live_binding)
+    if live_run_dir is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason_code": "LIVE_RUN_ARTIFACTS_UNAVAILABLE",
+                "message": "The bound run is not visible locally, so clock-out cannot be queued.",
+            },
+        )
     scope = _operator_mutation_scope(
         root,
         instance_id=sid,
@@ -3117,45 +2946,50 @@ async def end_day_now(
         run_id=live_binding.run_id,
     )
     with scope:
-        scope.stage = "daemon_stop"
-        try:
-            result = await host_daemon_client.stop_run(
-                settings.live_runner_daemon_url,
-                live_binding.run_id,
-                request.model_dump(),
-            )
-        except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-            unknown = scope.unknown(error=exc)
-            await _ensure_surface_hub_started(sid)
-            _raise_outcome_unknown("end_day_now", exc, mutation_attempt_id=unknown.mutation_attempt_id)
-        except host_daemon_client.HostDaemonError as exc:
-            rejected = scope.reject_not_observed(
-                outcome={"accepted": False, "status_code": exc.status_code},
-            )
-            await _ensure_surface_hub_started(sid)
-            raise HTTPException(
-                exc.status_code,
-                detail=_mutation_error_detail(exc.detail, rejected),
-            ) from exc
+        scope.stage = "clock_out_enqueue"
+        command_seq: int | None = None
+        if clock_out_is_in_progress(live_run_dir):
+            command_id = f"clock-out-{live_binding.run_id}-in-progress"
+            stop_outcome = "clock_out_already_queued"
+        else:
+            try:
+                command = CommandChannel(live_run_dir / "commands").write_from_operator(
+                    CommandVerb.CLOCK_OUT
+                )
+            except OSError as exc:
+                unknown = scope.unknown(error=exc)
+                await _ensure_surface_hub_started(sid)
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=_mutation_error_detail("clock-out command could not be queued", unknown),
+                ) from exc
+            command_seq = command.seq
+            command_id = f"clock-out-{live_binding.run_id}-{command.seq}"
+            stop_outcome = "clock_out_queued"
         scope.stage = "end_day_response_assembly"
-        response = _parse_action_response(result)
-        if response.accepted:
-            _bot_lifecycle_state_repo(root, sid).set_phase(
-                BotLifecyclePhase.OFF_DUTY,
-                now_ms=_now_ms(),
-                updated_by="operator",
-                active_run_id=None,
-                reason="end_day_now",
-            )
+        response = _parse_action_response(
+            {
+                "accepted": True,
+                "command_id": command_id,
+                "stop_outcome": stop_outcome,
+                "process": {
+                    "state": process.state,
+                    "run_id": live_binding.run_id,
+                    "strategy_instance_id": sid,
+                    "pid": process.pid,
+                    "started_at_ms": process.started_at_ms,
+                },
+            }
+        )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
             root,
             settings,
-            response.process.model_dump(mode="json"),
-            mutation_key="stop",
+            daemon,
+            mutation_key="clock_out",
         )
         confirmed = scope.confirm(
-            outcome={"accepted": response.accepted, "run_id": live_binding.run_id},
+            outcome={"accepted": True, "run_id": live_binding.run_id, "command_seq": command_seq},
         )
         response = response.model_copy(
             update={
@@ -3179,12 +3013,22 @@ async def set_lifecycle_roster(
     sid = _validate_instance_id(strategy_instance_id)
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    _bot_lifecycle_state_repo(root, sid).set_roster(
-        body.on_roster,
-        now_ms=_now_ms(),
-        updated_by=body.updated_by,
-        reason=body.reason,
-    )
+    try:
+        BotLifecycleEvaluator(root.parent, sid).set_roster(
+            body.on_roster,
+            now_ms=_now_ms(),
+            updated_by=body.updated_by,
+            reason=body.reason,
+        )
+    except LifecycleTransitionRefusedError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "RETIRED_LIFECYCLE",
+                "message": str(exc),
+                "strategy_instance_id": sid,
+            },
+        ) from exc
     return await _daily_lifecycle_mutation_response(sid, root, settings)
 
 
@@ -3206,31 +3050,37 @@ async def retire_and_replace(
         )
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    process, _live_binding = _interpret_daemon_process(daemon, root)
-    if process.state == "unreachable":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "HOST_SERVICE_OFFLINE",
-                "message": "The bot service is unreachable. Reconnect it before retiring and replacing this bot.",
-                "process_state": process.state,
-            },
+    with bot_lifecycle_operation_fence(root.parent, sid):
+        _result, daemon = await host_daemon_client.fetch_instance_process(
+            settings.live_runner_daemon_url, sid
         )
-    if process.state in {"running", "stopping"}:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "BOT_ON_DUTY",
-                "message": "End the day before retiring and replacing this bot.",
-                "process_state": process.state,
-            },
+        process, _live_binding = _interpret_daemon_process(daemon, root)
+        if process.state == "unreachable":
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "HOST_SERVICE_OFFLINE",
+                    "message": "The bot service is unreachable. Reconnect it before retiring and replacing this bot.",
+                    "process_state": process.state,
+                },
+            )
+        if process.state in {"running", "stopping"}:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "BOT_ON_DUTY",
+                    "message": "End the day before retiring and replacing this bot.",
+                    "process_state": process.state,
+                },
+            )
+        retire_bot_lifecycle_and_bindings_under_operation_fence(
+            root.parent,
+            sid,
+            run_ids=[str(run["run_id"]) for run in _scan_runs_by_instance(root).get(sid, [])],
+            now_ms=_now_ms(),
+            updated_by=body.updated_by,
+            reason=body.reason,
         )
-    _bot_lifecycle_state_repo(root, sid).retire(
-        now_ms=_now_ms(),
-        updated_by=body.updated_by,
-        reason=body.reason,
-    )
     return await _daily_lifecycle_mutation_response(sid, root, settings)
 
 
@@ -3529,34 +3379,6 @@ async def _fetch_broker_connected_account(
     if isinstance(account, str) and account.strip():
         return account.strip(), True
     return None, True
-
-
-async def _cohort_target_account_posture(account_id: str) -> CohortTargetPosture:
-    """Return the current broker-authored posture for one cohort target.
-
-    A run ledger already pins the account identity, while the data-plane
-    broker snapshot owns whether that exact account is currently connected in
-    paper mode.  Keep this derivation at the existing broker boundary rather
-    than writing another mode value into every run ledger.
-    """
-
-    snapshot = snapshot_data_plane_broker()
-    broker_account, broker_known = await _fetch_broker_connected_account(snapshot)
-    if not broker_known or broker_account is None:
-        return "UNKNOWN"
-    try:
-        connected_account_id = normalize_account_id(broker_account)
-    except InvalidAccountIdError:
-        return "UNKNOWN"
-    if connected_account_id != account_id:
-        return "UNKNOWN"
-    if (
-        snapshot.connected
-        and snapshot.connection_state == "connected"
-        and snapshot.configured_mode == "paper"
-    ):
-        return "PAPER_EXECUTION"
-    return "UNSAFE"
 
 
 async def _compute_account_fleet_contamination(
@@ -4029,12 +3851,6 @@ _OUTCOME_UNKNOWN_RUNBOOK_HINTS: dict[str, str] = {
         "An end-day stop request was sent to the host runner daemon but the response "
         "was lost. The run may or may not have stopped. Read the latest Bot Cockpit "
         "state before deciding whether to retry."
-    ),
-    "emergency_flatten": (
-        "An emergency-flatten request was sent to the host runner daemon "
-        "but the response was lost. Broker positions may be in an "
-        "intermediate state. Verify positions directly via the broker "
-        "before deciding whether to retry."
     ),
     "renew_daemon_lease": (
         "A control-plane lease renewal request was sent to the host runner "
@@ -5112,10 +4928,6 @@ async def set_instance_desired_state(
     root = Path(settings.live_runs_root)
 
     artifacts_root = _desired_state_root(root)
-    try:
-        sidecar_path = stable_desired_state_path(artifacts_root, sid)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
     # PRD #616 / #619-A §A4 — re-run the shared capability evaluator
     # immediately before the durable write so a stale status snapshot
@@ -5164,13 +4976,14 @@ async def set_instance_desired_state(
     )
     with scope:
         scope.stage = "durable_intent_write"
-        repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
-        record = repo.set(
+        record = BotLifecycleEvaluator(artifacts_root, sid).set_desired_state(
             _ACTION_TO_STATE[body.action],
             updated_by=body.updated_by,
             reason=body.reason,
             now_ms=_now_ms(),
-        )
+        ).desired_state
+        if record is None:
+            raise OSError("lifecycle evaluator did not return a desired-state record")
         durable = DesiredStateRecordResponse(
             state=record.desired_state.value,
             updated_at_ms=record.updated_at_ms,
@@ -5266,10 +5079,6 @@ async def flatten_and_pause_instance(
     root = Path(settings.live_runs_root)
 
     artifacts_root = _desired_state_root(root)
-    try:
-        sidecar_path = stable_desired_state_path(artifacts_root, sid)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
     # PRD #607 / Slice 1 (#608) / #619-A §A4 — shared-capability gate.
     # The status endpoint's ``operator_surface.actions.flatten_and_pause``
@@ -5305,14 +5114,15 @@ async def flatten_and_pause_instance(
     )
     with scope:
         scope.stage = "durable_pause_write"
-        repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
         try:
-            record = repo.set(
+            record = BotLifecycleEvaluator(artifacts_root, sid).set_desired_state(
                 DesiredState.PAUSED,
                 updated_by=payload.updated_by,
                 reason=payload.reason or "flatten-and-pause",
                 now_ms=_now_ms(),
-            )
+            ).desired_state
+            if record is None:
+                raise OSError("lifecycle evaluator did not return a desired-state record")
         except OSError as exc:
             unknown = scope.unknown(error=exc)
             await _ensure_surface_hub_started(sid)
@@ -5728,80 +5538,6 @@ async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommand
             rung_receipt_warnings=warnings,
             mutation_attempt_id=confirmed.mutation_attempt_id,
             mutation_dispatch_state=confirmed.dispatch_state,
-        )
-    await _ensure_surface_hub_started(sid)
-    return response
-
-
-@router.post("/{strategy_instance_id}/emergency-flatten", response_model=HostRunnerActionResponse)
-async def emergency_flatten_instance(
-    strategy_instance_id: str, body: EmergencyFlattenRequest
-) -> HostRunnerActionResponse:
-    """Account-wide emergency flatten (§ 7.2 #6), independent of a live binding.
-
-    The console FLATTEN *command* needs a live binding (it writes to the run's
-    command channel for the engine to drain) — but after a halt/poison the
-    binding is gone, exactly when an operator most wants to flatten. This reaches
-    the daemon's one-shot ``emergency-flatten`` on the instance's latest run,
-    reusing the existing paper-guarded CLI. It connects its own broker session,
-    so it works with no live process. Account-wide only; namespace-attributed
-    reconciliation stays fail-closed. The operator must echo the account id
-    (defense-in-depth, mirrors the CLI ``--account`` gate).
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    if not body.confirm:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    runs = _scan_runs_by_instance(root).get(sid, [])
-    if not runs:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"no run found for instance {sid!r} to flatten")
-    run_id = str(runs[0]["run_id"])
-    scope = _operator_mutation_scope(root, instance_id=sid, action="flatten", run_id=run_id)
-    with scope:
-        scope.stage = "daemon_emergency_flatten"
-        try:
-            body_json = await host_daemon_client.emergency_flatten_run(
-                settings.live_runner_daemon_url,
-                run_id,
-                {"account": body.account, "confirm": True},
-            )
-        except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-            unknown = scope.unknown(error=exc)
-            await _ensure_surface_hub_started(sid)
-            _raise_outcome_unknown(
-                "emergency_flatten",
-                exc,
-                mutation_attempt_id=unknown.mutation_attempt_id,
-            )
-        except host_daemon_client.HostDaemonError as exc:
-            rejected = scope.reject_not_observed(
-                outcome={"accepted": False, "status_code": exc.status_code},
-            )
-            await _ensure_surface_hub_started(sid)
-            raise HTTPException(
-                exc.status_code,
-                detail=_mutation_error_detail(exc.detail, rejected),
-            ) from exc
-        scope.stage = "emergency_flatten_response_assembly"
-        response = HostRunnerActionResponse.model_validate(body_json)
-        receipt, warnings = await _mutation_rung_receipts_from_process(
-            sid,
-            root,
-            settings,
-            response.process.model_dump(mode="json"),
-            mutation_key="emergency_flatten",
-        )
-        confirmed = scope.confirm(
-            outcome={"accepted": response.accepted, "run_id": run_id},
-        )
-        response = response.model_copy(
-            update={
-                "rung_receipt": receipt,
-                "rung_receipt_warnings": warnings,
-                "mutation_attempt_id": confirmed.mutation_attempt_id,
-                "mutation_dispatch_state": confirmed.dispatch_state,
-            }
         )
     await _ensure_surface_hub_started(sid)
     return response

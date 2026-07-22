@@ -89,7 +89,7 @@ export class AccountDeskJournalCureComponent {
     this.transportErrorMessage.set(null);
     this.transportReasonCode.set(null);
     try {
-      const status = await this.broker.recheckAccountClerk(accountId);
+      const status = await this.broker.accountServiceStatus(accountId);
       if (!this.isCurrent(accountId, generation)) return;
       this.transportReady.set(status.account_id === accountId);
       if (status.account_id !== accountId) {
