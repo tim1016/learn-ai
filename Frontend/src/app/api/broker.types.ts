@@ -75,7 +75,7 @@ export interface paths {
         put?: never;
         /**
          * Emergency Flatten Account Endpoint
-         * @description Run the audited account-wide paper flatten without a surviving bot run.
+         * @description Authorize and dispatch one Clerk-owned account-wide paper flatten.
          */
         post: operations["emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post"];
         delete?: never;
