@@ -32,6 +32,19 @@ from app.engine.live.live_state_sidecar import _file_lock
 BINDING_COMMAND_LEDGER_FILENAME = "binding_commands.jsonl"
 ACCOUNT_BINDING_LEDGER_READ_ENABLED_ENV = "ACCOUNT_BINDING_LEDGER_READ_ENABLED"
 
+# Fields compared to decide whether a legacy registry binding and its latest
+# ledger decision agree. Shared by parity detection and baseline seeding so the
+# two operations can never drift on what "matching" means.
+_COMPARISON_FIELDS = (
+    "account_id",
+    "strategy_instance_id",
+    "run_id",
+    "bot_order_namespace",
+    "lifecycle_state",
+    "recorded_at_ms",
+    "source",
+)
+
 
 class AccountBindingCommand(BaseModel):
     """One sequenced Clerk binding decision or daemon retirement proposal."""
@@ -248,19 +261,10 @@ def binding_ledger_parity(
     legacy_ids = set(legacy_latest)
     ledger_ids = set(ledger_latest)
     mismatch: list[str] = []
-    comparison_fields = (
-        "account_id",
-        "strategy_instance_id",
-        "run_id",
-        "bot_order_namespace",
-        "lifecycle_state",
-        "recorded_at_ms",
-        "source",
-    )
     for strategy_instance_id in sorted(legacy_ids & ledger_ids):
         legacy = legacy_latest[strategy_instance_id]
         command = ledger_latest[strategy_instance_id]
-        if any(legacy.get(field) != getattr(command, field) for field in comparison_fields):
+        if any(legacy.get(field) != getattr(command, field) for field in _COMPARISON_FIELDS):
             mismatch.append(strategy_instance_id)
     return BindingLedgerParity(
         legacy_only_instances=tuple(sorted(legacy_ids - ledger_ids)),
@@ -301,15 +305,6 @@ def baseline_binding_ledger_from_registry(
     for binding in legacy_bindings:
         strategy_instance_id = _required_string(binding, "strategy_instance_id")
         legacy_latest[strategy_instance_id] = dict(binding)
-    comparison_fields = (
-        "account_id",
-        "strategy_instance_id",
-        "run_id",
-        "bot_order_namespace",
-        "lifecycle_state",
-        "recorded_at_ms",
-        "source",
-    )
     baselined: list[str] = []
     with _file_lock(path):
         ledger_latest: dict[str, AccountBindingCommand] = {}
@@ -322,7 +317,7 @@ def baseline_binding_ledger_from_registry(
             existing = ledger_latest.get(strategy_instance_id)
             if existing is not None and all(
                 legacy.get(field) == getattr(existing, field)
-                for field in comparison_fields
+                for field in _COMPARISON_FIELDS
             ):
                 continue
             _append_command_locked(path, legacy, entry_kind="decision")

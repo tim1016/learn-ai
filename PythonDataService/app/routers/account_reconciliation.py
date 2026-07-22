@@ -17,7 +17,7 @@ from app.engine.live.account_artifacts import AccountArtifactError, append_accou
 from app.engine.live.account_clerk_rpc import (
     AccountClerkRpcClient,
     AccountClerkRpcError,
-    AccountClerkRpcRejectedError,
+    clerk_rejection_reason,
 )
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import (
@@ -206,10 +206,9 @@ def _outcome_unknown_http_error(
 def _clerk_rpc_http_error(exc: AccountClerkRpcError) -> HTTPException:
     """Expose normal Clerk rejections without collapsing them into a server error."""
 
-    unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
-    reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+    retry_safe, reason_code = clerk_rejection_reason(exc)
     return HTTPException(
-        status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+        status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
         detail={"reason_code": reason_code, "message": "Clerk rejected or could not complete the request."},
     )
 

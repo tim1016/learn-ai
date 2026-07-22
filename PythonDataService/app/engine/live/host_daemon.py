@@ -42,6 +42,7 @@ from app.engine.live.account_clerk_rpc import (
     AccountClerkRpcClient,
     AccountClerkRpcError,
     AccountClerkRpcRejectedError,
+    clerk_rejection_reason,
 )
 from app.engine.live.account_clerk_supervisor import (
     AccountClerkProcessEvidence,
@@ -1144,10 +1145,9 @@ class RunnerProcessManager:
                 )
             )
         except AccountClerkRpcError as exc:
-            unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
-            reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+            retry_safe, reason_code = clerk_rejection_reason(exc)
             raise HostRunnerError(
-                status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+                status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
                 {
                     "reason_code": reason_code,
                     "message": "The Account Clerk could not prove the emergency account recovery complete.",
@@ -2660,10 +2660,9 @@ def create_app(
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
         except AccountClerkRpcError as exc:
-            unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
-            reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+            retry_safe, reason_code = clerk_rejection_reason(exc)
             raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+                status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
                 detail={
                     "reason_code": reason_code,
                     "message": "Clerk rejected or could not complete the request.",
