@@ -269,7 +269,8 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     safe_account_id = match.group(0)
     resolved_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
     resolved = os.path.realpath(os.path.join(resolved_root, safe_account_id))
-    if not str(resolved).startswith(str(resolved_root) + os.sep):
+    root_prefix = resolved_root.rstrip(os.sep) + os.sep
+    if not resolved.startswith(root_prefix):
         raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
     return Path(resolved)
 
@@ -322,12 +323,12 @@ def _account_artifact_file_path(
     if filename != os.path.basename(filename):
         raise AccountArtifactError(f"invalid account artifact filename: {filename!r}")
     root = account_artifacts_root(artifacts_root, account_id)
-    path = Path(os.path.realpath(os.path.join(os.fspath(root), filename)))
-    root_real = os.fspath(root)
-    root_prefix = root_real if root_real.endswith(os.sep) else f"{root_real}{os.sep}"
-    if not os.fspath(path).startswith(root_prefix):
+    root_real = os.path.realpath(os.fspath(root))
+    candidate = os.path.realpath(os.path.join(root_real, filename))
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+    if not candidate.startswith(root_prefix):
         raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
-    return path
+    return Path(candidate)
 
 
 def _existing_account_artifact_file_path(
