@@ -14,7 +14,7 @@ from app.broker.alpaca import adapter
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
 
 # Alpaca free / paper-account capabilities, verified 2026-07 (spec §3). Honest
@@ -50,6 +50,10 @@ class AlpacaBroker:
     async def get_account(self) -> BrokerAccountSnapshot:
         payload = await self._client.get_account()
         return adapter.from_alpaca_account(payload)
+
+    async def list_positions(self) -> list[BrokerPosition]:
+        payloads = await self._client.list_positions()
+        return [adapter.from_alpaca_position(payload) for payload in payloads]
 
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:

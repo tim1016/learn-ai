@@ -15,7 +15,7 @@ from typing import NoReturn
 from fastapi import APIRouter, HTTPException
 
 from app.broker.contract.errors import BrokerError, BrokerRateLimited
-from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
 
@@ -53,3 +53,8 @@ async def _run[T](broker: str, call: Callable[[BrokerReadPort], Awaitable[T]]) -
 @router.get("/{broker}/account", response_model=BrokerAccountSnapshot)
 async def get_account(broker: str) -> BrokerAccountSnapshot:
     return await _run(broker, lambda port: port.get_account())
+
+
+@router.get("/{broker}/positions", response_model=list[BrokerPosition])
+async def list_positions(broker: str) -> list[BrokerPosition]:
+    return await _run(broker, lambda port: port.list_positions())

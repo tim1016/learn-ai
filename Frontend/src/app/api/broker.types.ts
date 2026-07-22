@@ -1226,6 +1226,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/positions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Positions */
+        get: operations["list_positions_api_brokers__broker__positions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chart/allowed-timeframes": {
         parameters: {
             query?: never;
@@ -8299,6 +8316,38 @@ export interface components {
              * @enum {string}
              */
             verdict: "CONSISTENT" | "CONFLICTING" | "UNKNOWN" | "NOT_COMPARABLE";
+        };
+        /**
+         * BrokerPosition
+         * @description A single open position (symbol, quantity, entry, value, unrealized PnL).
+         */
+        BrokerPosition: {
+            /** Asset Class */
+            asset_class: string | null;
+            /** Asset Id */
+            asset_id: string | null;
+            /** Average Entry Price */
+            average_entry_price: number;
+            /** Broker */
+            broker: string;
+            /** Cost Basis */
+            cost_basis: number;
+            /** Current Price */
+            current_price: number | null;
+            /** Market Value */
+            market_value: number;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Quantity */
+            quantity: number;
+            /** Side */
+            side: string;
+            /** Symbol */
+            symbol: string;
+            /** Unrealized Pl */
+            unrealized_pl: number;
+            /** Unrealized Plpc */
+            unrealized_plpc: number | null;
         };
         /**
          * BrokerSafetyVerdict
@@ -24452,6 +24501,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerAccountSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_positions_api_brokers__broker__positions_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerPosition"][];
                 };
             };
             /** @description Validation Error */

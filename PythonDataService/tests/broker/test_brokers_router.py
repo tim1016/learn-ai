@@ -11,7 +11,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.contract.errors import BrokerAuthError, BrokerRateLimited
-from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
@@ -48,17 +48,23 @@ def _snapshot(**overrides) -> BrokerAccountSnapshot:
     return BrokerAccountSnapshot(**base)
 
 
-class _FakeAccountPort:
+class _FakePort:
     broker_id = "alpaca"
 
-    def __init__(self, *, account=None, error=None) -> None:
+    def __init__(self, *, account=None, positions=None, error=None) -> None:
         self._account = account
+        self._positions = positions if positions is not None else []
         self._error = error
 
     async def get_account(self) -> BrokerAccountSnapshot:
         if self._error is not None:
             raise self._error
         return self._account
+
+    async def list_positions(self):
+        if self._error is not None:
+            raise self._error
+        return self._positions
 
 
 async def _get(path: str):
@@ -69,7 +75,7 @@ async def _get(path: str):
 
 
 async def test_account_endpoint_returns_snapshot() -> None:
-    get_broker_registry().register(_FakeAccountPort(account=_snapshot(account_id="PA9")))
+    get_broker_registry().register(_FakePort(account=_snapshot(account_id="PA9")))
 
     response = await _get("/api/brokers/alpaca/account")
 
@@ -91,7 +97,7 @@ async def test_unknown_broker_returns_404() -> None:
 
 async def test_auth_error_translates_to_502() -> None:
     get_broker_registry().register(
-        _FakeAccountPort(error=BrokerAuthError("Alpaca rejected our credentials.", broker="alpaca"))
+        _FakePort(error=BrokerAuthError("Alpaca rejected our credentials.", broker="alpaca"))
     )
 
     response = await _get("/api/brokers/alpaca/account")
@@ -102,7 +108,7 @@ async def test_auth_error_translates_to_502() -> None:
 
 async def test_rate_limited_sets_retry_after_header() -> None:
     get_broker_registry().register(
-        _FakeAccountPort(
+        _FakePort(
             error=BrokerRateLimited("Throttled.", broker="alpaca", retry_after_ms=2000)
         )
     )
@@ -111,3 +117,43 @@ async def test_rate_limited_sets_retry_after_header() -> None:
 
     assert response.status_code == 503
     assert response.headers["Retry-After"] == "2"
+
+
+def _position(**overrides) -> BrokerPosition:
+    base = dict(
+        broker="alpaca",
+        symbol="AAPL",
+        asset_id="a-1",
+        asset_class="us_equity",
+        quantity=10.0,
+        side="long",
+        average_entry_price=135.8,
+        market_value=1358.02,
+        cost_basis=1358.0,
+        current_price=135.8,
+        unrealized_pl=0.02,
+        unrealized_plpc=0.0,
+        observed_at_ms=1_700_000_000_000,
+    )
+    base.update(overrides)
+    return BrokerPosition(**base)
+
+
+async def test_positions_endpoint_returns_list() -> None:
+    get_broker_registry().register(_FakePort(positions=[_position(symbol="MSFT")]))
+
+    response = await _get("/api/brokers/alpaca/positions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["symbol"] == "MSFT"
+
+
+async def test_positions_endpoint_returns_empty_list() -> None:
+    get_broker_registry().register(_FakePort(positions=[]))
+
+    response = await _get("/api/brokers/alpaca/positions")
+
+    assert response.status_code == 200
+    assert response.json() == []

@@ -7286,6 +7286,109 @@
         "title": "BrokerObservationConsistency",
         "type": "object"
       },
+      "BrokerPosition": {
+        "additionalProperties": false,
+        "description": "A single open position (symbol, quantity, entry, value, unrealized PnL).",
+        "properties": {
+          "asset_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Class"
+          },
+          "asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Id"
+          },
+          "average_entry_price": {
+            "title": "Average Entry Price",
+            "type": "number"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "cost_basis": {
+            "title": "Cost Basis",
+            "type": "number"
+          },
+          "current_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Price"
+          },
+          "market_value": {
+            "title": "Market Value",
+            "type": "number"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "unrealized_pl": {
+            "title": "Unrealized Pl",
+            "type": "number"
+          },
+          "unrealized_plpc": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unrealized Plpc"
+          }
+        },
+        "required": [
+          "broker",
+          "symbol",
+          "asset_id",
+          "asset_class",
+          "quantity",
+          "side",
+          "average_entry_price",
+          "market_value",
+          "cost_basis",
+          "current_price",
+          "unrealized_pl",
+          "unrealized_plpc",
+          "observed_at_ms"
+        ],
+        "title": "BrokerPosition",
+        "type": "object"
+      },
       "BrokerSafetyVerdict": {
         "description": "ADR 0011 \u00a71 \u2014 the broker safety verdict shape.\n\nRides on the existing broker-status / readiness payload \u2014 no new\ntransport, no connect-time cache. The Frontend MUST NOT derive\n``final_verdict`` from the raw gate fields; it renders the\nserver-derived ``final_verdict`` directly and may show the\nper-gate fields as expandable detail.",
         "properties": {
@@ -42015,6 +42118,68 @@
           }
         },
         "summary": "Get Account",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/positions": {
+      "get": {
+        "operationId": "list_positions_api_brokers__broker__positions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrokerPosition"
+                  },
+                  "title": "Response List Positions Api Brokers  Broker  Positions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Positions",
         "tags": [
           "brokers-v2"
         ]

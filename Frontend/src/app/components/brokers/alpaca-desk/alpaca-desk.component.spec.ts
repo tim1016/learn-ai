@@ -10,7 +10,10 @@ describe('AlpacaDeskComponent', () => {
       providers: [
         {
           provide: BrokersService,
-          useValue: { getAccount: vi.fn().mockResolvedValue(undefined) },
+          useValue: {
+            getAccount: vi.fn().mockResolvedValue(undefined),
+            listPositions: vi.fn().mockResolvedValue([]),
+          },
         },
       ],
     });

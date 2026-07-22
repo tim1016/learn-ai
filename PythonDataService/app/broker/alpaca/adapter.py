@@ -22,7 +22,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.config import BROKER_ID
-from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
 
 # DST-correct ET zone for anchoring bare dates (never a fixed offset).
 _ET = ZoneInfo("America/New_York")
@@ -46,6 +46,11 @@ def opt_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def opt_str(value: Any) -> str | None:
+    """Coerce an optional value to ``str``; ``None`` stays ``None``."""
+    return None if value is None else str(value)
 
 
 def _parse_rfc3339(value: str) -> datetime:
@@ -130,5 +135,28 @@ def from_alpaca_account(
         trading_blocked=bool(payload["trading_blocked"]),
         account_blocked=bool(payload["account_blocked"]),
         created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
+        observed_at_ms=_observed(observed_at_ms),
+    )
+
+
+def from_alpaca_position(
+    payload: Mapping[str, Any],
+    *,
+    observed_at_ms: int | None = None,
+) -> BrokerPosition:
+    """Map a raw Alpaca position payload to a ``BrokerPosition`` (signed qty)."""
+    return BrokerPosition(
+        broker=BROKER_ID,
+        symbol=str(payload["symbol"]),
+        asset_id=opt_str(payload.get("asset_id")),
+        asset_class=opt_str(payload.get("asset_class")),
+        quantity=to_float(payload["qty"]),
+        side=str(payload["side"]),
+        average_entry_price=to_float(payload["avg_entry_price"]),
+        market_value=to_float(payload["market_value"]),
+        cost_basis=to_float(payload["cost_basis"]),
+        current_price=opt_float(payload.get("current_price")),
+        unrealized_pl=to_float(payload["unrealized_pl"]),
+        unrealized_plpc=opt_float(payload.get("unrealized_plpc")),
         observed_at_ms=_observed(observed_at_ms),
     )

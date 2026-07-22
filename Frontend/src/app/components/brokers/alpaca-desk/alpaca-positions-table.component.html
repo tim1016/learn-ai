@@ -1,0 +1,41 @@
+@if (positions.isLoading()) {
+  <p class="state" role="status">Loading positions…</p>
+} @else if (positions.error()) {
+  <p class="state state-error" role="alert">
+    Couldn't reach Alpaca. Positions are unavailable right now.
+  </p>
+} @else if (positions.value(); as rows) {
+  @if (rows.length === 0) {
+    <p class="state" role="status">No open positions.</p>
+  } @else {
+    <table class="positions">
+      <caption>Open positions</caption>
+      <thead>
+        <tr>
+          <th scope="col">Symbol</th>
+          <th scope="col" class="num">Qty</th>
+          <th scope="col" class="num">Avg entry</th>
+          <th scope="col" class="num">Market value</th>
+          <th scope="col" class="num">Unrealized P&amp;L</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of rows; track row.symbol) {
+          <tr>
+            <th scope="row">{{ row.symbol }}</th>
+            <td class="num">{{ row.quantity | number: '1.0-4' }}</td>
+            <td class="num">{{ row.average_entry_price | currency: 'USD' }}</td>
+            <td class="num">{{ row.market_value | currency: 'USD' }}</td>
+            <td
+              class="num"
+              [class.pl-pos]="row.unrealized_pl >= 0"
+              [class.pl-neg]="row.unrealized_pl < 0"
+            >
+              {{ row.unrealized_pl | currency: 'USD' }}
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+}

@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
+import { AlpacaPositionsTableComponent } from './alpaca-positions-table.component';
 
 /**
  * Alpaca broker desk (Broker System v2) — the `/brokers/alpaca` route target.
@@ -10,7 +11,7 @@ import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
 @Component({
   selector: 'app-alpaca-desk',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AlpacaAccountCardComponent],
+  imports: [AlpacaAccountCardComponent, AlpacaPositionsTableComponent],
   templateUrl: './alpaca-desk.component.html',
   styleUrl: './alpaca-desk.component.scss',
 })

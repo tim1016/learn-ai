@@ -2,7 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
-import type { BrokerAccountSnapshot } from '../api/alpaca.types';
+import type { BrokerAccountSnapshot, BrokerPosition } from '../api/alpaca.types';
 
 /**
  * Broker System v2 read client — targets `/api/brokers/{broker}/...`, the v2
@@ -18,6 +18,12 @@ export class BrokersService {
   getAccount(broker = 'alpaca'): Promise<BrokerAccountSnapshot> {
     return firstValueFrom(
       this.http.get<BrokerAccountSnapshot>(`${this.base}/${broker}/account`),
+    );
+  }
+
+  listPositions(broker = 'alpaca'): Promise<BrokerPosition[]> {
+    return firstValueFrom(
+      this.http.get<BrokerPosition[]>(`${this.base}/${broker}/positions`),
     );
   }
 }
