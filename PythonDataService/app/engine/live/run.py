@@ -1778,8 +1778,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         return 1
     if desired_record is None:
         try:
-            desired_repo.set(
-                DesiredState.RUNNING,
+            from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
+
+            BotLifecycleEvaluator(
+                _artifacts_root, strategy_instance_id
+            ).seed_default_desired_state_if_absent(
                 updated_by="engine",
                 reason="run.start:default_running",
                 now_ms=now_ms(),
@@ -1859,7 +1862,16 @@ def cmd_start(args: argparse.Namespace) -> int:
             return 3
 
     def _write_desired_state(state: DesiredState, reason: str) -> None:
-        desired_repo.set(state, updated_by="engine", reason=reason, now_ms=now_ms())
+        from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
+
+        BotLifecycleEvaluator(
+            _artifacts_root, strategy_instance_id
+        ).set_desired_state(
+            DesiredState(state),
+            updated_by="engine",
+            reason=reason,
+            now_ms=now_ms(),
+        )
 
     # Resolve the decision-row schema + provenance from the strategy spec
     # the ledger pins (PRD-A §16.1 Resolution 5). The spec is authoritative for
@@ -2911,20 +2923,21 @@ def _cmd_set_desired_state(args: argparse.Namespace, state) -> int:
     """Shared body for pause/resume/stop: atomically set the durable
     desired-state for a strategy_instance_id (PRD-A § 16.4 Resolution 7).
     """
-    from app.engine.live.desired_state import (
-        DesiredStateRepo,
-        stable_desired_state_path,
-    )
+    from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
+    from app.engine.live.desired_state import stable_desired_state_path
     from app.engine.live.run_status import now_ms
 
-    path = stable_desired_state_path(args.artifacts_root, args.strategy_instance_id)
-    repo = DesiredStateRepo(path, trusted_root=args.artifacts_root / "live_state")
-    record = repo.set(
+    record = BotLifecycleEvaluator(
+        args.artifacts_root, args.strategy_instance_id
+    ).set_desired_state(
         state,
         updated_by=args.updated_by,
         reason=args.reason,
         now_ms=now_ms(),
-    )
+    ).desired_state
+    if record is None:
+        raise OSError("lifecycle evaluator did not return a desired-state record")
+    path = stable_desired_state_path(args.artifacts_root, args.strategy_instance_id)
     print(
         f"[DESIRED-STATE] {args.strategy_instance_id} -> {record.desired_state.value} "
         f"(version {record.version}) at {path}"

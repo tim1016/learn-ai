@@ -45,6 +45,11 @@ from app.engine.live.account_identity import InvalidAccountIdError, normalize_ac
 from app.engine.live.account_observation_lease import (
     assess_account_observation_lease,
 )
+from app.engine.live.bot_lifecycle_evaluator import (
+    BotLifecycleEvaluator,
+    LifecycleStartAdmissionEvidence,
+    LifecycleTransitionRefusedError,
+)
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
     BotLifecycleStateCorruptError,
@@ -63,8 +68,6 @@ from app.engine.live.desired_state import (
     DesiredState,
     DesiredStateCorruptError,
     DesiredStateRecord,
-    DesiredStateRepo,
-    stable_desired_state_path,
 )
 from app.engine.live.engine_runtime import (
     ENGINE_RUNTIME_FILENAME,
@@ -445,14 +448,6 @@ def _resolve_bot_lifecycle_state(root: Path, sid: str) -> BotLifecycleStateRecor
             extra={"strategy_instance_id": sid, "exception": repr(exc)},
         )
         return None
-
-
-def _bot_lifecycle_state_repo(root: Path, sid: str) -> BotLifecycleStateRepo:
-    try:
-        path = stable_bot_lifecycle_state_path(root.parent, sid)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
-    return BotLifecycleStateRepo(path)
 
 
 def _active_roll_call_offer(root: Path, sid: str, *, now_ms: int) -> BotRollCallOfferRecord | None:
@@ -2560,21 +2555,11 @@ def _start_request_with_ledger_strategy_default(
         ) from exc
 
 
-def _start_intent_repo(root: Path, sid: str) -> DesiredStateRepo:
-    artifacts_root = _desired_state_root(root)
-    try:
-        sidecar_path = stable_desired_state_path(artifacts_root, sid)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
-    return DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
-
-
 def _persist_start_intent(root: Path, sid: str) -> DesiredStateRecord | None:
     """Read the Start latch without letting Start itself clear STOPPED."""
 
-    repo = _start_intent_repo(root, sid)
     try:
-        previous = repo.read()
+        previous = BotLifecycleEvaluator(root.parent, sid).assert_start_latch_allows_start()
         if previous is not None and previous.desired_state is DesiredState.STOPPED:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -2585,6 +2570,16 @@ def _persist_start_intent(root: Path, sid: str) -> DesiredStateRecord | None:
                     "strategy_instance_id": sid,
                 },
             )
+    except LifecycleTransitionRefusedError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "STOPPED_REQUIRES_RESUME",
+                "message": "This bot is durably STOPPED. Resume it before starting.",
+                "gate_id": "desired_state.start",
+                "strategy_instance_id": sid,
+            },
+        ) from None
     except DesiredStateCorruptError as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -2606,27 +2601,6 @@ def _persist_start_intent(root: Path, sid: str) -> DesiredStateRecord | None:
             },
         ) from exc
     return previous
-
-
-def _restore_start_intent(
-    root: Path,
-    sid: str,
-    previous: DesiredStateRecord | None,
-) -> None:
-    repo = _start_intent_repo(root, sid)
-    try:
-        if previous is None:
-            repo.delete()
-        else:
-            repo.write(previous)
-    except (OSError, ValueError) as exc:
-        logger.warning(
-            "failed to restore start intent after rejected start",
-            extra={
-                "strategy_instance_id": sid,
-                "error": str(exc),
-            },
-        )
 
 
 async def _interactive_start_observation_guard(
@@ -2697,7 +2671,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     scope = _operator_mutation_scope(root, instance_id=sid, action="start", run_id=run_id)
     with scope:
         scope.stage = "persist_start_intent"
-        previous_start_intent = _persist_start_intent(root, sid)
+        _persist_start_intent(root, sid)
         scope.stage = "idempotent_start" if admission.idempotent_process is not None else "daemon_start"
         try:
             result = (
@@ -2721,7 +2695,6 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
             rejected = scope.reject_not_observed(
                 outcome={"accepted": False, "status_code": exc.status_code},
             )
-            _restore_start_intent(root, sid, previous_start_intent)
             await _ensure_surface_hub_started(sid)
             raise HTTPException(
                 exc.status_code,
@@ -2729,18 +2702,23 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
             ) from exc
         scope.stage = "start_response_assembly"
         response = _parse_action_response(result)
-        if not response.accepted:
-            _restore_start_intent(root, sid, previous_start_intent)
         await _maybe_start_broker_activity_publisher(response)
         if response.accepted:
             if body.roll_call_offer_id is not None:
                 bot_roll_call_offer_repo(root, sid).consume(body.roll_call_offer_id)
-            _bot_lifecycle_state_repo(root, sid).set_phase(
-                BotLifecyclePhase.ON_DUTY,
-                now_ms=_now_ms(),
+            admitted_at_ms = _now_ms()
+            BotLifecycleEvaluator(root.parent, sid).record_start_accepted(
+                run_id=run_id,
+                now_ms=admitted_at_ms,
                 updated_by="system",
-                active_run_id=run_id,
                 reason="start_accepted",
+                admission=LifecycleStartAdmissionEvidence(
+                    policy=admission.policy,
+                    strategy_instance_id=sid,
+                    run_id=run_id,
+                    roll_call_offer_id=body.roll_call_offer_id,
+                    admitted_at_ms=admitted_at_ms,
+                ),
             )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
@@ -2975,12 +2953,22 @@ async def set_lifecycle_roster(
     sid = _validate_instance_id(strategy_instance_id)
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    _bot_lifecycle_state_repo(root, sid).set_roster(
-        body.on_roster,
-        now_ms=_now_ms(),
-        updated_by=body.updated_by,
-        reason=body.reason,
-    )
+    try:
+        BotLifecycleEvaluator(root.parent, sid).set_roster(
+            body.on_roster,
+            now_ms=_now_ms(),
+            updated_by=body.updated_by,
+            reason=body.reason,
+        )
+    except LifecycleTransitionRefusedError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "RETIRED_LIFECYCLE",
+                "message": str(exc),
+                "strategy_instance_id": sid,
+            },
+        ) from exc
     return await _daily_lifecycle_mutation_response(sid, root, settings)
 
 
@@ -4880,10 +4868,6 @@ async def set_instance_desired_state(
     root = Path(settings.live_runs_root)
 
     artifacts_root = _desired_state_root(root)
-    try:
-        sidecar_path = stable_desired_state_path(artifacts_root, sid)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
     # PRD #616 / #619-A §A4 — re-run the shared capability evaluator
     # immediately before the durable write so a stale status snapshot
@@ -4932,13 +4916,14 @@ async def set_instance_desired_state(
     )
     with scope:
         scope.stage = "durable_intent_write"
-        repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
-        record = repo.set(
+        record = BotLifecycleEvaluator(artifacts_root, sid).set_desired_state(
             _ACTION_TO_STATE[body.action],
             updated_by=body.updated_by,
             reason=body.reason,
             now_ms=_now_ms(),
-        )
+        ).desired_state
+        if record is None:
+            raise OSError("lifecycle evaluator did not return a desired-state record")
         durable = DesiredStateRecordResponse(
             state=record.desired_state.value,
             updated_at_ms=record.updated_at_ms,
@@ -5034,10 +5019,6 @@ async def flatten_and_pause_instance(
     root = Path(settings.live_runs_root)
 
     artifacts_root = _desired_state_root(root)
-    try:
-        sidecar_path = stable_desired_state_path(artifacts_root, sid)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
     # PRD #607 / Slice 1 (#608) / #619-A §A4 — shared-capability gate.
     # The status endpoint's ``operator_surface.actions.flatten_and_pause``
@@ -5073,14 +5054,15 @@ async def flatten_and_pause_instance(
     )
     with scope:
         scope.stage = "durable_pause_write"
-        repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
         try:
-            record = repo.set(
+            record = BotLifecycleEvaluator(artifacts_root, sid).set_desired_state(
                 DesiredState.PAUSED,
                 updated_by=payload.updated_by,
                 reason=payload.reason or "flatten-and-pause",
                 now_ms=_now_ms(),
-            )
+            ).desired_state
+            if record is None:
+                raise OSError("lifecycle evaluator did not return a desired-state record")
         except OSError as exc:
             unknown = scope.unknown(error=exc)
             await _ensure_surface_hub_started(sid)

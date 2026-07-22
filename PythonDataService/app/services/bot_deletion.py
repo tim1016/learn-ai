@@ -25,6 +25,12 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
     write_fenced_lifecycle_retirement_binding,
 )
+from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
+from app.engine.live.bot_lifecycle_fence import (
+    BOT_LIFECYCLE_OPERATION_FENCE_FILENAME,
+    bot_lifecycle_operation_fence,
+    stable_bot_lifecycle_operation_fence_path,
+)
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRecord,
     BotLifecycleStateRepo,
@@ -35,7 +41,13 @@ from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 
 BOT_DELETION_FILENAME = "bot_deletion.json"
 BOT_RETIREMENT_TRANSITION_FILENAME = "retirement_transition.json"
-BOT_LIFECYCLE_OPERATION_FENCE_FILENAME = "lifecycle_operation_fence"
+
+# Stable re-exports for callers that adopted the original S1 fence location.
+__all__ = [
+    "BOT_LIFECYCLE_OPERATION_FENCE_FILENAME",
+    "bot_lifecycle_operation_fence",
+    "stable_bot_lifecycle_operation_fence_path",
+]
 
 
 class BotDeletionCorruptError(RuntimeError):
@@ -98,32 +110,6 @@ def stable_bot_deletion_path(artifacts_root: Path, strategy_instance_id: str) ->
 def stable_bot_retirement_transition_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
     validate_strategy_instance_id(strategy_instance_id)
     return artifacts_root / "live_state" / strategy_instance_id / BOT_RETIREMENT_TRANSITION_FILENAME
-
-
-def stable_bot_lifecycle_operation_fence_path(
-    artifacts_root: Path,
-    strategy_instance_id: str,
-) -> Path:
-    """Return the stable cross-writer fence for one bot identity.
-
-    The target is intentionally an otherwise-unused path: its sibling lock is
-    the durable synchronization point shared by admission, Clerk placement,
-    and retirement.  A transition file alone cannot protect an admission that
-    started before PENDING was written.
-    """
-
-    validate_strategy_instance_id(strategy_instance_id)
-    return artifacts_root / "live_state" / strategy_instance_id / BOT_LIFECYCLE_OPERATION_FENCE_FILENAME
-
-
-@contextlib.contextmanager
-def bot_lifecycle_operation_fence(artifacts_root: Path, strategy_instance_id: str) -> Iterable[None]:
-    """Serialize every broker/admission/retirement transition for one bot."""
-
-    path = stable_bot_lifecycle_operation_fence_path(artifacts_root, strategy_instance_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(path):
-        yield
 
 
 def read_bot_deletion(artifacts_root: Path, strategy_instance_id: str) -> BotDeletionRecord | None:
@@ -415,13 +401,17 @@ def _complete_retirement_transition_locked(
             transition_path=path,
         )
     _verify_retired_registry_bindings(artifacts_root, transition.strategy_instance_id, bindings)
-    lifecycle = BotLifecycleStateRepo(
-        stable_bot_lifecycle_state_path(artifacts_root, transition.strategy_instance_id)
+    disposition = BotLifecycleEvaluator(
+        artifacts_root, transition.strategy_instance_id
     ).retire(
         now_ms=transition.prepared_at_ms,
         updated_by=transition.updated_by,
         reason=transition.reason,
+        operation_fence_held=True,
     )
+    lifecycle = disposition.lifecycle_state
+    if lifecycle is None:
+        raise OSError("lifecycle evaluator did not return a retirement state")
     _write_retirement_transition_locked(path, transition.model_copy(update={"state": "COMMITTED"}))
     return lifecycle
 

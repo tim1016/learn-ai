@@ -1326,6 +1326,7 @@ class RunnerProcessManager:
     def _reopen_retired_lifecycle_for_deploy(self, strategy_instance_id: str, run_id: str) -> None:
         """Record the explicit deploy successor while its operation fence is held."""
 
+        from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
         from app.engine.live.bot_lifecycle_state import (
             BotLifecyclePhase,
             BotLifecycleStateCorruptError,
@@ -1339,10 +1340,13 @@ class RunnerProcessManager:
             )
             current = repo.read()
             if current is not None and current.phase is BotLifecyclePhase.RETIRED:
-                repo.reopen_for_deploy(
+                BotLifecycleEvaluator(
+                    self.artifacts_root, strategy_instance_id
+                ).reopen_for_deploy_if_retired(
                     now_ms=self._clock_ms(),
                     updated_by="host_daemon",
                     reason="deploy.replacement",
+                    operation_fence_held=True,
                 )
         except (BotLifecycleStateCorruptError, OSError) as exc:
             raise HostRunnerError(
@@ -2353,6 +2357,7 @@ class RunnerProcessManager:
 
         if not strategy_instance_id:
             return
+        from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
         from app.engine.live.bot_lifecycle_state import (
             BotDutyOutcome,
             BotLifecyclePhase,
@@ -2365,7 +2370,9 @@ class RunnerProcessManager:
         current = repo.read()
         if current is not None and current.phase is BotLifecyclePhase.RETIRED:
             return
-        repo.record_terminal_outcome(
+        BotLifecycleEvaluator(
+            self.artifacts_root, strategy_instance_id
+        ).record_terminal_outcome(
             BotDutyOutcome(
                 kind="FAILED_LAUNCH",
                 reason_code="FAILED_LAUNCH",
@@ -2374,6 +2381,7 @@ class RunnerProcessManager:
             ),
             updated_by="host_daemon",
             reason=source,
+            operation_fence_held=True,
         )
 
     def _record_terminal_lifecycle_outcome(
@@ -2390,6 +2398,7 @@ class RunnerProcessManager:
             with self._bot_lifecycle_operation_fence(managed.strategy_instance_id):
                 self._record_terminal_lifecycle_outcome(managed, operation_fence_held=True)
             return
+        from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
         from app.engine.live.bot_lifecycle_state import (
             BotDutyOutcome,
             BotLifecyclePhase,
@@ -2449,11 +2458,14 @@ class RunnerProcessManager:
                 run_id=managed.run_id,
             )
             reason = verdict.registry_source
-        repo.record_terminal_outcome(
+        BotLifecycleEvaluator(
+            self.artifacts_root, managed.strategy_instance_id
+        ).record_terminal_outcome(
             outcome,
             updated_by="host_daemon",
             reason=reason,
             expected_active_run_id=managed.run_id,
+            operation_fence_held=True,
         )
 
     def _clock_out_stop_latch_is_durable(self, strategy_instance_id: str) -> bool:

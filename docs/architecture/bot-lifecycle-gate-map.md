@@ -14,6 +14,13 @@ state casing contract, and shipped/not-shipped status. When this map disagrees
 with the authority document, the authority document wins.
 It intentionally separates:
 
+**Slice 7 authority amendment (2026-07-21):** The Account Clerk owns account
+and broker authority; the lifecycle evaluator owns durable bot duty and roster
+transitions; and the host daemon only actuates processes and reports observed
+facts. Pause, Resume, and Stop are evaluator-owned durable control-plane
+commands, deliberately independent of Clerk or broker availability. Start
+consults account admission but cannot clear a `STOPPED` latch.
+
 - **Current gates**: checks already enforced by code.
 - **Partial gates**: checks that exist, but not at the scope Claude's design requires.
 - **Proposed gates**: new account/fleet substrate from the original design.
