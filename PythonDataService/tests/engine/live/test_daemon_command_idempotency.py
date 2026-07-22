@@ -93,14 +93,14 @@ def test_execute_shadow_account_logs_but_does_not_suppress_duplicate(tmp_path: P
 
     first = service.execute(
         idempotency_key="shadow-key",
-        command="emergency_flatten_run",
+        command="stop",
         account_id="DU999",
         semantic_payload={"run_id": "run-1", "account": "DU999"},
         invoke=invoke,
     )
     duplicate = service.execute(
         idempotency_key="shadow-key",
-        command="emergency_flatten_run",
+        command="stop",
         account_id="DU999",
         semantic_payload={"run_id": "run-1", "account": "DU999"},
         invoke=invoke,

@@ -250,8 +250,8 @@ The primary regression seams are `test_account_binding_ledger.py`,
 The daemon's binding-decision RPC is host-capability authenticated. The
 bot-facing `AccountClerkRpcClient` exposes no binding-decision method; only the
 daemon's private `AccountClerkHostRpcClient` can submit one. The capability is
-a dedicated durable host-control secret, inherited only by the Clerk and a
-host-launched emergency subprocess. It is deliberately distinct from the
+a dedicated durable host-control secret, inherited only by the Clerk and its
+host daemon. It is deliberately distinct from the
 data-plane HTTP token so a daemon restart can adopt and continue controlling a
 healthy Clerk without rotating its authority. The Clerk compares it before
 serializing a transition, and ordinary bot environments do not receive it.
@@ -271,8 +271,7 @@ account-ledger lock. The lifecycle evaluator may append only an exact
 `retirement_transition.json`, under a second per-instance authority fence.
 Neither seam can record a daemon liveness fact, a deployment, an emergency
 binding, or an arbitrary lifecycle state. Normal daemon lifecycle transitions
-and both emergency-flatten binding transitions use the host-authorized Clerk
-RPC and fail closed when it is unavailable. These two explicitly audited
+use the host-authorized Clerk RPC and fail closed when it is unavailable. These two explicitly audited
 compatibility seams are scheduled for removal once direct CLI starts and the
 lifecycle retirement commit are Clerk-native end to end.
 
@@ -303,6 +302,36 @@ is reserved for a later deliberate carryover/overnight design and does not
 enable that behavior by itself. The Account desk returns the exact gate result
 and override state, so the cockpit renders enforcement rather than inferring
 it from clock time.
+
+## Clerk S6 account-emergency recovery boundary (2026-07-21)
+
+Issue #1159 makes account emergency recovery a Clerk-owned, paper-only state
+machine. The Account Desk may request it only with the exact `FLATTEN` token
+after it has declared a fresh account reconciliation receipt. The Clerk reads
+that canonical durable receipt itself—matching receipt ID, account, paper
+identity, expiry, and the absence of an exact recovery candidate—before it
+issues a short-lived authorization. An RPC caller cannot manufacture those
+facts.
+
+The host daemon is a process actuator only. It first asks the Clerk to close
+normal intake, then proves every on-duty account bot has exited. Only then may
+it record `bots_paused` through the host-capability RPC; a timeout or unknown
+bot state writes `requires_reconciliation` and cannot reach a broker write.
+The Clerk cancels and liquidates through its already-held, generation-fenced
+paper session, never a host-native emergency subprocess or a dedicated
+emergency IBKR client identity.
+
+On every Clerk attach, recovery reads a fresh paper position and open-order
+snapshot before publishing the socket. A position is flag-and-held only when
+current broker execution evidence proves exact recorded `order_ref` values,
+execution IDs, namespace, and complete signed quantity. Symbol coincidence is
+not attribution. Foreign or unprovable exposure freezes admission. A flat
+account receives only an exact-ref, Clerk-known dangling-order cancellation;
+unknown orders freeze admission. An interrupted emergency is folded under its
+original operation ID, probes every durable ref, and never cancels a sibling
+operation sharing the emergency namespace or creates a replacement order
+during boot recovery. Missing broker proof also freezes rather than treating
+the account as flat.
 
 ## Issue #1044 callback-stream hardening traceability
 

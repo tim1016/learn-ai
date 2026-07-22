@@ -285,7 +285,11 @@ describe('AccountDeskRecoveryStore', () => {
     store.setConfirmationToken('FLATTEN');
     await store.confirm();
 
-    expect(broker.emergencyFlattenAccount).toHaveBeenCalledWith('DU1234567');
+    expect(broker.emergencyFlattenAccount).toHaveBeenCalledWith('DU1234567', {
+      account: 'DU1234567',
+      confirmation_token: 'FLATTEN',
+      idempotency_key: expect.any(String),
+    });
     expect(store.success()?.kind).toBe('emergency_flatten');
   });
 });

@@ -22,6 +22,9 @@ from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerAckReceipt,
     AccountClerkBrokerEventReceipt,
     AccountClerkCancelNamespaceReceipt,
+    AccountClerkEmergencyAuthorization,
+    AccountClerkEmergencyFlattenReceipt,
+    AccountClerkEmergencyOperationEvent,
     AccountClerkInboxEntry,
     AccountClerkIntentRejected,
     AccountClerkJournalCorruptError,
@@ -461,6 +464,37 @@ class AccountClerkJournal:
             _append_jsonl(journal_path, entry)
             entries.append(entry)
 
+    def append_emergency_operation(self, event: AccountClerkEmergencyOperationEvent) -> None:
+        """Fsync one account-emergency state boundary before its next action."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            entry = AccountClerkJournalEntry(
+                seq=_next_seq(entries),
+                entry_kind="emergency_operation",
+                recorded_at_ms=self._now_ms(),
+                emergency_operation=event,
+            )
+            _append_jsonl(journal_path, entry)
+            entries.append(entry)
+
+    def emergency_authorization(self, operation_id: str) -> AccountClerkEmergencyAuthorization | None:
+        """Return the immutable authorization issued for one idempotent operation."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            for entry in reversed(entries):
+                event = entry.emergency_operation
+                if (
+                    event is not None
+                    and event.operation_id == operation_id
+                    and event.phase == "authorization_issued"
+                ):
+                    return event.authorization
+        return None
+
     def append_operator_adjustment(
         self,
         adjustment: AccountClerkOperatorAdjustment,
@@ -882,6 +916,8 @@ __all__ = [
     "ACCOUNT_CLERK_JOURNAL_FILENAME",
     "AccountClerkBrokerAckReceipt",
     "AccountClerkBrokerEventReceipt",
+    "AccountClerkEmergencyFlattenReceipt",
+    "AccountClerkEmergencyOperationEvent",
     "AccountClerkInboxEntry",
     "AccountClerkIntentRejected",
     "AccountClerkJournal",

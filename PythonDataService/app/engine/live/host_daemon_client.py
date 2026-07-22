@@ -228,22 +228,6 @@ async def stop_run(base_url: str, run_id: str, payload: dict) -> dict:
     return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/stop", payload)
 
 
-async def emergency_flatten_run(base_url: str, run_id: str, payload: dict) -> dict:
-    """POST /runs/{run_id}/emergency-flatten.
-
-    Same contract as :func:`start_run` but with a longer timeout — the
-    daemon round-trips to the broker synchronously. A read-timeout here
-    is far more likely than for the lighter mutations, and the
-    consequence (broker positions in an unknown post-mutation state) is
-    the highest-stakes ambiguous-outcome case 619-C5 surfaces.
-    """
-    return await _post_action(
-        f"{base_url.rstrip('/')}/runs/{run_id}/emergency-flatten",
-        payload,
-        timeout=_FLATTEN_TIMEOUT,
-    )
-
-
 async def emergency_flatten_account(base_url: str, account_id: str, payload: dict) -> dict:
     """POST an account-scoped emergency flatten with the broker timeout."""
 

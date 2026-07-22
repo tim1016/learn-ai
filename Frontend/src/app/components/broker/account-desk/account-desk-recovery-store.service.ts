@@ -45,6 +45,7 @@ export interface AccountDeskRecoveryConfirmation {
   readonly journalCure: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest } | null;
   readonly legacyCandidate: LegacyStaleClaimCandidate | null;
   readonly recoveryFlatten: AccountRecoveryFlattenCandidate | null;
+  readonly emergencyOperationId: string | null;
 }
 
 export type AccountDeskRecoverySuccess =
@@ -148,6 +149,7 @@ export class AccountDeskRecoveryStore {
       journalCure: null,
       legacyCandidate: null,
       recoveryFlatten: null,
+      emergencyOperationId: null,
     });
     this.errorMessageState.set(null);
   }
@@ -199,7 +201,7 @@ export class AccountDeskRecoveryStore {
 
   requestEmergencyFlatten(confirmation: OperatorConfirmationCopy): void {
     const accountId = this.accountKey();
-    if (this.busyState() || accountId === null || confirmation.required_token === '') return;
+    if (this.busyState() || accountId === null || confirmation.required_token !== 'FLATTEN') return;
     this.openConfirmation(accountId, 'emergency_flatten', confirmation);
   }
 
@@ -286,6 +288,7 @@ export class AccountDeskRecoveryStore {
       journalCure: details.journalCure ?? null,
       legacyCandidate: details.legacyCandidate ?? null,
       recoveryFlatten: details.recoveryFlatten ?? null,
+      emergencyOperationId: command === 'emergency_flatten' ? crypto.randomUUID() : null,
     });
     this.errorMessageState.set(null);
   }
@@ -344,9 +347,16 @@ export class AccountDeskRecoveryStore {
           }),
         };
       case 'emergency_flatten':
+        if (confirmation.providedToken !== 'FLATTEN' || confirmation.emergencyOperationId === null) {
+          throw new Error('Emergency flatten confirmation is incomplete.');
+        }
         return {
           kind: 'emergency_flatten',
-          receipt: await this.broker.emergencyFlattenAccount(confirmation.accountId),
+          receipt: await this.broker.emergencyFlattenAccount(confirmation.accountId, {
+            account: confirmation.accountId,
+            confirmation_token: 'FLATTEN',
+            idempotency_key: confirmation.emergencyOperationId,
+          }),
         };
     }
   }

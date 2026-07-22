@@ -80,6 +80,86 @@ class AccountClerkOperatorAdjustmentConflict(ValueError):
     """A durable operator-adjustment idempotency key was reused differently."""
 
 
+class AccountClerkPositionEvidence(BaseModel):
+    """A fresh, broker-sourced position fact retained with an emergency decision."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    symbol: str = Field(min_length=1, max_length=32)
+    signed_quantity: float
+    evidence_observed_at_ms: int = Field(ge=0, le=_MAX_INT64)
+
+    @model_validator(mode="after")
+    def validate_signed_quantity(self) -> AccountClerkPositionEvidence:
+        if self.signed_quantity == 0 or not math.isfinite(self.signed_quantity):
+            raise ValueError("signed_quantity must be finite and non-zero")
+        return self
+
+
+class AccountClerkEmergencyAuthorization(BaseModel):
+    """Short-lived Clerk receipt for one explicitly confirmed account flatten."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    authorization_id: str = Field(min_length=16, max_length=128)
+    account_id: str = Field(min_length=1, max_length=64)
+    operation_id: str = Field(min_length=1, max_length=128)
+    confirmation_token: Literal["FLATTEN"]
+    reconciliation_evidence_version: str = Field(min_length=1, max_length=128)
+    evidence_observed_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    expires_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    no_exact_recovery_candidate: Literal[True]
+
+    @model_validator(mode="after")
+    def validate_expiry(self) -> AccountClerkEmergencyAuthorization:
+        if self.expires_at_ms <= self.evidence_observed_at_ms:
+            raise ValueError("emergency authorization expiry must follow its evidence")
+        return self
+
+
+class AccountClerkEmergencyOperationEvent(BaseModel):
+    """One durable state transition of a Clerk-owned account emergency operation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operation_id: str = Field(min_length=1, max_length=128)
+    phase: Literal[
+        "authorization_issued",
+        "intake_closed",
+        "bots_paused",
+        "cancel_unconfirmed",
+        "liquidation_planned",
+        "liquidation_submitting",
+        "observed_flat",
+        "requires_reconciliation",
+        "flag_and_hold",
+        "foreign_exposure_freeze",
+        "cancel_only_proposed",
+        "cancel_only_confirmed",
+    ]
+    authorization: AccountClerkEmergencyAuthorization | None = None
+    cancelled_order_ids: tuple[int, ...] = ()
+    reason: str | None = Field(default=None, max_length=512)
+    positions: tuple[AccountClerkPositionEvidence, ...] = ()
+    bot_order_namespace: str | None = Field(default=None, min_length=1, max_length=256)
+    recorded_order_refs: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> AccountClerkEmergencyOperationEvent:
+        if self.phase == "authorization_issued" and self.authorization is None:
+            raise ValueError("authorization_issued requires an authorization")
+        if self.phase != "authorization_issued" and self.authorization is not None:
+            raise ValueError("only authorization_issued may carry an authorization")
+        if (
+            self.phase == "flag_and_hold"
+            and (self.bot_order_namespace is None or not self.recorded_order_refs or not self.positions)
+        ):
+            raise ValueError("flag_and_hold requires attributable broker evidence")
+        if self.phase == "foreign_exposure_freeze" and not self.positions:
+            raise ValueError("foreign_exposure_freeze requires broker evidence")
+        return self
+
+
 class AccountClerkJournalEntry(BaseModel):
     """One serial, durable receipt-#1 ledger entry for an account intent."""
 
@@ -100,6 +180,7 @@ class AccountClerkJournalEntry(BaseModel):
         "broker_event",
         "reconciliation",
         "operator_adjustment",
+        "emergency_operation",
     ] = "recorded"
     recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
     # All intent lifecycle entries are attributed. A broker callback without a
@@ -116,6 +197,7 @@ class AccountClerkJournalEntry(BaseModel):
     event_account_id: str | None = Field(default=None, min_length=1)
     broker_callback_idempotency_key: str | None = Field(default=None, min_length=1)
     operator_adjustment: AccountClerkOperatorAdjustment | None = None
+    emergency_operation: AccountClerkEmergencyOperationEvent | None = None
 
     @model_validator(mode="after")
     def validate_attribution_shape(self) -> AccountClerkJournalEntry:
@@ -128,6 +210,15 @@ class AccountClerkJournalEntry(BaseModel):
                 raise ValueError("callback metadata is invalid on operator_adjustment rows")
             return self
 
+        if self.entry_kind == "emergency_operation":
+            if self.intent is not None or self.emergency_operation is None:
+                raise ValueError("emergency_operation rows require only emergency_operation")
+            if self.event_account_id is not None or self.broker_callback_idempotency_key is not None:
+                raise ValueError("callback metadata is invalid on emergency_operation rows")
+            if self.operator_adjustment is not None:
+                raise ValueError("operator adjustment is invalid on emergency_operation rows")
+            return self
+
         if self.entry_kind != "broker_event":
             if self.intent is None:
                 raise ValueError("non-broker-event journal rows require an intent")
@@ -135,6 +226,7 @@ class AccountClerkJournalEntry(BaseModel):
                 self.event_account_id is not None
                 or self.broker_callback_idempotency_key is not None
                 or self.operator_adjustment is not None
+                or self.emergency_operation is not None
             ):
                 raise ValueError("callback metadata is only valid on broker_event rows")
             return self
@@ -151,6 +243,8 @@ class AccountClerkJournalEntry(BaseModel):
             raise ValueError("unattributed broker_event rows require event_account_id")
         if self.operator_adjustment is not None:
             raise ValueError("operator adjustment is invalid on broker_event rows")
+        if self.emergency_operation is not None:
+            raise ValueError("emergency operation is invalid on broker_event rows")
         return self
 
 
@@ -218,6 +312,19 @@ class AccountClerkRecoveryFlattenReceipt(BaseModel):
     cancelled_order_ids: tuple[int, ...]
 
 
+class AccountClerkEmergencyFlattenReceipt(BaseModel):
+    """Terminal evidence that the Clerk re-observed the paper account flat."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["fresh_flat"] = "fresh_flat"
+    account_id: str = Field(min_length=1, max_length=64)
+    operation_id: str = Field(min_length=1, max_length=128)
+    cancelled_order_ids: tuple[int, ...]
+    broker_acked: tuple[AccountClerkBrokerAckReceipt, ...]
+    observed_at_ms: int = Field(ge=0, le=_MAX_INT64)
+
+
 class AccountClerkCancelNamespaceReceipt(BaseModel):
     """Durable terminal-cancel receipt for one bot namespace."""
 
@@ -226,18 +333,6 @@ class AccountClerkCancelNamespaceReceipt(BaseModel):
     status: Literal["cancel_confirmed"] = "cancel_confirmed"
     recorded: AccountClerkRecordedReceipt
     cancelled_order_ids: tuple[int, ...]
-
-
-class AccountClerkLegacyEmergencyFenceReceipt(BaseModel):
-    """Durable state of the temporary legacy emergency-write fence."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    status: Literal["legacy_emergency_fenced", "legacy_emergency_fence_released"]
-    account_id: str = Field(min_length=1, max_length=64)
-    fence_id: str = Field(min_length=1, max_length=128)
-    reason_code: Literal["CLERK_LEGACY_EMERGENCY_FENCE"] = "CLERK_LEGACY_EMERGENCY_FENCE"
-    recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
 
 
 @dataclass(frozen=True)
@@ -260,13 +355,16 @@ __all__ = [
     "AccountClerkBrokerAckReceipt",
     "AccountClerkBrokerEventReceipt",
     "AccountClerkCancelNamespaceReceipt",
+    "AccountClerkEmergencyAuthorization",
+    "AccountClerkEmergencyFlattenReceipt",
+    "AccountClerkEmergencyOperationEvent",
     "AccountClerkInboxEntry",
     "AccountClerkIntentRejected",
     "AccountClerkJournalCorruptError",
     "AccountClerkJournalEntry",
-    "AccountClerkLegacyEmergencyFenceReceipt",
     "AccountClerkOperatorAdjustment",
     "AccountClerkOperatorAdjustmentConflict",
+    "AccountClerkPositionEvidence",
     "AccountClerkRecordedReceipt",
     "AccountClerkRecoveryFlattenReceipt",
 ]

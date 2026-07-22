@@ -135,7 +135,6 @@ from app.schemas.live_runs import (
     CommandView,
     DesiredStateAction,
     DesiredStateRecordResponse,
-    EmergencyFlattenRequest,
     EnqueueCommandRequest,
     FleetAccountSummary,
     FleetContamination,
@@ -3805,12 +3804,6 @@ _OUTCOME_UNKNOWN_RUNBOOK_HINTS: dict[str, str] = {
         "was lost. The run may or may not have stopped. Read the latest Bot Cockpit "
         "state before deciding whether to retry."
     ),
-    "emergency_flatten": (
-        "An emergency-flatten request was sent to the host runner daemon "
-        "but the response was lost. Broker positions may be in an "
-        "intermediate state. Verify positions directly via the broker "
-        "before deciding whether to retry."
-    ),
     "renew_daemon_lease": (
         "A control-plane lease renewal request was sent to the host runner "
         "daemon but the response was lost. Refresh the cockpit to read the "
@@ -5503,80 +5496,6 @@ async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommand
             rung_receipt_warnings=warnings,
             mutation_attempt_id=confirmed.mutation_attempt_id,
             mutation_dispatch_state=confirmed.dispatch_state,
-        )
-    await _ensure_surface_hub_started(sid)
-    return response
-
-
-@router.post("/{strategy_instance_id}/emergency-flatten", response_model=HostRunnerActionResponse)
-async def emergency_flatten_instance(
-    strategy_instance_id: str, body: EmergencyFlattenRequest
-) -> HostRunnerActionResponse:
-    """Account-wide emergency flatten (§ 7.2 #6), independent of a live binding.
-
-    The console FLATTEN *command* needs a live binding (it writes to the run's
-    command channel for the engine to drain) — but after a halt/poison the
-    binding is gone, exactly when an operator most wants to flatten. This reaches
-    the daemon's one-shot ``emergency-flatten`` on the instance's latest run,
-    reusing the existing paper-guarded CLI. It connects its own broker session,
-    so it works with no live process. Account-wide only; namespace-attributed
-    reconciliation stays fail-closed. The operator must echo the account id
-    (defense-in-depth, mirrors the CLI ``--account`` gate).
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    if not body.confirm:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    runs = _scan_runs_by_instance(root).get(sid, [])
-    if not runs:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"no run found for instance {sid!r} to flatten")
-    run_id = str(runs[0]["run_id"])
-    scope = _operator_mutation_scope(root, instance_id=sid, action="flatten", run_id=run_id)
-    with scope:
-        scope.stage = "daemon_emergency_flatten"
-        try:
-            body_json = await host_daemon_client.emergency_flatten_run(
-                settings.live_runner_daemon_url,
-                run_id,
-                scope.daemon_payload(body),
-            )
-        except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-            unknown = scope.unknown(error=exc)
-            await _ensure_surface_hub_started(sid)
-            _raise_outcome_unknown(
-                "emergency_flatten",
-                exc,
-                mutation_attempt_id=unknown.mutation_attempt_id,
-            )
-        except host_daemon_client.HostDaemonError as exc:
-            rejected = scope.reject_not_observed(
-                outcome={"accepted": False, "status_code": exc.status_code},
-            )
-            await _ensure_surface_hub_started(sid)
-            raise HTTPException(
-                exc.status_code,
-                detail=_mutation_error_detail(exc.detail, rejected),
-            ) from exc
-        scope.stage = "emergency_flatten_response_assembly"
-        response = HostRunnerActionResponse.model_validate(body_json)
-        receipt, warnings = await _mutation_rung_receipts_from_process(
-            sid,
-            root,
-            settings,
-            response.process.model_dump(mode="json"),
-            mutation_key="emergency_flatten",
-        )
-        confirmed = scope.confirm(
-            outcome={"accepted": response.accepted, "run_id": run_id},
-        )
-        response = response.model_copy(
-            update={
-                "rung_receipt": receipt,
-                "rung_receipt_warnings": warnings,
-                "mutation_attempt_id": confirmed.mutation_attempt_id,
-                "mutation_dispatch_state": confirmed.dispatch_state,
-            }
         )
     await _ensure_surface_hub_started(sid)
     return response

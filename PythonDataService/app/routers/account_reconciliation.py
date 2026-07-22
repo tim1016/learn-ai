@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Annotated
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from starlette.concurrency import run_in_threadpool
@@ -48,7 +47,11 @@ from app.schemas.journal_cures import (
     OperatorRecoveryFlattenRequest,
     OperatorRecoveryFlattenResponse,
 )
-from app.schemas.live_runs import AccountEmergencyFlattenResponse, EmergencyFlattenRequest
+from app.schemas.live_runs import (
+    AccountEmergencyFlattenDispatchRequest,
+    AccountEmergencyFlattenResponse,
+    EmergencyFlattenRequest,
+)
 from app.services.account_directory import (
     AccountDirectoryError,
     AccountDirectoryService,
@@ -481,14 +484,18 @@ async def emergency_flatten_account_endpoint(
         Depends(get_account_reconciliation_service),
     ],
 ) -> AccountEmergencyFlattenResponse:
-    """Run the audited account-wide paper flatten without a surviving bot run."""
+    """Authorize and dispatch one Clerk-owned account-wide paper flatten."""
 
     canonical_account_id = _canonical_account_id(account_id)
-    if not request.confirm:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "emergency-flatten requires confirm=true")
     if request.account != canonical_account_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "request account does not match path")
-    if reconciliation.triage(account_id=canonical_account_id).emergency_flatten_confirmation is None:
+    triage = reconciliation.triage(account_id=canonical_account_id)
+    receipt = triage.account_reconciliation_receipt
+    if (
+        triage.emergency_flatten_confirmation is None
+        or receipt is None
+        or triage.recovery_flatten_candidates
+    ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={
@@ -496,21 +503,29 @@ async def emergency_flatten_account_endpoint(
                 "message": "Fresh paper-account evidence does not declare an emergency flatten safe.",
             },
         )
-    idempotency_key = request.idempotency_key or f"account-emergency-flatten-{uuid4().hex}"
+    idempotency_key = request.idempotency_key
     try:
         settings = get_settings()
         await host_daemon_client.ensure_account_clerk(
             settings.live_runner_daemon_url,
             canonical_account_id,
         )
+        authorization = await AccountClerkRpcClient(
+            artifacts_root=artifacts_root,
+            account_id=canonical_account_id,
+        ).authorize_emergency_flatten(
+            operation_id=idempotency_key,
+            reconciliation_evidence_version=receipt.receipt_id,
+        )
         payload = await host_daemon_client.emergency_flatten_account(
             settings.live_runner_daemon_url,
             canonical_account_id,
-            {
-                "account": canonical_account_id,
-                "confirm": True,
-                "idempotency_key": idempotency_key,
-            },
+            AccountEmergencyFlattenDispatchRequest(
+                account=canonical_account_id,
+                confirmation_token="FLATTEN",
+                idempotency_key=idempotency_key,
+                authorization_id=authorization.authorization_id,
+            ).model_dump(mode="json"),
         )
         response = AccountEmergencyFlattenResponse.model_validate(payload)
         response = response.model_copy(
@@ -532,6 +547,8 @@ async def emergency_flatten_account_endpoint(
         raise _outcome_unknown_http_error(exc, idempotency_key=idempotency_key) from exc
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    except AccountClerkRpcError as exc:
+        raise _clerk_rpc_http_error(exc) from exc
 
 
 @router.get(

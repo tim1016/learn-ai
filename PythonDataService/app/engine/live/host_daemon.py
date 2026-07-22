@@ -26,7 +26,6 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -107,9 +106,9 @@ from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.broker_session import GatewaySocketsSnapshot
 from app.schemas.live_runs import (
     AccountClerkHealth,
+    AccountEmergencyFlattenDispatchRequest,
     AccountEmergencyFlattenResponse,
     AuditCopySizingLookup,
-    EmergencyFlattenRequest,
     HostRunnerActionResponse,
     HostRunnerClerkEnsureRequest,
     HostRunnerDeployRequest,
@@ -143,7 +142,6 @@ _IBKR_CLIENT_ID_MIN = 1
 _IBKR_CLIENT_ID_MAX = 2**31 - 1
 _IBKR_CLIENT_ID_POOL_MAX_SPAN = 1_000
 _IBKR_CLIENT_ID_IN_USE = "IBKR_CLIENT_ID_IN_USE"
-_EMERGENCY_FLATTEN_IBKR_CLIENT_ID = 1_000_000
 _ACCOUNT_CLERK_HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _ACCOUNT_CLERK_TERMINATE_WAIT_SECONDS = 2.0
 _ACCOUNT_CLERK_KILL_WAIT_SECONDS = 2.0
@@ -452,12 +450,12 @@ class RunnerProcessManager:
         # report the on-disk HEAD (which moves on pull), masking stale code —
         # the bug this fixes.
         self._launch_git_sha = self._compute_git_sha()
-        # Serialize emergency-flatten per account: each runs the CLI, which
-        # fetches positions then submits liquidating market orders, so two
-        # concurrent runs for one account (retry / double-click / second tab)
-        # could both act on the same pre-fill snapshot and double-liquidate.
+        # Serialize the host-side pause/envelope per account. The Clerk owns
+        # broker writes, while this prevents two daemon requests from racing
+        # its one durable emergency operation identity.
         self._flatten_lock = threading.Lock()
         self._flatten_in_flight: set[str] = set()
+        self._account_starts_in_flight: dict[str, int] = {}
 
     @property
     def _clerks(self) -> dict[str, ManagedClerk]:
@@ -835,28 +833,34 @@ class RunnerProcessManager:
 
         return self._clerk_supervisor.account_lock(account_id)
 
-    def _reject_start_during_legacy_emergency(self, account_id: str | None) -> None:
-        """Keep a new bot from joining an account while its legacy panic lane is fenced."""
+    @contextlib.contextmanager
+    def _account_start_admission_fence(self, account_id: str | None):
+        """Serialize account admission with the complete emergency envelope."""
 
         if account_id is None:
+            yield
             return
-        from app.engine.live.account_artifacts import active_legacy_emergency_fence_id
-
-        try:
-            fence_id = active_legacy_emergency_fence_id(self.artifacts_root, account_id)
-        except (OSError, ValueError) as exc:
-            raise HostRunnerError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "could not read the legacy emergency fence before start",
-            ) from exc
-        if fence_id is not None:
-            raise HostRunnerError(
-                status.HTTP_409_CONFLICT,
-                {
-                    "reason_code": "CLERK_LEGACY_EMERGENCY_FENCE",
-                    "message": "Start is refused while the account emergency fence is active.",
-                },
+        with self._flatten_lock:
+            if account_id in self._flatten_in_flight:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_ADMISSION_CLOSED",
+                        "account_id": account_id,
+                    },
+                )
+            self._account_starts_in_flight[account_id] = (
+                self._account_starts_in_flight.get(account_id, 0) + 1
             )
+        try:
+            yield
+        finally:
+            with self._flatten_lock:
+                remaining_starts = self._account_starts_in_flight[account_id] - 1
+                if remaining_starts:
+                    self._account_starts_in_flight[account_id] = remaining_starts
+                else:
+                    del self._account_starts_in_flight[account_id]
 
     def start(self, run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
         """Start ``app.engine.live.run start`` for an existing run directory.
@@ -878,10 +882,9 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
         sid = self._resolve_strategy_instance_id(run_dir)
         key = sid or run_id
-        account_id, _ = self._account_registry_identity(run_dir)
-        self._reject_start_during_legacy_emergency(account_id)
+        account_id = self.command_account_id(run_id)
 
-        with self._instance_start_operation_fence(key, sid):
+        with self._account_start_admission_fence(account_id), self._instance_start_operation_fence(key, sid):
             clerk_client_ids = self._clerk_supervisor.in_use_client_ids()
             # Reserve the bot's client ID under the registry lock, then release
             # it before any filesystem/broker readiness work.  The reservation
@@ -928,7 +931,6 @@ class RunnerProcessManager:
 
             env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
-            account_id = None
             active_binding_written = False
             try:
                 log_handle = log_path.open("a", encoding="utf-8")
@@ -1053,225 +1055,147 @@ class RunnerProcessManager:
             )
             return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
-    def emergency_flatten(self, run_id: str, account: str) -> HostRunnerActionResponse:
-        """Account-wide emergency flatten via the existing one-shot CLI (§ 7.2 #6).
+    def emergency_flatten_account(
+        self,
+        account: str,
+        *,
+        operation_id: str,
+        authorization_id: str,
+    ) -> AccountEmergencyFlattenResponse:
+        """Flatten an account through its sole held Clerk broker session."""
 
-        Independent of any live binding — after a halt/poison the binding is gone,
-        so the binding-gated console FLATTEN command is unavailable exactly when
-        an operator wants to flatten. This reuses ``app.engine.live.run
-        emergency-flatten`` (paper-guarded, ``--confirm`` + ``--account`` gated),
-        run synchronously so the CLI's exit code drives the HTTP response. It is
-        the blunt account-wide liquidate only; namespace-attributed
-        reconciliation stays fail-closed (we don't best-guess broker ownership).
-        """
-        run_dir = self._validate_run_dir(run_id)
-        self._execute_emergency_flatten(run_id=run_id, run_dir=run_dir, account=account)
-        return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
-
-    def emergency_flatten_account(self, account: str) -> AccountEmergencyFlattenResponse:
-        """Mint an audit run and flatten a paper account without a surviving bot run."""
-
-        run_id = f"eflat-{uuid.uuid4().hex}"
-        run_dir = self.live_runs_root / run_id
-        run_dir.mkdir(parents=True, exist_ok=False)
-        self._execute_emergency_flatten(run_id=run_id, run_dir=run_dir, account=account)
+        receipt = self._run_clerk_emergency_flatten(
+            account=account,
+            operation_id=operation_id,
+            authorization_id=authorization_id,
+        )
         return AccountEmergencyFlattenResponse(
             accepted=True,
             account_id=account,
-            audit_run_id=run_id,
-            completed_at_ms=_now_ms(),
+            audit_run_id=receipt.operation_id,
+            completed_at_ms=receipt.observed_at_ms,
         )
 
-    def _execute_emergency_flatten(self, *, run_id: str, run_dir: Path, account: str) -> None:
-        """Run the canonical one-shot CLI under the per-account exclusion fence."""
+    def _run_clerk_emergency_flatten(
+        self,
+        *,
+        account: str,
+        operation_id: str,
+        authorization_id: str,
+    ):
+        """Close Clerk intake, pause bots, then let the same Clerk flatten."""
 
-        # Claim the account so a concurrent flatten for it is rejected rather than
-        # run against the same pre-fill position snapshot (double-liquidate). The
-        # CLI runs OUTSIDE the lock, so a 120s flatten never blocks the daemon.
         with self._flatten_lock:
             if account in self._flatten_in_flight:
                 raise HostRunnerError(
                     status.HTTP_409_CONFLICT,
                     f"emergency-flatten already in progress for account {account}",
                 )
+            if account in self._account_starts_in_flight:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_START_IN_FLIGHT",
+                        "account_id": account,
+                    },
+                )
             self._flatten_in_flight.add(account)
-        # Generate the id before the RPC.  A timed-out request may already have
-        # committed the durable open event, so this identity is what lets us
-        # distinguish that safe-to-release case from an activation failure.
-        fence_id = uuid.uuid4().hex
-        fence_activated = False
-        command_error: HostRunnerError | None = None
         try:
-            self._activate_legacy_emergency_fence(account, fence_id=fence_id)
-            fence_activated = True
-            self._refuse_legacy_emergency_with_active_runs(account)
-            command = [
-                sys.executable,
-                "-m",
-                "app.engine.live.run",
-                "emergency-flatten",
-                "--run-dir",
-                str(run_dir),
-                "--account",
-                account,
-                "--confirm",
-            ]
-            env = os.environ.copy()
-            python_path = str(self.repo_root / "PythonDataService")
-            existing = env.get("PYTHONPATH")
-            env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
-            env["IBKR_HOST"] = host_process_ibkr_host(env.get("IBKR_HOST", "auto"))
-            # This one-shot client must not inherit the data-plane's or an
-            # ordinary bot's session identity.  The dedicated ID is outside
-            # the configurable host-runner pool (whose default is 50-99).
-            env["IBKR_CLIENT_ID"] = str(_EMERGENCY_FLATTEN_IBKR_CLIENT_ID)
-            env[CLERK_HOST_BINDING_CAPABILITY_ENV] = self._clerk_host_binding_capability
+            self._ensure_account_clerk(account)
+            client = AccountClerkHostRpcClient(
+                artifacts_root=self.artifacts_root,
+                account_id=account,
+                host_capability=self._clerk_host_binding_capability,
+            )
+            asyncio.run(
+                client.prepare_emergency_flatten(
+                    operation_id=operation_id,
+                    authorization_id=authorization_id,
+                )
+            )
             try:
-                proc = subprocess.run(
-                    command,
-                    cwd=str(self.repo_root),
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-            except subprocess.TimeoutExpired as exc:
-                raise HostRunnerError(
-                    status.HTTP_504_GATEWAY_TIMEOUT,
-                    f"emergency-flatten timed out after {exc.timeout}s",
-                ) from exc
-            except OSError as exc:
-                raise HostRunnerError(
-                    status.HTTP_503_SERVICE_UNAVAILABLE, f"could not run emergency-flatten: {exc}"
-                ) from exc
-            if proc.returncode != 0:
-                # CLI exit codes: 2 = operator precondition (account mismatch / no
-                # --confirm) -> 400; everything else (3 = broker/runtime) -> 502.
-                http_code = status.HTTP_400_BAD_REQUEST if proc.returncode == 2 else status.HTTP_502_BAD_GATEWAY
-                detail = (proc.stderr or proc.stdout or "").strip()[:500] or (
-                    f"emergency-flatten exited {proc.returncode}"
-                )
-                command_error = HostRunnerError(http_code, f"emergency-flatten failed: {detail}")
-                raise command_error
-            logger.info("emergency-flatten completed for run=%s account=%s", run_id, account)
-        except HostRunnerError as exc:
-            command_error = exc
-            raise
-        finally:
-            if fence_activated:
-                try:
-                    self._release_legacy_emergency_fence(account, fence_id=fence_id)
-                except HostRunnerError:
-                    logger.exception(
-                        "legacy emergency fence could not be released after subprocess exit",
-                        extra={"account_id": account, "fence_id": fence_id},
+                self._pause_on_duty_account_bots(account)
+            except HostRunnerError:
+                # The intake closure is durable already.  Preserve the host
+                # actuator failure in the same operation before returning; a
+                # restart must not mistake an unproved bot stop for quiescence.
+                asyncio.run(
+                    client.mark_emergency_requires_reconciliation(
+                        operation_id=operation_id,
+                        reason="CLERK_EMERGENCY_BOT_PAUSE_UNPROVEN",
                     )
-                    if command_error is None:
-                        raise
-            with self._flatten_lock:
-                self._flatten_in_flight.discard(account)
-
-    def _activate_legacy_emergency_fence(self, account_id: str, *, fence_id: str) -> None:
-        """Close Clerk broker-write intake before invoking the temporary second writer."""
-
-        try:
-            self._ensure_account_clerk(account_id)
-            receipt = asyncio.run(
-                AccountClerkRpcClient(
-                    artifacts_root=self.artifacts_root,
-                    account_id=account_id,
-                ).activate_legacy_emergency_fence(fence_id=fence_id)
+                )
+                raise
+            asyncio.run(
+                client.mark_emergency_bots_paused(
+                    operation_id=operation_id,
+                    authorization_id=authorization_id,
+                )
+            )
+            return asyncio.run(
+                client.emergency_flatten_account(
+                    operation_id=operation_id,
+                    authorization_id=authorization_id,
+                )
             )
         except AccountClerkRpcError as exc:
-            # The Clerk may have appended the open event just before a socket
-            # timeout or malformed response reached the host.  Re-read the
-            # durable authority record using the caller-owned identity before
-            # deciding whether the fence needs a compensating release.
-            from app.engine.live.account_artifacts import active_legacy_emergency_fence_id
-
-            try:
-                active_fence_id = active_legacy_emergency_fence_id(self.artifacts_root, account_id)
-            except (OSError, ValueError) as read_exc:
-                raise HostRunnerError(
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    "Emergency flatten could not confirm whether Clerk intake was fenced.",
-                ) from read_exc
-            if active_fence_id == fence_id:
-                logger.warning(
-                    "legacy emergency fence activation response was lost; durable fence confirmed",
-                    extra={"account_id": account_id, "fence_id": fence_id, "reason_code": exc.reason_code},
-                )
-                return
             unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
             reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
             raise HostRunnerError(
                 status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
                 {
                     "reason_code": reason_code,
-                    "message": "Emergency flatten could not close Clerk broker-write intake.",
+                    "message": "The Account Clerk could not prove the emergency account recovery complete.",
                 },
             ) from exc
         except OSError as exc:
             raise HostRunnerError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
-                "Emergency flatten could not start the account Clerk to close intake.",
+                "Emergency flatten could not start the account Clerk.",
             ) from exc
-        if receipt.fence_id != fence_id:
-            raise HostRunnerError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "Emergency flatten received a mismatched Clerk fence receipt.",
-            )
+        finally:
+            with self._flatten_lock:
+                self._flatten_in_flight.discard(account)
 
-    def _release_legacy_emergency_fence(self, account_id: str, *, fence_id: str) -> None:
-        """Reopen Clerk intake only after the external emergency process has exited."""
+    def _pause_on_duty_account_bots(self, account_id: str) -> None:
+        """Prove every managed on-duty bot has exited before broker recovery."""
 
-        try:
-            asyncio.run(
-                AccountClerkRpcClient(
-                    artifacts_root=self.artifacts_root,
-                    account_id=account_id,
-                ).release_legacy_emergency_fence(fence_id=fence_id)
-            )
-        except AccountClerkRpcError as exc:
-            unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
-            reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
-            raise HostRunnerError(
-                status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
-                {
-                    "reason_code": reason_code,
-                    "message": "Emergency flatten exited but Clerk intake remains fenced.",
-                },
-            ) from exc
-
-    def _refuse_legacy_emergency_with_active_runs(self, account_id: str) -> None:
-        """Refuse the second broker writer while any current binding remains ACTIVE."""
-
-        from app.engine.live.account_registry import index_account_instance_bindings, read_account_instance_registry
-
-        try:
-            bindings = index_account_instance_bindings(
-                read_account_instance_registry(self.artifacts_root, account_id),
-                account_id=account_id,
-            ).latest_by_instance.values()
-        except (OSError, ValueError) as exc:
-            raise HostRunnerError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "could not read account bindings before emergency flatten",
-            ) from exc
-        active_instance_ids = sorted(
-            binding.strategy_instance_id
-            for binding in bindings
-            if binding.lifecycle_state == "ACTIVE"
-        )
-        if active_instance_ids:
-            raise HostRunnerError(
-                status.HTTP_409_CONFLICT,
-                {
-                    "reason_code": "EMERGENCY_FLATTEN_ACTIVE_RUNS_SURVIVE",
-                    "message": "Emergency flatten is refused while ACTIVE bot bindings survive.",
-                    "strategy_instance_ids": active_instance_ids,
-                },
-            )
+        with self._managed_lock:
+            managed = tuple(self._managed.values())
+        for candidate in managed:
+            if candidate.process.poll() is not None:
+                continue
+            try:
+                candidate_account_id = self.command_account_id(candidate.run_id)
+            except HostRunnerError as exc:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_BOT_ACCOUNT_UNPROVEN",
+                        "run_id": candidate.run_id,
+                    },
+                ) from exc
+            if candidate_account_id != account_id:
+                continue
+            try:
+                stopped = self.stop(candidate.run_id, HostRunnerStopRequest(force=False))
+            except (HostRunnerError, OSError) as exc:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_BOT_PAUSE_UNPROVEN",
+                        "run_id": candidate.run_id,
+                    },
+                ) from exc
+            if stopped.stop_outcome != "exited" or candidate.process.poll() is None:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_BOT_PAUSE_UNPROVEN",
+                        "run_id": candidate.run_id,
+                        "stop_outcome": stopped.stop_outcome,
+                    },
+                )
 
     def deploy(self, request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:
         """Create a run on the host via ``deploy_run`` (ADR 0006), optionally
@@ -1522,6 +1446,19 @@ class RunnerProcessManager:
                     host_capability=self._clerk_host_binding_capability,
                 ).record_binding_decision(binding)
             )
+        except AccountClerkRpcRejectedError as exc:
+            if exc.reason == "CLERK_EMERGENCY_ADMISSION_CLOSED":
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": exc.reason,
+                        "account_id": binding.account_id,
+                    },
+                ) from exc
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Account Clerk rejected the binding transition.",
+            ) from exc
         except (AccountClerkRpcError, OSError) as exc:
             raise HostRunnerError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2876,55 +2813,31 @@ def create_app(
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
     @app.post(
-        "/runs/{run_id}/emergency-flatten",
-        response_model=HostRunnerActionResponse,
-        dependencies=auth,
-    )
-    async def emergency_flatten_run(run_id: str, request: EmergencyFlattenRequest) -> HostRunnerActionResponse:
-        if not request.confirm:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
-        try:
-            key = _daemon_idempotency_key(request.idempotency_key)
-            outcome = await run_in_threadpool(
-                command_idempotency.execute,
-                idempotency_key=key,
-                command="emergency_flatten_run",
-                account_id=request.account,
-                semantic_payload={
-                    "run_id": run_id,
-                    "request": request.model_dump(mode="json", exclude={"idempotency_key"}),
-                },
-                invoke=lambda: _manager_command_outcome(
-                    lambda: process_manager.emergency_flatten(run_id, request.account)
-                ),
-            )
-            response = HostRunnerActionResponse.model_validate(_command_outcome_body(outcome))
-            return response.model_copy(update={"idempotency_key": key, "idempotency_replayed": outcome.replayed})
-        except HostRunnerError as exc:
-            raise HTTPException(exc.status_code, detail=exc.detail) from exc
-
-    @app.post(
         "/accounts/{account_id}/emergency-flatten",
         response_model=AccountEmergencyFlattenResponse,
         dependencies=auth,
     )
     async def emergency_flatten_account(
         account_id: str,
-        request: EmergencyFlattenRequest,
+        request: AccountEmergencyFlattenDispatchRequest,
     ) -> AccountEmergencyFlattenResponse:
-        if not request.confirm:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
         if request.account != account_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="request account does not match path")
         try:
-            key = _daemon_idempotency_key(request.idempotency_key)
+            key = request.idempotency_key
             outcome = await run_in_threadpool(
                 command_idempotency.execute,
                 idempotency_key=key,
                 command="emergency_flatten_account",
                 account_id=account_id,
                 semantic_payload={"account_id": account_id, "request": request.model_dump(mode="json", exclude={"idempotency_key"})},
-                invoke=lambda: _manager_command_outcome(lambda: process_manager.emergency_flatten_account(account_id)),
+                invoke=lambda: _manager_command_outcome(
+                    lambda: process_manager.emergency_flatten_account(
+                        account_id,
+                        operation_id=key,
+                        authorization_id=request.authorization_id,
+                    )
+                ),
             )
             response = AccountEmergencyFlattenResponse.model_validate(_command_outcome_body(outcome))
             return response.model_copy(update={"idempotency_key": key, "idempotency_replayed": outcome.replayed})

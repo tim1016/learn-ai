@@ -19,10 +19,10 @@ from app.engine.live.account_clerk import (
     AccountClerkBrokerAckReceipt,
     AccountClerkCancelNamespaceReceipt,
     AccountClerkCancelNamespaceUncertainError,
+    AccountClerkEmergencyFlattenIncompleteError,
+    AccountClerkEmergencyFlattenReceipt,
     AccountClerkGenerationFencedError,
     AccountClerkIntentRejected,
-    AccountClerkLegacyEmergencyFenceReceipt,
-    AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
     account_clerk_socket_path,
     read_account_clerk_journal,
@@ -32,6 +32,7 @@ from app.engine.live.account_clerk_cursor import (
     AccountClerkEventCursorRepo,
 )
 from app.engine.live.account_clerk_journal import normalize_broker_event
+from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
 from app.engine.live.account_clerk_rpc_protocol import (
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
@@ -172,22 +173,27 @@ class AccountClerkRpcClient:
                 request_identity=request_identity({"intent": intent.model_dump(mode="json")}),
             ) from exc
 
-    async def register_emergency_flatten(
+    async def authorize_emergency_flatten(
         self,
-        intent: AccountOwnerSubmitIntent,
-    ) -> AccountClerkRecordedReceipt:
-        """Register a panic-path liquidation before its separate broker write."""
+        *,
+        operation_id: str,
+        reconciliation_evidence_version: str,
+    ) -> AccountClerkEmergencyAuthorization:
+        """Ask the Clerk to issue a short-lived, exact-confirmation receipt."""
 
         request = {
-            "operation": "register_emergency_flatten",
-            "intent": intent.model_dump(mode="json"),
+            "operation": "authorize_emergency_flatten",
+            "operation_id": operation_id,
+            "confirmation_token": "FLATTEN",
+            "reconciliation_evidence_version": reconciliation_evidence_version,
+            "no_exact_recovery_candidate": True,
         }
         payload = await self._request(request)
         try:
-            return AccountClerkRecordedReceipt.model_validate(payload["recorded"])
+            return AccountClerkEmergencyAuthorization.model_validate(payload["authorization"])
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
-                operation="register_emergency_flatten",
+                operation="authorize_emergency_flatten",
                 request_identity=request_identity(request),
             ) from exc
 
@@ -287,40 +293,6 @@ class AccountClerkRpcClient:
             raise AccountClerkRpcMalformedResponseError(
                 operation="operator_adjustment",
                 request_identity=request_identity(rpc_request),
-            ) from exc
-
-    async def activate_legacy_emergency_fence(
-        self,
-        *,
-        fence_id: str,
-    ) -> AccountClerkLegacyEmergencyFenceReceipt:
-        """Close Clerk broker-write intake for the temporary external panic lane."""
-
-        request = {"operation": "activate_legacy_emergency_fence", "fence_id": fence_id}
-        payload = await self._request(request)
-        try:
-            return AccountClerkLegacyEmergencyFenceReceipt.model_validate(payload["legacy_emergency_fence"])
-        except (KeyError, ValidationError, TypeError) as exc:
-            raise AccountClerkRpcMalformedResponseError(
-                operation="activate_legacy_emergency_fence",
-                request_identity=request_identity(request),
-            ) from exc
-
-    async def release_legacy_emergency_fence(
-        self,
-        *,
-        fence_id: str,
-    ) -> AccountClerkLegacyEmergencyFenceReceipt:
-        """Reopen Clerk broker-write intake after the external panic process exits."""
-
-        request = {"operation": "release_legacy_emergency_fence", "fence_id": fence_id}
-        payload = await self._request(request)
-        try:
-            return AccountClerkLegacyEmergencyFenceReceipt.model_validate(payload["legacy_emergency_fence"])
-        except (KeyError, ValidationError, TypeError) as exc:
-            raise AccountClerkRpcMalformedResponseError(
-                operation="release_legacy_emergency_fence",
-                request_identity=request_identity(request),
             ) from exc
 
     async def fold_binding_retirements(self) -> BindingRetirementFoldResult:
@@ -543,6 +515,64 @@ class AccountClerkHostRpcClient(AccountClerkRpcClient):
                 request_identity=request_identity(request),
             ) from exc
 
+    async def emergency_flatten_account(
+        self,
+        *,
+        operation_id: str,
+        authorization_id: str,
+    ) -> AccountClerkEmergencyFlattenReceipt:
+        """Ask the current Clerk—not a daemon subprocess—to flatten its account."""
+
+        request = {
+            "operation": "emergency_flatten_account",
+            "operation_id": operation_id,
+            "authorization_id": authorization_id,
+            "host_capability": self._host_capability,
+        }
+        payload = await self._request(request)
+        try:
+            return AccountClerkEmergencyFlattenReceipt.model_validate(payload["emergency_flatten"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="emergency_flatten_account",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def prepare_emergency_flatten(self, *, operation_id: str, authorization_id: str) -> None:
+        """Close Clerk intake before this daemon pauses bot processes."""
+
+        request = {
+            "operation": "prepare_emergency_flatten",
+            "operation_id": operation_id,
+            "authorization_id": authorization_id,
+            "host_capability": self._host_capability,
+        }
+        await self._request(request)
+
+    async def mark_emergency_bots_paused(self, *, operation_id: str, authorization_id: str) -> None:
+        """Persist host-proven termination of every on-duty account bot."""
+
+        await self._request(
+            {
+                "operation": "mark_emergency_bots_paused",
+                "operation_id": operation_id,
+                "authorization_id": authorization_id,
+                "host_capability": self._host_capability,
+            }
+        )
+
+    async def mark_emergency_requires_reconciliation(self, *, operation_id: str, reason: str) -> None:
+        """Persist a host pause failure without attempting any broker action."""
+
+        await self._request(
+            {
+                "operation": "mark_emergency_requires_reconciliation",
+                "operation_id": operation_id,
+                "reason": reason,
+                "host_capability": self._host_capability,
+            }
+        )
+
 
 class AccountClerkRpcServer:
     """Clerk-process RPC server; the broker stays exclusively behind this seam."""
@@ -584,6 +614,10 @@ class AccountClerkRpcServer:
             self._persist_broker_callbacks(),
             name="account-clerk-broker-callback-writer",
         )
+        # Reconciliation happens while the callback durability worker is live
+        # but before the socket is published. No bot can race a recovery
+        # classification into a broker write.
+        await self._clerk.recover_account_state()
         self._server = await asyncio.start_unix_server(self._handle, path=str(self._socket_path))
         self._socket_path.chmod(0o600)
 
@@ -634,6 +668,17 @@ class AccountClerkRpcServer:
             response = AccountClerkRpcErrorEnvelope(
                 reason_code="ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN"
             )
+        except AccountClerkEmergencyFlattenIncompleteError as exc:
+            response = rejected_envelope(str(exc))
+        except RuntimeError as exc:
+            # Clerk policy rejections are intentionally stable, public reason
+            # codes. Unexpected runtime failures continue to the internal
+            # error path below rather than exposing implementation details.
+            reason = str(exc)
+            if reason.startswith("CLERK_"):
+                response = rejected_envelope(reason)
+            else:
+                response = AccountClerkRpcErrorEnvelope(reason_code="ACCOUNT_CLERK_INTERNAL_ERROR")
         except (json.JSONDecodeError, ValidationError):
             response = rejected_envelope("INVALID_REQUEST")
         except asyncio.CancelledError:
@@ -641,6 +686,7 @@ class AccountClerkRpcServer:
         except Exception as exc:
             logger.error(
                 "Account Clerk RPC server failure",
+                exc_info=True,
                 extra={
                     "rpc_operation": operation,
                     "account_id": self._clerk._account_id,
@@ -684,11 +730,47 @@ class AccountClerkRpcServer:
                     "broker_acked": broker_acked.model_dump(mode="json"),
                 }
             )
-        if operation == "register_emergency_flatten":
-            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
-            recorded = await self._clerk.register_emergency_flatten_intent(intent)
+        if operation == "emergency_flatten_account":
+            receipt = await self._clerk.emergency_flatten_account(
+                operation_id=required_string(request, "operation_id"),
+                authorization_id=required_string(request, "authorization_id"),
+                host_capability=required_string(request, "host_capability"),
+            )
             return AccountClerkRpcSuccessEnvelope(
-                payload={"recorded": recorded.model_dump(mode="json")}
+                payload={"emergency_flatten": receipt.model_dump(mode="json")}
+            )
+        if operation == "prepare_emergency_flatten":
+            await self._clerk.prepare_emergency_flatten(
+                operation_id=required_string(request, "operation_id"),
+                authorization_id=required_string(request, "authorization_id"),
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(payload={})
+        if operation == "mark_emergency_bots_paused":
+            await self._clerk.mark_emergency_bots_paused(
+                operation_id=required_string(request, "operation_id"),
+                authorization_id=required_string(request, "authorization_id"),
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(payload={})
+        if operation == "mark_emergency_requires_reconciliation":
+            await self._clerk.mark_emergency_requires_reconciliation(
+                operation_id=required_string(request, "operation_id"),
+                reason=required_string(request, "reason"),
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(payload={})
+        if operation == "authorize_emergency_flatten":
+            if request.get("confirmation_token") != "FLATTEN" or request.get("no_exact_recovery_candidate") is not True:
+                raise _AccountClerkRpcRequestRejected("INVALID_EMERGENCY_AUTHORIZATION")
+            authorization = await self._clerk.authorize_emergency_flatten(
+                operation_id=required_string(request, "operation_id"),
+                confirmation_token="FLATTEN",
+                reconciliation_evidence_version=required_string(request, "reconciliation_evidence_version"),
+                no_exact_recovery_candidate=True,
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"authorization": authorization.model_dump(mode="json")}
             )
         if operation == "recovery_flatten":
             intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
@@ -736,20 +818,6 @@ class AccountClerkRpcServer:
             receipt = await self._operator_adjustment_handler(cure_request)
             return AccountClerkRpcSuccessEnvelope(
                 payload={"operator_adjustment": receipt.model_dump(mode="json")}
-            )
-        if operation == "activate_legacy_emergency_fence":
-            receipt = await self._clerk.activate_legacy_emergency_fence(
-                fence_id=required_string(request, "fence_id"),
-            )
-            return AccountClerkRpcSuccessEnvelope(
-                payload={"legacy_emergency_fence": receipt.model_dump(mode="json")}
-            )
-        if operation == "release_legacy_emergency_fence":
-            receipt = await self._clerk.release_legacy_emergency_fence(
-                fence_id=required_string(request, "fence_id"),
-            )
-            return AccountClerkRpcSuccessEnvelope(
-                payload={"legacy_emergency_fence": receipt.model_dump(mode="json")}
             )
         if operation == "record_binding_decision":
             binding = AccountInstanceBinding.model_validate(request_object(request, "binding"))

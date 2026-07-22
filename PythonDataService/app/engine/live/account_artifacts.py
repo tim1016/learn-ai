@@ -23,8 +23,6 @@ ACCOUNT_EVENTS_SEQUENCE_FILENAME = "account_events.seq"
 ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACCOUNT_CLERK_GENERATION_FILENAME = "clerk_generation.json"
 ACCOUNT_CLERK_LEASE_FILENAME = "clerk_lease.json"
-LEGACY_EMERGENCY_FENCE_OPENED_EVENT_TYPE = "account_legacy_emergency_fence_opened"
-LEGACY_EMERGENCY_FENCE_RELEASED_EVENT_TYPE = "account_legacy_emergency_fence_released"
 ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES = frozenset(
     {
         "account_recovery_proof_recorded",
@@ -660,27 +658,6 @@ def append_account_event(
         {**payload, "account_id": account_id},
         only_if_receipt_absent=only_if_receipt_absent,
     )
-
-
-def active_legacy_emergency_fence_id(artifacts_root: Path, account_id: str) -> str | None:
-    """Return the currently durable legacy-emergency fence, if one remains open."""
-
-    active_fence_id: str | None = None
-    for event in read_account_events(artifacts_root, account_id):
-        event_type = event.get("event_type")
-        fence_id = event.get("fence_id")
-        if not isinstance(fence_id, str) or not fence_id:
-            if event_type in {
-                LEGACY_EMERGENCY_FENCE_OPENED_EVENT_TYPE,
-                LEGACY_EMERGENCY_FENCE_RELEASED_EVENT_TYPE,
-            }:
-                raise AccountArtifactError("legacy emergency fence event is missing fence_id")
-            continue
-        if event_type == LEGACY_EMERGENCY_FENCE_OPENED_EVENT_TYPE:
-            active_fence_id = fence_id
-        elif event_type == LEGACY_EMERGENCY_FENCE_RELEASED_EVENT_TYPE and fence_id == active_fence_id:
-            active_fence_id = None
-    return active_fence_id
 
 
 def write_account_owner_generation(

@@ -733,7 +733,7 @@
       },
       "AccountEmergencyFlattenResponse": {
         "additionalProperties": false,
-        "description": "Receipt returned after the account-scoped emergency CLI completes.",
+        "description": "Receipt returned after the Clerk re-observes the account flat.",
         "properties": {
           "accepted": {
             "title": "Accepted",
@@ -11726,7 +11726,7 @@
         "type": "object"
       },
       "EmergencyFlattenRequest": {
-        "description": "Body for the account-wide emergency flatten (\u00a7 7.2 #6).\n\nReaches the daemon's one-shot ``emergency-flatten`` CLI independent of any\nlive binding, so an operator can flatten after a halt/poison (when the\nbinding-gated console FLATTEN command is unavailable). ``account`` must echo\nthe IBKR account id \u2014 defense-in-depth mirroring the CLI ``--account`` gate,\nwhich refuses if it does not match the connected account.",
+        "description": "Body for the account-wide emergency flatten (\u00a7 7.2 #6).\n\nReaches the held Account Clerk independent of any live binding, so an\noperator can flatten after a halt/poison. The Clerk closes intake, records\ncancellation uncertainty, writes any liquidations under its own broker\nsession, and only completes after a fresh paper-account snapshot is flat.",
         "properties": {
           "account": {
             "maxLength": 32,
@@ -11734,28 +11734,23 @@
             "title": "Account",
             "type": "string"
           },
-          "confirm": {
-            "description": "Must be true; typo-proofing gate.",
-            "title": "Confirm",
-            "type": "boolean"
+          "confirmation_token": {
+            "const": "FLATTEN",
+            "description": "Exact typed confirmation required for the destructive account action.",
+            "title": "Confirmation Token"
           },
           "idempotency_key": {
-            "anyOf": [
-              {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Idempotency Key"
+            "description": "Public emergency operation identity.",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
           }
         },
         "required": [
           "account",
-          "confirm"
+          "confirmation_token",
+          "idempotency_key"
         ],
         "title": "EmergencyFlattenRequest",
         "type": "object"
@@ -45859,76 +45854,6 @@
           }
         },
         "summary": "Set Instance Desired State",
-        "tags": [
-          "live-instances",
-          "live-instances"
-        ]
-      }
-    },
-    "/api/live-instances/{strategy_instance_id}/emergency-flatten": {
-      "post": {
-        "description": "Account-wide emergency flatten (\u00a7 7.2 #6), independent of a live binding.\n\nThe console FLATTEN *command* needs a live binding (it writes to the run's\ncommand channel for the engine to drain) \u2014 but after a halt/poison the\nbinding is gone, exactly when an operator most wants to flatten. This reaches\nthe daemon's one-shot ``emergency-flatten`` on the instance's latest run,\nreusing the existing paper-guarded CLI. It connects its own broker session,\nso it works with no live process. Account-wide only; namespace-attributed\nreconciliation stays fail-closed. The operator must echo the account id\n(defense-in-depth, mirrors the CLI ``--account`` gate).",
-        "operationId": "emergency_flatten_instance_api_live_instances__strategy_instance_id__emergency_flatten_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "strategy_instance_id",
-            "required": true,
-            "schema": {
-              "title": "Strategy Instance Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EmergencyFlattenRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HostRunnerActionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Emergency Flatten Instance",
         "tags": [
           "live-instances",
           "live-instances"

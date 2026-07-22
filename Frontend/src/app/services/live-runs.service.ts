@@ -394,21 +394,6 @@ export class LiveRunsService {
     );
   }
 
-  /** Account-wide emergency flatten (§ 7.2 #6). Reaches the daemon's one-shot
-   * flatten on the instance's latest run, independent of a live binding — so it
-   * works after a halt/poison, when the binding-gated FLATTEN command can't. */
-  emergencyFlattenAccount(
-    instanceId: string,
-    request: { account: string; confirm: boolean },
-  ): Promise<HostRunnerActionResponse> {
-    return firstValueFrom(
-      this.http.post<HostRunnerActionResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/emergency-flatten`,
-        request,
-      ),
-    );
-  }
-
   /** Account/fleet contamination: net vs Σ instance expecteds (ADR 0005, #399). */
   getAccountFleet(): Promise<FleetContamination> {
     return firstValueFrom(this.http.get<FleetContamination>(`${this.instancesBase}/account`));

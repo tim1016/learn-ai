@@ -72,6 +72,7 @@ START_MS = 1_784_000_000_000
 class _Broker:
     def __init__(self) -> None:
         self._client = SimpleNamespace(settings=SimpleNamespace(mode="paper"))
+        self.open_orders: list[object] = []
 
     async def place_order(self, _order: object) -> object:
         return SimpleNamespace(order_id=101, perm_id=201, exec_id="exec-1040")
@@ -79,10 +80,67 @@ class _Broker:
     async def cancel_open_orders_for_namespace(self, _namespace: str) -> list[int]:
         return [1046]
 
+    async def fetch_positions(self) -> object:
+        return SimpleNamespace(account_id=ACCOUNT, is_paper=True, positions=[], fetched_at_ms=START_MS)
+
+    async def list_open_orders(self) -> list[object]:
+        return self.open_orders
+
+    async def cancel_open_orders_for_refs(self, order_refs: tuple[str, ...]) -> list[int]:
+        targets = [
+            int(order.order_id)
+            for order in self.open_orders
+            if getattr(order, "order_ref", None) in set(order_refs)
+        ]
+        self.open_orders = [
+            order
+            for order in self.open_orders
+            if getattr(order, "order_ref", None) not in set(order_refs)
+        ]
+        return targets
+
 
 class _FailingBroker(_Broker):
     async def place_order(self, _order: object) -> object:
         raise ValueError("broker secret must not reach the socket response")
+
+
+def _allow_emergency_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    receipt_id: str,
+) -> None:
+    """Install the canonical reconciliation artifact seen by the Clerk RPC server."""
+
+    from app.services import account_reconciliation as reconciliation_module
+
+    receipt = SimpleNamespace(
+        receipt_id=receipt_id,
+        account_id=ACCOUNT,
+        connected_account_id=ACCOUNT,
+        account_truth_generated_at_ms=START_MS,
+        expires_at_ms=START_MS + 300_000,
+        account_truth=SimpleNamespace(account=SimpleNamespace(is_paper=True)),
+    )
+
+    class _CanonicalReconciliation:
+        def __init__(self, *, artifacts_root: Path) -> None:
+            assert artifacts_root
+
+        def read_latest_receipt(self, account_id: str) -> object:
+            assert account_id == ACCOUNT
+            return receipt
+
+        def triage(self, *, account_id: str, now_ms: int) -> object:
+            assert account_id == ACCOUNT
+            assert now_ms == START_MS
+            return SimpleNamespace(
+                account_reconciliation_receipt=receipt,
+                emergency_flatten_confirmation=object(),
+                recovery_flatten_candidates=[],
+            )
+
+    monkeypatch.setattr(reconciliation_module, "AccountReconciliationService", _CanonicalReconciliation)
 
 
 class _UncertainCancelBroker(_Broker):
@@ -303,88 +361,72 @@ async def _close_raw_server(server: asyncio.AbstractServer, path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_register_emergency_flatten_persists_attribution_before_external_submit(tmp_path: Path) -> None:
-    _write_active_binding(tmp_path, "eflat-DU1040", "eflat-run")
+async def test_authorize_emergency_flatten_persists_typed_receipt_before_host_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     generation = 1
-    intent = _emergency_flatten_intent()
     server = AccountClerkRpcServer(
-        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
-    )
-    await server.start()
-    try:
-        receipt = await AccountClerkRpcClient(
+        AccountClerk(
             artifacts_root=tmp_path,
             account_id=ACCOUNT,
-        ).register_emergency_flatten(intent)
+            broker=_Broker(),
+            clerk_generation=generation,
+            now_ms=lambda: START_MS,
+        )
+    )
+    _allow_emergency_reconciliation(monkeypatch, receipt_id="receipt-1040")
+    await server.start()
+    try:
+        authorization = await AccountClerkRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+        ).authorize_emergency_flatten(
+            operation_id="emergency-1040",
+            reconciliation_evidence_version="receipt-1040",
+        )
     finally:
         await server.close()
 
-    assert receipt.intent_id == intent.intent_id
+    assert authorization.confirmation_token == "FLATTEN"
     [recorded] = [
         entry
         for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
-        if entry.entry_kind == "recorded"
+        if entry.entry_kind == "emergency_operation"
     ]
-    assert recorded.intent == intent
+    assert recorded.emergency_operation is not None
+    assert recorded.emergency_operation.authorization == authorization
 
 
 @pytest.mark.asyncio
-async def test_legacy_emergency_fence_rejects_normal_submit_but_keeps_audit_registration(tmp_path: Path) -> None:
-    """The temporary external panic lane fences every Clerk broker write except its audit record."""
-
-    _write_active_binding(tmp_path)
-    _write_active_binding(tmp_path, "eflat-DU1040", "eflat-run")
-    broker = _Broker()
-    server = AccountClerkRpcServer(
-        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker, clerk_generation=1)
-    )
-    await server.start()
-    client = AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT)
-    try:
-        fence = await client.activate_legacy_emergency_fence(fence_id="fence-1040")
-        with pytest.raises(AccountClerkRpcRejectedError) as exc_info:
-            await client.submit(_intent())
-        registered = await client.register_emergency_flatten(_emergency_flatten_intent())
-        released = await client.release_legacy_emergency_fence(fence_id=fence.fence_id)
-        broker_acked = await client.submit(_intent("after-fence"))
-    finally:
-        await server.close()
-
-    assert fence.status == "legacy_emergency_fenced"
-    assert exc_info.value.reason == "CLERK_LEGACY_EMERGENCY_FENCE"
-    assert registered.intent_id == "emergency-1040"
-    assert released.status == "legacy_emergency_fence_released"
-    assert broker_acked.intent_id == "after-fence"
-    assert [event["event_type"] for event in read_account_events(tmp_path, ACCOUNT)][-2:] == [
-        "account_legacy_emergency_fence_opened",
-        "account_legacy_emergency_fence_released",
-    ]
-
-
-@pytest.mark.asyncio
-async def test_register_emergency_flatten_rejects_non_emergency_intent(tmp_path: Path) -> None:
-    _write_active_binding(tmp_path)
+async def test_authorize_emergency_flatten_rejects_uncorroborated_reconciliation_evidence(tmp_path: Path) -> None:
     generation = 1
     server = AccountClerkRpcServer(
-        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_Broker(),
+            clerk_generation=generation,
+            now_ms=lambda: START_MS + 120_001,
+        )
     )
     await server.start()
     try:
         with pytest.raises(AccountClerkRpcRejectedError) as exc_info:
-            await AccountClerkRpcClient(
-                artifacts_root=tmp_path,
-                account_id=ACCOUNT,
-            ).register_emergency_flatten(_intent())
+            await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).authorize_emergency_flatten(
+                operation_id="emergency-stale",
+                reconciliation_evidence_version="receipt-stale",
+            )
     finally:
         await server.close()
 
-    assert exc_info.value.reason == "CLERK_EMERGENCY_FLATTEN_INTENT_KIND_REQUIRED"
+    assert exc_info.value.reason == "CLERK_EMERGENCY_RECONCILIATION_EVIDENCE_INVALID"
 
 
 @pytest.mark.asyncio
 async def test_historical_emergency_receipt_stops_unattributed_callback_replay(tmp_path: Path) -> None:
-    _write_active_binding(tmp_path, "eflat-DU1040", "eflat-run")
-    intent = _emergency_flatten_intent()
+    _write_active_binding(tmp_path)
+    intent = _intent()
     callback = IbkrOrderEvent(
         account_id=ACCOUNT,
         order_id=1040,
@@ -399,7 +441,7 @@ async def test_historical_emergency_receipt_stops_unattributed_callback_replay(t
     first = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
 
     initial = await first.record_broker_event(callback)
-    await first.register_emergency_flatten_intent(intent)
+    await first.record_intent(intent)
     alarm_count_before_restart = len(read_account_events(tmp_path, ACCOUNT))
 
     restarted = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)

@@ -175,13 +175,7 @@ def assess_account_live_session(
 
     canonical_account_id = normalize_account_id(account_id)
     policy = read_account_session_policy(artifacts_root, canonical_account_id)
-    try:
-        evidence = read_account_live_feed_evidence(artifacts_root, canonical_account_id)
-    except (OSError, ValueError):
-        # An order boundary must fail closed when its durable liveness proof is
-        # unreadable.  The Account desk uses the strict reader above to surface
-        # the artifact fault with its typed operator error.
-        evidence = None
+    evidence = read_account_live_feed_evidence(artifacts_root, canonical_account_id)
 
     scheduled_state = session_state_at_ms(now_ms)
     scheduled_open = scheduled_state == "RTH_OPEN"

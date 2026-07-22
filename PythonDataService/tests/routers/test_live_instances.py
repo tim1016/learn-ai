@@ -102,6 +102,9 @@ def _forbid_account_truth_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fail_if_called(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("broker-free read attempted an Account Truth refresh")
 
+    # The Start boundary owns Account Truth refreshes.  Status and fleet reads
+    # must remain broker-free, so guard the actual owner rather than a stale
+    # router-level import seam.
     monkeypatch.setattr(account_start_gate, "refresh_account_truth_now", fail_if_called)
 
 
@@ -256,6 +259,7 @@ def _remember_clean_account_truth(
         cached_at_ms=observed_at_ms,
     )
     monkeypatch.setattr(live_instances, "get_account_truth_snapshot_provider", lambda: provider)
+    monkeypatch.setattr(account_start_gate, "get_account_truth_snapshot_provider", lambda: provider)
     monkeypatch.setattr(live_instances, "_now_ms", lambda: observed_at_ms)
 
 
@@ -748,6 +752,9 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return object()
 
     monkeypatch.setattr(account_start_gate, "refresh_account_truth_now", fresh_account_truth)
+    # Successful Start tests exercise the admission and daemon seams, not the
+    # process-global IBKR connection singleton.  The dedicated failure tests
+    # replace this with the unavailable-client path.
     monkeypatch.setattr(live_instances, "require_connected_client", lambda: object())
 
     async def connected_broker_account() -> tuple[str | None, bool]:
@@ -1963,10 +1970,12 @@ async def test_chart_snapshot_today_returns_bars_and_runs(app_with_root, monkeyp
     from zoneinfo import ZoneInfo
 
     ny_tz = ZoneInfo("America/New_York")
-    now_ms = int(datetime.now(UTC).timestamp() * 1000)
-    today = datetime.fromtimestamp(now_ms / 1000, tz=UTC).astimezone(ny_tz).date()
-    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
+    today = datetime.now(ny_tz).date()
     today_start_ms = int(datetime(today.year, today.month, today.day, tzinfo=ny_tz).timestamp() * 1000)
+    # The endpoint rejects an empty pre-open window.  Freeze "now" inside
+    # today's regular session so this contract remains valid in overnight CI.
+    now_ms = today_start_ms + 36_000_000
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
 
     run_dir = root / "run-chart"
     run_dir.mkdir(parents=True)
@@ -3006,74 +3015,6 @@ async def test_status_last_exit_surfaces_the_specific_halt_trigger(
     assert last_exit["halt_trigger"] == "outside_mutation"
     assert last_exit["halt_at_ms"] == 1_700_000_000_000
     assert last_exit["halt_detail"]["symbol"] == "SPY"
-
-
-async def test_emergency_flatten_works_without_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The account-wide flatten reaches the latest run's daemon emergency-flatten
-    even with NO live binding (the binding-gated console FLATTEN command can't) —
-    exactly the post-halt/poison case where flattening matters most."""
-    app, root = app_with_root
-    _write_ledger(root, "run-flat", "spy_ema_paper", 100)
-    _set_daemon(monkeypatch, process={"state": "idle"})  # not running -> no live binding
-
-    captured: dict = {}
-
-    async def fake_flatten(base_url: str, run_id: str, payload: dict) -> dict:
-        captured["run_id"] = run_id
-        captured["payload"] = payload
-        return {
-            "accepted": True,
-            "process": {"state": "idle"},
-            "idempotency_key": payload["idempotency_key"],
-            "idempotency_replayed": False,
-        }
-
-    monkeypatch.setattr(host_daemon_client, "emergency_flatten_run", fake_flatten)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/live-instances/spy_ema_paper/emergency-flatten",
-            json={"account": "DU123", "confirm": True},
-        )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["accepted"] is True
-    assert body["mutation_attempt_id"].startswith("mutation-")
-    assert body["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
-    assert captured["run_id"] == "run-flat"
-    assert captured["payload"]["account"] == "DU123"
-    assert captured["payload"]["confirm"] is True
-    assert captured["payload"]["idempotency_key"] == body["mutation_attempt_id"]
-    assert body["idempotency_key"] == body["mutation_attempt_id"]
-    assert body["idempotency_replayed"] is False
-
-
-async def test_emergency_flatten_requires_confirm(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, root = app_with_root
-    _write_ledger(root, "run-flat2", "spy_ema_paper", 100)
-    _set_daemon(monkeypatch, process={"state": "idle"})
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/live-instances/spy_ema_paper/emergency-flatten",
-            json={"account": "DU123", "confirm": False},
-        )
-
-    assert response.status_code == 400
-
-
-async def test_emergency_flatten_404_when_instance_has_no_run(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _root = app_with_root
-    _set_daemon(monkeypatch, process={"state": "idle"})
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/api/live-instances/ghost_instance/emergency-flatten",
-            json={"account": "DU123", "confirm": True},
-        )
-
-    assert response.status_code == 404
 
 
 async def test_status_start_defaults_redeploy_fields_empty_for_legacy_ledger(
@@ -6713,38 +6654,7 @@ async def test_stop_run_outcome_unknown_returns_typed_409(app_with_root, monkeyp
     assert detail["mutation_dispatch_state"] == "OUTCOME_UNKNOWN"
 
 
-async def test_emergency_flatten_outcome_unknown_returns_typed_409(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Emergency-flatten has a 130s timeout; an ambiguous outcome here
-    means broker positions may be in an intermediate state — the highest
-    stakes case for 619-C5."""
-    app, root = app_with_root
-    sid = "strategy-of-flatten"
-    _write_ledger(root, "run-flatten", sid, created_at_ms=1_700_000_000_000)
-
-    async def fake_flatten(_base_url: str, _run_id: str, _payload: dict) -> dict:
-        raise _outcome_unknown_exc(category="remote_protocol_error")
-
-    monkeypatch.setattr(host_daemon_client, "emergency_flatten_run", fake_flatten)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            f"/api/live-instances/{sid}/emergency-flatten",
-            json={"account": "DU123", "confirm": True},
-        )
-
-    assert response.status_code == 409
-    _assert_outcome_unknown_body(
-        response.json()["detail"],
-        endpoint="emergency_flatten",
-        category="remote_protocol_error",
-    )
-    assert response.json()["detail"]["mutation_attempt_id"].startswith("mutation-")
-    assert response.json()["detail"]["mutation_dispatch_state"] == "OUTCOME_UNKNOWN"
-
-
-@pytest.mark.parametrize("endpoint", ["stop", "end_day", "emergency_flatten"])
+@pytest.mark.parametrize("endpoint", ["stop", "end_day"])
 async def test_cancelled_mutation_marks_attempt_outcome_unknown(
     endpoint: str,
     app_with_root,
@@ -6773,13 +6683,6 @@ async def test_cancelled_mutation_marks_attempt_outcome_unknown(
         )
         monkeypatch.setattr(live_instances, "_mutation_rung_receipts_from_process", cancelled)
         invocation = live_instances.end_day_now(sid)
-    else:
-        monkeypatch.setattr(host_daemon_client, "emergency_flatten_run", cancelled)
-        invocation = live_instances.emergency_flatten_instance(
-            sid,
-            live_instances.EmergencyFlattenRequest(account="DU123", confirm=True),
-        )
-
     with pytest.raises(asyncio.CancelledError):
         await invocation
 
@@ -6787,11 +6690,7 @@ async def test_cancelled_mutation_marks_attempt_outcome_unknown(
     assert attempt is not None
     assert attempt.dispatch_state == "OUTCOME_UNKNOWN"
     assert attempt.outcome == {
-        "stage": (
-            "daemon_emergency_flatten"
-            if endpoint == "emergency_flatten"
-            else ("end_day_response_assembly" if endpoint == "end_day" else "daemon_stop")
-        ),
+        "stage": "end_day_response_assembly" if endpoint == "end_day" else "daemon_stop",
         "error_type": "CancelledError",
     }
 

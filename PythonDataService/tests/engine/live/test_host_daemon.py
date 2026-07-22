@@ -543,6 +543,24 @@ def _add_managed_process(
     )
 
 
+def test_emergency_pause_refuses_to_continue_while_a_bot_is_still_running(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The emergency lane must not record bot pause after a graceful-stop timeout."""
+
+    manager, _ = daemon_context
+    _add_managed_process(manager, key="pause-proof", ended_at_ms=None, returncode=None)
+    managed = manager._managed["pause-proof"]
+    monkeypatch.setattr(manager, "command_account_id", lambda _run_id: "DU-PAUSE")
+
+    with pytest.raises(HostRunnerError, match="CLERK_EMERGENCY_BOT_PAUSE_UNPROVEN"):
+        manager._pause_on_duty_account_bots("DU-PAUSE")
+
+    assert managed.process.poll() is None
+    assert managed.process.signals
+
+
 @pytest.fixture
 def daemon_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[RunnerProcessManager, Path]:
     repo_root = tmp_path / "repo"
@@ -550,8 +568,6 @@ def daemon_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Run
     run_dir = live_runs_root / RUN_ID
     run_dir.mkdir(parents=True)
     manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
-    monkeypatch.setattr(manager, "_activate_legacy_emergency_fence", lambda _account, *, fence_id: None)
-    monkeypatch.setattr(manager, "_release_legacy_emergency_fence", lambda _account, *, fence_id: None)
     def record_binding_through_test_clerk(
         binding: AccountInstanceBinding,
         *,
@@ -1243,301 +1259,6 @@ def test_health_flags_stale_code_when_launch_sha_behind_head(tmp_path: Path) -> 
     assert health.commits_behind == 3  # linear history → exact
 
 
-def test_emergency_flatten_runs_cli_and_reports_success(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The account-wide flatten reuses the one-shot emergency-flatten CLI: the
-    manager spawns it (fixed argv, --confirm + --account), and exit 0 → accepted."""
-    from app.engine.live import host_daemon as hd
-
-    manager, run_dir = daemon_context
-    captured: dict[str, object] = {}
-
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def fake_run(command: list[str], **kwargs: object) -> _Result:
-        captured["command"] = command
-        captured["env"] = kwargs["env"]
-        return _Result()
-
-    monkeypatch.setenv("IBKR_HOST", "host.containers.internal")
-    monkeypatch.setenv("IBKR_CLIENT_ID", "42")
-    monkeypatch.setattr(hd.subprocess, "run", fake_run)
-
-    resp = manager.emergency_flatten(RUN_ID, "DU123")
-
-    assert resp.accepted is True
-    cmd = captured["command"]
-    assert isinstance(cmd, list)
-    assert cmd[1:4] == ["-m", "app.engine.live.run", "emergency-flatten"]
-    assert "--confirm" in cmd
-    assert "DU123" in cmd
-    assert str(run_dir.resolve()) in cmd
-    env = captured["env"]
-    assert isinstance(env, dict)
-    assert env["IBKR_HOST"] == "127.0.0.1"
-    assert env["IBKR_CLIENT_ID"] == "1000000"
-
-
-def test_account_emergency_flatten_mints_audit_run_without_existing_bot(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from app.engine.live import host_daemon as hd
-
-    manager, _ = daemon_context
-    captured: dict[str, list[str]] = {}
-
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def fake_run(command: list[str], **_kwargs: object) -> _Result:
-        captured["command"] = command
-        return _Result()
-
-    monkeypatch.setattr(hd.subprocess, "run", fake_run)
-
-    response = manager.emergency_flatten_account("DU123")
-
-    assert response.accepted is True
-    assert response.account_id == "DU123"
-    assert response.audit_run_id.startswith("eflat-")
-    audit_dir = manager.live_runs_root / response.audit_run_id
-    assert audit_dir.is_dir()
-    assert str(audit_dir) in captured["command"]
-
-
-def test_account_emergency_flatten_refuses_when_active_binding_survives(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The temporary second broker writer never starts while a live binding remains ACTIVE."""
-
-    from app.engine.live import host_daemon as hd
-
-    manager, _ = daemon_context
-    write_account_instance_binding(
-        manager.artifacts_root,
-        AccountInstanceBinding(
-            account_id="DU123",
-            strategy_instance_id="bot-still-active",
-            run_id="run-still-active",
-            bot_order_namespace=bot_order_namespace_for_instance("bot-still-active"),
-            lifecycle_state="ACTIVE",
-            recorded_at_ms=1,
-            source="test",
-        ),
-    )
-    monkeypatch.setattr(hd.subprocess, "run", pytest.fail)
-
-    with pytest.raises(HostRunnerError) as exc_info:
-        manager.emergency_flatten_account("DU123")
-
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail == {
-        "reason_code": "EMERGENCY_FLATTEN_ACTIVE_RUNS_SURVIVE",
-        "message": "Emergency flatten is refused while ACTIVE bot bindings survive.",
-        "strategy_instance_ids": ["bot-still-active"],
-    }
-
-
-def test_emergency_fence_response_loss_releases_the_durably_open_fence(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A committed open event plus a lost RPC response must never strand intake closed."""
-
-    from app.engine.live import host_daemon as hd
-    from app.engine.live.account_clerk_rpc_protocol import (
-        AccountClerkRpcRequestIdentity,
-        AccountClerkRpcTimeoutError,
-    )
-
-    manager, _ = daemon_context
-    fence_id = "fence-response-lost"
-    run_dir = manager.live_runs_root / "emergency-response-loss"
-    run_dir.mkdir()
-    activated_fence_ids: list[str] = []
-    write_account_instance_binding(
-        manager.artifacts_root,
-        AccountInstanceBinding(
-            account_id="DU123",
-            strategy_instance_id="bot-still-active",
-            run_id="run-still-active",
-            bot_order_namespace=bot_order_namespace_for_instance("bot-still-active"),
-            lifecycle_state="ACTIVE",
-            recorded_at_ms=1,
-            source="test",
-        ),
-    )
-
-    class _ResponseLostClient:
-        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
-            self.artifacts_root = artifacts_root
-            self.account_id = account_id
-
-        async def activate_legacy_emergency_fence(self, *, fence_id: str) -> None:
-            activated_fence_ids.append(fence_id)
-            append_account_event(
-                self.artifacts_root,
-                self.account_id,
-                {
-                    "event_type": "account_legacy_emergency_fence_opened",
-                    "fence_id": fence_id,
-                    "recorded_at_ms": 1,
-                },
-            )
-            raise AccountClerkRpcTimeoutError(
-                operation="activate_legacy_emergency_fence",
-                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
-            )
-
-    released_fence_ids: list[str] = []
-
-    def release_fence(account_id: str, *, fence_id: str) -> None:
-        released_fence_ids.append(fence_id)
-        append_account_event(
-            manager.artifacts_root,
-            account_id,
-            {
-                "event_type": "account_legacy_emergency_fence_released",
-                "fence_id": fence_id,
-                "recorded_at_ms": 2,
-            },
-        )
-
-    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account: None)
-    monkeypatch.setattr(
-        manager,
-        "_activate_legacy_emergency_fence",
-        RunnerProcessManager._activate_legacy_emergency_fence.__get__(manager, RunnerProcessManager),
-    )
-    monkeypatch.setattr(hd, "AccountClerkRpcClient", _ResponseLostClient)
-    monkeypatch.setattr(hd.uuid, "uuid4", lambda: SimpleNamespace(hex=fence_id))
-    monkeypatch.setattr(
-        manager,
-        "_release_legacy_emergency_fence",
-        release_fence,
-    )
-    monkeypatch.setattr(hd.subprocess, "run", pytest.fail)
-
-    with pytest.raises(HostRunnerError, match="ACTIVE bot bindings survive"):
-        manager._execute_emergency_flatten(run_id="emergency-response-loss", run_dir=run_dir, account="DU123")
-
-    assert activated_fence_ids == [fence_id]
-    assert released_fence_ids == [fence_id]
-    fence_events = [
-        event["event_type"]
-        for event in read_account_events(manager.artifacts_root, "DU123")
-        if event["event_type"].startswith("account_legacy_emergency_fence_")
-    ]
-    assert fence_events == [
-        "account_legacy_emergency_fence_opened",
-        "account_legacy_emergency_fence_released",
-    ]
-
-
-def test_start_refuses_while_a_durable_legacy_emergency_fence_is_open(
-    daemon_context: tuple[RunnerProcessManager, Path],
-) -> None:
-    manager, _ = daemon_context
-    append_account_event(
-        manager.artifacts_root,
-        "DU123",
-        {
-            "event_type": "account_legacy_emergency_fence_opened",
-            "fence_id": "fence-open",
-            "recorded_at_ms": 1,
-        },
-    )
-
-    with pytest.raises(HostRunnerError) as exc_info:
-        manager._reject_start_during_legacy_emergency("DU123")
-
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.detail["reason_code"] == "CLERK_LEGACY_EMERGENCY_FENCE"
-
-
-def test_emergency_flatten_account_mismatch_maps_to_http_400(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """CLI exit 2 (operator precondition — account mismatch / no --confirm) → 400."""
-    from app.engine.live import host_daemon as hd
-    from app.engine.live.host_daemon import HostRunnerError
-
-    manager, _ = daemon_context
-
-    class _Result:
-        returncode = 2
-        stdout = ""
-        stderr = "account mismatch"
-
-    monkeypatch.setattr(hd.subprocess, "run", lambda command, **_kwargs: _Result())
-
-    with pytest.raises(HostRunnerError) as exc_info:
-        manager.emergency_flatten(RUN_ID, "DU999")
-    assert exc_info.value.status_code == 400
-
-
-def test_emergency_flatten_broker_error_maps_to_http_502(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """CLI exit 3 (broker/runtime) → 502, with the CLI stderr surfaced."""
-    from app.engine.live import host_daemon as hd
-    from app.engine.live.host_daemon import HostRunnerError
-
-    manager, _ = daemon_context
-
-    class _Result:
-        returncode = 3
-        stdout = ""
-        stderr = "broker boom"
-
-    monkeypatch.setattr(hd.subprocess, "run", lambda command, **_kwargs: _Result())
-
-    with pytest.raises(HostRunnerError) as exc_info:
-        manager.emergency_flatten(RUN_ID, "DU123")
-    assert exc_info.value.status_code == 502
-    assert "broker boom" in exc_info.value.detail
-
-
-def test_emergency_flatten_rejects_concurrent_same_account(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A second concurrent flatten for the same account is rejected (409), not run
-    against the same pre-fill snapshot — preventing double-liquidation (Codex P1
-    on #451). The account is released after the run so a later flatten proceeds.
-    """
-    from app.engine.live import host_daemon as hd
-    from app.engine.live.host_daemon import HostRunnerError
-
-    manager, _ = daemon_context
-    reentrant: dict[str, int] = {}
-
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def fake_run(command: list[str], **_kwargs: object) -> _Result:
-        # While the first flatten holds the account, a re-entrant one is rejected.
-        with pytest.raises(HostRunnerError) as exc_info:
-            manager.emergency_flatten(RUN_ID, "DU123")
-        reentrant["status"] = exc_info.value.status_code
-        return _Result()
-
-    monkeypatch.setattr(hd.subprocess, "run", fake_run)
-
-    resp = manager.emergency_flatten(RUN_ID, "DU123")
-
-    assert resp.accepted is True
-    assert reentrant["status"] == 409
-    # Released after completion — the in-flight set does not leak the account.
-    assert "DU123" not in manager._flatten_in_flight
-
-
 async def test_start_launches_existing_run_with_host_env(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -1582,6 +1303,37 @@ async def test_start_launches_existing_run_with_host_env(
     assert captured["kwargs"]["env"]["IBKR_HOST"] == "127.0.0.1"
     assert captured["kwargs"]["env"]["IBKR_CLIENT_ID"] == "70"
     assert "PythonDataService" in captured["kwargs"]["env"]["PYTHONPATH"]
+
+
+def test_start_refuses_admission_while_account_emergency_is_in_flight(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No bot can cross host admission after the emergency envelope begins."""
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with manager._flatten_lock:
+        manager._flatten_in_flight.add("DU111")
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("must not spawn"))
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "reason_code": "CLERK_EMERGENCY_ADMISSION_CLOSED",
+        "account_id": "DU111",
+    }
 
 
 def test_start_refuses_stopped_desired_state_before_spawn(
@@ -2154,6 +1906,8 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
     captured_lock = threading.Lock()
     first_popen_entered = threading.Event()
     allow_first_popen_to_finish = threading.Event()
+    second_popen_entered = threading.Event()
+    allow_second_popen_to_finish = threading.Event()
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
         if "app.engine.live.account_clerk" in command:
@@ -2164,6 +1918,9 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
         if call_number == 1:
             first_popen_entered.set()
             assert allow_first_popen_to_finish.wait(timeout=2.0)
+        if call_number == 2:
+            second_popen_entered.set()
+            assert allow_second_popen_to_finish.wait(timeout=2.0)
         return FakeProcess()
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -2180,11 +1937,26 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
     first.start()
     assert first_popen_entered.wait(timeout=2.0)
     second.start()
+    assert second_popen_entered.wait(timeout=2.0)
     allow_first_popen_to_finish.set()
     first.join(timeout=2.0)
-    second.join(timeout=2.0)
 
     assert not first.is_alive()
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager._run_clerk_emergency_flatten(
+            account="DU111",
+            operation_id="start-interleaving",
+            authorization_id="authorization",
+        )
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "reason_code": "CLERK_EMERGENCY_START_IN_FLIGHT",
+        "account_id": "DU111",
+    }
+
+    allow_second_popen_to_finish.set()
+    second.join(timeout=2.0)
+
     assert not second.is_alive()
     assert errors == []
     assert captured_ids == ["90", "92"]
@@ -2663,7 +2435,7 @@ async def test_stop_handles_process_exiting_between_poll_and_signal(
     assert stop.json()["accepted"] is False
 
 
-async def test_daemon_boundary_replays_matching_start_stop_and_flatten_without_reinvoking(
+async def test_daemon_boundary_replays_matching_start_and_stop_without_reinvoking(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2675,7 +2447,7 @@ async def test_daemon_boundary_replays_matching_start_stop_and_flatten_without_r
         encoding="utf-8",
     )
     monkeypatch.setenv("LIVE_RUNNER_DAEMON_COMMAND_IDEMPOTENCY_ENFORCED_ACCOUNTS", "DU123")
-    calls = {"start": 0, "stop": 0, "flatten": 0}
+    calls = {"start": 0, "stop": 0}
     process = HostRunnerProcessStatus(state=HostRunnerProcessState.running, run_id=RUN_ID, pid=42)
 
     def start(_run_id: str, _request: HostRunnerStartRequest) -> HostRunnerActionResponse:
@@ -2686,13 +2458,8 @@ async def test_daemon_boundary_replays_matching_start_stop_and_flatten_without_r
         calls["stop"] += 1
         return HostRunnerActionResponse(accepted=True, process=process, command_id="stop-1")
 
-    def flatten(_run_id: str, _account: str) -> HostRunnerActionResponse:
-        calls["flatten"] += 1
-        return HostRunnerActionResponse(accepted=True, process=process)
-
     monkeypatch.setattr(manager, "start", start)
     monkeypatch.setattr(manager, "stop", stop)
-    monkeypatch.setattr(manager, "emergency_flatten", flatten)
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
@@ -2701,23 +2468,15 @@ async def test_daemon_boundary_replays_matching_start_stop_and_flatten_without_r
         start_replay = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-key"})
         stop_first = await client.post(f"/runs/{RUN_ID}/stop", json={"idempotency_key": "stop-key"})
         stop_replay = await client.post(f"/runs/{RUN_ID}/stop", json={"idempotency_key": "stop-key"})
-        flatten_first = await client.post(
-            f"/runs/{RUN_ID}/emergency-flatten",
-            json={"account": "DU123", "confirm": True, "idempotency_key": "flatten-key"},
-        )
-        flatten_replay = await client.post(
-            f"/runs/{RUN_ID}/emergency-flatten",
-            json={"account": "DU123", "confirm": True, "idempotency_key": "flatten-key"},
-        )
         conflict = await client.post(
             f"/runs/{RUN_ID}/start",
             json={"readonly": False, "idempotency_key": "start-key"},
         )
 
     assert missing_key.status_code == 400
-    assert [response.status_code for response in (start_first, start_replay, stop_first, stop_replay, flatten_first, flatten_replay)] == [200] * 6
-    assert [start_replay.json()["idempotency_replayed"], stop_replay.json()["idempotency_replayed"], flatten_replay.json()["idempotency_replayed"]] == [True] * 3
-    assert calls == {"start": 1, "stop": 1, "flatten": 1}
+    assert [response.status_code for response in (start_first, start_replay, stop_first, stop_replay)] == [200] * 4
+    assert [start_replay.json()["idempotency_replayed"], stop_replay.json()["idempotency_replayed"]] == [True] * 2
+    assert calls == {"start": 1, "stop": 1}
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["reason_code"] == "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_COMMAND"
 
@@ -2732,13 +2491,19 @@ async def test_daemon_boundary_replays_account_emergency_flatten_without_reinvok
     monkeypatch.setenv("LIVE_RUNNER_DAEMON_COMMAND_IDEMPOTENCY_ENFORCED_ACCOUNTS", "DU123")
     calls = 0
 
-    def flatten_account(account_id: str) -> AccountEmergencyFlattenResponse:
+    def flatten_account(
+        account_id: str,
+        *,
+        operation_id: str,
+        authorization_id: str,
+    ) -> AccountEmergencyFlattenResponse:
         nonlocal calls
         calls += 1
+        assert authorization_id == "clerk-auth-123456"
         return AccountEmergencyFlattenResponse(
             accepted=True,
             account_id=account_id,
-            audit_run_id="eflat-audit-1",
+            audit_run_id=operation_id,
             completed_at_ms=1_700_000_000_000,
         )
 
@@ -2748,11 +2513,21 @@ async def test_daemon_boundary_replays_account_emergency_flatten_without_reinvok
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         first = await client.post(
             "/accounts/DU123/emergency-flatten",
-            json={"account": "DU123", "confirm": True, "idempotency_key": "account-flatten-key"},
+            json={
+                "account": "DU123",
+                "confirmation_token": "FLATTEN",
+                "authorization_id": "clerk-auth-123456",
+                "idempotency_key": "account-flatten-key",
+            },
         )
         replay = await client.post(
             "/accounts/DU123/emergency-flatten",
-            json={"account": "DU123", "confirm": True, "idempotency_key": "account-flatten-key"},
+            json={
+                "account": "DU123",
+                "confirmation_token": "FLATTEN",
+                "authorization_id": "clerk-auth-123456",
+                "idempotency_key": "account-flatten-key",
+            },
         )
 
     assert first.status_code == 200
@@ -2766,11 +2541,6 @@ async def test_daemon_boundary_replays_account_emergency_flatten_without_reinvok
     [
         (f"/runs/{RUN_ID}/start", {"idempotency_key": "unknown-start"}, "start"),
         (f"/runs/{RUN_ID}/stop", {"idempotency_key": "unknown-stop"}, "stop"),
-        (
-            f"/runs/{RUN_ID}/emergency-flatten",
-            {"account": "DU123", "confirm": True, "idempotency_key": "unknown-flatten"},
-            "emergency_flatten",
-        ),
     ],
 )
 async def test_daemon_boundary_pending_command_never_reinvokes_after_uncertain_delivery(

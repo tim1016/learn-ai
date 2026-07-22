@@ -28,6 +28,7 @@ from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
 from app.broker.ibkr.orders import (
     cancel_paper_order,
+    executions_for_reconnect_recovery,
     list_open_orders,
     place_paper_order,
     stream_order_events,
@@ -491,6 +492,44 @@ class IbkrBrokerAdapter(BrokerAdapter):
             await self._wait_for_terminal_fills(targeted_set)
         return targeted
 
+    async def cancel_open_orders_for_refs(self, order_refs: tuple[str, ...]) -> list[int]:
+        """Cancel only the exact broker references selected by Clerk recovery.
+
+        Emergency operations share a reserved namespace, so a namespace prefix
+        is too broad when resuming one interrupted operation.  The Clerk has
+        already durably selected these exact refs; this adapter rechecks that
+        exact broker echo and cancels no sibling operation's order.
+        """
+
+        self._enforce_account_owner_write_fence("broker.cancel_open_orders_for_refs")
+        expected_refs = set(order_refs)
+        if not expected_refs:
+            return []
+        open_orders = await list_open_orders(self._client)
+        targeted = [
+            int(order.order_id)
+            for order in open_orders
+            if order.order_ref in expected_refs
+        ]
+        if not targeted:
+            return []
+        targeted_set = set(targeted)
+        for order in open_orders:
+            if int(order.order_id) in targeted_set:
+                await cancel_paper_order(self._client, order.order_id)
+        while True:
+            remaining = {
+                order.order_ref
+                for order in await list_open_orders(self._client)
+                if order.order_ref in expected_refs
+            }
+            if not remaining:
+                break
+            await asyncio.sleep(0.05)
+        if self._event_task is not None:
+            await self._wait_for_terminal_fills(targeted_set)
+        return targeted
+
     async def probe_intent_status(self, intent_id: str, order_ref: str) -> str:
         """Return ``PRESENT`` only when IBKR still echoes this exact order ref.
 
@@ -505,6 +544,21 @@ class IbkrBrokerAdapter(BrokerAdapter):
         if any(order.order_ref == order_ref for order in open_orders):
             return "PRESENT"
         return "NOT_PROVABLE"
+
+    async def fetch_execution_evidence(self) -> list[IbkrOrderEvent]:
+        """Fetch broker execution rows used to prove Clerk position ownership.
+
+        A recorded intent or matching symbol is never sufficient at restart.
+        The Clerk needs IBKR's exact ``orderRef`` and execution identifiers
+        before it can hold a position instead of freezing account admission.
+        """
+
+        return list(await executions_for_reconnect_recovery(self._client))
+
+    async def list_open_orders(self) -> list[object]:
+        """Read current broker orders for Clerk startup reconciliation only."""
+
+        return list(await list_open_orders(self._client))
 
     async def probe_namespace_cancel_status(self, bot_order_namespace: str) -> str:
         """Prove whether a fenced namespace still has broker open orders.

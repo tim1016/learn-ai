@@ -48,6 +48,10 @@ from app.engine.live.account_clerk_cursor import (
     AccountClerkEventConsumerIdentity,
     AccountClerkEventCursorRepo,
 )
+from app.engine.live.account_clerk_journal_models import (
+    AccountClerkEmergencyAuthorization,
+    AccountClerkEmergencyOperationEvent,
+)
 from app.engine.live.account_clerk_reconciler import (
     AccountClerkReconciler,
     _unresolved_intents,
@@ -58,6 +62,7 @@ from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
+    read_account_instance_registry,
     write_account_instance_binding,
 )
 from app.engine.live.order_identity import build_order_ref
@@ -96,6 +101,8 @@ class _FakeBroker:
     def __init__(self) -> None:
         self.calls: list[object] = []
         self.cancelled_namespaces: list[str] = []
+        self.cancelled_ref_batches: list[tuple[str, ...]] = []
+        self.open_orders: list[object] = []
         self._client = SimpleNamespace(settings=SimpleNamespace(mode="paper"))
 
     async def place_order(self, order: object) -> object:
@@ -105,6 +112,98 @@ class _FakeBroker:
     async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
         self.cancelled_namespaces.append(namespace)
         return [41]
+
+    async def fetch_positions(self) -> object:
+        return SimpleNamespace(account_id=ACCOUNT, is_paper=True, positions=[], fetched_at_ms=START_MS)
+
+    async def list_open_orders(self) -> list[object]:
+        return self.open_orders
+
+    async def cancel_open_orders_for_refs(self, order_refs: tuple[str, ...]) -> list[int]:
+        self.cancelled_ref_batches.append(order_refs)
+        targets = [
+            int(order.order_id)
+            for order in self.open_orders
+            if getattr(order, "order_ref", None) in set(order_refs)
+        ]
+        self.open_orders = [
+            order
+            for order in self.open_orders
+            if getattr(order, "order_ref", None) not in set(order_refs)
+        ]
+        return targets
+
+
+class _EmergencyBroker(_FakeBroker):
+    """A Clerk-held broker seam whose snapshots become flat after one order."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        position = SimpleNamespace(
+            symbol="SPY",
+            sec_type="STK",
+            quantity=2.0,
+            expiry_ms=None,
+            strike=None,
+            right=None,
+            multiplier=1,
+        )
+        self._snapshots = [
+            SimpleNamespace(account_id=ACCOUNT, is_paper=True, positions=[], fetched_at_ms=START_MS),
+            SimpleNamespace(account_id=ACCOUNT, is_paper=True, positions=[position], fetched_at_ms=START_MS),
+            SimpleNamespace(account_id=ACCOUNT, is_paper=True, positions=[], fetched_at_ms=START_MS + 1),
+        ]
+
+    async def fetch_positions(self) -> object:
+        return self._snapshots.pop(0)
+
+
+class _StartupRecoveryBroker(_FakeBroker):
+    def __init__(self, *, symbol: str = "SPY") -> None:
+        super().__init__()
+        self._snapshot = SimpleNamespace(
+            account_id=ACCOUNT,
+            is_paper=True,
+            positions=[SimpleNamespace(symbol=symbol, quantity=2.0)],
+            fetched_at_ms=START_MS,
+        )
+        self.execution_evidence: list[IbkrOrderEvent] = []
+
+    async def fetch_positions(self) -> object:
+        return self._snapshot
+
+    async def fetch_execution_evidence(self) -> list[IbkrOrderEvent]:
+        return self.execution_evidence
+
+    async def probe_intent_status(self, _intent_id: str, _order_ref: str) -> str:
+        return "NOT_PROVABLE"
+
+
+class _NoOpenOrderSnapshotRecoveryBroker:
+    """Has a flat position proof but deliberately no open-order capability."""
+
+    async def fetch_positions(self) -> object:
+        return SimpleNamespace(account_id=ACCOUNT, is_paper=True, positions=[], fetched_at_ms=START_MS)
+
+
+class _CancelThenFillRecoveryBroker(_FakeBroker):
+    """Models a cancel acknowledgement racing a fill after the flat snapshot."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        residual_position = SimpleNamespace(symbol="SPY", quantity=1.0)
+        self._snapshots = [
+            SimpleNamespace(account_id=ACCOUNT, is_paper=True, positions=[], fetched_at_ms=START_MS),
+            SimpleNamespace(
+                account_id=ACCOUNT,
+                is_paper=True,
+                positions=[residual_position],
+                fetched_at_ms=START_MS + 1,
+            ),
+        ]
+
+    async def fetch_positions(self) -> object:
+        return self._snapshots.pop(0)
 
 
 class _ReconciliationBroker(_FakeBroker):
@@ -219,6 +318,397 @@ def _intent(instance_id: str, run_id: str, intent_id: str) -> AccountOwnerSubmit
     )
 
 
+def _allow_emergency_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    receipt_id: str,
+) -> None:
+    """Install a canonical-receipt seam for Clerk-only emergency tests."""
+
+    from app.services import account_reconciliation as reconciliation_module
+
+    receipt = SimpleNamespace(
+        receipt_id=receipt_id,
+        account_id=ACCOUNT,
+        connected_account_id=ACCOUNT,
+        account_truth_generated_at_ms=START_MS,
+        expires_at_ms=START_MS + 300_000,
+        account_truth=SimpleNamespace(account=SimpleNamespace(is_paper=True)),
+    )
+
+    class _CanonicalReconciliation:
+        def __init__(self, *, artifacts_root: Path) -> None:
+            assert artifacts_root
+
+        def read_latest_receipt(self, account_id: str) -> object:
+            assert account_id == ACCOUNT
+            return receipt
+
+        def triage(self, *, account_id: str, now_ms: int) -> object:
+            assert account_id == ACCOUNT
+            assert now_ms == START_MS
+            return SimpleNamespace(
+                account_reconciliation_receipt=receipt,
+                emergency_flatten_confirmation=object(),
+                recovery_flatten_candidates=[],
+            )
+
+    monkeypatch.setattr(reconciliation_module, "AccountReconciliationService", _CanonicalReconciliation)
+
+
+@pytest.mark.asyncio
+async def test_emergency_flatten_uses_only_the_clerk_broker_and_requires_fresh_flat(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker = _EmergencyBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        host_binding_capability="host-capability",
+        now_ms=lambda: START_MS,
+    )
+    _allow_emergency_reconciliation(monkeypatch, receipt_id="reconciliation-eflat-test")
+
+    authorization = await clerk.authorize_emergency_flatten(
+        operation_id="eflat-test",
+        confirmation_token="FLATTEN",
+        reconciliation_evidence_version="reconciliation-eflat-test",
+        no_exact_recovery_candidate=True,
+    )
+
+    await clerk.prepare_emergency_flatten(
+        operation_id="eflat-test",
+        authorization_id=authorization.authorization_id,
+        host_capability="host-capability",
+    )
+    await clerk.mark_emergency_bots_paused(
+        operation_id="eflat-test",
+        authorization_id=authorization.authorization_id,
+        host_capability="host-capability",
+    )
+    receipt = await clerk.emergency_flatten_account(
+        operation_id="eflat-test",
+        authorization_id=authorization.authorization_id,
+        host_capability="host-capability",
+    )
+
+    assert receipt.status == "fresh_flat"
+    assert receipt.observed_at_ms == START_MS + 1
+    assert len(receipt.broker_acked) == 1
+    [submitted] = broker.calls
+    assert submitted.action == "SELL"
+    assert submitted.quantity == 2.0
+    assert submitted.order_ref.startswith("learn-ai/eflat-DU123456/v1:")
+    phases = [
+        entry.emergency_operation.phase
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.emergency_operation is not None
+    ]
+    assert phases[0] == "authorization_issued"
+    assert phases[-1] == "observed_flat"
+    assert "bots_paused" in phases
+    assert "liquidation_planned" in phases
+    assert "liquidation_submitting" in phases
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_holds_uniquely_attributable_exposure_without_freezing_admission(
+    tmp_path: Path,
+) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _StartupRecoveryBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+    )
+    intent = _intent("bot-a", "run-a", "startup-hold")
+    await clerk.record_intent(intent)
+    broker.execution_evidence = [
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=101,
+            event_type="fill",
+            order_ref=intent.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=2.0,
+            exec_id="startup-owned-fill",
+            ts_ms=START_MS,
+        )
+    ]
+
+    await clerk.recover_account_state()
+
+    [decision] = [
+        entry.emergency_operation
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.emergency_operation is not None and entry.emergency_operation.phase == "flag_and_hold"
+    ]
+    assert decision is not None
+    assert decision.bot_order_namespace == intent.bot_order_namespace
+    assert decision.recorded_order_refs == (intent.order_ref,)
+    assert clerk._normal_submit_intake_reason is None
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_freezes_same_symbol_foreign_exposure_despite_recorded_intent(
+    tmp_path: Path,
+) -> None:
+    """A matching symbol cannot turn a manual position into Clerk ownership."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _StartupRecoveryBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _intent("bot-a", "run-a", "same-symbol-foreign")
+    await clerk.record_intent(intent)
+    broker.execution_evidence = [
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=201,
+            event_type="fill",
+            order_ref="manual-tws-order",
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=2.0,
+            exec_id="foreign-same-symbol-fill",
+            ts_ms=START_MS,
+        )
+    ]
+
+    await clerk.recover_account_state()
+
+    assert clerk._normal_submit_intake_reason == "CLERK_BROKER_EVIDENCE_ONLY_FREEZE"
+    assert read_account_freeze(tmp_path, ACCOUNT) is not None
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_keeps_interrupted_emergency_under_original_operation(
+    tmp_path: Path,
+) -> None:
+    """Kill-after-record never creates a second emergency broker placement."""
+
+    broker = _StartupRecoveryBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    operation_id = "restart-after-record"
+    intent = _emergency_flatten_intent("restart-ref").model_copy(
+        update={"run_id": f"clerk-emergency-{operation_id}"}
+    )
+    await clerk.record_intent(intent)
+    await asyncio.to_thread(
+        clerk._journal.append_emergency_operation,
+        AccountClerkEmergencyOperationEvent(
+            operation_id=operation_id,
+            phase="liquidation_submitting",
+            recorded_order_refs=(intent.order_ref,),
+        ),
+    )
+
+    await clerk.recover_account_state()
+
+    events = [
+        entry.emergency_operation
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.emergency_operation is not None and entry.emergency_operation.operation_id == operation_id
+    ]
+    assert events[-1].phase == "requires_reconciliation"
+    assert events[-1].recorded_order_refs == (intent.order_ref,)
+    assert broker.calls == []
+    assert clerk._normal_submit_intake_reason == "CLERK_BROKER_EVIDENCE_ONLY_FREEZE"
+
+
+@pytest.mark.asyncio
+async def test_interrupted_authorization_freezes_without_an_open_order_snapshot(tmp_path: Path) -> None:
+    """No recorded emergency order does not make missing order evidence safe."""
+
+    operation_id = "authorization-only-crash"
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_NoOpenOrderSnapshotRecoveryBroker(),
+    )
+    await asyncio.to_thread(
+        clerk._journal.append_emergency_operation,
+        AccountClerkEmergencyOperationEvent(
+            operation_id=operation_id,
+            phase="authorization_issued",
+            authorization=AccountClerkEmergencyAuthorization(
+                authorization_id="a" * 16,
+                account_id=ACCOUNT,
+                operation_id=operation_id,
+                confirmation_token="FLATTEN",
+                reconciliation_evidence_version="receipt-1",
+                evidence_observed_at_ms=START_MS,
+                expires_at_ms=START_MS + 60_000,
+                no_exact_recovery_candidate=True,
+            ),
+        ),
+    )
+
+    await clerk.recover_account_state()
+
+    events = [
+        entry.emergency_operation
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.emergency_operation is not None and entry.emergency_operation.operation_id == operation_id
+    ]
+    assert events[-1].phase == "requires_reconciliation"
+    assert clerk._normal_submit_intake_reason == "CLERK_BROKER_EVIDENCE_ONLY_FREEZE"
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_freezes_unattributable_broker_exposure(tmp_path: Path) -> None:
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_StartupRecoveryBroker(symbol="QQQ"),
+    )
+
+    await clerk.recover_account_state()
+
+    assert clerk._normal_submit_intake_reason == "CLERK_BROKER_EVIDENCE_ONLY_FREEZE"
+    assert read_account_freeze(tmp_path, ACCOUNT) is not None
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_cancels_only_exact_known_open_orders_when_flat(tmp_path: Path) -> None:
+    """A flat account cures a dangling Clerk order before admitting new work."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _intent("bot-a", "run-a", "flat-dangling")
+    await clerk.record_intent(intent)
+    broker.open_orders = [SimpleNamespace(order_id=801, order_ref=intent.order_ref)]
+
+    await clerk.recover_account_state()
+
+    assert broker.cancelled_ref_batches == [(intent.order_ref,)]
+    phases = [
+        entry.emergency_operation.phase
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.emergency_operation is not None
+    ]
+    assert phases[-2:] == ["cancel_only_proposed", "cancel_only_confirmed"]
+    assert clerk._normal_submit_intake_reason is None
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_freezes_when_cancel_races_a_fill(tmp_path: Path) -> None:
+    """An order vanishing from open orders is not proof that its fill was harmless."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _CancelThenFillRecoveryBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _intent("bot-a", "run-a", "cancel-races-fill")
+    await clerk.record_intent(intent)
+    broker.open_orders = [SimpleNamespace(order_id=821, order_ref=intent.order_ref)]
+
+    await clerk.recover_account_state()
+
+    events = [
+        entry.emergency_operation
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.emergency_operation is not None
+    ]
+    assert broker.cancelled_ref_batches == [(intent.order_ref,)]
+    assert events[-1].phase == "foreign_exposure_freeze"
+    assert clerk._normal_submit_intake_reason == "CLERK_BROKER_EVIDENCE_ONLY_FREEZE"
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_never_auto_cancels_a_live_mode_du_snapshot(tmp_path: Path) -> None:
+    """Paper account-id shape cannot substitute for the configured paper mode."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    broker._client.settings.mode = "live"
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _intent("bot-a", "run-a", "live-mode-dangling")
+    await clerk.record_intent(intent)
+    broker.open_orders = [SimpleNamespace(order_id=811, order_ref=intent.order_ref)]
+
+    await clerk.recover_account_state()
+
+    assert broker.cancelled_ref_batches == []
+    assert clerk._normal_submit_intake_reason == "CLERK_BROKER_EVIDENCE_ONLY_FREEZE"
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_keeps_each_interrupted_emergency_cancel_ref_exact(
+    tmp_path: Path,
+) -> None:
+    """Shared emergency namespace never permits operation A to cancel operation B."""
+
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    operation_a = "restart-operation-a"
+    operation_b = "restart-operation-b"
+    intent_a = _emergency_flatten_intent("restart-a").model_copy(
+        update={"run_id": f"clerk-emergency-{operation_a}"}
+    )
+    intent_b = _emergency_flatten_intent("restart-b").model_copy(
+        update={"run_id": f"clerk-emergency-{operation_b}"}
+    )
+    await clerk.record_intent(intent_a)
+    await clerk.record_intent(intent_b)
+    for operation_id, intent in ((operation_a, intent_a), (operation_b, intent_b)):
+        await asyncio.to_thread(
+            clerk._journal.append_emergency_operation,
+            AccountClerkEmergencyOperationEvent(
+                operation_id=operation_id,
+                phase="liquidation_submitting",
+                recorded_order_refs=(intent.order_ref,),
+            ),
+        )
+    broker.open_orders = [
+        SimpleNamespace(order_id=901, order_ref=intent_a.order_ref),
+        SimpleNamespace(order_id=902, order_ref=intent_b.order_ref),
+    ]
+
+    await clerk.recover_account_state()
+
+    assert broker.cancelled_ref_batches == [(intent_a.order_ref,), (intent_b.order_ref,)]
+    assert broker.cancelled_namespaces == []
+    assert clerk._normal_submit_intake_reason is None
+
+
+@pytest.mark.asyncio
+async def test_interrupted_emergency_freezes_when_cancel_races_a_fill(tmp_path: Path) -> None:
+    """The original emergency never reports flat without a post-cancel snapshot."""
+
+    broker = _CancelThenFillRecoveryBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    operation_id = "cancel-races-fill"
+    intent = _emergency_flatten_intent("cancel-races-fill-ref").model_copy(
+        update={"run_id": f"clerk-emergency-{operation_id}"}
+    )
+    await clerk.record_intent(intent)
+    await asyncio.to_thread(
+        clerk._journal.append_emergency_operation,
+        AccountClerkEmergencyOperationEvent(
+            operation_id=operation_id,
+            phase="liquidation_submitting",
+            recorded_order_refs=(intent.order_ref,),
+        ),
+    )
+    broker.open_orders = [SimpleNamespace(order_id=831, order_ref=intent.order_ref)]
+
+    await clerk.recover_account_state()
+
+    events = [
+        entry.emergency_operation
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.emergency_operation is not None and entry.emergency_operation.operation_id == operation_id
+    ]
+    assert broker.cancelled_ref_batches == [(intent.order_ref,)]
+    assert events[-1].phase == "foreign_exposure_freeze"
+    assert all(event.phase != "observed_flat" for event in events)
+    assert clerk._normal_submit_intake_reason == "CLERK_BROKER_EVIDENCE_ONLY_FREEZE"
+
+
 @pytest.mark.asyncio
 async def test_clerk_rejects_an_active_binding_while_retirement_is_pending(tmp_path: Path) -> None:
     """The retirement transaction fence closes the normal writer before replay."""
@@ -243,6 +733,33 @@ async def test_clerk_rejects_an_active_binding_while_retirement_is_pending(tmp_p
         await clerk.record_intent(_intent("bot-a", "run-a", "retirement-pending"))
 
     assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_clerk_rejects_active_binding_after_emergency_closes_admission(tmp_path: Path) -> None:
+    """A Start racing the host pause cannot write an ACTIVE binding after prepare."""
+
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_FakeBroker(),
+        host_binding_capability="host-capability",
+    )
+    clerk._normal_submit_intake_reason = "CLERK_EMERGENCY_FLATTEN_PREPARED"
+    binding = AccountInstanceBinding(
+        account_id=ACCOUNT,
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        lifecycle_state="ACTIVE",
+        recorded_at_ms=START_MS,
+        source="test",
+    )
+
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_EMERGENCY_ADMISSION_CLOSED"):
+        await clerk.record_binding_decision(binding, host_capability="host-capability")
+
+    assert read_account_instance_registry(tmp_path, ACCOUNT) == []
 
 
 @pytest.mark.asyncio
@@ -1581,7 +2098,10 @@ async def test_submit_reconciler_never_retries_an_externally_owned_emergency_int
     broker = _ReconciliationBroker("PROVABLY_ABSENT")
     clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
 
-    await clerk.register_emergency_flatten_intent(_emergency_flatten_intent("emergency-reconcile"))
+    emergency_intent = _emergency_flatten_intent("emergency-reconcile").model_copy(
+        update={"run_id": "clerk-emergency-emergency-reconcile"}
+    )
+    await clerk.record_intent(emergency_intent)
 
     assert await AccountClerkReconciler(clerk).reconcile_once() == ()
     assert broker.calls == []

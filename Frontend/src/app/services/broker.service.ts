@@ -255,11 +255,14 @@ export class BrokerService {
     );
   }
 
-  emergencyFlattenAccount(accountId: string): Promise<AccountEmergencyFlattenResponse> {
+  emergencyFlattenAccount(
+    accountId: string,
+    request: { account: string; confirmation_token: 'FLATTEN'; idempotency_key: string },
+  ): Promise<AccountEmergencyFlattenResponse> {
     return firstValueFrom(
       this.http.post<AccountEmergencyFlattenResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/emergency-flatten`,
-        { account: accountId, confirm: true },
+        request,
       ),
     );
   }

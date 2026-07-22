@@ -57,6 +57,10 @@ from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetiremen
 from app.utils.timestamps import now_ms_utc
 
 
+async def _async_value(value: object) -> object:
+    return value
+
+
 def _health() -> IbkrConnectionHealth:
     return IbkrConnectionHealth(
         mode="paper",
@@ -460,8 +464,9 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
     async def flatten(_base_url: str, account_id: str, payload: dict) -> dict:
         assert account_id == "DU1234567"
         assert payload["account"] == "DU1234567"
-        assert payload["confirm"] is True
-        assert payload["idempotency_key"].startswith("account-emergency-flatten-")
+        assert payload["confirmation_token"] == "FLATTEN"
+        assert payload["authorization_id"] == "a" * 16
+        assert payload["idempotency_key"] == "account-emergency-flatten-1"
         return {
             "accepted": True,
             "account_id": account_id,
@@ -471,15 +476,31 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
 
     monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
     monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
+    monkeypatch.setattr(
+        account_reconciliation.AccountClerkRpcClient,
+        "authorize_emergency_flatten",
+        lambda *_args, **_kwargs: _async_value(SimpleNamespace(authorization_id="a" * 16)),
+    )
     app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
     app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: SimpleNamespace(
-        triage=lambda **_: SimpleNamespace(emergency_flatten_confirmation=object())
+        triage=lambda **_: SimpleNamespace(
+            emergency_flatten_confirmation=object(),
+            account_reconciliation_receipt=SimpleNamespace(
+                receipt_id="reconciliation-1",
+                account_truth_generated_at_ms=1_780_000_000_000,
+            ),
+            recovery_flatten_candidates=[],
+        )
     )
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
                 "/api/accounts/DU1234567/emergency-flatten",
-                json={"account": "DU1234567", "confirm": True},
+                json={
+                    "account": "DU1234567",
+                    "confirmation_token": "FLATTEN",
+                    "idempotency_key": "account-emergency-flatten-1",
+                },
             )
     finally:
         app.dependency_overrides.clear()
@@ -504,13 +525,21 @@ async def test_account_emergency_flatten_fails_closed_without_declared_confirmat
     monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
     app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
     app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: SimpleNamespace(
-        triage=lambda **_: SimpleNamespace(emergency_flatten_confirmation=None)
+        triage=lambda **_: SimpleNamespace(
+            emergency_flatten_confirmation=None,
+            account_reconciliation_receipt=None,
+            recovery_flatten_candidates=[],
+        )
     )
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
                 "/api/accounts/DU1234567/emergency-flatten",
-                json={"account": "DU1234567", "confirm": True},
+                json={
+                    "account": "DU1234567",
+                    "confirmation_token": "FLATTEN",
+                    "idempotency_key": "account-emergency-flatten-2",
+                },
             )
     finally:
         app.dependency_overrides.clear()

@@ -30,11 +30,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
-    LEGACY_EMERGENCY_FENCE_OPENED_EVENT_TYPE,
-    LEGACY_EMERGENCY_FENCE_RELEASED_EVENT_TYPE,
     AccountFreezeEvidence,
     account_artifacts_root,
-    active_legacy_emergency_fence_id,
     append_account_event,
     read_account_clerk_generation,
     read_account_freeze,
@@ -46,6 +43,7 @@ from app.engine.live.account_clerk_journal import (
     AccountClerkBrokerAckReceipt,
     AccountClerkBrokerEventReceipt,
     AccountClerkCancelNamespaceReceipt,
+    AccountClerkEmergencyFlattenReceipt,
     AccountClerkInboxEntry,
     AccountClerkIntentRejected,
     AccountClerkJournal,
@@ -60,11 +58,12 @@ from app.engine.live.account_clerk_journal import (
     read_account_clerk_inbox,
     read_account_clerk_journal,
 )
-from app.engine.live.account_clerk_journal_models import AccountClerkLegacyEmergencyFenceReceipt
+from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
 from app.engine.live.account_clerk_lease import AccountClerkLeaseWriter
 from app.engine.live.account_clerk_operations import (
     ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S,
     AccountClerkCancelNamespaceUncertainError,
+    AccountClerkEmergencyFlattenIncompleteError,
     AccountClerkGenerationFencedError,
     AccountClerkOperationCoordinator,
     AccountClerkOperationDependencies,
@@ -87,6 +86,7 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
 from app.engine.live.daemon_auth import CLERK_HOST_BINDING_CAPABILITY_ENV
+from app.engine.live.order_identity import build_bot_order_namespace, emergency_flatten_strategy_instance_id
 from app.services.bot_deletion import (
     BotDeletionCorruptError,
     bot_lifecycle_operation_fence,
@@ -141,10 +141,7 @@ class AccountClerk:
         # Kept as a direct alias for focused compatibility tests that model a
         # process restart by clearing only volatile callback attribution.
         self._intents_by_order_ref = self._journal.intents_by_order_ref
-        self._legacy_emergency_fence_id = active_legacy_emergency_fence_id(artifacts_root, account_id)
-        self._normal_submit_intake_reason: str | None = (
-            "CLERK_LEGACY_EMERGENCY_FENCE" if self._legacy_emergency_fence_id is not None else None
-        )
+        self._normal_submit_intake_reason: str | None = None
         self._cancel_operation_lock = asyncio.Lock()
         self._callback_drain: Callable[[], Awaitable[None]] | None = None
         self._operations = AccountClerkOperationCoordinator(
@@ -166,10 +163,17 @@ class AccountClerk:
                         before_broker_write=before_broker_write,
                     )
                 ),
+                cancel_order_refs_open_orders=lambda order_refs, before_broker_write: (
+                    self._cancel_order_refs_open_orders(
+                        order_refs,
+                        before_broker_write=before_broker_write,
+                    )
+                ),
                 place_under_clerk_grant=lambda spec, wait_for_perm_id: (
                     self._place_under_clerk_grant(spec, wait_for_perm_id=wait_for_perm_id)
                 ),
                 retry_recorded_intent_locked=self._retry_recorded_intent_locked,
+                now_ms=self._now_ms,
             )
         )
         self._rpc_write_intake_closed = False
@@ -197,19 +201,104 @@ class AccountClerk:
         async with self._intake_lock:
             return await asyncio.to_thread(self._record_intent_locked, intent)
 
-    async def register_emergency_flatten_intent(
+    async def emergency_flatten_account(
         self,
-        intent: AccountOwnerSubmitIntent,
-    ) -> AccountClerkRecordedReceipt:
-        """Durably own an externally submitted emergency liquidation.
+        *,
+        operation_id: str,
+        authorization_id: str,
+        host_capability: str,
+    ) -> AccountClerkEmergencyFlattenReceipt:
+        """Run the operator-confirmed account emergency through the held Clerk session."""
 
-        Emergency flatten deliberately keeps its own broker connection so it
-        remains independent of a poisoned runner. It may not, however, bypass
-        the account Clerk's durable attribution journal: this receipt must
-        exist before that independent connection can place an order.
-        """
+        self._require_host_capability(host_capability)
+        if self._normal_submit_intake_reason not in (
+            None,
+            "CLERK_EMERGENCY_FLATTEN_PREPARED",
+            "CLERK_EMERGENCY_FLATTEN_IN_PROGRESS",
+            "CLERK_EMERGENCY_RECOVERY_REQUIRED",
+        ):
+            raise RuntimeError("CLERK_EMERGENCY_FLATTEN_INTAKE_UNAVAILABLE")
+        self._normal_submit_intake_reason = "CLERK_EMERGENCY_FLATTEN_IN_PROGRESS"
+        try:
+            receipt = await self._operations.emergency_flatten_account(
+                operation_id=operation_id,
+                authorization_id=authorization_id,
+            )
+        except AccountClerkEmergencyFlattenIncompleteError:
+            # Do not reopen an account whose final broker snapshot was not flat.
+            raise
+        else:
+            self._normal_submit_intake_reason = None
+            return receipt
 
-        return await self._operations.register_emergency_flatten_intent(intent)
+    async def prepare_emergency_flatten(
+        self,
+        *,
+        operation_id: str,
+        authorization_id: str,
+        host_capability: str,
+    ) -> None:
+        """Durably close intake before the daemon pauses on-duty bot processes."""
+
+        self._require_host_capability(host_capability)
+        if self._normal_submit_intake_reason not in (
+            None,
+            "CLERK_EMERGENCY_FLATTEN_PREPARED",
+            "CLERK_EMERGENCY_RECOVERY_REQUIRED",
+        ):
+            raise RuntimeError("CLERK_EMERGENCY_FLATTEN_INTAKE_UNAVAILABLE")
+        self._normal_submit_intake_reason = "CLERK_EMERGENCY_FLATTEN_PREPARED"
+        await self._operations.prepare_emergency_flatten(
+            operation_id=operation_id,
+            authorization_id=authorization_id,
+        )
+
+    async def mark_emergency_bots_paused(
+        self,
+        *,
+        operation_id: str,
+        authorization_id: str,
+        host_capability: str,
+    ) -> None:
+        """Record host-proven bot quiescence before an emergency broker action."""
+
+        self._require_host_capability(host_capability)
+        await self._operations.mark_emergency_bots_paused(
+            operation_id=operation_id,
+            authorization_id=authorization_id,
+        )
+
+    async def mark_emergency_requires_reconciliation(
+        self,
+        *,
+        operation_id: str,
+        reason: str,
+        host_capability: str,
+    ) -> None:
+        """Persist a host-side pause failure without allowing a broker write."""
+
+        self._require_host_capability(host_capability)
+        await self._operations.mark_emergency_requires_reconciliation(
+            operation_id=operation_id,
+            reason=reason,
+        )
+
+    async def authorize_emergency_flatten(
+        self,
+        *,
+        operation_id: str,
+        confirmation_token: Literal["FLATTEN"],
+        reconciliation_evidence_version: str,
+        no_exact_recovery_candidate: Literal[True],
+    ) -> AccountClerkEmergencyAuthorization:
+        """Issue the sole receipt that may authorize an account emergency write."""
+
+        return await self._operations.authorize_emergency_flatten(
+            operation_id=operation_id,
+            confirmation_token=confirmation_token,
+            reconciliation_evidence_version=reconciliation_evidence_version,
+            no_exact_recovery_candidate=no_exact_recovery_candidate,
+        )
 
     async def submit_intent(
         self,
@@ -331,12 +420,43 @@ class AccountClerk:
 
         async with self._intake_lock:
             unattributed_events = await asyncio.to_thread(self._journal.rebuild_attribution)
+            entries = await asyncio.to_thread(self._journal.snapshot)
+            emergency_events = [
+                entry.emergency_operation
+                for entry in entries
+                if entry.emergency_operation is not None
+            ]
+            if emergency_events and emergency_events[-1].phase not in {
+                "observed_flat",
+                "flag_and_hold",
+                "foreign_exposure_freeze",
+                "cancel_only_confirmed",
+            }:
+                self._normal_submit_intake_reason = "CLERK_EMERGENCY_RECOVERY_REQUIRED"
             for event, callback_key in unattributed_events:
                 await asyncio.to_thread(
                     self._assert_unattributed_broker_event_guardrail,
                     event,
                     callback_key,
                 )
+
+    async def recover_account_state(self) -> None:
+        """Classify fresh broker exposure before this Clerk publishes readiness."""
+
+        result = await self._operations.recover_account_state()
+        if result.freezes_admission:
+            self._normal_submit_intake_reason = "CLERK_BROKER_EVIDENCE_ONLY_FREEZE"
+            freeze = AccountFreezeEvidence(
+                account_id=self._account_id,
+                freeze_kind="exposure",
+                reason="Broker exposure has no unique Clerk order-ref attribution.",
+                source="account_clerk.startup_recovery",
+                recorded_at_ms=self._now_ms(),
+                operator_next_step="Reconcile the account exposure before admitting new bots.",
+            )
+            await asyncio.to_thread(write_account_freeze, self._artifacts_root, freeze)
+        elif self._normal_submit_intake_reason == "CLERK_EMERGENCY_RECOVERY_REQUIRED":
+            self._normal_submit_intake_reason = None
 
     async def record_broker_event(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
         """Persist one callback off-loop before any downstream relay.
@@ -367,91 +487,6 @@ class AccountClerk:
                 return
             await asyncio.to_thread(self._record_event_stream_down_locked, failure)
             self._event_stream_down_recorded = True
-
-    async def activate_legacy_emergency_fence(
-        self,
-        *,
-        fence_id: str,
-    ) -> AccountClerkLegacyEmergencyFenceReceipt:
-        """Fence Clerk broker writes before the temporary external panic lane runs."""
-
-        if self._legacy_emergency_fence_id not in (None, fence_id):
-            raise AccountClerkIntentRejected(
-                reason="CLERK_LEGACY_EMERGENCY_FENCE_ACTIVE",
-                diagnostics={"account_id": self._account_id},
-            )
-        self._legacy_emergency_fence_id = fence_id
-        self._normal_submit_intake_reason = "CLERK_LEGACY_EMERGENCY_FENCE"
-        recorded_at_ms = self._now_ms()
-        try:
-            async with self._cancel_operation_lock, self._intake_lock:
-                await asyncio.to_thread(
-                    append_account_event,
-                    self._artifacts_root,
-                    self._account_id,
-                    {
-                        "event_type": LEGACY_EMERGENCY_FENCE_OPENED_EVENT_TYPE,
-                        "fence_id": fence_id,
-                        "reason_code": "CLERK_LEGACY_EMERGENCY_FENCE",
-                        "source": "account_clerk",
-                        "recorded_at_ms": recorded_at_ms,
-                        "receipt_id": f"legacy-emergency-fence:{fence_id}",
-                    },
-                    only_if_receipt_absent=True,
-                )
-        except Exception:
-            self._legacy_emergency_fence_id = active_legacy_emergency_fence_id(
-                self._artifacts_root,
-                self._account_id,
-            )
-            self._normal_submit_intake_reason = (
-                "CLERK_LEGACY_EMERGENCY_FENCE" if self._legacy_emergency_fence_id is not None else None
-            )
-            raise
-        return AccountClerkLegacyEmergencyFenceReceipt(
-            status="legacy_emergency_fenced",
-            account_id=self._account_id,
-            fence_id=fence_id,
-            recorded_at_ms=recorded_at_ms,
-        )
-
-    async def release_legacy_emergency_fence(
-        self,
-        *,
-        fence_id: str,
-    ) -> AccountClerkLegacyEmergencyFenceReceipt:
-        """Reopen Clerk broker-write intake after the external process has exited."""
-
-        if self._legacy_emergency_fence_id != fence_id:
-            raise AccountClerkIntentRejected(
-                reason="CLERK_LEGACY_EMERGENCY_FENCE_MISMATCH",
-                diagnostics={"account_id": self._account_id},
-            )
-        recorded_at_ms = self._now_ms()
-        async with self._cancel_operation_lock, self._intake_lock:
-            await asyncio.to_thread(
-                append_account_event,
-                self._artifacts_root,
-                self._account_id,
-                {
-                    "event_type": LEGACY_EMERGENCY_FENCE_RELEASED_EVENT_TYPE,
-                    "fence_id": fence_id,
-                    "reason_code": "CLERK_LEGACY_EMERGENCY_FENCE",
-                    "source": "account_clerk",
-                    "recorded_at_ms": recorded_at_ms,
-                    "receipt_id": f"legacy-emergency-fence-release:{fence_id}",
-                },
-                only_if_receipt_absent=True,
-            )
-            self._legacy_emergency_fence_id = None
-            if self._normal_submit_intake_reason == "CLERK_LEGACY_EMERGENCY_FENCE":
-                self._normal_submit_intake_reason = None
-        return AccountClerkLegacyEmergencyFenceReceipt(
-            status="legacy_emergency_fence_released",
-            account_id=self._account_id,
-            fence_id=fence_id,
-            recorded_at_ms=recorded_at_ms,
-        )
 
     def close_normal_submit_intake(self) -> None:
         """Fence all broker writes before this Clerk's RPC transport shuts down."""
@@ -494,14 +529,7 @@ class AccountClerk:
     ) -> AccountInstanceBinding:
         """Serialize one daemon lifecycle transition through the Clerk authority."""
 
-        if (
-            self._host_binding_capability is None
-            or not hmac.compare_digest(host_capability, self._host_binding_capability)
-        ):
-            raise AccountClerkIntentRejected(
-                reason="CLERK_HOST_BINDING_CAPABILITY_REQUIRED",
-                diagnostics={"account_id": self._account_id},
-            )
+        self._require_host_capability(host_capability)
         if binding.account_id != self._account_id:
             raise AccountClerkIntentRejected(
                 reason="CLERK_BINDING_ACCOUNT_MISMATCH",
@@ -514,6 +542,16 @@ class AccountClerk:
             )
         async with self._intake_lock:
             self._assert_current_generation("record_binding_decision")
+            if binding.lifecycle_state == "ACTIVE" and self._normal_submit_intake_reason is not None:
+                raise AccountClerkIntentRejected(
+                    reason="CLERK_EMERGENCY_ADMISSION_CLOSED",
+                    diagnostics={
+                        "account_id": self._account_id,
+                        "strategy_instance_id": binding.strategy_instance_id,
+                        "run_id": binding.run_id,
+                        "intake_reason": self._normal_submit_intake_reason,
+                    },
+                )
             await asyncio.to_thread(
                 write_account_instance_binding,
                 self._artifacts_root,
@@ -703,13 +741,21 @@ class AccountClerk:
             self._reject(intent, "CLERK_CANCEL_NAMESPACE_UNRESOLVED")
 
     def _require_rpc_write_intake(self, intent: AccountOwnerSubmitIntent) -> None:
-        if self._legacy_emergency_fence_id is not None and intent.intent_kind != "EMERGENCY_FLATTEN":
-            self._reject(intent, "CLERK_LEGACY_EMERGENCY_FENCE")
         if not self._rpc_write_intake_closed:
             return
         self._reject(intent, "CLERK_RPC_CLOSED")
 
     def _validate_intent_identity(self, intent: AccountOwnerSubmitIntent) -> None:
+        if intent.intent_kind == "EMERGENCY_FLATTEN":
+            expected_strategy_instance_id = emergency_flatten_strategy_instance_id(self._account_id)
+            if (
+                intent.account_id != self._account_id
+                or intent.strategy_instance_id != expected_strategy_instance_id
+                or intent.bot_order_namespace != build_bot_order_namespace(expected_strategy_instance_id)
+                or not intent.run_id.startswith("clerk-emergency-")
+            ):
+                self._reject(intent, "CLERK_EMERGENCY_IDENTITY_MISMATCH")
+            return
         try:
             if bot_retirement_is_pending(
                 self._artifacts_root,
@@ -748,6 +794,16 @@ class AccountClerk:
             return
         self._validate_binding(intent, binding)
 
+    def _require_host_capability(self, host_capability: str) -> None:
+        if (
+            self._host_binding_capability is None
+            or not hmac.compare_digest(host_capability, self._host_binding_capability)
+        ):
+            raise AccountClerkIntentRejected(
+                reason="CLERK_HOST_BINDING_CAPABILITY_REQUIRED",
+                diagnostics={"account_id": self._account_id},
+            )
+
     def _validate_binding(
         self,
         intent: AccountOwnerSubmitIntent,
@@ -774,6 +830,23 @@ class AccountClerk:
         return await self._run_broker_write(
             "account_clerk.broker.cancel_open_orders_for_namespace",
             lambda: cancel_namespace(namespace),
+            before_broker_write=before_broker_write,
+        )
+
+    async def _cancel_order_refs_open_orders(
+        self,
+        order_refs: tuple[str, ...],
+        *,
+        before_broker_write: Callable[[], Awaitable[None]] | None = None,
+    ) -> list[int]:
+        """Cancel only the exact durable references selected by startup fold."""
+
+        cancel_refs = getattr(self._broker, "cancel_open_orders_for_refs", None)
+        if not callable(cancel_refs):
+            raise RuntimeError("ACCOUNT_CLERK_CANCEL_EXACT_REFS_UNSUPPORTED")
+        return await self._run_broker_write(
+            "account_clerk.broker.cancel_open_orders_for_refs",
+            lambda: cancel_refs(order_refs),
             before_broker_write=before_broker_write,
         )
 

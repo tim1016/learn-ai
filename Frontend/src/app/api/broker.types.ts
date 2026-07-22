@@ -3152,35 +3152,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/live-instances/{strategy_instance_id}/emergency-flatten": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Emergency Flatten Instance
-         * @description Account-wide emergency flatten (§ 7.2 #6), independent of a live binding.
-         *
-         *     The console FLATTEN *command* needs a live binding (it writes to the run's
-         *     command channel for the engine to drain) — but after a halt/poison the
-         *     binding is gone, exactly when an operator most wants to flatten. This reaches
-         *     the daemon's one-shot ``emergency-flatten`` on the instance's latest run,
-         *     reusing the existing paper-guarded CLI. It connects its own broker session,
-         *     so it works with no live process. Account-wide only; namespace-attributed
-         *     reconciliation stays fail-closed. The operator must echo the account id
-         *     (defense-in-depth, mirrors the CLI ``--account`` gate).
-         */
-        post: operations["emergency_flatten_instance_api_live_instances__strategy_instance_id__emergency_flatten_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/live-instances/{strategy_instance_id}/end-day-now": {
         parameters: {
             query?: never;
@@ -5376,7 +5347,7 @@ export interface components {
         };
         /**
          * AccountEmergencyFlattenResponse
-         * @description Receipt returned after the account-scoped emergency CLI completes.
+         * @description Receipt returned after the Clerk re-observes the account flat.
          */
         AccountEmergencyFlattenResponse: {
             /** Accepted */
@@ -10400,22 +10371,25 @@ export interface components {
          * EmergencyFlattenRequest
          * @description Body for the account-wide emergency flatten (§ 7.2 #6).
          *
-         *     Reaches the daemon's one-shot ``emergency-flatten`` CLI independent of any
-         *     live binding, so an operator can flatten after a halt/poison (when the
-         *     binding-gated console FLATTEN command is unavailable). ``account`` must echo
-         *     the IBKR account id — defense-in-depth mirroring the CLI ``--account`` gate,
-         *     which refuses if it does not match the connected account.
+         *     Reaches the held Account Clerk independent of any live binding, so an
+         *     operator can flatten after a halt/poison. The Clerk closes intake, records
+         *     cancellation uncertainty, writes any liquidations under its own broker
+         *     session, and only completes after a fresh paper-account snapshot is flat.
          */
         EmergencyFlattenRequest: {
             /** Account */
             account: string;
             /**
-             * Confirm
-             * @description Must be true; typo-proofing gate.
+             * Confirmation Token
+             * @description Exact typed confirmation required for the destructive account action.
+             * @constant
              */
-            confirm: boolean;
-            /** Idempotency Key */
-            idempotency_key?: string | null;
+            confirmation_token: "FLATTEN";
+            /**
+             * Idempotency Key
+             * @description Public emergency operation identity.
+             */
+            idempotency_key: string;
         };
         /**
          * EngineBacktestJobRequest
@@ -26837,43 +26811,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetInstanceDesiredStateResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    emergency_flatten_instance_api_live_instances__strategy_instance_id__emergency_flatten_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmergencyFlattenRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HostRunnerActionResponse"];
                 };
             };
             /** @description Validation Error */

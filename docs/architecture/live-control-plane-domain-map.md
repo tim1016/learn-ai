@@ -187,7 +187,6 @@ The checked-in baseline must yield `171`. Every row below belongs to exactly one
 | 5989 | `_read_owned_positions_empty` | reconciliation surfaces | services.fleet_contamination.instance_broker | — | future LiveInstanceReconciliationService |
 | 6001 | `get_instance_commands` | reconciliation surfaces | broker.ibkr.config.get_settings<br>pathlib.Path<br>schemas.live_runs.CommandsTimeline<br>engine.live.host_daemon_client | — | future LiveInstanceReconciliationService |
 | 6021 | `issue_instance_command` | reconciliation surfaces | broker.ibkr.config.get_settings<br>pathlib.Path<br>engine.live.command_channel.CommandVerb<br>fastapi.HTTPException | — | future LiveInstanceReconciliationService |
-| 6114 | `emergency_flatten_instance` | reconciliation surfaces | broker.ibkr.config.get_settings<br>pathlib.Path<br>fastapi.HTTPException<br>schemas.live_runs.HostRunnerActionResponse | — | future LiveInstanceReconciliationService |
 
 ## Domain-level characterization net
 

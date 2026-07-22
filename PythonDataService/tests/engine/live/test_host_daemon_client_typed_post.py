@@ -1,7 +1,7 @@
 """PRD #619-C5 — typed POST + ambiguous-outcome classification.
 
-Exercises the four mutation forwarders (``deploy`` / ``start_run`` /
-``stop_run`` / ``emergency_flatten_run``) end-to-end through the typed
+Exercises the control-plane mutation forwarders (``deploy`` / ``start_run`` /
+``stop_run``) end-to-end through the typed
 POST core. Mocks the daemon HTTP layer with respx so the real
 ``httpx.AsyncClient`` exercises the request/response path.
 
@@ -31,7 +31,6 @@ from app.engine.live.host_daemon_client import (
     HostDaemonError,
     HostDaemonOutcomeUnknownError,
     deploy,
-    emergency_flatten_run,
     ensure_account_clerk,
     release_account_clerk,
     start_run,
@@ -187,20 +186,6 @@ async def test_remote_protocol_error_raises_outcome_unknown() -> None:
         await stop_run(BASE, "run-A", {})
 
     assert exc_info.value.error_category == "remote_protocol_error"
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_emergency_flatten_read_timeout_raises_outcome_unknown() -> None:
-    """The 130s flatten timeout is the most common place a ReadTimeout
-    fires; the broker round-trip means an ambiguous outcome here has
-    the highest stakes."""
-    respx.post(f"{BASE}/runs/run-A/emergency-flatten").mock(
-        side_effect=httpx.ReadTimeout("read")
-    )
-
-    with pytest.raises(HostDaemonOutcomeUnknownError):
-        await emergency_flatten_run(BASE, "run-A", {})
 
 
 @pytest.mark.asyncio
