@@ -3125,7 +3125,10 @@ def _init_git_repo(repo: Path) -> None:
 
 
 @pytest.fixture
-def git_daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
+def git_daemon_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[RunnerProcessManager, Path]:
     """Daemon manager whose repo_root is a clean git repo holding a spec + QC
     audit copy. Returns ``(manager, repo_root)``."""
     repo = tmp_path / "repo"
@@ -3161,6 +3164,18 @@ def git_daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
 
     live_runs_root = repo / "PythonDataService" / "artifacts" / "live_runs"
     manager = RunnerProcessManager(repo_root=repo, live_runs_root=live_runs_root)
+
+    def record_binding_through_test_clerk(
+        binding: AccountInstanceBinding,
+        *,
+        ibkr_host: str | None = None,
+    ) -> None:
+        """Model the Clerk-approved write; RPC ownership is tested separately."""
+
+        del ibkr_host
+        write_account_instance_binding(manager.artifacts_root, binding)
+
+    monkeypatch.setattr(manager, "_record_account_binding_decision_via_clerk", record_binding_through_test_clerk)
     return manager, repo
 
 

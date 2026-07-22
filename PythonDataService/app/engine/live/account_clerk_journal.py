@@ -16,6 +16,7 @@ from typing import Any, Literal, overload
 from pydantic import ValidationError
 
 from app.broker.ibkr.models import IbkrOrderEvent
+from app.engine.live import durable_append_log
 from app.engine.live.account_artifacts import account_artifacts_root
 from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerAckReceipt,
@@ -33,7 +34,6 @@ from app.engine.live.account_clerk_journal_models import (
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
-from app.engine.live import durable_append_log
 from app.engine.live.live_state_sidecar import _file_lock
 
 ACCOUNT_CLERK_INBOX_FILENAME = "clerk_inbox.jsonl"

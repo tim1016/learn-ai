@@ -21,12 +21,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.engine.live import durable_append_log
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
     _safe_account_path_segment,
     account_artifacts_root,
 )
-from app.engine.live import durable_append_log
 from app.engine.live.live_state_sidecar import _file_lock
 
 BINDING_COMMAND_LEDGER_FILENAME = "binding_commands.jsonl"
