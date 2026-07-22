@@ -35,3 +35,10 @@ ruff>=0.8
 # Pinned tight because async connection-pool behaviour is sensitive to minor
 # version differences; upgrade deliberately with a matching EF migration.
 asyncpg==0.29.0
+# alpaca-py: official Alpaca SDK, used by app.broker.alpaca.* for the Broker
+# System v2 read paths (paper trading). Chosen over a hand-rolled httpx client
+# for maintained models/enums/streaming; verbatim raw capture is preserved via
+# a requests.Session response hook and a schema-drift test guards field
+# coverage (design decision D4; ADR broker-contract-v2). Pinned tight because
+# the raw-payload field set is validated against this exact version.
+alpaca-py==0.42.0
