@@ -962,6 +962,88 @@ async def test_journal_cure_endpoint_propagates_daemon_clerk_rejection(
     assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
 
 
+async def test_events_repair_endpoint_returns_resequence_receipt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.engine.live.account_artifacts import AccountEventSequenceRepair
+    from app.main import app
+
+    def _repair(artifacts_root: Path, account_id: str) -> AccountEventSequenceRepair:
+        assert account_id == "DU1234567"
+        return AccountEventSequenceRepair(
+            account_id=account_id,
+            rewritten_rows=3,
+            backup_path=tmp_path / "account_events.jsonl.pre-resequence-abc.bak",
+        )
+
+    monkeypatch.setattr(account_reconciliation, "repair_account_event_sequence", _repair)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/accounts/DU1234567/events/repair-sequence")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    assert response.json()["rewritten_rows"] == 3
+    assert response.json()["backup_path"].endswith(".bak")
+
+
+async def test_events_repair_endpoint_surfaces_unsafe_repair(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.engine.live.account_artifacts import AccountArtifactError
+    from app.main import app
+
+    def _repair(artifacts_root: Path, account_id: str) -> None:
+        raise AccountArtifactError("invalid account event row 5")
+
+    monkeypatch.setattr(account_reconciliation, "repair_account_event_sequence", _repair)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/accounts/DU1234567/events/repair-sequence")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_EVENTS_REPAIR_UNSAFE"
+
+
+async def test_retire_stale_binding_endpoint_delegates_to_daemon(
+    monkeypatch,
+) -> None:
+    from app.main import app
+
+    forwarded: list[tuple[str, dict]] = []
+
+    async def _retire(_base_url: str, account_id: str, payload: dict) -> dict:
+        forwarded.append((account_id, payload))
+        return {
+            "schema_version": 1,
+            "account_id": account_id,
+            "strategy_instance_id": payload["strategy_instance_id"],
+            "run_id": payload["run_id"],
+            "bot_order_namespace": "learn-ai/stale-bot/v1",
+            "lifecycle_state": "RETIRED",
+            "recorded_at_ms": 200,
+        }
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "retire_stale_binding", _retire)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/accounts/DU1234567/bindings/retire",
+            json={"strategy_instance_id": "stale-bot", "run_id": "run-stale"},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["lifecycle_state"] == "RETIRED"
+    assert forwarded[0][0] == "DU1234567"
+    assert forwarded[0][1]["strategy_instance_id"] == "stale-bot"
+
+
 async def test_journal_cure_preview_honors_artifact_root_dependency_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

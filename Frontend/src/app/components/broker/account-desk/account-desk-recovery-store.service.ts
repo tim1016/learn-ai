@@ -4,7 +4,9 @@ import type {
   AccountAcceptExposureOverrideResponse,
   AccountClearFreezeResponse,
   AccountEmergencyFlattenResponse,
+  AccountEventSequenceRepairReceipt,
   AccountRecoveryFlattenCandidate,
+  BindingLedgerBaselineReceipt,
   AccountReconciliationAutomationPolicy,
   AccountReconciliationReceipt,
   JournalCurePreview,
@@ -33,7 +35,9 @@ export type AccountDeskRecoveryCommand =
   | 'recovery_flatten'
   | 'emergency_flatten'
   | 'restore_clerk'
-  | 'journal_recovery';
+  | 'journal_recovery'
+  | 'binding_ledger_baseline'
+  | 'event_sequence_repair';
 
 export interface AccountDeskRecoveryConfirmation {
   readonly command: AccountDeskRecoveryCommand;
@@ -63,7 +67,9 @@ export type AccountDeskRecoverySuccess =
   | { readonly kind: 'recovery_flatten'; readonly receipt: OperatorRecoveryFlattenResponse }
   | { readonly kind: 'emergency_flatten'; readonly receipt: AccountEmergencyFlattenResponse }
   | { readonly kind: 'restore_clerk'; readonly receipt: AccountClerkRestoreReceipt }
-  | { readonly kind: 'journal_recovery'; readonly receipt: JournalRecoveryReceipt };
+  | { readonly kind: 'journal_recovery'; readonly receipt: JournalRecoveryReceipt }
+  | { readonly kind: 'binding_ledger_baseline'; readonly receipt: BindingLedgerBaselineReceipt }
+  | { readonly kind: 'event_sequence_repair'; readonly receipt: AccountEventSequenceRepairReceipt };
 
 /**
  * Executes only exact account-desk requests declared by backend projections.
@@ -224,6 +230,54 @@ export class AccountDeskRecoveryStore {
       !this.legacyCandidatesState().includes(candidate)
     ) return;
     this.openConfirmation(accountId, 'legacy_retire', candidate.confirmation, { legacyCandidate: candidate });
+  }
+
+  requestBindingLedgerBaseline(): void {
+    const accountId = this.accountKey();
+    if (this.busyState() || accountId === null) return;
+    this.confirmationState.set({
+      command: 'binding_ledger_baseline',
+      accountId,
+      title: 'Repair binding ledger',
+      body: 'Seed the Clerk binding ledger from the current account registry to clear dirty parity so bot admission is no longer fail-closed.',
+      consequence:
+        'The Account service records one binding decision per registry binding it does not already match. It never removes rows and leaves genuine ledger-only anomalies visible.',
+      confirmLabel: 'Repair binding ledger',
+      requiredToken: '',
+      providedToken: '',
+      desiredAutomationEnabled: null,
+      reason: '',
+      journalCure: null,
+      legacyCandidate: null,
+      recoveryFlatten: null,
+      emergencyOperationId: null,
+      restoreOperationId: null,
+    });
+    this.errorMessageState.set(null);
+  }
+
+  requestEventSequenceRepair(): void {
+    const accountId = this.accountKey();
+    if (this.busyState() || accountId === null) return;
+    this.confirmationState.set({
+      command: 'event_sequence_repair',
+      accountId,
+      title: 'Repair event history',
+      body: 'Restore contiguous event-sequence numbers for an event history whose durable sequence envelope was duplicated.',
+      consequence:
+        'The original bytes are snapshotted beside the ledger before only the sequence field is rewritten. Malformed or cross-account rows are refused, never dropped.',
+      confirmLabel: 'Repair event history',
+      requiredToken: '',
+      providedToken: '',
+      desiredAutomationEnabled: null,
+      reason: '',
+      journalCure: null,
+      legacyCandidate: null,
+      recoveryFlatten: null,
+      emergencyOperationId: null,
+      restoreOperationId: null,
+    });
+    this.errorMessageState.set(null);
   }
 
   requestEmergencyFlatten(confirmation: OperatorConfirmationCopy): void {
@@ -410,6 +464,16 @@ export class AccountDeskRecoveryStore {
             confirmation.providedToken === 'QUARANTINE' ? 'quarantine' : 'rebaseline',
             { confirmation_token: confirmation.providedToken, idempotency_key: confirmation.restoreOperationId },
           ),
+        };
+      case 'binding_ledger_baseline':
+        return {
+          kind: 'binding_ledger_baseline',
+          receipt: await this.broker.baselineBindingLedger(confirmation.accountId),
+        };
+      case 'event_sequence_repair':
+        return {
+          kind: 'event_sequence_repair',
+          receipt: await this.broker.repairAccountEventSequence(confirmation.accountId),
         };
     }
   }

@@ -253,6 +253,21 @@ export interface LegacyStaleClaimRetirementReceipt {
   retired_at_ms: number;
 }
 
+export interface BindingLedgerBaselineReceipt {
+  schema_version: number;
+  account_id: string;
+  baselined_instances: string[];
+  parity_clean: boolean;
+  unresolved_ledger_only_instances: string[];
+}
+
+export interface AccountEventSequenceRepairReceipt {
+  schema_version: number;
+  account_id: string;
+  rewritten_rows: number;
+  backup_path: string | null;
+}
+
 export interface StaleBindingRetirementCandidate {
   strategy_instance_id: string;
   run_id: string;

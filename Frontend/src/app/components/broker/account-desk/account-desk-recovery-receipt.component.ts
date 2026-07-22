@@ -138,5 +138,27 @@ function recoveryReceiptView(success: AccountDeskRecoverySuccess): RecoveryRecei
           field("Recorded", "", "text", success.receipt.recorded_at_ms),
         ],
       };
+    case "binding_ledger_baseline":
+      return {
+        message: success.receipt.parity_clean
+          ? "Binding ledger repaired; parity is clean and admission is open."
+          : "Binding ledger baseline recorded; a ledger-only anomaly still needs review.",
+        fields: [
+          field("Account", success.receipt.account_id, "code"),
+          field("Baselined instances", success.receipt.baselined_instances.length),
+          field("Parity", success.receipt.parity_clean ? "Clean" : "Dirty", "label"),
+        ],
+      };
+    case "event_sequence_repair":
+      return {
+        message: success.receipt.rewritten_rows > 0
+          ? "Event history sequence was repaired."
+          : "Event history sequence was already contiguous.",
+        fields: [
+          field("Account", success.receipt.account_id, "code"),
+          field("Rewritten rows", success.receipt.rewritten_rows),
+          field("Backup", success.receipt.backup_path ?? "—", "code"),
+        ],
+      };
   }
 }

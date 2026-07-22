@@ -1048,6 +1048,45 @@
         "title": "AccountEventRow",
         "type": "object"
       },
+      "AccountEventSequenceRepairReceipt": {
+        "additionalProperties": false,
+        "description": "Result of an operator-triggered account-event sequence repair.\n\nRestores contiguous event-sequence numbers for a ledger whose JSON rows are\nvalid but whose durable ``seq`` envelope was duplicated. Evidence is never\ndiscarded; the pre-repair bytes are snapshotted beside the ledger.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "backup_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backup Path"
+          },
+          "rewritten_rows": {
+            "minimum": 0.0,
+            "title": "Rewritten Rows",
+            "type": "integer"
+          },
+          "schema_version": {
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "rewritten_rows"
+        ],
+        "title": "AccountEventSequenceRepairReceipt",
+        "type": "object"
+      },
       "AccountEventsResponse": {
         "description": "Cursor page from the immutable account event journal.",
         "properties": {
@@ -32962,6 +33001,84 @@
         "title": "StageAdvanceCriterionResponse",
         "type": "object"
       },
+      "StaleBindingRetirementReceipt": {
+        "additionalProperties": false,
+        "description": "Durable proof that a stale DEPLOYED binding was moved to RETIRED.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "bot_order_namespace": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Bot Order Namespace",
+            "type": "string"
+          },
+          "lifecycle_state": {
+            "const": "RETIRED",
+            "default": "RETIRED",
+            "title": "Lifecycle State"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "strategy_instance_id",
+          "run_id",
+          "bot_order_namespace",
+          "recorded_at_ms"
+        ],
+        "title": "StaleBindingRetirementReceipt",
+        "type": "object"
+      },
+      "StaleBindingRetirementRequest": {
+        "additionalProperties": false,
+        "description": "Operator request to retire one inactive (DEPLOYED) account binding.",
+        "properties": {
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "run_id"
+        ],
+        "title": "StaleBindingRetirementRequest",
+        "type": "object"
+      },
       "StockEntryLeg": {
         "description": "Stock ``ActionEntity`` \u2014 Slice 1B.",
         "properties": {
@@ -38225,6 +38342,75 @@
         ]
       }
     },
+    "/api/accounts/{account_id}/bindings/retire": {
+      "post": {
+        "description": "Retire one inactive (DEPLOYED) binding via the host lifecycle authority.\n\nBinding retirement is a host-authority mutation the Clerk records, so the\ncontainer delegates to the daemon rather than writing the RETIRED decision\nitself. The daemon guards that the binding is currently DEPLOYED.",
+        "operationId": "retire_stale_binding_endpoint_api_accounts__account_id__bindings_retire_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaleBindingRetirementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaleBindingRetirementReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retire Stale Binding Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/{account_id}/clerk": {
       "get": {
         "description": "Return the immutable Account service projection for one known account.",
@@ -38622,6 +38808,65 @@
           }
         },
         "summary": "Account Events Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/events/repair-sequence": {
+      "post": {
+        "description": "Resequence a corrupt account-event journal without discarding evidence.\n\nRepairs an ACCOUNT_EVENTS_JOURNAL_CORRUPT feed whose JSON rows are valid but\nwhose durable ``seq`` envelope was duplicated. Snapshots the original bytes\nbeside the ledger, then atomically rewrites only the ``seq`` field under the\nledger lock. Malformed or cross-account rows are refused, not silently dropped.",
+        "operationId": "repair_account_event_sequence_endpoint_api_accounts__account_id__events_repair_sequence_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountEventSequenceRepairReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Repair Account Event Sequence Endpoint",
         "tags": [
           "accounts"
         ]

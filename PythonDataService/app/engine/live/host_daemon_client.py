@@ -283,6 +283,21 @@ async def apply_operator_adjustment(base_url: str, account_id: str, payload: dic
     )
 
 
+async def retire_stale_binding(base_url: str, account_id: str, payload: dict) -> dict:
+    """POST a stale-binding retirement to the daemon (host lifecycle authority).
+
+    The Clerk records binding decisions on the host; the daemon guards that the
+    binding is DEPLOYED, records the RETIRED decision via the Clerk, and returns
+    the retired binding body verbatim.
+    """
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/bindings/retire",
+        payload,
+        timeout=_START_ADMISSION_TIMEOUT,
+    )
+
+
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
     """Typed POST core for the four mutation forwards.
 

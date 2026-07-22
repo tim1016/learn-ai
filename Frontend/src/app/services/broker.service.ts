@@ -7,6 +7,8 @@ import type {
   AccountEmergencyFlattenResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
+  AccountEventSequenceRepairReceipt,
+  BindingLedgerBaselineReceipt,
   JournalCurePreview,
   JournalCureReceipt,
   JournalCureRequest,
@@ -147,6 +149,24 @@ export class BrokerService {
     return firstValueFrom(
       this.http.post<AccountReconciliationReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation`,
+        {},
+      ),
+    );
+  }
+
+  baselineBindingLedger(accountId: string): Promise<BindingLedgerBaselineReceipt> {
+    return firstValueFrom(
+      this.http.post<BindingLedgerBaselineReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/binding-ledger/baseline`,
+        {},
+      ),
+    );
+  }
+
+  repairAccountEventSequence(accountId: string): Promise<AccountEventSequenceRepairReceipt> {
+    return firstValueFrom(
+      this.http.post<AccountEventSequenceRepairReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/events/repair-sequence`,
         {},
       ),
     );

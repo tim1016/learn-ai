@@ -86,7 +86,10 @@ function makeDirectoryStore(rows: readonly AccountRosterRow[] = []) {
     serviceStatusShowingStaleLastGood: signal(false),
     cockpit: signal({
       mode: 'NORMAL',
-      clerk: { headline: 'Ready — no bots on duty', detail: 'Backend-authored posture.', generation: null, phase: null },
+      clerk: {
+        headline: 'Ready — no bots on duty', detail: 'Backend-authored posture.', generation: null, phase: null,
+        binding: { ledger_parity: 'clean' },
+      },
       daemon: { availability: 'AVAILABLE', observed_at_ms: 1_780_000_000_000 },
       blockers: [],
     }),

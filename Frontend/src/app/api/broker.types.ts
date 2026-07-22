@@ -70,6 +70,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/bindings/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retire Stale Binding Endpoint
+         * @description Retire one inactive (DEPLOYED) binding via the host lifecycle authority.
+         *
+         *     Binding retirement is a host-authority mutation the Clerk records, so the
+         *     container delegates to the daemon rather than writing the RETIRED decision
+         *     itself. The daemon guards that the binding is currently DEPLOYED.
+         */
+        post: operations["retire_stale_binding_endpoint_api_accounts__account_id__bindings_retire_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/clerk": {
         parameters: {
             query?: never;
@@ -164,6 +188,31 @@ export interface paths {
         get: operations["account_events_endpoint_api_accounts__account_id__events_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/events/repair-sequence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Repair Account Event Sequence Endpoint
+         * @description Resequence a corrupt account-event journal without discarding evidence.
+         *
+         *     Repairs an ACCOUNT_EVENTS_JOURNAL_CORRUPT feed whose JSON rows are valid but
+         *     whose durable ``seq`` envelope was duplicated. Snapshots the original bytes
+         *     beside the ledger, then atomically rewrites only the ``seq`` field under the
+         *     ledger lock. Malformed or cross-account rows are refused, not silently dropped.
+         */
+        post: operations["repair_account_event_sequence_endpoint_api_accounts__account_id__events_repair_sequence_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5592,6 +5641,27 @@ export interface components {
             seq: number;
             /** Trader Narration */
             trader_narration?: string | null;
+        };
+        /**
+         * AccountEventSequenceRepairReceipt
+         * @description Result of an operator-triggered account-event sequence repair.
+         *
+         *     Restores contiguous event-sequence numbers for a ledger whose JSON rows are
+         *     valid but whose durable ``seq`` envelope was duplicated. Evidence is never
+         *     discarded; the pre-repair bytes are snapshotted beside the ledger.
+         */
+        AccountEventSequenceRepairReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Backup Path */
+            backup_path?: string | null;
+            /** Rewritten Rows */
+            rewritten_rows: number;
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version?: number;
         };
         /**
          * AccountEventsResponse
@@ -20197,6 +20267,43 @@ export interface components {
             required_repr?: string;
         };
         /**
+         * StaleBindingRetirementReceipt
+         * @description Durable proof that a stale DEPLOYED binding was moved to RETIRED.
+         */
+        StaleBindingRetirementReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Bot Order Namespace */
+            bot_order_namespace: string;
+            /**
+             * Lifecycle State
+             * @default RETIRED
+             * @constant
+             */
+            lifecycle_state?: "RETIRED";
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version?: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * StaleBindingRetirementRequest
+         * @description Operator request to retire one inactive (DEPLOYED) account binding.
+         */
+        StaleBindingRetirementRequest: {
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
          * StockEntryLeg
          * @description Stock ``ActionEntity`` — Slice 1B.
          */
@@ -22594,6 +22701,43 @@ export interface operations {
             };
         };
     };
+    retire_stale_binding_endpoint_api_accounts__account_id__bindings_retire_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StaleBindingRetirementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaleBindingRetirementReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     account_service_status_endpoint_api_accounts__account_id__clerk_get: {
         parameters: {
             query?: never;
@@ -22760,6 +22904,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountEventsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    repair_account_event_sequence_endpoint_api_accounts__account_id__events_repair_sequence_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountEventSequenceRepairReceipt"];
                 };
             };
             /** @description Validation Error */
