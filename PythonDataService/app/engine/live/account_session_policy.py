@@ -139,6 +139,27 @@ def write_account_live_feed_evidence(
     return evidence
 
 
+def read_account_live_feed_evidence(
+    artifacts_root: Path,
+    account_id: str,
+) -> AccountLiveFeedEvidence | None:
+    """Read live-feed evidence strictly for diagnostic/account-desk projections.
+
+    Missing evidence is an ordinary unproven-live-session state.  Present but
+    malformed evidence is a durable-artifact fault, which callers that surface
+    operator evidence must not silently collapse into "missing".
+    """
+
+    canonical_account_id = normalize_account_id(account_id)
+    path = account_live_feed_evidence_path(artifacts_root, canonical_account_id)
+    if not path.exists():
+        return None
+    evidence = AccountLiveFeedEvidence.model_validate_json(path.read_text(encoding="utf-8"))
+    if evidence.account_id != canonical_account_id:
+        raise ValueError("account live-feed evidence belongs to a different account")
+    return evidence
+
+
 def assess_account_live_session(
     artifacts_root: Path,
     *,
@@ -154,12 +175,13 @@ def assess_account_live_session(
 
     canonical_account_id = normalize_account_id(account_id)
     policy = read_account_session_policy(artifacts_root, canonical_account_id)
-    evidence = read_pydantic_artifact(
-        account_live_feed_evidence_path(artifacts_root, canonical_account_id),
-        AccountLiveFeedEvidence,
-    )
-    if evidence is not None and evidence.account_id != canonical_account_id:
-        raise ValueError("account live-feed evidence belongs to a different account")
+    try:
+        evidence = read_account_live_feed_evidence(artifacts_root, canonical_account_id)
+    except (OSError, ValueError):
+        # An order boundary must fail closed when its durable liveness proof is
+        # unreadable.  The Account desk uses the strict reader above to surface
+        # the artifact fault with its typed operator error.
+        evidence = None
 
     scheduled_state = session_state_at_ms(now_ms)
     scheduled_open = scheduled_state == "RTH_OPEN"
@@ -222,6 +244,7 @@ __all__ = [
     "account_live_feed_evidence_path",
     "account_session_policy_path",
     "assess_account_live_session",
+    "read_account_live_feed_evidence",
     "read_account_session_policy",
     "write_account_live_feed_evidence",
     "write_account_session_policy",

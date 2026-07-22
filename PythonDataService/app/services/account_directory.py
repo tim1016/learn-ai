@@ -35,6 +35,7 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.account_session_policy import (
     assess_account_live_session,
+    read_account_live_feed_evidence,
     read_account_session_policy,
 )
 from app.schemas.account_directory import (
@@ -163,6 +164,7 @@ class AccountDirectoryService:
                 now_ms=now_ms,
             )
             session_policy = read_account_session_policy(self._artifacts_root, account_id)
+            read_account_live_feed_evidence(self._artifacts_root, account_id)
             session_assessment = assess_account_live_session(
                 self._artifacts_root,
                 account_id=account_id,
