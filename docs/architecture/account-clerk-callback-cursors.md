@@ -1,5 +1,10 @@
 # Account Clerk callback cursors
 
+**Status:** Current supporting technical note (2026-07-22).
+**Implementation authority:** ADR-0030 and `docs/architecture/engine-authority-map.md`.
+**Operator authority:** `docs/bot-control-operator-manual.md`; this document is for
+engineers maintaining callback delivery and must not be used as an operator procedure.
+
 Issue #1045 replaces the transient namespace queue with a non-destructive,
 at-least-once read of the Account Clerk journal. Each run persists
 `account_clerk_event_cursor.json` only after its own

@@ -2,7 +2,7 @@
 
 **Status:** Accepted 2026-05-30
 **Decision drivers:** The operator console must answer one headline question — *"is this strategy allowed and able to act on the next bar?"* — and must reconcile artifact-derived intended state against broker-observed account reality. Done naively, both invite a second, drifting implementation of logic the engine already owns.
-**Related:** ADR 0002 (shadow per-instance namespace + no-submit invariant), ADR 0004 (instance-addressed control plane), `CONTEXT.md`, `docs/ibkr-paper-deployment-plan.md` § 16, `.claude/rules/numerical-rigor.md` (single source of truth).
+**Related:** ADR 0002 (shadow per-instance namespace + no-submit invariant), ADR 0004 (instance-addressed control plane), `CONTEXT.md`, historical plan `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16, `.claude/rules/numerical-rigor.md` (single source of truth).
 
 ## Context
 

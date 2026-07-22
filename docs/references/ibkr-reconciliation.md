@@ -1,7 +1,7 @@
 # IBKR broker-activity reconciliation — conceptual reference
 
 **Audience:** engineers extending the broker-activity surface (publisher, reconciler, templates, schemas).
-**Not:** operator documentation (see `docs/runbooks/live-trade-reconciliation.md`); not a re-statement of ADR 0014 (see `docs/architecture/adrs/0014-broker-authored-operator-view-backend-rendered-narratives.md`).
+**Not:** operator documentation (see `docs/bot-control-operator-manual.md`); not a re-statement of ADR 0014 (see `docs/architecture/adrs/0014-broker-authored-operator-view-backend-rendered-narratives.md`).
 **Pairs with:** ADR 0014 (the decision), ADR 0008 + 2026-06-22 amendment (identity ladder & sibling WAL).
 
 A conceptual map for engineers extending the reconciler. The decision (why server-authored, why one row per IBKR execution, why a closed verdict enum) lives in ADR 0014 and is assumed here. The mechanics live in code. This doc bridges the two: the *concepts* a contributor needs before reading either.
@@ -136,4 +136,4 @@ If you find yourself reading CP Web API docs while extending the reconciler, you
 | Account Truth REST surface | `GET /api/broker/account-truth` in `PythonDataService/app/routers/broker_account_truth.py` |
 | Resume cursor | `PythonDataService/app/engine/live/live_state_sidecar.py` (`last_broker_activity_wal_seq`) |
 | SSE + REST surface | `PythonDataService/app/routers/broker_activity.py` |
-| Operator runbook | `docs/runbooks/live-trade-reconciliation.md` |
+| Operator manual | `docs/bot-control-operator-manual.md` |

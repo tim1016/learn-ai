@@ -1,7 +1,7 @@
 # ADR 0008 — Durable submit protocol & order-identity recovery: a run-scoped WAL, `order_ref` ownership, and uncertain-ack semantics
 
 **Status:** Accepted 2026-06-04
-**Decision drivers:** same-account relaunch poisoning (commits a884ad5, PR #443, #444); the `live-{order_id}` ownership bug class; persistent IBKR paper bot work (`docs/ibkr-paper-deployment-plan.md` § 16.4).
+**Decision drivers:** same-account relaunch poisoning (commits a884ad5, PR #443, #444); the `live-{order_id}` ownership bug class; persistent IBKR paper bot work (historical plan `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16.4).
 **Related:** ADR 0001 (JSON+Parquet substrate — reaffirmed here), ADR 0005 (engine-authored readiness / two-altitude broker ownership), `CONTEXT.md` (identity ladder, owned-orphan vs outside-mutation, submit-uncertain halt, uniform ownership ladder).
 
 ## Context

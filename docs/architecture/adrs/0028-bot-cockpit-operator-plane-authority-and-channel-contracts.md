@@ -1,13 +1,16 @@
 # ADR-0028: Bot Cockpit operator-plane authority and channel contracts
 
-**Status**: Proposed 2026-07-10.
+**Status**: Proposed 2026-07-10 — current only for the stream/channel proposal.
+**Supersession note (2026-07-22):** Account Clerk, lifecycle, and operator procedure
+authority is ADR-0030, ADR-0026, and `docs/bot-control-operator-manual.md`. References
+to AccountOwner, its takeover, the former lifecycle snapshot, or the roadmap below are
+historical proposal context, not current implementation authority.
 **Related**: ADR-0001 (files canonical; Postgres rebuildable), ADR-0013
 (operator-surface judgment vs evidence), ADR-0018 (broker session mirror),
 ADR-0019 (daemon diagnostics), ADR-0022 (timestamp authority), ADR-0024
 (Bot event stream), ADR-0025 (single dominant headline), ADR-0026 (daily
-lifecycle single writer), ADR-0027 (operator blocker taxonomy), PRD #951
-(stream-primary Bot Cockpit), and PRD #974 (daily lifecycle and AccountOwner).
-**Roadmap**: `docs/architecture/bot-cockpit-target-architecture-roadmap.md`.
+lifecycle single writer), ADR-0027 (operator blocker taxonomy), and PRD #951
+(stream-primary Bot Cockpit).
 
 ## Context
 
@@ -46,9 +49,9 @@ Postgres and .NET GraphQL are permanently outside the Bot Cockpit read path.
 rebuildable analytical projection for historical, cross-run, reporting, and
 triage queries.
 
-This narrows, rather than reverses, the existing fallback contract in
-`docs/bot-lifecycle-account-owner-authority.md` §4.1: that document already
-requires the file-backed `compute_operator_surface` and
+This narrows, rather than reverses, the current file-backed fallback contract
+described by the Bot Control manual and ADR-0030: the system requires the
+file-backed `compute_operator_surface` and
 `compose_bot_lifecycle_chart` path whenever the lifecycle projection is empty,
 stale, disabled, or down. ADR-0028 removes the Postgres lifecycle timeline
 from the operator UI read path entirely. Projection unavailability remains an
@@ -268,15 +271,15 @@ records and seven days, configurable at daemon launch via
 retention settings, current exited-record count, and cumulative prune count so
 soak evidence can cite the exact daemon contract under test.
 
-AccountOwner takeover is fenced, not merely leased. An authoritative owner
-generation is checked at intent acceptance and immediately before every
-broker-write boundary. The Postgres `account_owner_status_snapshots` table may
-project that generation but is not its authority. A paused old owner that
-resumes after lease expiry must be refused. The required failure scenario is:
+The current **Account Clerk** generation is fenced, not merely leased. The active
+Clerk validates its generation at normal intent intake and immediately before every
+broker-write boundary; historical AccountOwner snapshots do not select a writer. A
+superseded Clerk must be refused after a replacement becomes accepting. The required
+failure scenario is:
 
 ```text
-SIGSTOP old owner → lease expires → new owner takes over →
-SIGCONT old owner → every stale-generation write is refused
+SIGSTOP old Clerk → lease expires → replacement Clerk becomes accepting →
+SIGCONT old Clerk → every stale-generation write is refused
 ```
 
 `kill -9` takeover is necessary but insufficient proof because a killed owner
@@ -357,7 +360,7 @@ are deleted.
    replayable history and names every resume path.
 3. **Blast radius** — §5 renders dependency-specific staleness; §6 bounds
    queues/tasks, isolates mutations, breaks daemon failure amplification, and
-   fences AccountOwner takeover.
+   fences Clerk replacement.
 4. **Signal reactivity** — one route-scoped store consumes a versioned state
    channel, while shared resources and typed state/event adapters own their
    distinct recovery mechanics over one small authenticated SSE connection
@@ -419,13 +422,13 @@ are deleted.
 - The broker mirror remains observational under ADR-0018.
 - The Bot event stream remains historical evidence under ADR-0024.
 - ADR-0026 retains lifecycle-phase ownership and the Button Rule.
-- This ADR proposes no implementation change by itself; the separate roadmap
-  controls delivery order.
+- This ADR proposes no implementation change by itself.
 
 ## References
 
-- `docs/bot-lifecycle-account-owner-authority.md` §4.1 — Postgres lifecycle
-  projection and canonical file fallback.
+- `docs/bot-control-operator-manual.md` — current Bot Control, lifecycle, and Clerk
+  operator authority.
+- ADR-0030 — current account-rooted Clerk and journal authority.
 - `PythonDataService/app/routers/live_instances.py` — current status assembly
   and status-time publisher bootstrap.
 - `PythonDataService/app/services/operator_surface.py` — pure operator-surface
@@ -438,5 +441,5 @@ are deleted.
 - `Frontend/src/app/services/broker-sse.ts` — current native `EventSource`
   wrapper replaced by the authenticated connection primitive and typed
   snapshot/event-feed adapters.
-- `docs/architecture/bot-control-stream-primary-prd.md` — PRD #951 interim
+- `docs/archive/plans/bot-control-stream-primary-prd.md` — archived PRD #951 interim
   stream affordance map and surface-disposal contract.
