@@ -611,7 +611,6 @@ def test_broker_disconnected_blocker_matches_deploy_and_run_surfaces() -> None:
         for blocker in author_deploy_blockers(
             DeployPreflightSignals(
                 daemon_reachable=True,
-                daemon_code_current=True,
                 broker_connection_state="disconnected",
                 account_frozen=False,
                 account_proven=True,

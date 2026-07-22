@@ -30,7 +30,7 @@ from pydantic import ValidationError
 from app.engine.live.daemon_auth import TOKEN_HEADER, read_daemon_token
 from app.engine.live.daemon_transport import DaemonResult
 from app.schemas.broker_session import GatewaySocketsSnapshot
-from app.schemas.live_runs import HostRunnerHealth
+from app.schemas.live_runs import HostRunnerHealth, HostRunnerProcessStatus
 
 logger = logging.getLogger(__name__)
 
@@ -388,9 +388,21 @@ async def fetch_instance_process(
 
 async def fetch_run_process(
     base_url: str, run_id: str
-) -> tuple[DaemonResult, dict | None]:
-    """GET /runs/{id}/process for proof about one immutable run identity."""
-    return await _typed_get_json(f"{base_url.rstrip('/')}/runs/{run_id}/process")
+) -> tuple[DaemonResult, HostRunnerProcessStatus | None]:
+    """GET /runs/{id}/process and validate its immutable process proof."""
+    result, payload = await _typed_get_json(f"{base_url.rstrip('/')}/runs/{run_id}/process")
+    if result.kind != "CONNECTED" or payload is None:
+        return result, None
+    try:
+        return result, HostRunnerProcessStatus.model_validate(payload)
+    except ValidationError as exc:
+        return (
+            DaemonResult.incompatible_contract(
+                status=result.response_status or 200,
+                detail=str(exc),
+            ),
+            None,
+        )
 
 
 async def fetch_qc_audit_copies(base_url: str) -> tuple[DaemonResult, dict | None]:
