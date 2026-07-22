@@ -44,6 +44,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/binding-ledger/baseline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Baseline Account Binding Ledger Endpoint
+         * @description Seed the command ledger from the legacy registry to clear dirty parity.
+         *
+         *     An account whose registry rows predate the binding-command ledger stays
+         *     fail-closed on 'binding ledger parity is dirty' with no forward writer to
+         *     close the legacy-only bindings. This idempotent, non-destructive recovery
+         *     action folds the current registry into the ledger; it never removes rows and
+         *     leaves any genuine ledger-only anomaly visible.
+         */
+        post: operations["baseline_account_binding_ledger_endpoint_api_accounts__account_id__binding_ledger_baseline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/clerk": {
         parameters: {
             query?: never;
@@ -215,7 +241,12 @@ export interface paths {
         put?: never;
         /**
          * Apply Journal Cure Endpoint
-         * @description Append a claim-reducing cure only after the account Clerk is healthy.
+         * @description Append a claim-reducing cure through the host daemon's host-local Clerk RPC.
+         *
+         *     The Clerk's Unix socket lives on the host and cannot be reached from this
+         *     container across the podman VM boundary, so the cure RPC is delegated to the
+         *     daemon rather than opened here. The daemon authors the Clerk-rejection status
+         *     and reason_code, which propagate back verbatim.
          */
         post: operations["apply_journal_cure_endpoint_api_accounts__account_id__journal_cures_post"];
         delete?: never;
@@ -7588,6 +7619,30 @@ export interface components {
              * @description Underlying ticker
              */
             ticker: string;
+        };
+        /**
+         * BindingLedgerBaselineReceipt
+         * @description Result of seeding the binding-command ledger from the legacy registry.
+         *
+         *     Completes the reversible migration for an account whose registry predates
+         *     the ledger, clearing the fail-closed 'binding ledger parity is dirty'
+         *     posture. ``unresolved_ledger_only_instances`` stays non-empty only when a
+         *     genuine dual-write anomaly remains that baseline must not mask.
+         */
+        BindingLedgerBaselineReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Baselined Instances */
+            baselined_instances?: string[];
+            /** Parity Clean */
+            parity_clean: boolean;
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version?: number;
+            /** Unresolved Ledger Only Instances */
+            unresolved_ledger_only_instances?: string[];
         };
         /** Body_download_validation_report_api_dataset_validation_report_download_post */
         Body_download_validation_report_api_dataset_validation_report_download_post: {
@@ -22493,6 +22548,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountsRosterResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    baseline_account_binding_ledger_endpoint_api_accounts__account_id__binding_ledger_baseline_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BindingLedgerBaselineReceipt"];
                 };
             };
             /** @description Validation Error */
