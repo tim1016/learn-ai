@@ -21,6 +21,10 @@ from app.engine.live.account_binding_ledger import account_binding_ledger_read_e
 from app.engine.live.account_clerk_journal import inspect_account_clerk_journal
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalCorruptError
 from app.engine.live.account_identity import normalize_account_id
+from app.engine.live.account_observation_lease import (
+    account_observation_lease_gate_result,
+    assess_account_observation_lease,
+)
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
     AccountInstanceBinding,
@@ -28,10 +32,6 @@ from app.engine.live.account_registry import (
     index_account_instance_bindings,
     pending_account_binding_retirements,
     read_account_instance_registry,
-)
-from app.engine.live.account_observation_lease import (
-    account_observation_lease_gate_result,
-    assess_account_observation_lease,
 )
 from app.engine.live.account_session_policy import (
     assess_account_live_session,

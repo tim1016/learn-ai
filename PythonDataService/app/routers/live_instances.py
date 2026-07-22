@@ -27,7 +27,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
-from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
 from app.config import settings as app_settings
@@ -44,7 +43,6 @@ from app.engine.live.account_artifacts import (
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_observation_lease import (
-    account_observation_lease_gate_result,
     assess_account_observation_lease,
 )
 from app.engine.live.bot_lifecycle_state import (

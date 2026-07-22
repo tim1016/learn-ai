@@ -1597,6 +1597,17 @@
       "AccountServiceGateAuthority": {
         "description": "Exact backend-authoritative account-gate promotion state.",
         "properties": {
+          "action_authority": {
+            "enum": [
+              "account_truth",
+              "observation_lease"
+            ],
+            "title": "Action Authority",
+            "type": "string"
+          },
+          "action_gate": {
+            "$ref": "#/components/schemas/GateResult"
+          },
           "disposition": {
             "anyOf": [
               {
@@ -1616,9 +1627,6 @@
             ],
             "title": "Effective Authority",
             "type": "string"
-          },
-          "gate_result": {
-            "$ref": "#/components/schemas/GateResult"
           },
           "lease_weaker_comparison_count": {
             "minimum": 0.0,
@@ -1674,7 +1682,8 @@
           "effective_authority",
           "promotion_state",
           "reason_code",
-          "gate_result",
+          "action_authority",
+          "action_gate",
           "lease_weaker_comparison_count"
         ],
         "title": "AccountServiceGateAuthority",

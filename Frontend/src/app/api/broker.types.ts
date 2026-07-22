@@ -5738,6 +5738,12 @@ export interface components {
          * @description Exact backend-authoritative account-gate promotion state.
          */
         AccountServiceGateAuthority: {
+            /**
+             * Action Authority
+             * @enum {string}
+             */
+            action_authority: "account_truth" | "observation_lease";
+            action_gate: components["schemas"]["GateResult"];
             /** Disposition */
             disposition?: string | null;
             /**
@@ -5745,7 +5751,6 @@ export interface components {
              * @enum {string}
              */
             effective_authority: "account_truth" | "observation_lease";
-            gate_result: components["schemas"]["GateResult"];
             /** Lease Weaker Comparison Count */
             lease_weaker_comparison_count: number;
             /** Observed Session Dates */
