@@ -23,8 +23,8 @@ import inspect
 import os
 import signal
 import tempfile
-from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager, suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -55,6 +55,7 @@ from app.engine.live.account_clerk_journal import (
     _now_ms,
     account_clerk_inbox_path,
     account_clerk_journal_path,
+    read_account_clerk_durability_spine,
     read_account_clerk_inbox,
     read_account_clerk_journal,
 )
@@ -86,6 +87,11 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
 from app.engine.live.daemon_auth import CLERK_HOST_BINDING_CAPABILITY_ENV
+from app.engine.live.journal_recovery_state import (
+    JournalRecoveryStateCorruptError,
+    assess_journal_recovery_fence,
+    journal_recovery_admission_lock,
+)
 from app.engine.live.order_identity import build_bot_order_namespace, emergency_flatten_strategy_instance_id
 from app.services.bot_deletion import (
     BotDeletionCorruptError,
@@ -102,6 +108,21 @@ ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME = "clerk_authority"
 # budget expires.  A timed-out broker write is ambiguous, so its durable
 # ``broker_uncertain`` row is deliberately left for reconciliation.
 _BROKER_SUBMIT_TIMEOUT_S = 25.0
+
+
+@asynccontextmanager
+async def _journal_recovery_broker_write_lock(
+    artifacts_root: Path,
+    account_id: str,
+) -> AsyncIterator[None]:
+    """Hold recovery admission off-loop across a Clerk broker invocation."""
+
+    lock = journal_recovery_admission_lock(artifacts_root, account_id)
+    await asyncio.to_thread(lock.__enter__)
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(lock.__exit__, None, None, None)
 _RECOVERY_PERM_ID_WAIT_S = 2.0
 
 
@@ -727,6 +748,9 @@ class AccountClerk:
             raise RuntimeError("ACCOUNT_CLERK_PAPER_MODE_REQUIRED")
 
     async def _require_normal_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
+        recovery_reason = await self._journal_recovery_write_reason()
+        if recovery_reason is not None:
+            self._reject(intent, recovery_reason)
         if self._normal_submit_intake_reason is not None:
             self._reject(intent, self._normal_submit_intake_reason)
         if self.cancel_namespace_in_progress:
@@ -867,6 +891,33 @@ class AccountClerk:
             timeout=_BROKER_SUBMIT_TIMEOUT_S,
         )
 
+    async def _journal_recovery_write_reason(self) -> str | None:
+        """Return the durable account-wide broker-write fence, if any.
+
+        This is deliberately re-read at each admission boundary.  A recovery
+        can complete while this long-lived Clerk process is still serving, so
+        recording the temporary condition in normal intake would make a safe
+        re-baseline look permanently unavailable until a process restart.
+        """
+
+        try:
+            await asyncio.to_thread(
+                read_account_clerk_durability_spine,
+                self._artifacts_root,
+                self._account_id,
+            )
+        except AccountClerkJournalCorruptError:
+            return "CLERK_JOURNAL_CORRUPT"
+        try:
+            recovery_fence = await asyncio.to_thread(
+                assess_journal_recovery_fence,
+                self._artifacts_root,
+                self._account_id,
+            )
+        except JournalRecoveryStateCorruptError:
+            return "CLERK_JOURNAL_RECOVERY_STATE_CORRUPT"
+        return recovery_fence.reason_code if recovery_fence.blocks_broker_writes else None
+
     async def _run_broker_write(
         self,
         boundary: str,
@@ -874,6 +925,29 @@ class AccountClerk:
         *,
         before_broker_write: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
+        """Exclude a recovery claim from final broker-write admission onward."""
+
+        async with _journal_recovery_broker_write_lock(self._artifacts_root, self._account_id):
+            return await self._run_broker_write_under_recovery_admission(
+                boundary,
+                write,
+                before_broker_write=before_broker_write,
+            )
+
+    async def _run_broker_write_under_recovery_admission(
+        self,
+        boundary: str,
+        write: Callable[[], Any],
+        *,
+        before_broker_write: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
+        # A torn journal is a global account-write fence.  This final shared
+        # boundary covers normal placements, recovery actions, cancellations,
+        # and emergencies, so no exceptional path can reach IBKR on corrupt
+        # durable intent evidence.
+        recovery_reason = await self._journal_recovery_write_reason()
+        if recovery_reason is not None:
+            raise RuntimeError(recovery_reason)
         if self._clerk_generation is None:
             if before_broker_write is not None:
                 await before_broker_write()

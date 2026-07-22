@@ -685,6 +685,8 @@
             "enum": [
               "NORMAL",
               "CLERK_DOWN",
+              "JOURNAL_CORRUPT",
+              "JOURNAL_EVIDENCE_HOLD",
               "DAEMON_DOWN",
               "DAEMON_UNREADABLE"
             ],
@@ -1848,6 +1850,28 @@
       "AccountServiceJournalWatermark": {
         "description": "Newest durable Account Clerk journal entry, if any.",
         "properties": {
+          "corruption_detail": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Corruption Detail"
+          },
+          "integrity": {
+            "default": "healthy",
+            "enum": [
+              "healthy",
+              "corrupt",
+              "broker_evidence_only"
+            ],
+            "title": "Integrity",
+            "type": "string"
+          },
           "last_seq": {
             "anyOf": [
               {
@@ -1872,6 +1896,24 @@
               }
             ],
             "title": "Last Write Ms"
+          },
+          "recovery_phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "QUARANTINE_REQUIRED",
+                  "QUARANTINE_PENDING",
+                  "REBASELINE_REQUIRED",
+                  "REBASELINE_PENDING",
+                  "COMPLETE"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Phase"
           }
         },
         "title": "AccountServiceJournalWatermark",
@@ -19405,6 +19447,109 @@
           "idempotency_key"
         ],
         "title": "JournalCureRequest",
+        "type": "object"
+      },
+      "JournalRecoveryPosition": {
+        "description": "One broker-observed holding retained without guessed bot ownership.",
+        "properties": {
+          "signed_quantity": {
+            "title": "Signed Quantity",
+            "type": "number"
+          },
+          "symbol": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "signed_quantity"
+        ],
+        "title": "JournalRecoveryPosition",
+        "type": "object"
+      },
+      "JournalRecoveryReceipt": {
+        "description": "Durable evidence returned after one recovery step completes.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker_evidence_positions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/JournalRecoveryPosition"
+            },
+            "title": "Broker Evidence Positions",
+            "type": "array"
+          },
+          "phase": {
+            "enum": [
+              "REBASELINE_REQUIRED",
+              "COMPLETE"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "quarantined_journal_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quarantined Journal Name"
+          },
+          "receipt_id": {
+            "maxLength": 320,
+            "minLength": 1,
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "account_id",
+          "phase",
+          "recorded_at_ms"
+        ],
+        "title": "JournalRecoveryReceipt",
+        "type": "object"
+      },
+      "JournalRecoveryRequest": {
+        "description": "A typed confirmation for exactly one irreversible ceremony step.",
+        "properties": {
+          "confirmation_token": {
+            "enum": [
+              "QUARANTINE",
+              "REBASELINE"
+            ],
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation_token",
+          "idempotency_key"
+        ],
+        "title": "JournalRecoveryRequest",
         "type": "object"
       },
       "JsonValue": {},
@@ -38730,6 +38875,144 @@
           }
         },
         "summary": "Journal Cure Preview Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/journal-recovery/quarantine": {
+      "post": {
+        "description": "Permanently rename aside corrupt journal evidence after typed confirmation.",
+        "operationId": "quarantine_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_quarantine_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JournalRecoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalRecoveryReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Quarantine Account Clerk Journal Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/journal-recovery/rebaseline": {
+      "post": {
+        "description": "Seed a fresh journal from a fresh broker snapshot; never infer bot ownership.",
+        "operationId": "rebaseline_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_rebaseline_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JournalRecoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalRecoveryReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rebaseline Account Clerk Journal Endpoint",
         "tags": [
           "accounts"
         ]

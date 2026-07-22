@@ -63,6 +63,9 @@ export interface AccountServiceLease {
 export interface AccountServiceJournalWatermark {
   readonly last_seq: number | null;
   readonly last_write_ms: number | null;
+  readonly integrity?: 'healthy' | 'corrupt' | 'broker_evidence_only';
+  readonly corruption_detail?: string | null;
+  readonly recovery_phase?: 'QUARANTINE_REQUIRED' | 'QUARANTINE_PENDING' | 'REBASELINE_REQUIRED' | 'REBASELINE_PENDING' | 'COMPLETE' | null;
 }
 
 export interface AccountServiceGateResult {

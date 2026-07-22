@@ -130,6 +130,17 @@ kinds you'll care about:
   `RECONCILE_UNATTRIBUTED_BROKER_EVENT` (`account_clerk.py:413-455`).
 - **`operator_adjustment`** — an immutable **journal cure** (§6.3).
 
+#### Corrupt journal: the one operator-required exception
+
+`ACCOUNT_CLERK_JOURNAL_CORRUPT` blocks **every** Clerk broker-write boundary.
+The Account Desk is the only recovery surface: confirm `QUARANTINE` to durably
+rename the corrupt journal **and its paired crash-boundary inbox** aside forever,
+then confirm `REBASELINE` to take a fresh broker snapshot and seed a new journal.
+Neither original artifact is deleted or truncated. Every holding discovered at re-baseline is retained as
+broker-evidence-only flag-and-hold exposure; no bot namespace is guessed and
+admission remains frozen until normal reconciliation proves ownership. There
+is deliberately no terminal/filesystem procedure and no fallback broker writer.
+
 **Exposure is projected two ways from this one journal** (`journal_exposure.py`), and
 the difference matters enormously (§5.2):
 - **Per-instance / namespace fold** (`group_by="strategy_instance"`) counts only fills

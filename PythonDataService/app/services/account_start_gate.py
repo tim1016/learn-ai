@@ -12,6 +12,10 @@ from app.engine.live.account_observation_lease import (
     account_observation_lease_gate_result,
     assess_account_observation_lease,
 )
+from app.engine.live.journal_recovery_state import (
+    JournalRecoveryStateCorruptError,
+    assess_journal_recovery_fence,
+)
 from app.schemas.live_runs import GateResult
 from app.services.account_gate_promotion import (
     AccountGateAuthority,
@@ -54,6 +58,29 @@ async def ensure_account_start_gate(
     Start immediately returns to the proven Account Truth gate.  The current
     paired proof also cannot allow a first lease-weaker action.
     """
+
+    try:
+        recovery_fence = assess_journal_recovery_fence(artifacts_root, account_id)
+    except JournalRecoveryStateCorruptError as exc:
+        raise AccountStartGateError(
+            status_code=409,
+            detail={
+                "reason_code": "CLERK_JOURNAL_RECOVERY_STATE_CORRUPT",
+                "account_id": account_id,
+                "gate_id": "account.clerk_journal_recovery",
+                "operator_next_step": "ACCOUNT_DESK_JOURNAL_RECOVERY_REQUIRED",
+            },
+        ) from exc
+    if recovery_fence.blocks_broker_writes:
+        raise AccountStartGateError(
+            status_code=409,
+            detail={
+                "reason_code": recovery_fence.reason_code,
+                "account_id": account_id,
+                "gate_id": "account.clerk_journal_recovery",
+                "operator_next_step": "ACCOUNT_DESK_JOURNAL_RECOVERY_REQUIRED",
+            },
+        )
 
     initial_promotion = resolve_account_gate_authority(
         artifacts_root,

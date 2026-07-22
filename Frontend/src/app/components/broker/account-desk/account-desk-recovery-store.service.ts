@@ -14,7 +14,7 @@ import type {
   LegacyStaleClaimRetirementReceipt,
   OperatorRecoveryFlattenResponse,
 } from '../../../api/account-reconciliation.types';
-import type { AccountClerkRestoreReceipt } from '../../../api/account-cockpit.types';
+import type { AccountClerkRestoreReceipt, JournalRecoveryReceipt } from '../../../api/account-cockpit.types';
 import type { OperatorConfirmationCopy } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
 import { extractServerMessage } from '../operation-error';
@@ -32,7 +32,8 @@ export type AccountDeskRecoveryCommand =
   | 'legacy_retire'
   | 'recovery_flatten'
   | 'emergency_flatten'
-  | 'restore_clerk';
+  | 'restore_clerk'
+  | 'journal_recovery';
 
 export interface AccountDeskRecoveryConfirmation {
   readonly command: AccountDeskRecoveryCommand;
@@ -61,7 +62,8 @@ export type AccountDeskRecoverySuccess =
   | { readonly kind: 'legacy_retire'; readonly receipt: LegacyStaleClaimRetirementReceipt }
   | { readonly kind: 'recovery_flatten'; readonly receipt: OperatorRecoveryFlattenResponse }
   | { readonly kind: 'emergency_flatten'; readonly receipt: AccountEmergencyFlattenResponse }
-  | { readonly kind: 'restore_clerk'; readonly receipt: AccountClerkRestoreReceipt };
+  | { readonly kind: 'restore_clerk'; readonly receipt: AccountClerkRestoreReceipt }
+  | { readonly kind: 'journal_recovery'; readonly receipt: JournalRecoveryReceipt };
 
 /**
  * Executes only exact account-desk requests declared by backend projections.
@@ -145,14 +147,14 @@ export class AccountDeskRecoveryStore {
       this.busyState() ||
       accountId === null ||
       cockpit === null ||
-      cockpit.mode !== 'CLERK_DOWN' ||
+      (cockpit.mode !== 'CLERK_DOWN' && cockpit.mode !== 'JOURNAL_CORRUPT') ||
       event.move.action.kind !== 'confirm_in_form' ||
-      event.move.action.anchor !== 'account-clerk-restore-action' ||
+      (event.move.action.anchor !== 'account-clerk-restore-action' && event.move.action.anchor !== 'account-journal-recovery-action') ||
       confirmation === null ||
       confirmation === undefined ||
       !cockpit.blockers.some((blocker) => blocker.condition.id === event.blocker.condition.id)
     ) return;
-    this.openConfirmation(accountId, 'restore_clerk', confirmation);
+    this.openConfirmation(accountId, cockpit.mode === 'JOURNAL_CORRUPT' ? 'journal_recovery' : 'restore_clerk', confirmation);
   }
 
   requestAutomationChange(policy: AccountReconciliationAutomationPolicy): void {
@@ -315,7 +317,7 @@ export class AccountDeskRecoveryStore {
       legacyCandidate: details.legacyCandidate ?? null,
       recoveryFlatten: details.recoveryFlatten ?? null,
       emergencyOperationId: command === 'emergency_flatten' ? crypto.randomUUID() : null,
-      restoreOperationId: command === 'restore_clerk' ? crypto.randomUUID() : null,
+      restoreOperationId: (command === 'restore_clerk' || command === 'journal_recovery') ? crypto.randomUUID() : null,
     });
     this.errorMessageState.set(null);
   }
@@ -395,6 +397,19 @@ export class AccountDeskRecoveryStore {
             confirmation_token: 'RESTORE',
             idempotency_key: confirmation.restoreOperationId,
           }),
+        };
+      case 'journal_recovery':
+        if (
+          confirmation.restoreOperationId === null ||
+          (confirmation.providedToken !== 'QUARANTINE' && confirmation.providedToken !== 'REBASELINE')
+        ) throw new Error('Journal recovery confirmation is incomplete.');
+        return {
+          kind: 'journal_recovery',
+          receipt: await this.broker.recoverAccountJournal(
+            confirmation.accountId,
+            confirmation.providedToken === 'QUARANTINE' ? 'quarantine' : 'rebaseline',
+            { confirmation_token: confirmation.providedToken, idempotency_key: confirmation.restoreOperationId },
+          ),
         };
     }
   }

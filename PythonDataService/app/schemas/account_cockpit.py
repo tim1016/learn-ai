@@ -9,7 +9,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.account_directory import AccountServiceStatusResponse
 from app.schemas.operator_blocker import OperatorBlocker
 
-AccountCockpitMode = Literal["NORMAL", "CLERK_DOWN", "DAEMON_DOWN", "DAEMON_UNREADABLE"]
+AccountCockpitMode = Literal[
+    "NORMAL",
+    "CLERK_DOWN",
+    "JOURNAL_CORRUPT",
+    "JOURNAL_EVIDENCE_HOLD",
+    "DAEMON_DOWN",
+    "DAEMON_UNREADABLE",
+]
 AccountCockpitDaemonAvailability = Literal["AVAILABLE", "DOWN", "UNREADABLE"]
 
 

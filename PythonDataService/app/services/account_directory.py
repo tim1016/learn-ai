@@ -38,6 +38,10 @@ from app.engine.live.account_session_policy import (
     read_account_live_feed_evidence,
     read_account_session_policy,
 )
+from app.engine.live.journal_recovery_state import (
+    JournalRecoveryStateCorruptError,
+    assess_journal_recovery_fence,
+)
 from app.schemas.account_directory import (
     AccountEffectivePosture,
     AccountRosterRow,
@@ -133,20 +137,43 @@ class AccountDirectoryService:
         try:
             generation = read_account_clerk_generation(self._artifacts_root, account_id)
             lease = read_account_clerk_lease(self._artifacts_root, account_id)
-            journal = inspect_account_clerk_journal(self._artifacts_root, account_id)
             ledger_parity = account_binding_ledger_parity(
                 self._artifacts_root,
                 account_id=account_id,
             )
         except (
             AccountArtifactError,
-            AccountClerkJournalCorruptError,
             OSError,
             json.JSONDecodeError,
             ValidationError,
             ValueError,
         ) as exc:
             raise AccountDirectoryError(str(exc)) from exc
+        try:
+            journal = inspect_account_clerk_journal(self._artifacts_root, account_id)
+            journal_integrity = "healthy"
+            journal_corruption_detail = None
+        except AccountClerkJournalCorruptError as exc:
+            # This is a designated account state, not an unreadable directory.
+            # Keeping the rest of the Clerk projection visible is essential for
+            # the operator-only quarantine ceremony.
+            journal = []
+            journal_integrity = "corrupt"
+            journal_corruption_detail = exc.detail
+        try:
+            recovery_fence = assess_journal_recovery_fence(self._artifacts_root, account_id)
+            recovery_state = recovery_fence.state
+        except JournalRecoveryStateCorruptError as exc:
+            recovery_state = None
+            journal_integrity = "corrupt"
+            journal_corruption_detail = f"journal recovery state is corrupt: {exc.detail}"
+        else:
+            if recovery_fence.reason_code == "CLERK_JOURNAL_RECOVERY_REQUIRED":
+                journal_integrity = "corrupt"
+                journal_corruption_detail = f"operator recovery is at {recovery_state.phase}"
+            elif recovery_fence.reason_code == "CLERK_BROKER_EVIDENCE_ONLY_HOLD":
+                journal_integrity = "broker_evidence_only"
+                journal_corruption_detail = "fresh broker evidence remains unowned and held for reconciliation"
 
         try:
             now_ms = self._now_ms()
@@ -256,6 +283,9 @@ class AccountDirectoryService:
             journal=AccountServiceJournalWatermark(
                 last_seq=None if not journal else journal[-1].seq,
                 last_write_ms=None if not journal else journal[-1].recorded_at_ms,
+                integrity=journal_integrity,
+                corruption_detail=journal_corruption_detail,
+                recovery_phase=None if recovery_state is None else recovery_state.phase,
             ),
             operating_state=operating_state,
             headline=headline,

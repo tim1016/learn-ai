@@ -25,6 +25,8 @@ import type {
   AccountClerkRestoreReceipt,
   AccountClerkRestoreRequest,
   AccountCockpitResponse,
+  JournalRecoveryReceipt,
+  JournalRecoveryRequest,
 } from '../api/account-cockpit.types';
 import type { AccountEventsRequest, AccountEventsResponse } from '../api/account-events.types';
 import type {
@@ -205,6 +207,19 @@ export class BrokerService {
     return firstValueFrom(
       this.http.post<AccountClerkRestoreReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk/restore`,
+        payload,
+      ),
+    );
+  }
+
+  recoverAccountJournal(
+    accountId: string,
+    step: 'quarantine' | 'rebaseline',
+    payload: JournalRecoveryRequest,
+  ): Promise<JournalRecoveryReceipt> {
+    return firstValueFrom(
+      this.http.post<JournalRecoveryReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-recovery/${step}`,
         payload,
       ),
     );

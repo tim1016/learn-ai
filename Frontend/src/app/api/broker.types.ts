@@ -244,6 +244,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/journal-recovery/quarantine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Quarantine Account Clerk Journal Endpoint
+         * @description Permanently rename aside corrupt journal evidence after typed confirmation.
+         */
+        post: operations["quarantine_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_quarantine_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/journal-recovery/rebaseline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rebaseline Account Clerk Journal Endpoint
+         * @description Seed a fresh journal from a fresh broker snapshot; never infer bot ownership.
+         */
+        post: operations["rebaseline_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_rebaseline_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/legacy-stale-claims/candidates": {
         parameters: {
             query?: never;
@@ -5390,7 +5430,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "NORMAL" | "CLERK_DOWN" | "DAEMON_DOWN" | "DAEMON_UNREADABLE";
+            mode: "NORMAL" | "CLERK_DOWN" | "JOURNAL_CORRUPT" | "JOURNAL_EVIDENCE_HOLD" | "DAEMON_DOWN" | "DAEMON_UNREADABLE";
             /**
              * Schema Version
              * @default 1
@@ -5861,10 +5901,20 @@ export interface components {
          * @description Newest durable Account Clerk journal entry, if any.
          */
         AccountServiceJournalWatermark: {
+            /** Corruption Detail */
+            corruption_detail?: string | null;
+            /**
+             * Integrity
+             * @default healthy
+             * @enum {string}
+             */
+            integrity?: "healthy" | "corrupt" | "broker_evidence_only";
             /** Last Seq */
             last_seq?: number | null;
             /** Last Write Ms */
             last_write_ms?: number | null;
+            /** Recovery Phase */
+            recovery_phase?: ("QUARANTINE_REQUIRED" | "QUARANTINE_PENDING" | "REBASELINE_REQUIRED" | "REBASELINE_PENDING" | "COMPLETE") | null;
         };
         /**
          * AccountServiceLease
@@ -13933,6 +13983,53 @@ export interface components {
             signed_quantity: number;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * JournalRecoveryPosition
+         * @description One broker-observed holding retained without guessed bot ownership.
+         */
+        JournalRecoveryPosition: {
+            /** Signed Quantity */
+            signed_quantity: number;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * JournalRecoveryReceipt
+         * @description Durable evidence returned after one recovery step completes.
+         */
+        JournalRecoveryReceipt: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Broker Evidence Positions
+             * @default []
+             */
+            broker_evidence_positions?: components["schemas"]["JournalRecoveryPosition"][];
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "REBASELINE_REQUIRED" | "COMPLETE";
+            /** Quarantined Journal Name */
+            quarantined_journal_name?: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /**
+         * JournalRecoveryRequest
+         * @description A typed confirmation for exactly one irreversible ceremony step.
+         */
+        JournalRecoveryRequest: {
+            /**
+             * Confirmation Token
+             * @enum {string}
+             */
+            confirmation_token: "QUARANTINE" | "REBASELINE";
+            /** Idempotency Key */
+            idempotency_key: string;
         };
         JsonValue: unknown;
         /**
@@ -22759,6 +22856,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JournalCurePreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    quarantine_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_quarantine_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JournalRecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalRecoveryReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebaseline_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_rebaseline_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JournalRecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalRecoveryReceipt"];
                 };
             };
             /** @description Validation Error */

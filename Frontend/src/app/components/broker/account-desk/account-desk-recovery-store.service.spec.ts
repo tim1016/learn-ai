@@ -31,6 +31,7 @@ describe('AccountDeskRecoveryStore', () => {
     submitOperatorRecoveryFlatten: vi.fn(),
     emergencyFlattenAccount: vi.fn(),
     restoreAccountClerk: vi.fn(),
+    recoverAccountJournal: vi.fn(),
   };
   const surface = { load: vi.fn(), triage: signal<AccountTriageResponse | null>(null) };
   const events = { load: vi.fn() };
@@ -207,6 +208,33 @@ describe('AccountDeskRecoveryStore', () => {
     });
     expect(store.success()?.kind).toBe('restore_clerk');
     expect(directory.loadServiceStatus).toHaveBeenCalledWith('DU1234567');
+  });
+
+  it('executes the ordered journal ceremony only from its backend-declared card and token', async () => {
+    const cockpit = journalRecoveryCockpit();
+    directory.cockpit.set(cockpit);
+    broker.recoverAccountJournal.mockResolvedValue({
+      receipt_id: 'journal-recovery-quarantine:opaque/1', account_id: 'DU1234567', phase: 'REBASELINE_REQUIRED',
+      recorded_at_ms: 1_780_000_000_000, quarantined_journal_name: 'clerk_journal.jsonl.corrupt-opaque',
+      broker_evidence_positions: [],
+    });
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    const [blocker] = cockpit.blockers;
+    if (blocker.primary_move === null) throw new Error('Expected the backend journal recovery move.');
+
+    store.requestCockpitMove({ blocker, move: blocker.primary_move });
+    expect(store.confirmation()?.command).toBe('journal_recovery');
+    await store.confirm();
+    expect(broker.recoverAccountJournal).not.toHaveBeenCalled();
+
+    store.setConfirmationToken('QUARANTINE');
+    await store.confirm();
+
+    expect(broker.recoverAccountJournal).toHaveBeenCalledWith('DU1234567', 'quarantine', {
+      confirmation_token: 'QUARANTINE', idempotency_key: expect.any(String),
+    });
+    expect(store.success()?.kind).toBe('journal_recovery');
   });
 
   it('confirms the exact fresh journal preview, preserves its receipt, and refreshes shared proof', async () => {
@@ -393,6 +421,34 @@ function restoreCockpit(): AccountCockpitResponse {
         target: null, confirmation,
       },
       secondary_moves: [], applies_to: 'both',
+    }],
+  };
+}
+
+function journalRecoveryCockpit(): AccountCockpitResponse {
+  const clerkDown = restoreCockpit();
+  return {
+    ...clerkDown,
+    mode: 'JOURNAL_CORRUPT',
+    clerk: {
+      ...clerkDown.clerk,
+      attachment: 'ATTACHED',
+      journal: {
+        last_seq: null, last_write_ms: null, integrity: 'corrupt',
+        corruption_detail: 'invalid row at line 1', recovery_phase: 'QUARANTINE_REQUIRED',
+      },
+    },
+    blockers: [{
+      condition: { id: 'ACCOUNT_CLERK_JOURNAL_CORRUPT', severity: 'blocking', scope: 'account', evidence: {} },
+      host: 'account_desk', anchor: { kind: 'surface', subject_key: null }, audience: 'operator', disposition: 'fix_here',
+      headline: 'Account Clerk journal is corrupt — broker writes are blocked', detail: 'Backend-authored guidance.', applies_to: 'both', secondary_moves: [],
+      primary_move: {
+        label: 'Begin journal recovery ceremony', action: { kind: 'confirm_in_form', anchor: 'account-journal-recovery-action' }, target: null,
+        confirmation: {
+          title: 'Quarantine corrupt Clerk journal', body: 'Backend preview.', consequence: 'Backend consequence.',
+          confirm_label: 'Quarantine journal', required_token: 'QUARANTINE',
+        },
+      },
     }],
   };
 }

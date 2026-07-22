@@ -96,6 +96,16 @@ class AccountClerkPositionEvidence(BaseModel):
         return self
 
 
+class AccountClerkBrokerEvidenceBaseline(BaseModel):
+    """A fresh broker snapshot retained without assigning a bot owner."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: str = Field(min_length=1, max_length=64)
+    observed_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    positions: tuple[AccountClerkPositionEvidence, ...] = ()
+
+
 class AccountClerkEmergencyAuthorization(BaseModel):
     """Short-lived Clerk receipt for one explicitly confirmed account flatten."""
 
@@ -181,6 +191,7 @@ class AccountClerkJournalEntry(BaseModel):
         "reconciliation",
         "operator_adjustment",
         "emergency_operation",
+        "broker_evidence_baseline",
     ] = "recorded"
     recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
     # All intent lifecycle entries are attributed. A broker callback without a
@@ -198,6 +209,7 @@ class AccountClerkJournalEntry(BaseModel):
     broker_callback_idempotency_key: str | None = Field(default=None, min_length=1)
     operator_adjustment: AccountClerkOperatorAdjustment | None = None
     emergency_operation: AccountClerkEmergencyOperationEvent | None = None
+    broker_evidence_baseline: AccountClerkBrokerEvidenceBaseline | None = None
 
     @model_validator(mode="after")
     def validate_attribution_shape(self) -> AccountClerkJournalEntry:
@@ -219,6 +231,29 @@ class AccountClerkJournalEntry(BaseModel):
                 raise ValueError("operator adjustment is invalid on emergency_operation rows")
             return self
 
+        if self.entry_kind == "broker_evidence_baseline":
+            if self.intent is not None or self.broker_evidence_baseline is None:
+                raise ValueError("broker_evidence_baseline rows require only broker_evidence_baseline")
+            if any(
+                value is not None
+                for value in (
+                    self.order_id,
+                    self.perm_id,
+                    self.exec_id,
+                    self.broker_event,
+                    self.cancelled_order_ids,
+                    self.reconciliation_verdict,
+                    self.reconciliation_reason,
+                    self.broker_error,
+                    self.event_account_id,
+                    self.broker_callback_idempotency_key,
+                    self.operator_adjustment,
+                    self.emergency_operation,
+                )
+            ):
+                raise ValueError("other journal data is invalid on broker_evidence_baseline rows")
+            return self
+
         if self.entry_kind != "broker_event":
             if self.intent is None:
                 raise ValueError("non-broker-event journal rows require an intent")
@@ -227,6 +262,7 @@ class AccountClerkJournalEntry(BaseModel):
                 or self.broker_callback_idempotency_key is not None
                 or self.operator_adjustment is not None
                 or self.emergency_operation is not None
+                or self.broker_evidence_baseline is not None
             ):
                 raise ValueError("callback metadata is only valid on broker_event rows")
             return self
@@ -245,6 +281,8 @@ class AccountClerkJournalEntry(BaseModel):
             raise ValueError("operator adjustment is invalid on broker_event rows")
         if self.emergency_operation is not None:
             raise ValueError("emergency operation is invalid on broker_event rows")
+        if self.broker_evidence_baseline is not None:
+            raise ValueError("broker evidence baseline is invalid on broker_event rows")
         return self
 
 
@@ -354,6 +392,7 @@ def _require_entry_intent(entry: AccountClerkJournalEntry) -> AccountOwnerSubmit
 __all__ = [
     "AccountClerkBrokerAckReceipt",
     "AccountClerkBrokerEventReceipt",
+    "AccountClerkBrokerEvidenceBaseline",
     "AccountClerkCancelNamespaceReceipt",
     "AccountClerkEmergencyAuthorization",
     "AccountClerkEmergencyFlattenReceipt",

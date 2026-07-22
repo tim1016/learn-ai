@@ -21,6 +21,7 @@ from app.engine.live.account_artifacts import account_artifacts_root
 from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerAckReceipt,
     AccountClerkBrokerEventReceipt,
+    AccountClerkBrokerEvidenceBaseline,
     AccountClerkCancelNamespaceReceipt,
     AccountClerkEmergencyAuthorization,
     AccountClerkEmergencyFlattenReceipt,
@@ -37,6 +38,10 @@ from app.engine.live.account_clerk_journal_models import (
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
+from app.engine.live.journal_recovery_state import (
+    JournalRecoveryStateCorruptError,
+    assess_journal_recovery_fence,
+)
 from app.engine.live.live_state_sidecar import _file_lock
 
 ACCOUNT_CLERK_INBOX_FILENAME = "clerk_inbox.jsonl"
@@ -66,6 +71,7 @@ class AccountClerkJournal:
         self._account_id = account_id
         self._now_ms = now_ms
         self._entries: list[AccountClerkJournalEntry] | None = None
+        self._journal_identity: tuple[int, int, int, int] | None = None
         self._intents_by_order_ref: dict[str, AccountOwnerSubmitIntent] = {}
 
     @property
@@ -574,9 +580,30 @@ class AccountClerkJournal:
         inbox_path: Path,
         journal_path: Path,
     ) -> list[AccountClerkJournalEntry]:
-        """Recover once, then keep the serial journal tail in process memory."""
+        """Recover once, refreshing if the operator has replaced the ledger."""
 
-        if self._entries is None:
+        # The recovery ceremony owns its own locked reads and writes.  Every
+        # ordinary Clerk journal writer must stand down while it has claimed
+        # the artifact, rather than recreating a journal between its durable
+        # PENDING marker and the rename/baseline it protects.
+        try:
+            recovery_fence = assess_journal_recovery_fence(
+                self._artifacts_root,
+                self._account_id,
+            )
+        except JournalRecoveryStateCorruptError as exc:
+            raise AccountClerkJournalCorruptError(
+                journal_path,
+                f"journal recovery state is unreadable: {exc.detail}",
+            ) from exc
+        if recovery_fence.state is not None and recovery_fence.state.phase != "COMPLETE":
+            raise AccountClerkJournalCorruptError(
+                journal_path,
+                f"journal recovery is {recovery_fence.state.phase}",
+            )
+
+        journal_identity = _journal_file_identity(journal_path)
+        if self._entries is None or journal_identity != self._journal_identity:
             journal_entries = _read_journal_jsonl(journal_path)
             self._entries = self._replay_inbox_locked(
                 inbox_entries=_read_jsonl(inbox_path, AccountClerkInboxEntry),
@@ -585,6 +612,7 @@ class AccountClerkJournal:
             )
             _rewrite_jsonl(inbox_path, [])
             self._rebuild_attribution_from_entries(self._entries)
+            self._journal_identity = _journal_file_identity(journal_path)
         return self._entries
 
     def _rebuild_attribution_from_entries(self, entries: list[AccountClerkJournalEntry]) -> None:
@@ -600,20 +628,12 @@ class AccountClerkJournal:
         journal_entries: list[AccountClerkJournalEntry],
         journal_path: Path,
     ) -> list[AccountClerkJournalEntry]:
+        unique_inbox_entries = _validate_inbox_replayable(
+            inbox_entries,
+            journal_entries,
+            journal_path,
+        )
         journal_by_seq = {entry.seq: entry for entry in journal_entries}
-        unique_inbox_entries: list[AccountClerkInboxEntry] = []
-        inbox_by_seq: dict[int, AccountClerkInboxEntry] = {}
-        for inbox_entry in inbox_entries:
-            existing_inbox_entry = inbox_by_seq.get(inbox_entry.seq)
-            if existing_inbox_entry is None:
-                inbox_by_seq[inbox_entry.seq] = inbox_entry
-                unique_inbox_entries.append(inbox_entry)
-                continue
-            if existing_inbox_entry != inbox_entry:
-                raise AccountClerkJournalCorruptError(
-                    journal_path,
-                    f"duplicate incompatible inbox rows at seq {inbox_entry.seq}",
-                )
 
         for inbox_entry in unique_inbox_entries:
             journal_entry = journal_by_seq.get(inbox_entry.seq)
@@ -672,6 +692,87 @@ def read_account_clerk_journal(
         return _read_journal_jsonl(path)
 
 
+def read_account_clerk_durability_spine(
+    artifacts_root: Path,
+    account_id: str,
+) -> list[AccountClerkJournalEntry]:
+    """Strictly validate the paired journal/inbox durability spine."""
+
+    inbox_path = account_clerk_inbox_path(artifacts_root, account_id)
+    journal_path = account_clerk_journal_path(artifacts_root, account_id)
+    with _file_lock(journal_path):
+        return read_account_clerk_durability_spine_locked(inbox_path, journal_path)
+
+
+def read_account_clerk_journal_locked(path: Path) -> list[AccountClerkJournalEntry]:
+    """Strictly replay a journal while the caller holds its writer lock.
+
+    The corruption ceremony uses this seam so validation and the irreversible
+    rename occur under one lock; a second writer cannot repair the file in the
+    gap between deciding it is corrupt and quarantining it.
+    """
+
+    return _read_journal_jsonl(path)
+
+
+def read_account_clerk_durability_spine_locked(
+    inbox_path: Path,
+    journal_path: Path,
+) -> list[AccountClerkJournalEntry]:
+    """Strictly validate both Clerk durability artifacts under their writer lock."""
+
+    journal_entries = _read_journal_jsonl(journal_path)
+    _validate_inbox_replayable(
+        _read_jsonl(inbox_path, AccountClerkInboxEntry),
+        journal_entries,
+        journal_path,
+    )
+    return journal_entries
+
+
+def seed_account_clerk_broker_evidence_baseline(
+    artifacts_root: Path,
+    account_id: str,
+    baseline: AccountClerkBrokerEvidenceBaseline,
+) -> None:
+    """Durably seed a fresh post-quarantine journal with unowned broker facts."""
+
+    path = account_clerk_journal_path(artifacts_root, account_id)
+    with _file_lock(path):
+        seed_account_clerk_broker_evidence_baseline_locked(path, account_id, baseline)
+
+
+def seed_account_clerk_broker_evidence_baseline_locked(
+    path: Path,
+    account_id: str,
+    baseline: AccountClerkBrokerEvidenceBaseline,
+) -> None:
+    """Create or verify precisely one fresh broker-evidence baseline.
+
+    A retry after a crash may find the baseline durable before the recovery
+    state reached COMPLETE.  Accept only byte-for-contract equivalent evidence,
+    never a second snapshot or an arbitrary pre-existing journal.
+    """
+
+    if baseline.account_id != account_id:
+        raise ValueError("broker-evidence baseline account must match its journal account")
+    if path.exists() and path.read_bytes():
+        entries = _read_journal_jsonl(path)
+        if (
+            len(entries) == 1
+            and entries[0].entry_kind == "broker_evidence_baseline"
+            and entries[0].broker_evidence_baseline == baseline
+        ):
+            return
+        raise AccountClerkJournalCorruptError(path, "re-baseline requires an empty or matching fresh journal")
+    _append_jsonl(path, AccountClerkJournalEntry(
+        seq=1,
+        entry_kind="broker_evidence_baseline",
+        recorded_at_ms=baseline.observed_at_ms,
+        broker_evidence_baseline=baseline,
+    ))
+
+
 def inspect_account_clerk_journal(
     artifacts_root: Path,
     account_id: str,
@@ -683,14 +784,15 @@ def inspect_account_clerk_journal(
     never parses a partially appended JSONL row.
     """
 
-    path = account_clerk_journal_path(artifacts_root, account_id)
-    if not path.exists():
+    inbox_path = account_clerk_inbox_path(artifacts_root, account_id)
+    journal_path = account_clerk_journal_path(artifacts_root, account_id)
+    if not journal_path.exists() and not inbox_path.exists():
         return []
     # The sibling lock already exists for an established journal; taking it
     # keeps this observational projection from parsing a partially appended
     # JSONL row while still avoiding directory creation for unseen accounts.
-    with _file_lock(path):
-        return _read_journal_jsonl(path)
+    with _file_lock(journal_path):
+        return read_account_clerk_durability_spine_locked(inbox_path, journal_path)
 
 
 def recovery_operation_started_for_namespace(
@@ -756,6 +858,52 @@ def _read_journal_jsonl(path: Path) -> list[AccountClerkJournalEntry]:
             )
         expected_seq += 1
     return entries
+
+
+def _validate_inbox_replayable(
+    inbox_entries: list[AccountClerkInboxEntry],
+    journal_entries: list[AccountClerkJournalEntry],
+    journal_path: Path,
+) -> list[AccountClerkInboxEntry]:
+    """Prove that inbox rows can only replay the Clerk's next durable intents."""
+
+    unique_inbox_entries: list[AccountClerkInboxEntry] = []
+    inbox_by_seq: dict[int, AccountClerkInboxEntry] = {}
+    for inbox_entry in inbox_entries:
+        existing_inbox_entry = inbox_by_seq.get(inbox_entry.seq)
+        if existing_inbox_entry is None:
+            inbox_by_seq[inbox_entry.seq] = inbox_entry
+            unique_inbox_entries.append(inbox_entry)
+            continue
+        if existing_inbox_entry != inbox_entry:
+            raise AccountClerkJournalCorruptError(
+                journal_path,
+                f"duplicate incompatible inbox rows at seq {inbox_entry.seq}",
+            )
+
+    journal_by_seq = {entry.seq: entry for entry in journal_entries}
+    expected_seq = _next_seq(journal_entries)
+    for inbox_entry in unique_inbox_entries:
+        journal_entry = journal_by_seq.get(inbox_entry.seq)
+        if journal_entry is not None:
+            if journal_entry.intent != inbox_entry.intent:
+                raise AccountClerkJournalCorruptError(
+                    journal_path,
+                    f"inbox and journal intent differ at seq {inbox_entry.seq}",
+                )
+            continue
+        if inbox_entry.seq != expected_seq:
+            raise AccountClerkJournalCorruptError(
+                journal_path,
+                f"inbox seq {inbox_entry.seq} cannot follow journal seq {expected_seq - 1}",
+            )
+        journal_by_seq[inbox_entry.seq] = AccountClerkJournalEntry(
+            seq=inbox_entry.seq,
+            recorded_at_ms=inbox_entry.received_at_ms,
+            intent=inbox_entry.intent,
+        )
+        expected_seq += 1
+    return unique_inbox_entries
 
 
 def _append_jsonl(path: Path, entry: AccountClerkInboxEntry | AccountClerkJournalEntry) -> None:
@@ -891,6 +1039,16 @@ def _next_seq(entries: list[AccountClerkJournalEntry]) -> int:
     return entries[-1].seq + 1 if entries else 1
 
 
+def _journal_file_identity(path: Path) -> tuple[int, int, int, int] | None:
+    """Return a stable file revision so cached Clerk state cannot hide a write."""
+
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
 def _same_operator_adjustment_request(
     existing: AccountClerkOperatorAdjustment,
     received: AccountClerkOperatorAdjustment,
@@ -930,6 +1088,11 @@ __all__ = [
     "account_clerk_inbox_path",
     "account_clerk_journal_path",
     "normalize_broker_event",
+    "read_account_clerk_durability_spine",
+    "read_account_clerk_durability_spine_locked",
     "read_account_clerk_inbox",
     "read_account_clerk_journal",
+    "read_account_clerk_journal_locked",
+    "seed_account_clerk_broker_evidence_baseline",
+    "seed_account_clerk_broker_evidence_baseline_locked",
 ]

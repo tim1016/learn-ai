@@ -9,6 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from starlette.concurrency import run_in_threadpool
 
+from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr.client import BrokerError, IbkrClient, NotConnectedError, _is_paper_account, get_client
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
@@ -24,6 +25,7 @@ from app.engine.live.daemon_command_idempotency import (
     DaemonCommandIdempotencyService,
     DaemonCommandOutcome,
 )
+from app.engine.live.journal_recovery_state import JournalRecoveryStateCorruptError
 from app.routers.broker_dependencies import require_connected_client
 from app.schemas.account_cockpit import (
     AccountClerkRestoreReceipt,
@@ -57,6 +59,7 @@ from app.schemas.journal_cures import (
     OperatorRecoveryFlattenRequest,
     OperatorRecoveryFlattenResponse,
 )
+from app.schemas.journal_recovery import JournalRecoveryReceipt, JournalRecoveryRequest
 from app.schemas.live_runs import (
     AccountEmergencyFlattenDispatchRequest,
     AccountEmergencyFlattenResponse,
@@ -75,6 +78,7 @@ from app.services.account_gate_promotion import AccountGatePromotionError
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
 from app.services.journal_cures import JournalCureError, JournalCureService
+from app.services.journal_recovery import JournalRecoveryError, JournalRecoveryService
 from app.services.legacy_stale_claim_retirement import (
     LegacyStaleClaimRetirementError,
     LegacyStaleClaimRetirementService,
@@ -161,6 +165,12 @@ def get_journal_cure_service(artifacts_root: AccountArtifactsRoot) -> JournalCur
     """Build cure projection from the overridable account-artifact root."""
 
     return JournalCureService(artifacts_root=artifacts_root)
+
+
+def get_journal_recovery_service(artifacts_root: AccountArtifactsRoot) -> JournalRecoveryService:
+    """Build the sole operator-required Clerk journal recovery ceremony."""
+
+    return JournalRecoveryService(artifacts_root=artifacts_root)
 
 
 def get_account_gate_policy_service(artifacts_root: AccountArtifactsRoot) -> AccountGatePolicyService:
@@ -336,6 +346,59 @@ async def restore_account_clerk_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
     except AccountDirectoryError as exc:
         raise _account_directory_http_error(exc) from exc
+
+
+@router.post("/{account_id}/journal-recovery/quarantine", response_model=JournalRecoveryReceipt)
+async def quarantine_account_clerk_journal_endpoint(
+    account_id: str,
+    request: JournalRecoveryRequest,
+    service: Annotated[JournalRecoveryService, Depends(get_journal_recovery_service)],
+) -> JournalRecoveryReceipt:
+    """Permanently rename aside corrupt journal evidence after typed confirmation."""
+
+    if request.confirmation_token != "QUARANTINE":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": "JOURNAL_RECOVERY_QUARANTINE_CONFIRMATION_REQUIRED"})
+    try:
+        return await run_in_threadpool(
+            service.quarantine,
+            account_id=_canonical_account_id(account_id),
+            idempotency_key=request.idempotency_key,
+        )
+    except JournalRecoveryStateCorruptError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": "JOURNAL_RECOVERY_STATE_CORRUPT"}) from exc
+    except JournalRecoveryError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": str(exc)}) from exc
+
+
+@router.post("/{account_id}/journal-recovery/rebaseline", response_model=JournalRecoveryReceipt)
+async def rebaseline_account_clerk_journal_endpoint(
+    account_id: str,
+    request: JournalRecoveryRequest,
+    service: Annotated[JournalRecoveryService, Depends(get_journal_recovery_service)],
+    client: ConnectedIbkrClient,
+) -> JournalRecoveryReceipt:
+    """Seed a fresh journal from a fresh broker snapshot; never infer bot ownership."""
+
+    if request.confirmation_token != "REBASELINE":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": "JOURNAL_RECOVERY_REBASELINE_CONFIRMATION_REQUIRED"})
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        recovery_state = await run_in_threadpool(service.state, account_id=canonical_account_id)
+        snapshot = None
+        if recovery_state.phase == "REBASELINE_REQUIRED":
+            snapshot = await ibkr_account.fetch_positions(client, allow_cache_fallback=False)
+        return await run_in_threadpool(
+            service.rebaseline,
+            account_id=canonical_account_id,
+            idempotency_key=request.idempotency_key,
+            snapshot=snapshot,
+        )
+    except JournalRecoveryStateCorruptError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": "JOURNAL_RECOVERY_STATE_CORRUPT"}) from exc
+    except JournalRecoveryError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": str(exc)}) from exc
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail={"reason_code": "JOURNAL_RECOVERY_BROKER_SNAPSHOT_UNAVAILABLE", "message": str(exc)}) from exc
 
 
 class _AccountClerkRestoreUnconfirmedError(RuntimeError):

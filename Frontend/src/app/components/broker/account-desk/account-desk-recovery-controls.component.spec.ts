@@ -170,6 +170,23 @@ describe('AccountDeskRecoveryControlsComponent', () => {
       },
       values: ['intent:opaque/1', 'order-ref:opaque/1', '7', formatTimestampDisplay(1_780_000_000_000, { mode: 'local' })],
     },
+    {
+      name: 'journal recovery',
+      success: {
+        kind: 'journal_recovery',
+        receipt: {
+          receipt_id: 'journal-recovery-quarantine:opaque/1', account_id: 'DU1234567',
+          phase: 'REBASELINE_REQUIRED', recorded_at_ms: 1_780_000_000_000,
+          quarantined_journal_name: 'clerk_journal.jsonl.corrupt-opaque', broker_evidence_positions: [],
+        },
+      },
+      values: [
+        'journal-recovery-quarantine:opaque/1',
+        'clerk_journal.jsonl.corrupt-opaque',
+        'Rebaseline Required',
+        formatTimestampDisplay(1_780_000_000_000, { mode: 'local' }),
+      ],
+    },
   ])('renders every displayed field for a returned $name receipt', async ({ success, values }) => {
     await renderRecoveryReceipt(success);
 

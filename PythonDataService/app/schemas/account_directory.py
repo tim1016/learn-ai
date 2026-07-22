@@ -100,6 +100,15 @@ class AccountServiceJournalWatermark(BaseModel):
 
     last_seq: int | None = Field(default=None, ge=1)
     last_write_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    integrity: Literal["healthy", "corrupt", "broker_evidence_only"] = "healthy"
+    corruption_detail: str | None = Field(default=None, max_length=512)
+    recovery_phase: Literal[
+        "QUARANTINE_REQUIRED",
+        "QUARANTINE_PENDING",
+        "REBASELINE_REQUIRED",
+        "REBASELINE_PENDING",
+        "COMPLETE",
+    ] | None = None
 
 
 class AccountServiceGateAuthority(BaseModel):

@@ -38,6 +38,7 @@ from app.engine.live.account_clerk_journal import (
     AccountClerkJournal,
     AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
+    account_clerk_journal_path,
 )
 from app.engine.live.account_clerk_rpc import AccountClerkRpcRejectedError, AccountClerkRpcRequestIdentity
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
@@ -48,6 +49,7 @@ from app.engine.live.account_registry import (
     write_account_instance_binding,
 )
 from app.engine.live.daemon_transport import DaemonResult
+from app.engine.live.journal_recovery_state import journal_recovery_state_path
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation
@@ -55,6 +57,7 @@ from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.services.account_directory import AccountDirectoryService, CurrentBrokerAccount
 from app.services.account_event_journal import AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
+from app.services.journal_recovery import JournalRecoveryService
 from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetirementService
 from app.utils.timestamps import now_ms_utc
 
@@ -182,6 +185,81 @@ async def test_latest_reconciliation_returns_404_when_missing(tmp_path: Path) ->
         app.dependency_overrides.clear()
 
     assert response.status_code == 404
+
+
+async def test_journal_recovery_routes_require_each_typed_ceremony_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The browser can only invoke the designated quarantine/rebaseline ceremony."""
+
+    from app.main import app
+
+    journal = account_clerk_journal_path(tmp_path, "DU1234567")
+    journal.parent.mkdir(parents=True)
+    journal.write_text("not-json\n", encoding="utf-8")
+    service = JournalRecoveryService(artifacts_root=tmp_path, now_ms=lambda: 1_780_000_000_000)
+    snapshot_calls: list[bool] = []
+
+    async def fresh_snapshot(_client: object, *, allow_cache_fallback: bool) -> IbkrPositionsSnapshot:
+        snapshot_calls.append(allow_cache_fallback)
+        return _positions_snapshot()
+
+    monkeypatch.setattr(account_reconciliation.ibkr_account, "fetch_positions", fresh_snapshot)
+    app.dependency_overrides[account_reconciliation.get_journal_recovery_service] = lambda: service
+    app.dependency_overrides[account_reconciliation.require_connected_client] = lambda: object()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            rejected_quarantine = await client.post(
+                "/api/accounts/DU1234567/journal-recovery/quarantine",
+                json={"confirmation_token": "REBASELINE", "idempotency_key": "quarantine-1"},
+            )
+            quarantined = await client.post(
+                "/api/accounts/DU1234567/journal-recovery/quarantine",
+                json={"confirmation_token": "QUARANTINE", "idempotency_key": "quarantine-1"},
+            )
+            rejected_rebaseline = await client.post(
+                "/api/accounts/DU1234567/journal-recovery/rebaseline",
+                json={"confirmation_token": "QUARANTINE", "idempotency_key": "rebaseline-1"},
+            )
+            rebaselined = await client.post(
+                "/api/accounts/DU1234567/journal-recovery/rebaseline",
+                json={"confirmation_token": "REBASELINE", "idempotency_key": "rebaseline-1"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert rejected_quarantine.status_code == 409
+    assert rejected_quarantine.json()["detail"]["reason_code"] == "JOURNAL_RECOVERY_QUARANTINE_CONFIRMATION_REQUIRED"
+    assert quarantined.status_code == 200
+    assert quarantined.json()["phase"] == "REBASELINE_REQUIRED"
+    assert rejected_rebaseline.status_code == 409
+    assert rejected_rebaseline.json()["detail"]["reason_code"] == "JOURNAL_RECOVERY_REBASELINE_CONFIRMATION_REQUIRED"
+    assert rebaselined.status_code == 200
+    assert rebaselined.json()["phase"] == "COMPLETE"
+    assert snapshot_calls == [False]
+
+
+async def test_journal_recovery_route_keeps_malformed_ceremony_state_fail_closed(tmp_path: Path) -> None:
+    from app.main import app
+
+    account_id = "DU1234567"
+    state_path = journal_recovery_state_path(tmp_path, account_id)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("not-json", encoding="utf-8")
+    service = JournalRecoveryService(artifacts_root=tmp_path)
+    app.dependency_overrides[account_reconciliation.get_journal_recovery_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                f"/api/accounts/{account_id}/journal-recovery/quarantine",
+                json={"confirmation_token": "QUARANTINE", "idempotency_key": "quarantine-1"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "JOURNAL_RECOVERY_STATE_CORRUPT"
 
 
 async def test_reconciliation_bootstraps_clerk_before_refreshing_account_truth(
@@ -1403,7 +1481,13 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
             },
         },
         "lease": None,
-        "journal": {"last_seq": None, "last_write_ms": None},
+            "journal": {
+                "last_seq": None,
+                "last_write_ms": None,
+                "integrity": "healthy",
+                "corruption_detail": None,
+                "recovery_phase": None,
+            },
         "operating_state": "ATTENTION",
         "headline": "Account service needs attention",
         "detail": "Account verification cannot stay current until the account service is attached.",
@@ -1642,7 +1726,13 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
             "renewed_at_ms": 1_780_000_000_102,
             "valid_until_ms": 1_780_000_060_102,
         },
-        "journal": {"last_seq": 1, "last_write_ms": 1_780_000_000_104},
+        "journal": {
+            "last_seq": 1,
+            "last_write_ms": 1_780_000_000_104,
+            "integrity": "healthy",
+            "corruption_detail": None,
+            "recovery_phase": None,
+        },
         "operating_state": "READY",
         "headline": "Ready — 1 bot is on duty",
         "detail": "The account service is attached and continuously verifying this account.",
@@ -1778,6 +1868,49 @@ async def test_account_cockpit_projects_restore_clerk_only_when_daemon_is_availa
     assert blocker["condition"]["id"] == "DAEMON_UNREACHABLE"
     assert blocker["primary_move"]["label"] == "Open host recovery guidance"
     assert "restart" not in blocker["primary_move"]["label"].lower()
+
+
+async def test_account_cockpit_authors_the_only_journal_corruption_ceremony(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Corrupt Clerk evidence gets typed desk guidance, never a writer bypass."""
+
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    account_id = "DU1234567"
+    journal = account_clerk_journal_path(tmp_path, account_id)
+    journal.parent.mkdir(parents=True)
+    journal.write_text("not-json\n", encoding="utf-8")
+    directory = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id=account_id, is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+
+    async def daemon_is_reachable() -> tuple[DaemonResult, object]:
+        return DaemonResult.connected(), object()
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_reachable())
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: directory
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            cockpit = await client.get(f"/api/accounts/{account_id}/cockpit")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert cockpit.status_code == 200
+    assert cockpit.json()["mode"] == "JOURNAL_CORRUPT"
+    [blocker] = cockpit.json()["blockers"]
+    assert blocker["condition"]["id"] == "ACCOUNT_CLERK_JOURNAL_CORRUPT"
+    assert blocker["primary_move"]["action"] == {
+        "kind": "confirm_in_form",
+        "anchor": "account-journal-recovery-action",
+    }
+    assert blocker["primary_move"]["confirmation"]["required_token"] == "QUARANTINE"
+    assert "terminal procedure" in blocker["detail"]
+    assert "bypass" in blocker["detail"]
 
 
 async def test_restore_account_clerk_writes_a_durable_receipt_and_reobserves_generation(
