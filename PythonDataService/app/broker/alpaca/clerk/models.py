@@ -21,11 +21,19 @@ from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrde
 
 
 class ClerkEntryKind(StrEnum):
-    """Order-journal entry kinds (S1 submit + S3 cancel + S4 lifecycle)."""
+    """Order-journal entry kinds (S1 submit + S3 cancel + S4 lifecycle + S5 resolution)."""
 
     INTENT_RECORDED = "intent_recorded"
     SUBMIT_ACKED = "submit_acked"
     SUBMIT_FAILED = "submit_failed"
+    # S5 crash-safety: the submit's HTTP outcome was UNKNOWN — the response may
+    # have been lost (timeout / 5xx / network → ``BrokerUnavailable``), so the
+    # order MAY have landed. Journaled AFTER ``intent_recorded`` and resolved by
+    # querying Alpaca for the order by ``client_order_id``: found → a terminal
+    # ``submit_acked``; definitively absent (404) → a terminal ``submit_failed``;
+    # lookup itself uncertain → the intent stays here for a later replay/sweep.
+    # NEVER a fabricated terminal outcome.
+    SUBMIT_UNCERTAIN = "submit_uncertain"
     # S3 cancel path — recorded BEFORE the broker call, acked/failed after.
     CANCEL_RECORDED = "cancel_recorded"
     CANCEL_ACKED = "cancel_acked"
@@ -110,14 +118,23 @@ class OrderLegError(BaseModel):
 class OrderLegResult(BaseModel):
     """The per-leg outcome the router shapes into its response.
 
-    Exactly one of ``order`` (acked) / ``error`` (failed) is set, keyed by
-    ``status``. ``order_ref`` is always present — an operator can find the
-    intent in the journal even when the submit failed.
+    Keyed by ``status``:
+
+    - ``acked`` — the broker accepted the order; ``order`` is set.
+    - ``failed`` — the order definitively did not land; ``error`` is set.
+    - ``uncertain`` — the submit's HTTP outcome was unknown AND resolving it by
+      ``client_order_id`` was itself unreachable (S5). Neither ``order`` nor
+      ``error`` is authoritative yet; the intent is durably journaled as
+      ``submit_uncertain`` and startup replay / a later sweep will finish it. The
+      operator must not assume the order failed — it may still have landed.
+
+    ``order_ref`` is always present — an operator can find the intent in the
+    journal in every case, including uncertain.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    status: str = Field(pattern="^(acked|failed)$")
+    status: str = Field(pattern="^(acked|failed|uncertain)$")
     order_ref: str
     intent_id: str
     order: BrokerOrder | None = None

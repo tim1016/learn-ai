@@ -32,6 +32,7 @@ class _FakeAlpaca:
         self.activities_call: Any = None
         self.post_call: Any = None
         self.delete_call: Any = None
+        self.lookup_call: Any = None
 
     def get_account(self) -> dict:
         return {"account_number": "PA1", "status": "ACTIVE"}
@@ -62,6 +63,10 @@ class _FakeAlpaca:
         # Alpaca's cancel returns HTTP 204 (no body); the SDK yields ``None``.
         self.delete_call = (path, data)
         return None
+
+    def get_order_by_client_id(self, client_id: str) -> dict:
+        self.lookup_call = client_id
+        return {"id": "broker-order-1", "client_order_id": client_id, "status": "accepted"}
 
 
 def _client(fake: _FakeAlpaca) -> AlpacaTradingClient:
@@ -141,6 +146,52 @@ async def test_cancel_order_non_cancelable_maps_to_contract_error(
     with pytest.raises(BrokerRequestInvalid) as excinfo:
         await _client(fake).cancel_order("broker-order-1")
     assert "not cancelable" in excinfo.value.message
+
+
+async def test_get_order_by_client_order_id_returns_raw_payload() -> None:
+    fake = _FakeAlpaca()
+
+    payload = await _client(fake).get_order_by_client_order_id("manual/inkant/v1:abc")
+
+    assert fake.lookup_call == "manual/inkant/v1:abc"
+    assert payload == {
+        "id": "broker-order-1",
+        "client_order_id": "manual/inkant/v1:abc",
+        "status": "accepted",
+    }
+
+
+async def test_get_order_by_client_order_id_404_returns_none(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    # A definitively-absent order (404) resolves to None — never
+    # BrokerUnavailable — so the clerk can journal submit_failed.
+    fake = _FakeAlpaca()
+
+    def raise_not_found(client_id: str) -> dict:
+        raise make_api_error(404, message="order not found")
+
+    fake.get_order_by_client_id = raise_not_found  # type: ignore[method-assign]
+
+    result = await _client(fake).get_order_by_client_order_id("manual/inkant/v1:abc")
+
+    assert result is None
+
+
+async def test_get_order_by_client_order_id_5xx_maps_to_unavailable(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    # A 5xx during the lookup must stay uncertain (BrokerUnavailable), NOT be
+    # swallowed as absent — the order may still have landed.
+    fake = _FakeAlpaca()
+
+    def raise_server_error(client_id: str) -> dict:
+        raise make_api_error(503, message="upstream error")
+
+    fake.get_order_by_client_id = raise_server_error  # type: ignore[method-assign]
+
+    with pytest.raises(BrokerUnavailable):
+        await _client(fake).get_order_by_client_order_id("manual/inkant/v1:abc")
 
 
 async def test_api_error_maps_to_contract_error(make_api_error: ApiErrorFactory) -> None:

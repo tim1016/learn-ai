@@ -83,6 +83,19 @@ class BrokerTradePort(Protocol):
     422) raises a ``BrokerError`` subclass the Clerk journals as
     ``cancel_failed``. The port does not read the journal or resolve ownership —
     that is the Clerk's concern; the port only speaks to the vendor.
+
+    ``get_order_by_client_order_id`` looks an order up by the
+    ``client_order_id`` the Clerk minted (== ``order_ref``). It exists solely to
+    **resolve an uncertain submit** (S5 crash safety): when a submit's HTTP
+    outcome is unknown, the Clerk asks the vendor whether the order actually
+    landed. It lives on the *trade* port — not the read port — because it is part
+    of the write/resolution flow, and because keeping it here leaves the
+    read-only :class:`BrokerReadPort` (and its consumers, e.g. the live-lifecycle
+    stream) untouched. Returns the order when it exists, ``None`` when the vendor
+    reports it definitively absent (HTTP 404), and raises a ``BrokerError``
+    subclass on any other failure — a ``BrokerUnavailable`` from the lookup keeps
+    the outcome uncertain, so the Clerk leaves the intent unresolved rather than
+    fabricating a terminal state.
     """
 
     broker_id: str
@@ -92,3 +105,7 @@ class BrokerTradePort(Protocol):
     ) -> BrokerOrder: ...
 
     async def cancel(self, order_id: str) -> None: ...
+
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> BrokerOrder | None: ...

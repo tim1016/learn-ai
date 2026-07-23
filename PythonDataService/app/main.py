@@ -119,6 +119,7 @@ async def lifespan(app: FastAPI):
     from app.broker.alpaca.broker import AlpacaBroker
     from app.broker.alpaca.clerk import AlpacaClerk, set_alpaca_clerk
     from app.broker.alpaca.config import get_alpaca_settings
+    from app.broker.contract.errors import BrokerError as ContractBrokerError
 
     try:
         get_alpaca_settings()
@@ -138,6 +139,29 @@ async def lifespan(app: FastAPI):
     else:
         alpaca_broker = AlpacaBroker()
         alpaca_clerk = AlpacaClerk(read=alpaca_broker, trade=alpaca_broker)
+
+        # Alpaca crash-safety recovery (phase 2, S5) — replay the order journal
+        # and resolve every intent left uncertain by a timeout or a restart
+        # (``intent_recorded`` / ``submit_uncertain`` with no terminal outcome)
+        # by asking Alpaca whether the order landed, BEFORE the clerk is
+        # installed for new submits. Best-effort: a broker that is unreachable at
+        # startup leaves the intents uncertain for a later replay/sweep, but must
+        # not abort boot (no clerk means no submit, which is money-safe). A fresh
+        # install with no journal resolves nothing and returns cleanly.
+        try:
+            await alpaca_clerk.recover()
+        except ContractBrokerError as exc:
+            # The contract error (``get_account`` unreachable at boot, etc.) is
+            # distinct from the IBKR ``BrokerError`` imported at module scope —
+            # catch the Alpaca-contract type explicitly so an IBKR failure is
+            # never silently swallowed here.
+            logger.warning(
+                "Alpaca clerk startup recovery incomplete; unresolved intents "
+                "will be retried on a later sweep. Detail: %s",
+                exc,
+                exc_info=True,
+            )
+
         set_alpaca_clerk(alpaca_clerk)
         logger.info("Alpaca Clerk ready (order submission enabled).")
 

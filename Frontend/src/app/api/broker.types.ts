@@ -18050,9 +18050,18 @@ export interface components {
          * OrderLegResult
          * @description The per-leg outcome the router shapes into its response.
          *
-         *     Exactly one of ``order`` (acked) / ``error`` (failed) is set, keyed by
-         *     ``status``. ``order_ref`` is always present — an operator can find the
-         *     intent in the journal even when the submit failed.
+         *     Keyed by ``status``:
+         *
+         *     - ``acked`` — the broker accepted the order; ``order`` is set.
+         *     - ``failed`` — the order definitively did not land; ``error`` is set.
+         *     - ``uncertain`` — the submit's HTTP outcome was unknown AND resolving it by
+         *       ``client_order_id`` was itself unreachable (S5). Neither ``order`` nor
+         *       ``error`` is authoritative yet; the intent is durably journaled as
+         *       ``submit_uncertain`` and startup replay / a later sweep will finish it. The
+         *       operator must not assume the order failed — it may still have landed.
+         *
+         *     ``order_ref`` is always present — an operator can find the intent in the
+         *     journal in every case, including uncertain.
          */
         OrderLegResult: {
             error?: components["schemas"]["OrderLegError"] | null;

@@ -36,7 +36,7 @@ from requests.exceptions import RequestException
 
 from app.broker.alpaca.capture_hook import install_capture_hook
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
-from app.broker.alpaca.errors import map_api_error
+from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import BrokerAuthError, BrokerUnavailable
 
@@ -217,3 +217,35 @@ class AlpacaTradingClient:
         await self._call(
             lambda c: c.delete(f"/orders/{order_id}"), describe="order cancellation"
         )
+
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> dict[str, Any] | None:
+        """GET ``/v2/orders:by_client_order_id`` for the order we minted (S5).
+
+        The SDK's ``get_order_by_client_id(client_id=...)`` hits
+        ``GET /orders:by_client_order_id?client_order_id=...`` over the same
+        capturing session. In ``raw_data`` mode it returns the parsed order dict
+        when the order exists, and raises an ``APIError`` (HTTP 404) when it is
+        definitively absent.
+
+        Returns the raw order payload on success (the adapter maps it), or
+        ``None`` when Alpaca reports the order absent (404 — it never landed).
+        A 404 is intercepted **before** ``_call``'s taxonomy would fold it into
+        ``BrokerUnavailable``, because for resolution "definitively absent" and
+        "unreachable" are opposite outcomes: absent → the submit failed, whereas
+        unreachable must stay uncertain. Every other failure (timeout, 5xx,
+        network, other 4xx) flows through ``_call`` unchanged — so a lookup
+        timeout surfaces as ``BrokerUnavailable`` and the resolution stays
+        uncertain.
+        """
+
+        def _get(client: Any) -> dict[str, Any] | None:
+            try:
+                return client.get_order_by_client_id(client_id=client_order_id)
+            except APIError as exc:
+                if status_of(exc) == 404:
+                    return None
+                raise
+
+        return await self._call(_get, describe="order lookup by client_order_id")

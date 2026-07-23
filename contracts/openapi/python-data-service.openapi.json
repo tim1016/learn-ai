@@ -28540,7 +28540,7 @@
       },
       "OrderLegResult": {
         "additionalProperties": false,
-        "description": "The per-leg outcome the router shapes into its response.\n\nExactly one of ``order`` (acked) / ``error`` (failed) is set, keyed by\n``status``. ``order_ref`` is always present \u2014 an operator can find the\nintent in the journal even when the submit failed.",
+        "description": "The per-leg outcome the router shapes into its response.\n\nKeyed by ``status``:\n\n- ``acked`` \u2014 the broker accepted the order; ``order`` is set.\n- ``failed`` \u2014 the order definitively did not land; ``error`` is set.\n- ``uncertain`` \u2014 the submit's HTTP outcome was unknown AND resolving it by\n  ``client_order_id`` was itself unreachable (S5). Neither ``order`` nor\n  ``error`` is authoritative yet; the intent is durably journaled as\n  ``submit_uncertain`` and startup replay / a later sweep will finish it. The\n  operator must not assume the order failed \u2014 it may still have landed.\n\n``order_ref`` is always present \u2014 an operator can find the intent in the\njournal in every case, including uncertain.",
         "properties": {
           "error": {
             "anyOf": [
@@ -28571,7 +28571,7 @@
             "type": "string"
           },
           "status": {
-            "pattern": "^(acked|failed)$",
+            "pattern": "^(acked|failed|uncertain)$",
             "title": "Status",
             "type": "string"
           }

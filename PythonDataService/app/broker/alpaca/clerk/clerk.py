@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -35,7 +36,7 @@ from app.broker.alpaca.clerk.models import (
     OrderSubmitResult,
 )
 from app.broker.alpaca.config import BROKER_ID
-from app.broker.contract.errors import BrokerError
+from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderEvent,
@@ -53,10 +54,20 @@ from app.engine.live.order_identity import (
 
 logger = logging.getLogger(__name__)
 
+# An injected clock: the current instant as ``int64`` ms UTC. Defaults to the
+# ingestion-boundary wall clock; tests inject a fixed clock (mirrors the S4
+# ``TradeUpdatesConsumer`` seam) so journaled timestamps are deterministic.
+type Clock = Callable[[], int]
+
 
 def _now_ms() -> int:
     """Current instant as ``int64`` ms UTC (ingestion boundary)."""
     return int(datetime.now(UTC).timestamp() * 1000)
+
+
+def _leg_error(exc: BrokerError) -> OrderLegError:
+    """Adapt a broker exception to the clerk's typed *what/why* leg error."""
+    return OrderLegError(message=exc.message, why=exc.detail)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,15 +84,23 @@ class _LegIdentity:
     intent_id: str
     order_ref: str
     leg: BrokerOrderLeg
+    clock: Clock
 
     def entry(
         self,
         kind: ClerkEntryKind,
         *,
         order: BrokerOrder | None = None,
-        error: BrokerError | None = None,
+        error: OrderLegError | None = None,
     ) -> OrderJournalEntry:
-        """A journal entry for this identity, stamped with ``kind`` and outcome."""
+        """A journal entry for this identity, stamped with ``kind`` and outcome.
+
+        ``error`` is the clerk's own typed *what/why* — a broker exception is
+        adapted with :func:`_leg_error` at the call site, and a resolution
+        synthesises its own. Keeping the one error shape lets every terminal /
+        uncertain line reuse this single builder instead of re-listing the six
+        identity fields.
+        """
         return OrderJournalEntry(
             kind=kind,
             account_id=self.account_id,
@@ -90,10 +109,29 @@ class _LegIdentity:
             order_ref=self.order_ref,
             client_order_id=self.order_ref,
             leg=self.leg,
-            recorded_at_ms=_now_ms(),
+            recorded_at_ms=self.clock(),
             order=order,
             error_message=error.message if error is not None else None,
-            error_detail=error.detail if error is not None else None,
+            error_detail=error.why if error is not None else None,
+        )
+
+    @classmethod
+    def from_entry(cls, entry: OrderJournalEntry, *, clock: Clock) -> _LegIdentity:
+        """Rebuild the identity from the owning ``intent_recorded`` line (S5).
+
+        Resolution reuses the durable identity the submit minted — never
+        fabricates one. Requires a leg: every submit-side line carries one, and
+        the resolver only calls this on entries whose leg is present.
+        """
+        if entry.leg is None:
+            raise ValueError(f"intent entry {entry.order_ref!r} has no leg to resolve")
+        return cls(
+            account_id=entry.account_id,
+            operator=entry.operator,
+            intent_id=entry.intent_id,
+            order_ref=entry.order_ref,
+            leg=entry.leg,
+            clock=clock,
         )
 
 
@@ -112,9 +150,11 @@ class AlpacaClerk:
         *,
         read: BrokerReadPort,
         trade: BrokerTradePort,
+        clock: Clock = _now_ms,
     ) -> None:
         self._read = read
         self._trade = trade
+        self._clock = clock
         self._intake_lock = asyncio.Lock()
         self._account_id: str | None = None
         self._journal: OrderJournal | None = None
@@ -188,7 +228,7 @@ class AlpacaClerk:
                     leg=owning.leg if owning is not None else None,
                     broker_order_id=order_id,
                     owned=owned,
-                    recorded_at_ms=_now_ms(),
+                    recorded_at_ms=self._clock(),
                     error_message=error.message if error is not None else None,
                     error_detail=error.detail if error is not None else None,
                 )
@@ -277,7 +317,7 @@ class AlpacaClerk:
                     leg=owning.leg if owning is not None else None,
                     broker_order_id=order.order_id if order is not None else None,
                     owned=owned,
-                    recorded_at_ms=_now_ms(),
+                    recorded_at_ms=self._clock(),
                     order=order,
                     event=event,
                     event_key=event_key,
@@ -396,26 +436,242 @@ class AlpacaClerk:
                     why=str(exc),
                 ),
             )
-        identity = _LegIdentity(account_id, operator, intent_id, order_ref, leg)
+        identity = _LegIdentity(
+            account_id, operator, intent_id, order_ref, leg, self._clock
+        )
 
         # No journal → no order: record + fsync the intent BEFORE the broker call.
         journal.append(identity.entry(ClerkEntryKind.INTENT_RECORDED))
 
         try:
             order = await self._trade.submit(leg, client_order_id=order_ref)
+        except BrokerUnavailable as exc:
+            # S5 UNCERTAIN: the response may have been lost (timeout / 5xx /
+            # network), so the order MAY have landed. The intent is already
+            # durable; journal the uncertainty, then resolve by asking the vendor
+            # whether the order actually exists. A resolution that is itself
+            # uncertain leaves the intent at ``submit_uncertain`` for startup
+            # replay / a later sweep to finish — never a fabricated terminal.
+            journal.append(
+                identity.entry(ClerkEntryKind.SUBMIT_UNCERTAIN, error=_leg_error(exc))
+            )
+            logger.warning(
+                "alpaca clerk submit outcome uncertain; resolving by client_order_id",
+                extra={
+                    "action": "submit_uncertain",
+                    "account_id": account_id,
+                    "order_ref": order_ref,
+                    "symbol": leg.symbol,
+                    "why": exc.detail,
+                },
+            )
+            return await self._resolve_intent(identity, journal)
         except BrokerError as exc:
-            journal.append(identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=exc))
+            # Every other BrokerError (invalid 4xx, rejected 409, auth, rate
+            # limit) is a DEFINITIVE failure — the order did not land.
+            failure = _leg_error(exc)
+            journal.append(identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=failure))
             return OrderLegResult(
                 status="failed",
                 order_ref=order_ref,
                 intent_id=intent_id,
-                error=OrderLegError(message=exc.message, why=exc.detail),
+                error=failure,
             )
 
         journal.append(identity.entry(ClerkEntryKind.SUBMIT_ACKED, order=order))
         return OrderLegResult(
             status="acked", order_ref=order_ref, intent_id=intent_id, order=order
         )
+
+    # ── S5 uncertain-submit resolution + startup replay ──────────────────────
+
+    async def recover(self) -> None:
+        """Replay the journal and resolve every unfinished intent (S5).
+
+        Called on startup BEFORE the platform accepts new submits: an intent left
+        at ``intent_recorded`` or ``submit_uncertain`` (a crash between the
+        durable intent and its terminal outcome) is finished by the same
+        ``client_order_id`` resolution the write path uses. Idempotent — safe to
+        call repeatedly; an already-terminal intent is a NO-OP.
+
+        A fresh install (no journal yet) resolves nothing and returns cleanly.
+        Each unresolved intent is resolved independently; one leg that stays
+        uncertain (the lookup is itself unreachable) does not block the others,
+        and is left for a later replay / sweep.
+        """
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            unresolved = self._unresolved_intents(journal)
+            if not unresolved:
+                logger.info(
+                    "alpaca clerk recovery: no unresolved intents",
+                    extra={"action": "recover", "account_id": account_id},
+                )
+                return
+            logger.info(
+                "alpaca clerk recovery: resolving unresolved intents",
+                extra={
+                    "action": "recover",
+                    "account_id": account_id,
+                    "count": len(unresolved),
+                },
+            )
+            for intent_entry in unresolved:
+                identity = _LegIdentity.from_entry(intent_entry, clock=self._clock)
+                await self._resolve_intent(identity, journal)
+
+    async def _resolve_intent(
+        self, identity: _LegIdentity, journal: OrderJournal
+    ) -> OrderLegResult:
+        """Resolve one intent by ``client_order_id``; idempotent, last-write-wins.
+
+        Callers already hold the intake lock (the ``submit`` path and ``recover``
+        both wrap this). Idempotency: if a terminal ``submit_acked`` /
+        ``submit_failed`` already exists for this ``order_ref``, this is a NO-OP —
+        it re-derives and returns the existing outcome without a second write, so
+        running it twice never double-writes a terminal entry or double-counts.
+
+        Otherwise it asks the vendor whether the order landed:
+
+        - found → append ``submit_acked`` (carry the vendor ``BrokerOrder``),
+        - ``None`` (404 absent) → append ``submit_failed`` (it never landed),
+        - lookup ``BrokerUnavailable`` → leave ``submit_uncertain``, no terminal
+          write, return an ``uncertain`` result. Never fabricate a terminal.
+        """
+        existing = self._terminal_outcome(identity.order_ref, journal)
+        if existing is not None:
+            return existing
+
+        try:
+            order = await self._trade.get_order_by_client_order_id(identity.order_ref)
+        except BrokerUnavailable as exc:
+            logger.warning(
+                "alpaca clerk resolution still uncertain; leaving intent for replay",
+                extra={
+                    "action": "resolve_uncertain",
+                    "account_id": identity.account_id,
+                    "order_ref": identity.order_ref,
+                    "why": exc.detail,
+                },
+            )
+            return OrderLegResult(
+                status="uncertain",
+                order_ref=identity.order_ref,
+                intent_id=identity.intent_id,
+                error=OrderLegError(
+                    message="The order's outcome is not yet known.",
+                    why=exc.detail,
+                ),
+            )
+
+        if order is None:
+            failure = OrderLegError(
+                message="The order did not reach the broker.",
+                why="Alpaca has no order for this client_order_id (definitively absent).",
+            )
+            journal.append(identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=failure))
+            logger.info(
+                "alpaca clerk resolved uncertain submit: order absent (failed)",
+                extra={
+                    "action": "resolve_failed",
+                    "account_id": identity.account_id,
+                    "order_ref": identity.order_ref,
+                },
+            )
+            return OrderLegResult(
+                status="failed",
+                order_ref=identity.order_ref,
+                intent_id=identity.intent_id,
+                error=failure,
+            )
+
+        journal.append(identity.entry(ClerkEntryKind.SUBMIT_ACKED, order=order))
+        logger.info(
+            "alpaca clerk resolved uncertain submit: order found (acked)",
+            extra={
+                "action": "resolve_acked",
+                "account_id": identity.account_id,
+                "order_ref": identity.order_ref,
+                "broker_order_id": order.order_id,
+            },
+        )
+        return OrderLegResult(
+            status="acked",
+            order_ref=identity.order_ref,
+            intent_id=identity.intent_id,
+            order=order,
+        )
+
+    @staticmethod
+    def _terminal_outcome(
+        order_ref: str, journal: OrderJournal
+    ) -> OrderLegResult | None:
+        """The existing terminal outcome for ``order_ref``, or ``None``.
+
+        Scans the ledger for the most recent ``submit_acked`` / ``submit_failed``
+        line whose ``order_ref`` matches (last-write-wins, consistent with the
+        rest of the Clerk). Returns the reconstructed result so resolution is
+        idempotent — a second resolve of an already-finished intent re-derives
+        the same outcome without a second journal write.
+        """
+        terminal: OrderJournalEntry | None = None
+        for entry in journal.read_entries():
+            if (
+                entry.kind
+                in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED)
+                and entry.order_ref == order_ref
+            ):
+                terminal = entry
+        if terminal is None:
+            return None
+        if terminal.kind is ClerkEntryKind.SUBMIT_ACKED:
+            return OrderLegResult(
+                status="acked",
+                order_ref=terminal.order_ref,
+                intent_id=terminal.intent_id,
+                order=terminal.order,
+            )
+        return OrderLegResult(
+            status="failed",
+            order_ref=terminal.order_ref,
+            intent_id=terminal.intent_id,
+            error=OrderLegError(
+                message=terminal.error_message or "The order did not reach the broker.",
+                why=terminal.error_detail,
+            ),
+        )
+
+    @staticmethod
+    def _unresolved_intents(journal: OrderJournal) -> list[OrderJournalEntry]:
+        """Every intent whose latest submit-side state is not terminal.
+
+        Groups submit-side lines by ``order_ref``; an intent is unresolved when
+        it reached ``intent_recorded`` or ``submit_uncertain`` but never a
+        terminal ``submit_acked`` / ``submit_failed``. Returns the owning
+        ``intent_recorded`` entry (the durable identity source) for each, in
+        first-seen order. Cancel and lifecycle lines are ignored — they are not
+        submit-side transitions.
+        """
+        origin: dict[str, OrderJournalEntry] = {}
+        terminal_refs: set[str] = set()
+        order: list[str] = []
+        for entry in journal.read_entries():
+            if not entry.order_ref:
+                continue
+            if entry.kind is ClerkEntryKind.INTENT_RECORDED:
+                if entry.order_ref not in origin:
+                    origin[entry.order_ref] = entry
+                    order.append(entry.order_ref)
+            elif entry.kind in (
+                ClerkEntryKind.SUBMIT_ACKED,
+                ClerkEntryKind.SUBMIT_FAILED,
+            ):
+                terminal_refs.add(entry.order_ref)
+        return [
+            origin[ref]
+            for ref in order
+            if ref not in terminal_refs and origin[ref].leg is not None
+        ]
 
 
 _clerk: AlpacaClerk | None = None

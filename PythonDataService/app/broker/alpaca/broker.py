@@ -130,6 +130,25 @@ class AlpacaBroker:
         """
         await self._client.cancel_order(order_id)
 
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> BrokerOrder | None:
+        """Look an order up by the ``client_order_id`` the Clerk minted (S5).
+
+        Resolves an uncertain submit: the Clerk asks whether the order it may
+        have sent actually landed. Delegates to the SDK client's
+        ``GET /v2/orders:by_client_order_id`` and maps the raw payload to a
+        ``BrokerOrder`` when found. Returns ``None`` when Alpaca reports the
+        order definitively absent (HTTP 404 — it never landed); a
+        ``BrokerUnavailable`` from the client (timeout / 5xx / network) keeps the
+        outcome uncertain and propagates so the Clerk leaves the intent
+        unresolved rather than fabricating a terminal state.
+        """
+        payload = await self._client.get_order_by_client_order_id(client_order_id)
+        if payload is None:
+            return None
+        return adapter.from_alpaca_order(payload)
+
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:
     """Register the phase-1 brokers (Alpaca only) into the registry."""
