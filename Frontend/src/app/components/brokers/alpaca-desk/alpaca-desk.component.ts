@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { TagModule } from 'primeng/tag';
 
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
+import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { AlpacaOrdersTableComponent } from './alpaca-orders-table.component';
 import { AlpacaPositionsTableComponent } from './alpaca-positions-table.component';
@@ -16,6 +17,7 @@ import { AlpacaPositionsTableComponent } from './alpaca-positions-table.componen
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaAccountCardComponent,
+    AlpacaHoldBannerComponent,
     AlpacaPositionsTableComponent,
     AlpacaOrdersTableComponent,
     AlpacaOrderEntryComponent,

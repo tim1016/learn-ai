@@ -10146,6 +10146,71 @@
         "title": "ChartSnapshotRun",
         "type": "object"
       },
+      "ClearHoldRequest": {
+        "additionalProperties": false,
+        "description": "Operator's clear-hold request body (phase-2 S6).\n\n``operator`` attributes the HOLD_CLEARED line (who lifted the hold);\n``reason`` is the operator's what/why the ledger records. Both are optional \u2014\na clear with no attribution still lifts the hold, journaled with defaults.",
+        "properties": {
+          "operator": {
+            "default": "operator",
+            "maxLength": 64,
+            "title": "Operator",
+            "type": "string"
+          },
+          "reason": {
+            "default": "Operator cleared the exposure hold.",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "ClearHoldRequest",
+        "type": "object"
+      },
+      "ClerkStatus": {
+        "additionalProperties": false,
+        "description": "The clerk's observable state for the operator status surface (S6).\n\nComposes the exposure hold, the latest reconciliation verdict, and the count\nof outstanding (unresolved) intents (the S5 unfinished set) \u2014 everything the\ndesk needs to render the hold banner and a health line.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "hold": {
+            "$ref": "#/components/schemas/HoldState"
+          },
+          "latest_reconciliation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReconciliationSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "outstanding_intents": {
+            "title": "Outstanding Intents",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "hold",
+          "outstanding_intents",
+          "observed_at_ms"
+        ],
+        "title": "ClerkStatus",
+        "type": "object"
+      },
       "CloseAllAction": {
         "additionalProperties": false,
         "properties": {
@@ -15399,6 +15464,54 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HoldState": {
+        "additionalProperties": false,
+        "description": "The account-level exposure-hold state, journal-derived (S6).\n\nA hold is active when a ``HOLD_SET`` or ``UNEXPLAINED_ORDER`` line has no\nlater ``HOLD_CLEARED``. The latter keeps a crash between the observation and\nits companion HOLD_SET receipt fail-closed. ``reason_code`` is code-like\n(rendered through ``receiptLabel`` on the UI); ``reason`` is backend-authored\nwhat/why prose (rendered unpiped). When not held, every field but ``active``\nis ``None``.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "since_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since Ms"
+          }
+        },
+        "required": [
+          "active"
+        ],
+        "title": "HoldState",
         "type": "object"
       },
       "HorizonICResult": {
@@ -30052,6 +30165,32 @@
         "title": "ReconcileSummary",
         "type": "object"
       },
+      "ReconciliationSummary": {
+        "additionalProperties": false,
+        "description": "The latest reconciliation-sweep result (S6), or ``None`` if never run.",
+        "properties": {
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "verdict": {
+            "enum": [
+              "clean",
+              "unexplained_order",
+              "missing_intent",
+              "stale"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "recorded_at_ms"
+        ],
+        "title": "ReconciliationSummary",
+        "type": "object"
+      },
       "RecordedSnapshotItem": {
         "properties": {
           "dividend_source": {
@@ -43549,6 +43688,134 @@
           }
         },
         "summary": "List Assets",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerk/clear-hold": {
+      "post": {
+        "description": "Clear the account exposure hold (operator exit); return the updated status.\n\nA control mutation (the control secret gates it). Transport only: resolve the\nClerk and delegate. The Clerk journals HOLD_CLEARED (idempotent \u2014 a clear\nagainst no active hold is a benign NO-OP) and returns the post-clear status so\nthe desk re-renders in one round-trip.",
+        "operationId": "clear_clerk_hold_api_brokers__broker__clerk_clear_hold_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClearHoldRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Clerk Hold",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerk/status": {
+      "get": {
+        "description": "Report the clerk's exposure hold, latest reconciliation, and outstanding intents.\n\nA protected read (the always-on data-plane secret gates the whole router).\nTransport only: resolve the account-scoped Clerk facade and delegate \u2014 the\nClerk owns the journal-derived hold + verdict + outstanding-intent state.",
+        "operationId": "get_clerk_status_api_brokers__broker__clerk_status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clerk Status",
         "tags": [
           "brokers-v2"
         ]

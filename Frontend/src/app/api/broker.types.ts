@@ -1396,6 +1396,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerk/clear-hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clear Clerk Hold
+         * @description Clear the account exposure hold (operator exit); return the updated status.
+         *
+         *     A control mutation (the control secret gates it). Transport only: resolve the
+         *     Clerk and delegate. The Clerk journals HOLD_CLEARED (idempotent — a clear
+         *     against no active hold is a benign NO-OP) and returns the post-clear status so
+         *     the desk re-renders in one round-trip.
+         */
+        post: operations["clear_clerk_hold_api_brokers__broker__clerk_clear_hold_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerk/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Clerk Status
+         * @description Report the clerk's exposure hold, latest reconciliation, and outstanding intents.
+         *
+         *     A protected read (the always-on data-plane secret gates the whole router).
+         *     Transport only: resolve the account-scoped Clerk facade and delegate — the
+         *     Clerk owns the journal-derived hold + verdict + outstanding-intent state.
+         */
+        get: operations["get_clerk_status_api_brokers__broker__clerk_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clock": {
         parameters: {
             query?: never;
@@ -9638,6 +9687,46 @@ export interface components {
             /** Trades */
             trades?: Record<string, never>[];
         };
+        /**
+         * ClearHoldRequest
+         * @description Operator's clear-hold request body (phase-2 S6).
+         *
+         *     ``operator`` attributes the HOLD_CLEARED line (who lifted the hold);
+         *     ``reason`` is the operator's what/why the ledger records. Both are optional —
+         *     a clear with no attribution still lifts the hold, journaled with defaults.
+         */
+        ClearHoldRequest: {
+            /**
+             * Operator
+             * @default operator
+             */
+            operator?: string;
+            /**
+             * Reason
+             * @default Operator cleared the exposure hold.
+             */
+            reason?: string;
+        };
+        /**
+         * ClerkStatus
+         * @description The clerk's observable state for the operator status surface (S6).
+         *
+         *     Composes the exposure hold, the latest reconciliation verdict, and the count
+         *     of outstanding (unresolved) intents (the S5 unfinished set) — everything the
+         *     desk needs to render the hold banner and a health line.
+         */
+        ClerkStatus: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            hold: components["schemas"]["HoldState"];
+            latest_reconciliation?: components["schemas"]["ReconciliationSummary"] | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Outstanding Intents */
+            outstanding_intents: number;
+        };
         /** CloseAllAction */
         CloseAllAction: {
             /**
@@ -12290,6 +12379,27 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HoldState
+         * @description The account-level exposure-hold state, journal-derived (S6).
+         *
+         *     A hold is active when a ``HOLD_SET`` or ``UNEXPLAINED_ORDER`` line has no
+         *     later ``HOLD_CLEARED``. The latter keeps a crash between the observation and
+         *     its companion HOLD_SET receipt fail-closed. ``reason_code`` is code-like
+         *     (rendered through ``receiptLabel`` on the UI); ``reason`` is backend-authored
+         *     what/why prose (rendered unpiped). When not held, every field but ``active``
+         *     is ``None``.
+         */
+        HoldState: {
+            /** Active */
+            active: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Since Ms */
+            since_ms?: number | null;
         };
         /**
          * HorizonICResult
@@ -18072,8 +18182,11 @@ export interface components {
             order?: components["schemas"]["BrokerOrder"] | null;
             /** Order Ref */
             order_ref: string;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "acked" | "failed" | "uncertain";
         };
         /**
          * OrderSide
@@ -18763,6 +18876,19 @@ export interface components {
             latest_receipt_name?: string | null;
             /** Latest Receipt Url */
             latest_receipt_url?: string | null;
+        };
+        /**
+         * ReconciliationSummary
+         * @description The latest reconciliation-sweep result (S6), or ``None`` if never run.
+         */
+        ReconciliationSummary: {
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "clean" | "unexplained_order" | "missing_intent" | "stale";
         };
         /** RecordedSnapshotItem */
         RecordedSnapshotItem: {
@@ -25340,6 +25466,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerAsset"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_clerk_hold_api_brokers__broker__clerk_clear_hold_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClearHoldRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clerk_status_api_brokers__broker__clerk_status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkStatus"];
                 };
             };
             /** @description Validation Error */

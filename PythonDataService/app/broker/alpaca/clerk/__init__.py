@@ -25,22 +25,38 @@ from app.broker.alpaca.clerk.clerk import (
 )
 from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
+    ClerkStatus,
+    HoldState,
     OrderCancelResult,
     OrderJournalEntry,
     OrderLegError,
     OrderLegResult,
     OrderSubmitResult,
+    ReconciliationSummary,
+)
+from app.broker.alpaca.clerk.sweep import (
+    ReconciliationSweep,
+    get_reconciliation_sweep,
+    reset_reconciliation_sweep_for_testing,
+    set_reconciliation_sweep,
 )
 
 __all__ = [
     "AlpacaClerk",
     "ClerkEntryKind",
+    "ClerkStatus",
+    "HoldState",
     "OrderCancelResult",
     "OrderJournalEntry",
     "OrderLegError",
     "OrderLegResult",
     "OrderSubmitResult",
+    "ReconciliationSummary",
+    "ReconciliationSweep",
     "get_alpaca_clerk",
+    "get_reconciliation_sweep",
     "reset_alpaca_clerk_for_testing",
+    "reset_reconciliation_sweep_for_testing",
     "set_alpaca_clerk",
+    "set_reconciliation_sweep",
 ]
