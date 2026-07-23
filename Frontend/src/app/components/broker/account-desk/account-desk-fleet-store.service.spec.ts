@@ -7,7 +7,7 @@ import { LiveRunsService } from '../../../services/live-runs.service';
 import { AccountDeskFleetStore } from './account-desk-fleet-store.service';
 
 describe('AccountDeskFleetStore', () => {
-  const liveRuns = { getAccountSummary: vi.fn<() => Promise<FleetAccountSummary>>() };
+  const liveRuns = { getAccountSummary: vi.fn<(accountId: string) => Promise<FleetAccountSummary>>() };
 
   beforeEach(() => {
     liveRuns.getAccountSummary.mockReset();
@@ -32,6 +32,7 @@ describe('AccountDeskFleetStore', () => {
     expect(store.summary()?.account_id).toBe('DU1234567');
     expect(store.showingStaleLastGood()).toBe(true);
     expect(store.lastGoodAtMs()).not.toBeNull();
+    expect(liveRuns.getAccountSummary).toHaveBeenCalledWith('DU1234567');
   });
 
   it('rejects a fleet response for a different account rather than reusing it', async () => {

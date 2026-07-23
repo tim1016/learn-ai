@@ -454,9 +454,11 @@ export class LiveRunsService {
    * contamination).  The new cockpit (PRD #617) reads this; the legacy
    * `/account` endpoint stays for back-compat callers.
    */
-  getAccountSummary(): Promise<FleetAccountSummary> {
+  getAccountSummary(accountId: string): Promise<FleetAccountSummary> {
     return firstValueFrom(
-      this.http.get<FleetAccountSummary>(`${this.instancesBase}/account-summary`),
+      this.http.get<FleetAccountSummary>(`${this.instancesBase}/account-summary`, {
+        params: { account_id: accountId },
+      }),
     );
   }
 

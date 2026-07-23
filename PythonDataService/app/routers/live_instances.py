@@ -72,9 +72,6 @@ from app.engine.live.engine_runtime import (
     EngineRuntimeSnapshot,
     read_engine_runtime_snapshot,
 )
-from app.engine.live.fleet import (
-    compute_fleet_account_summary,
-)
 from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
@@ -261,9 +258,6 @@ from app.services.deploy_admission import (
     SymbolResolution,
     evaluate_deploy_start_admission,
     resolve_symbol_from_ledger,
-)
-from app.services.fleet_contamination import (
-    collect_fleet_position_explanations,
 )
 from app.services.fleet_contamination import (
     fetch_net_positions as _fetch_net_positions,
@@ -3984,32 +3978,31 @@ async def get_account_fleet() -> FleetContamination:
 
 
 @router.get("/account-summary", response_model=FleetAccountSummary)
-async def get_account_summary() -> FleetAccountSummary:
-    """PRD #616 — server-authored account row.
+async def get_account_summary(
+    account_id: Annotated[str, Query(min_length=1, max_length=64)],
+) -> FleetAccountSummary:
+    """Return server-authored fleet evidence scoped to one account.
 
     Composes position contamination with account-identity verification
-    so the cockpit renders the account block from one DTO.  Account
+    so the cockpit renders the account block from one DTO. Account
     identity is separate from contamination: a CONFLICTING identity
     does not imply contamination, and vice versa.
     """
+    try:
+        normalized_account_id = normalize_account_id(account_id)
+    except InvalidAccountIdError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    account_ids: dict[str, str | None] = {}
-    for sid in _scan_runs_by_instance(root):
-        account_ids[sid] = _instance_ledger_account_id(root, sid)
-    net = await _fetch_net_positions()
     data_plane_snapshot = snapshot_data_plane_broker()
     broker_account, broker_known = await _fetch_broker_connected_account(data_plane_snapshot)
-    payload = compute_fleet_account_summary(
-        net_positions=net,
-        explained_by_instance=collect_fleet_position_explanations(root),
-        instance_account_ids=account_ids,
+    return await fleet_contamination_service.compute_scoped_fleet_account_summary(
+        root,
+        account_id=normalized_account_id,
+        fetch_positions=_fetch_net_positions,
         broker_connected_account=broker_account,
         broker_account_known=broker_known,
-        policy_blocks_starts=True,
     )
-    payload["contamination"] = FleetContamination(**payload["contamination"])
-    return FleetAccountSummary(**payload)
 
 
 def _surface_snapshot_unavailable(strategy_instance_id: str) -> HTTPException:

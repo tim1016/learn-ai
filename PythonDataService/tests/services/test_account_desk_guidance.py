@@ -10,13 +10,13 @@ from app.services.account_desk_guidance import author_account_desk_blockers
 
 
 @pytest.mark.parametrize(
-    ("cure_action", "anchor", "audience", "disposition", "action_kind"),
+    ("cure_action", "anchor", "audience", "disposition", "action_kind", "route"),
     [
-        ("reconcile_now", "reconciliation", "operator", "fix_elsewhere", "navigate"),
-        ("prove_evidence", "lease", "operator", "wait", None),
-        ("clear_freeze", "cure_tools", "both", "fix_elsewhere", "navigate"),
-        ("resolve_exposure", "cure_tools", "both", "fix_elsewhere", "navigate"),
-        ("retire_replace", "reconciliation", "operator", "fix_elsewhere", "navigate"),
+        ("reconcile_now", "reconciliation", "operator", "fix_elsewhere", "navigate", "/broker/account-monitor"),
+        ("prove_evidence", "lease", "operator", "fix_elsewhere", "navigate", "/broker/account-monitor"),
+        ("clear_freeze", "cure_tools", "both", "fix_elsewhere", "navigate", "/broker/account-monitor"),
+        ("resolve_exposure", "cure_tools", "both", "fix_elsewhere", "navigate", "/broker/account-monitor"),
+        ("retire_replace", "reconciliation", "operator", "fix_elsewhere", "navigate", "/broker/bots/DU1234567"),
     ],
 )
 def test_author_account_desk_blockers_preserves_condition_copy_and_declared_guidance(
@@ -25,6 +25,7 @@ def test_author_account_desk_blockers_preserves_condition_copy_and_declared_guid
     audience: str,
     disposition: str,
     action_kind: str | None,
+    route: str | None,
 ) -> None:
     condition = AccountConditionRow(
         condition_type="evidence_stale",
@@ -55,3 +56,4 @@ def test_author_account_desk_blockers_preserves_condition_copy_and_declared_guid
     else:
         assert blocker.primary_move is not None
         assert blocker.primary_move.action.kind == action_kind
+        assert blocker.primary_move.action.route == route

@@ -9,7 +9,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.engine.live.account_clerk import read_account_clerk_journal
-from app.engine.live.fleet import compute_fleet_contamination
+from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
+from app.engine.live.fleet import compute_fleet_account_summary, compute_fleet_contamination
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.live_state_sidecar import (
     LiveStateEnvelope,
@@ -18,7 +19,7 @@ from app.engine.live.live_state_sidecar import (
     stable_live_state_path,
 )
 from app.engine.live.run_ledger import read_ledger
-from app.schemas.live_runs import FleetContamination, InstanceBrokerView
+from app.schemas.live_runs import FleetAccountSummary, FleetContamination, InstanceBrokerView
 from app.services.account_journal_authority import (
     account_journal_authority_is_active,
     observe_account_journal_parity,
@@ -27,6 +28,7 @@ from app.services.legacy_stale_claim_retirement import retired_legacy_claim_keys
 
 logger = logging.getLogger(__name__)
 NetPositionFetcher = Callable[[], Awaitable[dict[str, int] | None]]
+ScopedNetPositionFetcher = Callable[[str], Awaitable[dict[str, int] | None]]
 
 
 class AccountJournalScopeRequiredError(ValueError):
@@ -58,6 +60,7 @@ def scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
                 "run_id": str(ledger.get("run_id") or run_dir.name),
                 "run_dir": str(run_dir),
                 "created_at_ms": ledger.get("created_at_ms") or 0,
+                "account_id": ledger.get("account_id"),
             }
         )
     for runs in out.values():
@@ -319,3 +322,65 @@ async def compute_account_fleet_contamination(
             policy_blocks_starts=True,
         )
     return FleetContamination(**result)
+
+
+async def compute_scoped_fleet_account_summary(
+    root: Path,
+    *,
+    account_id: str,
+    fetch_positions: ScopedNetPositionFetcher | None = None,
+    broker_connected_account: str | None,
+    broker_account_known: bool,
+) -> FleetAccountSummary:
+    """Compose fleet evidence for exactly one requested account.
+
+    The account id is a route boundary, not a client-side display filter:
+    only ledgers and Clerk exposure that attest this account may participate in
+    its identity or contamination projection.
+    """
+
+    instance_account_ids = {
+        sid: account_id
+        for sid, runs in scan_runs_by_instance(root).items()
+        if _latest_instance_account_id(runs) == account_id
+    }
+    resolve_positions = fetch_positions or fetch_net_positions
+    broker_mismatch = False
+    try:
+        net_positions = await resolve_positions(account_id)
+    except BrokerAccountMismatchError:
+        net_positions = None
+        broker_mismatch = True
+
+    payload = compute_fleet_account_summary(
+        net_positions=net_positions,
+        explained_by_instance=collect_fleet_position_explanations(root, account_id=account_id),
+        instance_account_ids=instance_account_ids,
+        broker_connected_account=broker_connected_account,
+        broker_account_known=broker_account_known,
+        policy_blocks_starts=True,
+    )
+    payload["account_id"] = account_id
+    if broker_mismatch:
+        payload["account_identity"] = "CONFLICTING"
+        reason_codes = payload["account_identity_reason_codes"]
+        if "BROKER_ACCOUNT_MISMATCH" not in reason_codes:
+            reason_codes.append("BROKER_ACCOUNT_MISMATCH")
+        payload["contamination"]["summary"] = (
+            "Connected broker account mismatches the requested account; fleet evidence is unavailable."
+        )
+    return FleetAccountSummary(**payload)
+
+
+def _latest_instance_account_id(runs: list[dict]) -> str | None:
+    """Return the normalized account id from an instance's latest ledger."""
+
+    if not runs:
+        return None
+    account_id = runs[0].get("account_id")
+    if not isinstance(account_id, str):
+        return None
+    try:
+        return normalize_account_id(account_id)
+    except InvalidAccountIdError:
+        return None

@@ -47,7 +47,7 @@ export class AccountDeskFleetStore {
     const generation = ++this.requestGeneration;
     this.state.update((state) => ({ ...state, loading: true, errorMessage: null }));
     try {
-      const summary = await this.liveRuns.getAccountSummary();
+      const summary = await this.liveRuns.getAccountSummary(accountId);
       if (generation !== this.requestGeneration) return;
       if (summary.account_id !== accountId) {
         throw new Error('Fleet account evidence did not attest this route.');

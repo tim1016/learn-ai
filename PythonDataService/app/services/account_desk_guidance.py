@@ -40,7 +40,13 @@ _CURE_ACTION_GUIDANCE: dict[AccountCureAction, _GuidanceSpec] = {
     "prove_evidence": _GuidanceSpec(
         anchor=OperatorBlockerAnchor(kind="lease", subject_key=None),
         audience="operator",
-        disposition="wait",
+        disposition="fix_elsewhere",
+        move_label="Open account reconciliation",
+        move_action=NavigateAction(
+            kind="navigate",
+            route="/broker/account-monitor",
+            fragment="account-reconciliation-action",
+        ),
     ),
     "clear_freeze": _GuidanceSpec(
         anchor=OperatorBlockerAnchor(kind="cure_tools", subject_key=None),
@@ -69,7 +75,6 @@ _CURE_ACTION_GUIDANCE: dict[AccountCureAction, _GuidanceSpec] = {
         audience="operator",
         disposition="fix_elsewhere",
         move_label="Open bot controls",
-        move_action=NavigateAction(kind="navigate", route="/broker/bots"),
     ),
 }
 
@@ -83,8 +88,15 @@ def author_account_desk_blockers(
     for condition in conditions:
         spec = _CURE_ACTION_GUIDANCE[condition.cure_action]
         primary_move = None
-        if spec.move_label is not None and spec.move_action is not None:
-            primary_move = OperatorMove(label=spec.move_label, action=spec.move_action)
+        if spec.move_label is not None:
+            action = spec.move_action
+            if condition.cure_action == "retire_replace":
+                action = NavigateAction(
+                    kind="navigate",
+                    route=f"/broker/bots/{condition.owner.owner_id}",
+                )
+            if action is not None:
+                primary_move = OperatorMove(label=spec.move_label, action=action)
         blockers.append(
             OperatorBlocker.for_host(
                 condition_id=f"account-condition:{condition.condition_type}:{condition.owner.owner_id}",
