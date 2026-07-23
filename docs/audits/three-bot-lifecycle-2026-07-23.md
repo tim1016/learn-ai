@@ -187,3 +187,35 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
   or the stop/restart lifecycle should route through PAUSE/RESUME.
 - **Fleet state right now:** `spy-0723` + `qqq-0723` still On duty (untouched);
   `nvda-0723` cleanly STOPPED, restart pending an approach decision.
+
+### 10:00–10:10 CDT — operator chose Pause/Resume; validated the true recipe
+
+- **Container↔daemon flakiness:** `host.containers.internal:8765` from the container
+  was ~40% unreachable (last 90s: 10 OK / 7 fail) while the daemon was idle (0% CPU)
+  and 100% reachable direct from the host — a Podman host-gateway flap that started
+  mid-session. Restarting the data-plane container (bots are HOST processes, so
+  untouched) did **not** clear it. It's cosmetic (durable writes still work) but
+  hides on-duty cockpit controls ~40% of the time, so I drove the pause/resume
+  operations via the app's own endpoints from the browser (through the proxy, which
+  attaches the control secret) rather than gambling on the flaky button display.
+- **"End day now" is NOT a pause — it is a clock-out → STOPPED.** Triggering it on
+  `nvda-0723r` set `desired_state=STOPPED` and the run process **exited** (pid 67052
+  dead) — same deadlock as graceful stop. The frontend wires the 'pause' stream
+  action to `endDayNow`, but `endDayNow` clocks the bot out for the day (STOPPED),
+  it does not pause. (This cost `nvda-0723r`.)
+- **The true resumable pause is `desired-state {action:'pause'}` → PAUSED, process
+  stays ALIVE** (run.py: "Booting paused… durable desired_state=PAUSED"). Verified
+  on `qqq-0723`: after `pause`, pid 55323 stayed **ALIVE** with `desired_state=PAUSED`;
+  after `resume`, `desired_state=RUNNING`, actuated on the same live run
+  (`command_seq 2`) — **no deadlock**, because the live run supplied the broker/
+  submission proof the resume gate needs. **In-place stop+restart of one bot works
+  via pause/resume.** (This satisfies the "stop + restart one bot" step.)
+- **Recipe for the remaining steps:** pause = `POST /api/live-instances/{id}/desired-state
+  {action:'pause'}`; resume = same with `{action:'resume'}` — never use graceful stop
+  or "End day now" (both STOP and deadlock). Fleet: `spy-0723`, `qqq-0723` RUNNING;
+  both nvda instances STOPPED/deadlocked → restore NVDA fresh for the 3-bot context.
+- **Product findings for the user:** (a) "End day now" is mislabeled/misrouted — it
+  stops (clock-out), it does not pause; a real Pause control should map to
+  desired-state pause; (b) STOPPED bots have no in-place restart (resume deadlock);
+  (c) the container↔host-daemon link is intermittently unreachable and needs
+  hardening (retry/backoff or a more robust host bridge).
