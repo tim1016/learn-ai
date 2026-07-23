@@ -73,6 +73,11 @@ services:
       args:
         GIT_SHA: ${GIT_SHA:-unknown}
     container_name: polygon-data-service
+    # Alpaca's Pydantic settings file is intentionally ignored and not mounted
+    # into /app. Pass its values through Compose so the running data plane has
+    # the same paper-only credentials as the local PythonDataService setup.
+    env_file:
+      - ./PythonDataService/.env
     restart: always
     ports:
       # Default host exposure is loopback-only; widen deliberately for remote/shared envs.

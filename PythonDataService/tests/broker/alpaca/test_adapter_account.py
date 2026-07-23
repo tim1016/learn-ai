@@ -50,3 +50,14 @@ def test_missing_created_at_is_none(load_alpaca_fixture: AlpacaFixtureLoader) ->
     payload.pop("created_at")
 
     assert from_alpaca_account(payload, observed_at_ms=_OBSERVED).created_at_ms is None
+
+
+def test_missing_pattern_day_trader_preserves_unknown(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload.pop("pattern_day_trader")
+
+    snapshot = from_alpaca_account(payload, observed_at_ms=_OBSERVED)
+
+    assert snapshot.pattern_day_trader is None

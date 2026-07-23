@@ -7313,8 +7313,15 @@
             "type": "integer"
           },
           "pattern_day_trader": {
-            "title": "Pattern Day Trader",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern Day Trader"
           },
           "portfolio_value": {
             "title": "Portfolio Value",

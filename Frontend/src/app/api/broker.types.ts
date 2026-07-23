@@ -8485,7 +8485,7 @@ export interface components {
             /** Observed At Ms */
             observed_at_ms: number;
             /** Pattern Day Trader */
-            pattern_day_trader: boolean;
+            pattern_day_trader: boolean | null;
             /** Portfolio Value */
             portfolio_value: number;
             /** Short Market Value */

@@ -42,7 +42,8 @@ class BrokerAccountSnapshot(_ContractModel):
     portfolio_value: float
     long_market_value: float
     short_market_value: float
-    pattern_day_trader: bool
+    # Alpaca omits this field for some paper accounts; absence is unknown, not false.
+    pattern_day_trader: bool | None
     trading_blocked: bool
     account_blocked: bool
     created_at_ms: int | None

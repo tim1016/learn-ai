@@ -20,10 +20,10 @@ class FakeLiveRunsService {
 }
 
 describe('AppSidebarComponent', () => {
-  it('surfaces the broker session mirror route in the Broker menu', () => {
+  it('surfaces the broker session mirror route in the Interactive Broker menu', () => {
     const fixture = setup();
 
-    clickGroup(fixture, 'Broker');
+    clickGroup(fixture, 'Interactive Broker');
 
     const link = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>(
@@ -34,10 +34,10 @@ describe('AppSidebarComponent', () => {
     expect(link?.getAttribute('href')).toBe('/broker/session-mirror');
   });
 
-  it('surfaces deploy and the operator manual beside bots in the Broker menu', () => {
+  it('surfaces deploy and the operator manual beside bots in the Interactive Broker menu', () => {
     const fixture = setup();
 
-    clickGroup(fixture, 'Broker');
+    clickGroup(fixture, 'Interactive Broker');
 
     const links = navLinks(fixture);
     expect(links.get('Deploy')).toBe('/broker/deploy');
@@ -45,7 +45,7 @@ describe('AppSidebarComponent', () => {
     expect(links.get('Bot Manual')).toBe('/broker/bot-manual');
   });
 
-  it('marks the most specific Broker route active when the URL has a manual fragment', async () => {
+  it('marks the most specific Interactive Broker route active when the URL has a manual fragment', async () => {
     const fixture = setup();
     const router = TestBed.inject(Router);
     router.resetConfig([{ path: 'broker/bot-manual', component: AppSidebarComponent }]);
@@ -60,16 +60,25 @@ describe('AppSidebarComponent', () => {
     expect(activeLabels).toEqual(['Bot Manual']);
   });
 
-  it('uses Accounts as the Broker account navigation slot', () => {
+  it('uses Accounts as the Interactive Broker account navigation slot', () => {
     const fixture = setup();
 
-    clickGroup(fixture, 'Broker');
+    clickGroup(fixture, 'Interactive Broker');
 
     const links = navLinks(fixture);
     expect(links.get('Accounts')).toBe('/broker/accounts');
     expect(links.has('Account Monitor')).toBe(false);
     expect(links.has('Broker Status')).toBe(false);
     expect(links.has('Reconciliation')).toBe(false);
+  });
+
+  it('adds Alpaca as a sibling broker group with its account desk', () => {
+    const fixture = setup();
+
+    clickGroup(fixture, 'Alpaca');
+
+    const links = navLinks(fixture);
+    expect(links.get('Accounts')).toBe('/brokers/alpaca');
   });
 
   it('surfaces live options visualizations in the Options menu', () => {
@@ -82,10 +91,10 @@ describe('AppSidebarComponent', () => {
     expect(links.get('Options Surface (3D)')).toBe('/broker/options-surface');
   });
 
-  it('keeps live options visualizations out of the Broker menu', () => {
+  it('keeps live options visualizations out of the Interactive Broker menu', () => {
     const fixture = setup();
 
-    clickGroup(fixture, 'Broker');
+    clickGroup(fixture, 'Interactive Broker');
 
     const labels = Array.from(navLinks(fixture).keys());
     expect(labels).toContain('Session Mirror');

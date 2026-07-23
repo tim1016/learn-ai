@@ -147,7 +147,7 @@ def from_alpaca_account(
         portfolio_value=to_float(payload["portfolio_value"]),
         long_market_value=to_float(payload["long_market_value"]),
         short_market_value=to_float(payload["short_market_value"]),
-        pattern_day_trader=bool(payload["pattern_day_trader"]),
+        pattern_day_trader=opt_bool(payload.get("pattern_day_trader")),
         trading_blocked=bool(payload["trading_blocked"]),
         account_blocked=bool(payload["account_blocked"]),
         created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
