@@ -29,10 +29,8 @@ from app.broker.contract.errors import (
 
 def status_of(exc: APIError) -> int | None:
     """Best-effort HTTP status from an APIError (None when unavailable)."""
-    try:
-        return exc.status_code
-    except Exception:
-        return None
+    status = exc.status_code
+    return status if isinstance(status, int) else None
 
 
 def _message_of(exc: APIError) -> str:

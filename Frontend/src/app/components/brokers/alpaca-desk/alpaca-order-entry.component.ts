@@ -1,33 +1,16 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { FormField, form } from '@angular/forms/signals';
+import { form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
-import { DialogModule } from 'primeng/dialog';
-import { InputTextModule } from 'primeng/inputtext';
 import { MessageModule } from 'primeng/message';
-import { TableModule } from 'primeng/table';
-import { TagModule } from 'primeng/tag';
+import { TooltipModule } from 'primeng/tooltip';
 
-import type {
-  BrokerOrderLeg,
-  OrderLegResult,
-  OrderSide,
-  OrderType,
-  TimeInForce,
-} from '../../../api/alpaca.types';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import type { BrokerOrderLeg, OrderLegResult } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
-
-/** A draft equity leg the operator is assembling (pre-submit). */
-interface DraftLeg {
-  readonly id: number;
-  symbol: string;
-  side: OrderSide;
-  quantity: string;
-  orderType: OrderType;
-  limitPrice: string;
-  timeInForce: TimeInForce;
-}
+import type { AlpacaOrderDraftLeg } from './alpaca-order-entry.types';
+import { AlpacaOrderLegRowComponent } from './alpaca-order-leg-row.component';
+import { AlpacaOrderPreviewComponent } from './alpaca-order-preview.component';
+import { AlpacaOrderResultsComponent } from './alpaca-order-results.component';
 
 /**
  * Alpaca order-entry panel (phase-2). Leg-based paradigm: the operator adds
@@ -41,14 +24,12 @@ interface DraftLeg {
   selector: 'app-alpaca-order-entry',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    FormField,
     ButtonModule,
-    DialogModule,
-    InputTextModule,
     MessageModule,
-    TableModule,
-    TagModule,
-    ReceiptLabelPipe,
+    TooltipModule,
+    AlpacaOrderLegRowComponent,
+    AlpacaOrderPreviewComponent,
+    AlpacaOrderResultsComponent,
   ],
   templateUrl: './alpaca-order-entry.component.html',
   host: { class: 'block' },
@@ -60,7 +41,7 @@ export class AlpacaOrderEntryComponent {
   // desk operator. Later slices thread the signed-in operator through here.
   private readonly operator = 'desk';
 
-  protected readonly legs = signal<DraftLeg[]>([]);
+  protected readonly legs = signal<AlpacaOrderDraftLeg[]>([]);
   protected readonly legsForm = form(this.legs);
   protected readonly previewOpen = signal(false);
   protected readonly submitting = signal(false);
@@ -73,7 +54,7 @@ export class AlpacaOrderEntryComponent {
     () => this.legs().length > 0 && this.legs().every((leg) => this.legValid(leg)),
   );
 
-  protected legValid(leg: DraftLeg): boolean {
+  protected legValid(leg: AlpacaOrderDraftLeg): boolean {
     const quantity = Number(leg.quantity);
     const baseValid =
       leg.symbol.trim().length > 0 &&
@@ -147,10 +128,7 @@ export class AlpacaOrderEntryComponent {
     }
   }
 
-  protected trackLeg = (_: number, leg: DraftLeg): number => leg.id;
-  protected trackResult = (_: number, result: OrderLegResult): string => result.order_ref;
-
-  private toRequestLeg(leg: DraftLeg): BrokerOrderLeg {
+  private toRequestLeg(leg: AlpacaOrderDraftLeg): BrokerOrderLeg {
     const base: BrokerOrderLeg = {
       symbol: leg.symbol.trim().toUpperCase(),
       side: leg.side,

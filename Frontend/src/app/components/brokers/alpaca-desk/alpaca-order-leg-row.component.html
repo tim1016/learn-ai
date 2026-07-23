@@ -1,0 +1,75 @@
+<label class="flex flex-col gap-1 text-xs">
+  <span>Symbol</span>
+  <input
+    pInputText
+    [formField]="legForm().symbol"
+    placeholder="e.g. SPY"
+    [attr.aria-label]="'Leg ' + (position() + 1) + ' symbol'"
+    class="w-28 uppercase"
+  />
+</label>
+<label class="flex flex-col gap-1 text-xs">
+  <span>Side</span>
+  <select
+    [formField]="legForm().side"
+    [attr.aria-label]="'Leg ' + (position() + 1) + ' side'"
+    class="h-10 rounded border border-surface px-2"
+  >
+    <option value="buy">Buy</option>
+    <option value="sell">Sell</option>
+  </select>
+</label>
+<label class="flex flex-col gap-1 text-xs">
+  <span>Quantity</span>
+  <input
+    type="number"
+    step="any"
+    [formField]="legForm().quantity"
+    placeholder="Shares"
+    [attr.aria-label]="'Leg ' + (position() + 1) + ' quantity'"
+    class="h-10 w-24 rounded border border-surface px-2"
+  />
+</label>
+<label class="flex flex-col gap-1 text-xs">
+  <span>Type</span>
+  <select
+    [formField]="legForm().orderType"
+    [attr.aria-label]="'Leg ' + (position() + 1) + ' order type'"
+    class="h-10 rounded border border-surface px-2"
+  >
+    <option value="market">Market</option>
+    <option value="limit">Limit</option>
+  </select>
+</label>
+@if (legForm().orderType().value() === 'limit') {
+  <label class="flex flex-col gap-1 text-xs">
+    <span>Limit price</span>
+    <input
+      type="number"
+      step="any"
+      [formField]="legForm().limitPrice"
+      placeholder="Price"
+      [attr.aria-label]="'Leg ' + (position() + 1) + ' limit price'"
+      class="h-10 w-24 rounded border border-surface px-2"
+    />
+  </label>
+}
+<label class="flex flex-col gap-1 text-xs">
+  <span>Time in force</span>
+  <select
+    [formField]="legForm().timeInForce"
+    [attr.aria-label]="'Leg ' + (position() + 1) + ' time in force'"
+    class="h-10 rounded border border-surface px-2"
+  >
+    <option value="day">Day</option>
+    <option value="gtc">GTC</option>
+  </select>
+</label>
+<p-button
+  icon="pi pi-trash"
+  size="small"
+  severity="danger"
+  [text]="true"
+  (onClick)="removed.emit()"
+  [attr.aria-label]="'Remove leg ' + (position() + 1)"
+/>

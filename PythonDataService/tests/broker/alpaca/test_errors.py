@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from alpaca.common.exceptions import APIError
 
-from app.broker.alpaca.errors import map_api_error
+from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerError,
@@ -59,3 +60,15 @@ def test_unknown_status_defaults_to_unavailable(make_api_error: ApiErrorFactory)
     error = map_api_error(make_api_error(None), broker="alpaca")
 
     assert isinstance(error, BrokerUnavailable)
+
+
+def test_status_access_failure_is_not_suppressed() -> None:
+    class BrokenStatusApiError(APIError):
+        @property
+        def status_code(self) -> int:
+            raise RuntimeError("unexpected SDK status failure")
+
+    error = BrokenStatusApiError('{"code": 1, "message": "broken"}')
+
+    with pytest.raises(RuntimeError, match="unexpected SDK status failure"):
+        status_of(error)
