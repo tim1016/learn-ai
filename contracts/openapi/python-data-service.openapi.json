@@ -43818,6 +43818,7 @@
             "name": "order_id",
             "required": true,
             "schema": {
+              "format": "uuid",
               "title": "Order Id",
               "type": "string"
             }

@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Callable
 from typing import Literal, NoReturn
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -130,8 +131,17 @@ def _require_trade_clerk(broker: str) -> AlpacaClerk:
     what/why. Only Alpaca has a trade port in phase 2.
     """
     if broker != "alpaca":
-        # Surface the same 404 shape the read path uses for an unknown broker.
+        # Preserve the read-path 404 for an unknown broker, then reject a known
+        # read-only broker instead of accidentally dispatching through Alpaca.
         _resolve_port(broker)
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "broker": broker,
+                "message": "Order management is not supported for this broker.",
+                "why": "Only Alpaca has a phase-2 trade port.",
+            },
+        )
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise HTTPException(
@@ -173,7 +183,7 @@ async def submit_orders(broker: str, request: BrokerOrderRequest) -> OrderSubmit
     response_model=OrderCancelResult,
     dependencies=[Depends(require_data_plane_control_secret)],
 )
-async def cancel_order(broker: str, order_id: str) -> OrderCancelResult:
+async def cancel_order(broker: str, order_id: UUID) -> OrderCancelResult:
     """Cancel one working order by its broker-assigned id (phase-2 S3 write path).
 
     Transport only: resolve the account-scoped Clerk facade and delegate. The
@@ -185,6 +195,6 @@ async def cancel_order(broker: str, order_id: str) -> OrderCancelResult:
     """
     clerk = _require_trade_clerk(broker)
     try:
-        return await clerk.cancel(order_id)
+        return await clerk.cancel(str(order_id))
     except BrokerError as error:
         _raise_http(error)
