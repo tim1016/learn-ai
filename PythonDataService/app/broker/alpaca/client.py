@@ -33,6 +33,7 @@ from alpaca.trading.enums import AssetStatus, QueryOrderStatus
 from alpaca.trading.requests import GetAssetsRequest, GetOrdersRequest
 from pydantic import ValidationError
 from requests.exceptions import RequestException
+from requests.sessions import Session
 
 from app.broker.alpaca.capture_hook import install_capture_hook
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
@@ -41,6 +42,8 @@ from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import BrokerAuthError, BrokerUnavailable
 
 _DEFAULT_TIMEOUT_S = 15.0
+_DEFAULT_CONNECT_TIMEOUT_S = 3.05
+_MAX_IN_FLIGHT_SYNC_CALLS = 8
 
 
 def _config_detail(exc: ValidationError) -> str:
@@ -53,6 +56,23 @@ def _config_detail(exc: ValidationError) -> str:
 
 def _ms_to_utc(after_ms: int) -> datetime:
     return datetime.fromtimestamp(after_ms / 1000, tz=UTC)
+
+
+def _install_session_timeout(session: Session, *, timeout_s: float) -> None:
+    """Give every SDK request finite connect and read timeouts.
+
+    alpaca-py delegates to ``Session.request`` without a timeout. Wrapping the
+    bound method retains an explicit timeout supplied by a future SDK call,
+    while making the service default finite for every current call path.
+    """
+    request = session.request
+    timeout = (min(_DEFAULT_CONNECT_TIMEOUT_S, timeout_s), timeout_s)
+
+    def request_with_timeout(method: str, url: str, **kwargs: Any) -> Any:
+        kwargs.setdefault("timeout", timeout)
+        return request(method, url, **kwargs)
+
+    session.request = request_with_timeout  # type: ignore[method-assign]
 
 
 class AlpacaTradingClient:
@@ -73,6 +93,10 @@ class AlpacaTradingClient:
         self._client_factory = client_factory
         self._timeout_s = timeout_s
         self._raw_client: Any | None = None
+        # A timed-out worker cannot be force-killed. Keep abandoned Alpaca
+        # workers off AnyIO's process-wide limiter while their request-level
+        # timeout lets them wind down.
+        self._thread_limiter = anyio.CapacityLimiter(_MAX_IN_FLIGHT_SYNC_CALLS)
 
     def _build_default_client(self) -> Any:
         settings = self._settings or get_alpaca_settings()
@@ -82,6 +106,7 @@ class AlpacaTradingClient:
             paper=settings.is_paper,
             raw_data=True,
         )
+        _install_session_timeout(client._session, timeout_s=self._timeout_s)
         journal = self._journal or get_capture_journal()
         install_capture_hook(client._session, journal, broker=self.broker_id)
         return client
@@ -111,6 +136,7 @@ class AlpacaTradingClient:
                     # a compatibility alias. It lets fail_after return while
                     # a stuck synchronous SDK worker winds down.
                     cancellable=True,
+                    limiter=self._thread_limiter,
                 )
         except TimeoutError as exc:
             raise BrokerUnavailable(
@@ -156,11 +182,14 @@ class AlpacaTradingClient:
         self,
         *,
         limit: int,
+        page_token: str | None = None,
     ) -> list[dict[str, Any]]:
         # Alpaca's ``after`` parameter filters a different vendor timestamp
         # than the contract's ``occurred_at_ms``. Fetch a bounded page here;
         # the broker filters mapped contract records by occurred_at_ms below.
         params = {"page_size": limit, "direction": "desc"}
+        if page_token is not None:
+            params["page_token"] = page_token
         return await self._call(
             lambda c: c.get("/account/activities", data=params),
             describe="activities",

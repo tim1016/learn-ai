@@ -16,13 +16,20 @@ _OBSERVED = 1_700_000_000_000
 class _ActivitiesClient:
     """Minimal broker-client seam for occurred-at cursor filtering."""
 
-    def __init__(self, payloads: list[dict]) -> None:
-        self.payloads = payloads
+    def __init__(self, pages: dict[str | None, list[dict]]) -> None:
+        self.pages = pages
         self.limit: int | None = None
+        self.page_tokens: list[str | None] = []
 
-    async def list_activities(self, *, limit: int) -> list[dict]:
+    async def list_activities(
+        self,
+        *,
+        limit: int,
+        page_token: str | None = None,
+    ) -> list[dict]:
         self.limit = limit
-        return self.payloads
+        self.page_tokens.append(page_token)
+        return self.pages[page_token]
 
 
 def test_trade_activity_maps_to_trade_category(
@@ -62,7 +69,7 @@ async def test_activity_cursor_filters_the_contract_occurred_at_timestamp(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:
     trade, non_trade = load_alpaca_fixture("activities", "activities.json")
-    client = _ActivitiesClient([trade, non_trade])
+    client = _ActivitiesClient({None: [trade, non_trade]})
     broker = AlpacaBroker(client=client)  # type: ignore[arg-type]
     cursor = rfc3339_to_ms("2022-09-23T13:30:00.123456Z")
 
@@ -70,3 +77,28 @@ async def test_activity_cursor_filters_the_contract_occurred_at_timestamp(
 
     assert client.limit == 25
     assert [activity.activity_id for activity in activities] == [trade["id"]]
+
+
+async def test_activity_cursor_pages_before_filtering_occurred_at(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    trade, non_trade = load_alpaca_fixture("activities", "activities.json")
+    page_size = 25
+    older_page = [
+        {**non_trade, "id": f"old-{index}"}
+        for index in range(page_size)
+    ]
+    qualifying_activity = {**trade, "id": "qualifying"}
+    client = _ActivitiesClient(
+        {
+            None: older_page,
+            "old-24": [qualifying_activity],
+        }
+    )
+    broker = AlpacaBroker(client=client)  # type: ignore[arg-type]
+    cursor = rfc3339_to_ms("2022-09-23T13:30:00.123456Z")
+
+    activities = await broker.list_activities(after_ms=cursor, limit=page_size)
+
+    assert client.page_tokens == [None, "old-24"]
+    assert [activity.activity_id for activity in activities] == ["qualifying"]
