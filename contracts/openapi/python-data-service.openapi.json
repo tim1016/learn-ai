@@ -8428,8 +8428,9 @@
             "$ref": "#/components/schemas/OrderSide"
           },
           "symbol": {
-            "maxLength": 32,
+            "maxLength": 7,
             "minLength": 1,
+            "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
             "title": "Symbol",
             "type": "string"
           },
@@ -28540,7 +28541,7 @@
       },
       "OrderLegResult": {
         "additionalProperties": false,
-        "description": "The per-leg outcome the router shapes into its response.\n\nExactly one of ``order`` (acked) / ``error`` (failed) is set, keyed by\n``status``. ``order_ref`` is always present \u2014 an operator can find the\nintent in the journal even when the submit failed.",
+        "description": "The per-leg outcome the router shapes into its response.\n\n``acked`` carries the accepted ``order``; ``failed`` is a definitive\nrejection or a lookup that proved the order absent; ``uncertain`` means the\nbroker could not confirm the result. ``order_ref`` is always present \u2014 an\noperator can find the durable intent in the journal before retrying.",
         "properties": {
           "error": {
             "anyOf": [
@@ -28571,7 +28572,11 @@
             "type": "string"
           },
           "status": {
-            "pattern": "^(acked|failed)$",
+            "enum": [
+              "acked",
+              "failed",
+              "uncertain"
+            ],
             "title": "Status",
             "type": "string"
           }
@@ -43813,6 +43818,7 @@
             "name": "order_id",
             "required": true,
             "schema": {
+              "format": "uuid",
               "title": "Order Id",
               "type": "string"
             }

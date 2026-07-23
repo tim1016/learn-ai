@@ -36,7 +36,7 @@ from requests.exceptions import RequestException
 
 from app.broker.alpaca.capture_hook import install_capture_hook
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
-from app.broker.alpaca.errors import map_api_error
+from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import BrokerAuthError, BrokerUnavailable
 
@@ -217,3 +217,22 @@ class AlpacaTradingClient:
         await self._call(
             lambda c: c.delete(f"/orders/{order_id}"), describe="order cancellation"
         )
+
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> dict[str, Any] | None:
+        """Look up a possibly-submitted order by its durable client id.
+
+        A 404 is definitive evidence that the order did not land, so it becomes
+        ``None``. Every other error keeps the submit outcome uncertain.
+        """
+
+        def _get(client: Any) -> dict[str, Any] | None:
+            try:
+                return client.get_order_by_client_id(client_id=client_order_id)
+            except APIError as exc:
+                if status_of(exc) == 404:
+                    return None
+                raise
+
+        return await self._call(_get, describe="order lookup by client_order_id")

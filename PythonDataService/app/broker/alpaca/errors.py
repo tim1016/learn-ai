@@ -27,7 +27,7 @@ from app.broker.contract.errors import (
 )
 
 
-def _status_of(exc: APIError) -> int | None:
+def status_of(exc: APIError) -> int | None:
     """Best-effort HTTP status from an APIError (None when unavailable)."""
     try:
         return exc.status_code
@@ -58,7 +58,7 @@ def _retry_after_ms(exc: APIError) -> int | None:
 
 def map_api_error(exc: APIError, *, broker: str) -> BrokerError:
     """Translate an alpaca-py ``APIError`` into a broker-contract error."""
-    status = _status_of(exc)
+    status = status_of(exc)
     message = _message_of(exc)
     detail = f"HTTP {status}" if status is not None else "no HTTP status"
 
