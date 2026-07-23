@@ -230,3 +230,10 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
   RUNNING). Resumed both via desired-state `resume` → both `RUNNING`, processes
   still ALIVE. Verified all three RUNNING at 10:57 CDT. Clean concurrent in-place
   pause/resume of two bots.
+
+### 10:59 CDT — step 7: pause all three, 10-minute wait
+
+- Paused all three via desired-state `pause`: `spy-0723` (51135), `qqq-0723`
+  (55323), `nvda-0723r2` (67654) → all `PAUSED` with processes **ALIVE** at
+  10:59:21 CDT. Starting the 10-minute wait (→ ~11:09 CDT), after which step 8
+  resumes one older bot and launches two new bots (AAPL, MSFT).
