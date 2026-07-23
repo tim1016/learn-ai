@@ -100,3 +100,18 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
 - **Left for later:** the crashed `spy-canary-0723` remains in Sick bay (flat,
   no runtime, harmless); to be retired during the 15-min hold. "Take off roster"
   did not remove it; will use Retire during the lull.
+
+### 09:05–09:14 — bots 2 (QQQ) and 3 (NVDA) staggered up; 3 concurrent
+
+- **Action:** Deployed `qqq-0723` (signal QQQ, `long QQQ x1`) at ~09:05 and
+  `nvda-0723` (signal NVDA, `long NVDA x1`) at ~09:12, each EMA Crossover, Paper
+  orders, 2000/day, start policy **optional**. Both via Deploy & run.
+- **Result:** As of **09:14:40 CDT** the roster shows **3 on duty** —
+  `spy-0723`, `qqq-0723`, `nvda-0723` — all Flat, account DUM284968. Roll call:
+  2 ready · 3 on duty · 1 sick bay. spy-0723 and qqq-0723 report Errors 0
+  ("Ready to act on the next bar; all hard gates pass"). nvda-0723 shows the same
+  transient "Degraded: latest_reconcile — no reconcile receipt" that qqq-0723
+  showed at launch and then cleared; monitoring for it to clear.
+- **15-minute concurrent hold started 09:14:40 CDT** → stop/restart sequence at
+  ~09:30. During the hold: retire the crashed `spy-canary-0723`, verify submission
+  posture, and watch for fills + the nvda reconcile flag.
