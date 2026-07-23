@@ -337,6 +337,41 @@ async def test_timestamp_cursors_reject_values_outside_non_negative_int64_ms(
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    ("path", "expected_call"),
+    [
+        (
+            "/api/brokers/alpaca/orders?after_ms=0",
+            {"status": None, "limit": None, "after_ms": 0},
+        ),
+        (
+            "/api/brokers/alpaca/orders?after_ms=9223372036854775807",
+            {"status": None, "limit": None, "after_ms": 9_223_372_036_854_775_807},
+        ),
+        (
+            "/api/brokers/alpaca/activities?after_ms=0",
+            {"after_ms": 0, "limit": 100},
+        ),
+        (
+            "/api/brokers/alpaca/activities?after_ms=9223372036854775807",
+            {"after_ms": 9_223_372_036_854_775_807, "limit": 100},
+        ),
+    ],
+)
+async def test_timestamp_cursors_accept_non_negative_int64_bounds(
+    path: str,
+    expected_call: dict[str, str | int | None],
+) -> None:
+    port = _FakePort()
+    get_broker_registry().register(port)
+
+    response = await _get(path)
+
+    assert response.status_code == 200
+    actual_call = port.orders_call if "/orders" in path else port.activities_call
+    assert actual_call == expected_call
+
+
 def _asset(**overrides: Any) -> BrokerAsset:
     base: dict[str, Any] = dict(
         broker="alpaca",
