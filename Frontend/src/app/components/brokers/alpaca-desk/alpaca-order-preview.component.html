@@ -1,0 +1,46 @@
+<p-dialog
+  header="Confirm order"
+  [visible]="visible()"
+  (visibleChange)="$event ? null : closed.emit()"
+  [modal]="true"
+  [style]="{ width: '32rem' }"
+>
+  <p class="mt-0 text-sm text-color-secondary">
+    Review the legs below. Each is journaled before it is sent. A limit leg rests
+    as a working order at its price until filled or canceled.
+  </p>
+  <p-table [value]="legs()" aria-label="Order preview">
+    <ng-template #header>
+      <tr>
+        <th scope="col">Symbol</th>
+        <th scope="col">Side</th>
+        <th scope="col" class="text-right">Qty</th>
+        <th scope="col">Type</th>
+        <th scope="col" class="text-right">Limit</th>
+        <th scope="col">TIF</th>
+      </tr>
+    </ng-template>
+    <ng-template #body let-leg>
+      <tr>
+        <th scope="row">{{ leg.symbol }}</th>
+        <td>{{ leg.side | receiptLabel }}</td>
+        <td class="text-right tabular-nums">{{ leg.quantity }}</td>
+        <td>{{ leg.orderType | receiptLabel }}</td>
+        <td class="text-right tabular-nums">
+          {{ leg.orderType === 'limit' ? leg.limitPrice : '—' }}
+        </td>
+        <td>{{ leg.timeInForce | receiptLabel }}</td>
+      </tr>
+    </ng-template>
+  </p-table>
+  <ng-template #footer>
+    <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="closed.emit()" />
+    <p-button
+      label="Confirm & submit"
+      icon="pi pi-check"
+      [loading]="submitting()"
+      [disabled]="submitting()"
+      (onClick)="confirmed.emit()"
+    />
+  </ng-template>
+</p-dialog>

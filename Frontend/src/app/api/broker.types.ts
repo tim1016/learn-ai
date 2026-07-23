@@ -1396,6 +1396,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerk/clear-hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clear Clerk Hold
+         * @description Clear the account exposure hold (operator exit); return the updated status.
+         *
+         *     A control mutation (the control secret gates it). Transport only: resolve the
+         *     Clerk and delegate. The Clerk journals HOLD_CLEARED (idempotent — a clear
+         *     against no active hold is a benign NO-OP) and returns the post-clear status so
+         *     the desk re-renders in one round-trip.
+         */
+        post: operations["clear_clerk_hold_api_brokers__broker__clerk_clear_hold_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerk/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Clerk Status
+         * @description Report the clerk's exposure hold, latest reconciliation, and outstanding intents.
+         *
+         *     A protected read (the always-on data-plane secret gates the whole router).
+         *     Transport only: resolve the account-scoped Clerk facade and delegate — the
+         *     Clerk owns the journal-derived hold + verdict + outstanding-intent state.
+         */
+        get: operations["get_clerk_status_api_brokers__broker__clerk_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clock": {
         parameters: {
             query?: never;
@@ -1423,8 +1472,47 @@ export interface paths {
         /** List Orders */
         get: operations["list_orders_api_brokers__broker__orders_get"];
         put?: never;
-        post?: never;
+        /**
+         * Submit Orders
+         * @description Submit one or more equity market/limit legs (phase-2 write path).
+         *
+         *     Transport only: FastAPI validates the body — an inconsistent leg (a limit
+         *     order with no ``limit_price``, a market order carrying one) is a Pydantic
+         *     ``422`` here, never a ``500`` — this resolves the account-scoped Clerk
+         *     facade, and the Clerk owns identity minting, fail-closed journaling, the
+         *     broker call, and per-leg result shaping. A per-leg broker rejection is a
+         *     *failed* leg in a ``200`` response (the request itself succeeded), never a
+         *     ``500``.
+         */
+        post: operations["submit_orders_api_brokers__broker__orders_post"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/orders/{order_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Order
+         * @description Cancel one working order by its broker-assigned id (phase-2 S3 write path).
+         *
+         *     Transport only: resolve the account-scoped Clerk facade and delegate. The
+         *     Clerk owns ownership resolution, fail-closed journaling, the broker call, and
+         *     result shaping. A non-cancelable order is a *failed* result in a ``200``
+         *     response with a typed what/why (never a ``500``). Cancel is intentionally a
+         *     first-class Clerk path, independent of the submit gate, so a future exposure
+         *     hold (S6) that blocks new submission never blocks reducing exposure.
+         */
+        delete: operations["cancel_order_api_brokers__broker__orders__order_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -8485,7 +8573,7 @@ export interface components {
             /** Observed At Ms */
             observed_at_ms: number;
             /** Pattern Day Trader */
-            pattern_day_trader: boolean;
+            pattern_day_trader: boolean | null;
             /** Portfolio Value */
             portfolio_value: number;
             /** Short Market Value */
@@ -8863,6 +8951,48 @@ export interface components {
             price: number | null;
             /** Quantity */
             quantity: number | null;
+        };
+        /**
+         * BrokerOrderLeg
+         * @description One equity leg of an order request (broker-neutral).
+         *
+         *     S2 adds ``LIMIT`` orders alongside S1's ``MARKET``: a limit leg carries a
+         *     ``limit_price`` and rests until filled or canceled. ``time_in_force`` selects
+         *     how long a resting order stays working (``DAY``/``GTC``). All additions are
+         *     additive — a bare S1 market leg (no ``limit_price``, default ``DAY``) still
+         *     validates. The quantity is a positive share count; the *sign* is ``side``.
+         */
+        BrokerOrderLeg: {
+            /** Limit Price */
+            limit_price?: number | null;
+            /**
+             * Order Type
+             * @default market
+             * @enum {string}
+             */
+            order_type?: "market" | "limit";
+            /** Quantity */
+            quantity: number;
+            side: components["schemas"]["OrderSide"];
+            /** Symbol */
+            symbol: string;
+            /** @default day */
+            time_in_force?: components["schemas"]["TimeInForce"];
+        };
+        /**
+         * BrokerOrderRequest
+         * @description An operator-authored order request: one or more legs to submit.
+         *
+         *     Each leg is journaled independently. A definitive per-leg failure does not
+         *     block later legs, but an uncertain outcome stops the batch before it can
+         *     create contradictory new exposure. The clerk mints a distinct ``order_ref``
+         *     identity per submitted leg.
+         */
+        BrokerOrderRequest: {
+            /** Legs */
+            legs: components["schemas"]["BrokerOrderLeg"][];
+            /** Operator */
+            operator: string;
         };
         /**
          * BrokerPosition
@@ -9554,6 +9684,46 @@ export interface components {
             started_at_ms?: number | null;
             /** Trades */
             trades?: Record<string, never>[];
+        };
+        /**
+         * ClearHoldRequest
+         * @description Operator's clear-hold request body (phase-2 S6).
+         *
+         *     ``operator`` attributes the HOLD_CLEARED line (who lifted the hold);
+         *     ``reason`` is the operator's what/why the ledger records. Both are optional —
+         *     a clear with no attribution still lifts the hold, journaled with defaults.
+         */
+        ClearHoldRequest: {
+            /**
+             * Operator
+             * @default operator
+             */
+            operator?: string;
+            /**
+             * Reason
+             * @default Operator cleared the exposure hold.
+             */
+            reason?: string;
+        };
+        /**
+         * ClerkStatus
+         * @description The clerk's observable state for the operator status surface (S6).
+         *
+         *     Composes the exposure hold, the latest reconciliation verdict, and the count
+         *     of outstanding (unresolved) intents (the S5 unfinished set) — everything the
+         *     desk needs to render the hold banner and a health line.
+         */
+        ClerkStatus: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            hold: components["schemas"]["HoldState"];
+            latest_reconciliation?: components["schemas"]["ReconciliationSummary"] | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Outstanding Intents */
+            outstanding_intents: number;
         };
         /** CloseAllAction */
         CloseAllAction: {
@@ -12207,6 +12377,27 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HoldState
+         * @description The account-level exposure-hold state, journal-derived (S6).
+         *
+         *     A hold is active when a ``HOLD_SET`` or ``UNEXPLAINED_ORDER`` line has no
+         *     later ``HOLD_CLEARED``. The latter keeps a crash between the observation and
+         *     its companion HOLD_SET receipt fail-closed. ``reason_code`` is code-like
+         *     (rendered through ``receiptLabel`` on the UI); ``reason`` is backend-authored
+         *     what/why prose (rendered unpiped). When not held, every field but ``active``
+         *     is ``None``.
+         */
+        HoldState: {
+            /** Active */
+            active: boolean;
+            /** Reason */
+            reason?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Since Ms */
+            since_ms?: number | null;
         };
         /**
          * HorizonICResult
@@ -17931,6 +18122,92 @@ export interface components {
             success: boolean;
         };
         /**
+         * OrderCancelResult
+         * @description The outcome of a cancel request the router shapes into its response.
+         *
+         *     ``status`` is ``acked`` when the broker accepted the cancel (HTTP 204) or
+         *     ``failed`` when it rejected it (a typed what/why, never a raw 500).
+         *     ``order_id`` always echoes the broker-assigned id the operator targeted, so
+         *     the ledger line is findable. ``owned`` reports whether this Clerk submitted
+         *     the canceled order — a foreign order still cancels (reducing exposure is the
+         *     safe direction), but the fact is surfaced honestly, not hidden.
+         */
+        OrderCancelResult: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            error?: components["schemas"]["OrderLegError"] | null;
+            /** Order Id */
+            order_id: string;
+            /** Order Ref */
+            order_ref?: string | null;
+            /** Owned */
+            owned: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "acked" | "failed";
+        };
+        /**
+         * OrderLegError
+         * @description A typed leg failure: a what/why the UI renders, never a raw 500.
+         */
+        OrderLegError: {
+            /** Message */
+            message: string;
+            /** Why */
+            why?: string | null;
+        };
+        /**
+         * OrderLegResult
+         * @description The per-leg outcome the router shapes into its response.
+         *
+         *     Keyed by ``status``:
+         *
+         *     - ``acked`` — the broker accepted the order; ``order`` is set.
+         *     - ``failed`` — the order definitively did not land; ``error`` is set.
+         *     - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order``
+         *       nor ``error`` is authoritative yet; the intent is durably journaled as
+         *       ``submit_uncertain`` and a later replay / sweep will finish it. The
+         *       operator must not assume the order failed — it may still have landed.
+         *
+         *     ``order_ref`` is always present — an operator can find the intent in the
+         *     journal in every case, including uncertain.
+         */
+        OrderLegResult: {
+            error?: components["schemas"]["OrderLegError"] | null;
+            /** Intent Id */
+            intent_id: string;
+            order?: components["schemas"]["BrokerOrder"] | null;
+            /** Order Ref */
+            order_ref: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "acked" | "failed" | "uncertain";
+        };
+        /**
+         * OrderSide
+         * @description The two order sides (broker-neutral).
+         * @enum {string}
+         */
+        OrderSide: "buy" | "sell";
+        /**
+         * OrderSubmitResult
+         * @description The whole request's outcome: one result per submitted leg, in order.
+         */
+        OrderSubmitResult: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            /** Results */
+            results: components["schemas"]["OrderLegResult"][];
+        };
+        /**
          * ParameterStabilityResponse
          * @description Parameter stability assessment.
          */
@@ -18600,6 +18877,19 @@ export interface components {
             latest_receipt_name?: string | null;
             /** Latest Receipt Url */
             latest_receipt_url?: string | null;
+        };
+        /**
+         * ReconciliationSummary
+         * @description The latest reconciliation-sweep result (S6), or ``None`` if never run.
+         */
+        ReconciliationSummary: {
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "clean" | "unexplained_order" | "missing_intent" | "stale";
         };
         /** RecordedSnapshotItem */
         RecordedSnapshotItem: {
@@ -21859,6 +22149,14 @@ export interface components {
              */
             tickers?: components["schemas"]["TickerInfo"][];
         };
+        /**
+         * TimeInForce
+         * @description How long an order stays working. S2 supports the two equity durations an
+         *     operator needs for a resting order: ``DAY`` (expires at session close) and
+         *     ``GTC`` (good-til-canceled). ``ioc``/``opg``/… are additive later members.
+         * @enum {string}
+         */
+        TimeInForce: "day" | "gtc";
         /** TimeOfDay */
         TimeOfDay: {
             /** After */
@@ -25182,6 +25480,76 @@ export interface operations {
             };
         };
     };
+    clear_clerk_hold_api_brokers__broker__clerk_clear_hold_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClearHoldRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clerk_status_api_brokers__broker__clerk_status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_clock_evidence_api_brokers__broker__clock_get: {
         parameters: {
             query?: never;
@@ -25239,6 +25607,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerOrder"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_orders_api_brokers__broker__orders_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrokerOrderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderSubmitResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_order_api_brokers__broker__orders__order_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderCancelResult"];
                 };
             };
             /** @description Validation Error */

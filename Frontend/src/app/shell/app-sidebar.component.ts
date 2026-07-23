@@ -78,8 +78,8 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    id: 'broker',
-    title: 'Broker',
+    id: 'interactive-broker',
+    title: 'Interactive Broker',
     icon: 'pi pi-link',
     items: [
       { label: 'Accounts', route: '/broker/accounts' },
@@ -88,6 +88,14 @@ const NAV: NavGroup[] = [
       { label: 'Deploy', route: '/broker/deploy' },
       { label: 'Bots', route: '/broker/bots' },
       { label: 'Bot Manual', route: '/broker/bot-manual' },
+    ],
+  },
+  {
+    id: 'alpaca',
+    title: 'Alpaca',
+    icon: 'pi pi-link',
+    items: [
+      { label: 'Accounts', route: '/brokers/alpaca' },
     ],
   },
   {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -80,6 +81,55 @@ from app.utils.error_handlers import polygon_exception_handler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+_ALPACA_RECOVERY_TIMEOUT_S = 60.0
+
+
+def _alpaca_clerk_configuration_is_valid() -> bool:
+    """Clear stale runtime state, validate settings, and log only safe detail."""
+    from pydantic import ValidationError
+
+    from app.broker.alpaca.clerk import set_alpaca_clerk
+    from app.broker.alpaca.config import (
+        alpaca_configuration_error_detail,
+        get_alpaca_settings,
+    )
+
+    set_alpaca_clerk(None)
+    try:
+        get_alpaca_settings()
+    except ValidationError as exc:
+        logger.warning(
+            "Alpaca settings invalid; order-submission clerk not installed.",
+            extra={"detail": alpaca_configuration_error_detail(exc)},
+        )
+        return False
+    return True
+
+
+async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: object) -> bool:
+    """Run S5 recovery before enabling submits; preserve a safe disabled state.
+
+    Recovery failure is not an availability-only concern: unresolved intents may
+    still represent live broker exposure. Keep the clerk out of the process
+    registry until recovery completes, so the write endpoint cannot accept a
+    new order against that unknown state.
+    """
+    try:
+        await asyncio.wait_for(
+            alpaca_clerk.recover(),  # type: ignore[attr-defined]
+            timeout=_ALPACA_RECOVERY_TIMEOUT_S,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Alpaca clerk startup recovery failed; order submission remains disabled. "
+            "Detail: %s",
+            exc,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events.
@@ -108,6 +158,61 @@ async def lifespan(app: FastAPI):
     logger.info(
         "Broker v2 registry ready: %s", get_broker_registry().registered_brokers()
     )
+
+    # Alpaca Clerk (phase 2) — the in-process single-writer for order
+    # submission. Installed only when Alpaca keys are present, independent of
+    # the IBKR broker_enabled block below (Alpaca is a peer vendor, not part of
+    # the IBKR gateway lifecycle). No keys → no clerk → the write endpoint
+    # honestly reports "not configured".
+    from app.broker.alpaca.broker import AlpacaBroker
+    from app.broker.alpaca.clerk import AlpacaClerk, set_alpaca_clerk
+
+    if _alpaca_clerk_configuration_is_valid():
+        alpaca_broker = AlpacaBroker()
+        alpaca_clerk = AlpacaClerk(read=alpaca_broker, trade=alpaca_broker)
+
+        # Alpaca crash-safety recovery (phase 2, S5) — replay the order journal
+        # and resolve every intent left uncertain by a timeout or a restart
+        # (``intent_recorded`` / ``submit_uncertain`` with no terminal outcome)
+        # by asking Alpaca whether the order landed, BEFORE the clerk is
+        # installed for new submits. Best-effort: a broker that is unreachable at
+        # startup leaves the intents uncertain for a later replay/sweep, but must
+        # not abort boot (no clerk means no submit, which is money-safe). A fresh
+        # install with no journal resolves nothing and returns cleanly.
+        if await _recover_alpaca_clerk_or_fail_closed(alpaca_clerk):
+            set_alpaca_clerk(alpaca_clerk)
+            logger.info("Alpaca Clerk ready (order submission enabled).")
+
+            # Alpaca live-lifecycle consumer (phase 2, S4) — the owned
+            # trade_updates websocket. Started alongside the Clerk (Alpaca is a peer
+            # vendor, independent of the IBKR gateway lifecycle). It captures each
+            # frame verbatim, attributes it against the Clerk's namespaces, and
+            # journals ORDER_EVENT / UNEXPLAINED_ORDER. No keys → no consumer.
+            from app.broker.alpaca.trade_updates import (
+                TradeUpdatesConsumer,
+                set_trade_updates_consumer,
+            )
+
+            alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
+                clerk=alpaca_clerk, read=alpaca_broker
+            )
+            alpaca_trade_updates.start()
+            set_trade_updates_consumer(alpaca_trade_updates)
+            logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
+
+            # Alpaca reconciliation sweep (phase 2, S6) — periodically compares
+            # the journal-derived exposure against Alpaca's live orders + positions
+            # and records a named verdict. It starts only after successful recovery:
+            # a recovery-failed clerk is deliberately not submit-capable or swept.
+            from app.broker.alpaca.clerk import (
+                ReconciliationSweep,
+                set_reconciliation_sweep,
+            )
+
+            alpaca_sweep = ReconciliationSweep(clerk=alpaca_clerk)
+            alpaca_sweep.start()
+            set_reconciliation_sweep(alpaca_sweep)
+            logger.info("Alpaca reconciliation sweep started (S6).")
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -281,6 +386,29 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Stop the Alpaca reconciliation sweep + live-lifecycle consumer first —
+        # cancel their background tasks (and the consumer's socket) cleanly,
+        # independent of the IBKR teardown.
+        from app.broker.alpaca.clerk import (
+            get_reconciliation_sweep,
+            set_alpaca_clerk,
+            set_reconciliation_sweep,
+        )
+        from app.broker.alpaca.trade_updates import (
+            get_trade_updates_consumer,
+            set_trade_updates_consumer,
+        )
+
+        alpaca_sweep = get_reconciliation_sweep()
+        if alpaca_sweep is not None:
+            await alpaca_sweep.stop()
+            set_reconciliation_sweep(None)
+
+        alpaca_trade_updates = get_trade_updates_consumer()
+        if alpaca_trade_updates is not None:
+            await alpaca_trade_updates.stop()
+            set_trade_updates_consumer(None)
+        set_alpaca_clerk(None)
         await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()
         # Stop the daemon monitor first — its probe traffic stops cleanly

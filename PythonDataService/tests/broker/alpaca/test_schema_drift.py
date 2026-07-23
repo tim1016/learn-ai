@@ -24,9 +24,13 @@ from alpaca.trading.models import (
     Position,
     TradeAccount,
     TradeActivity,
+    TradeUpdate,
 )
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 from pydantic import BaseModel
 
+from app.broker.alpaca.adapter import to_alpaca_order_request
+from app.broker.contract.models import BrokerOrderLeg
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 # family → (fixture filename, alpaca-py model(s) that define its known fields)
@@ -109,3 +113,86 @@ def test_asset_class_alias_is_recognized() -> None:
     # Alpaca's raw `class` key is aliased to `asset_class` in the SDK — the
     # guard must treat it as known, not as drift.
     assert "class" in _known_names(Asset)
+
+
+def test_order_submit_body_keys_are_all_known_to_the_sdk() -> None:
+    # Outbound drift guard: every key we POST to /v2/orders must be a field the
+    # SDK's order-request model defines. If a future alpaca-py renames one (or
+    # we typo a key), this fails and names it — the write-path twin of the
+    # inbound capture-drift guard above.
+    body = to_alpaca_order_request(
+        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        client_order_id="manual/inkant/v1:abc123",
+    )
+
+    unknown = set(body) - _known_names(MarketOrderRequest)
+
+    assert unknown == set(), (
+        f"order-submit body carries keys the SDK order model does not define: "
+        f"{sorted(unknown)}. Either alpaca-py renamed a field or the adapter "
+        f"emits a wrong key."
+    )
+    # The market contract keys are exactly these — pin them so a silent drop surfaces.
+    assert set(body) == {
+        "symbol",
+        "qty",
+        "side",
+        "type",
+        "time_in_force",
+        "client_order_id",
+    }
+
+
+def test_limit_order_submit_body_keys_are_all_known_to_the_sdk() -> None:
+    # The limit-order twin: the added ``limit_price`` key must be a field the
+    # SDK's limit-order-request model defines, and the body pins the full key set.
+    body = to_alpaca_order_request(
+        BrokerOrderLeg(
+            symbol="SPY",
+            side="sell",
+            quantity=2,
+            order_type="limit",
+            limit_price=240.5,
+            time_in_force="gtc",
+        ),
+        client_order_id="manual/inkant/v1:abc123",
+    )
+
+    unknown = set(body) - _known_names(LimitOrderRequest)
+
+    assert unknown == set(), (
+        f"limit order-submit body carries keys the SDK order model does not "
+        f"define: {sorted(unknown)}. Either alpaca-py renamed a field or the "
+        f"adapter emits a wrong key."
+    )
+    assert set(body) == {
+        "symbol",
+        "qty",
+        "side",
+        "type",
+        "time_in_force",
+        "limit_price",
+        "client_order_id",
+    }
+
+
+def test_trade_updates_frame_has_no_schema_drift(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    # S4 inbound drift guard: every key in a trade_updates event's ``data``
+    # payload (the envelope wrapper keys AND the nested order object) must be a
+    # field the SDK's TradeUpdate + Order models define. If Alpaca adds a
+    # lifecycle-event key alpaca-py doesn't know, this fails and names it.
+    frames = load_alpaca_fixture("trade_updates", "trade_updates.json")
+    models = (TradeUpdate, Order)
+    for frame in frames:
+        # The ``stream`` envelope key is the websocket framing, not an SDK model
+        # field — the SDK parses ``msg["data"]`` into a TradeUpdate — so drift is
+        # checked against the ``data`` payload only.
+        assert set(frame) == {"stream", "data"}
+        drift = unknown_keys(frame["data"], models)
+        assert drift == set(), (
+            "trade_updates: Alpaca event carries keys the SDK model(s) do not "
+            f"define: {sorted(drift)}. Either alpaca-py is behind (upgrade + "
+            f"extend the adapter) or the fixture is wrong."
+        )

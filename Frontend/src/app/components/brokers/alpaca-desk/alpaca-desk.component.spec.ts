@@ -14,12 +14,20 @@ describe('AlpacaDeskComponent', () => {
             getAccount: vi.fn().mockResolvedValue(undefined),
             listPositions: vi.fn().mockResolvedValue([]),
             listOrders: vi.fn().mockResolvedValue([]),
+            getClerkStatus: vi.fn().mockResolvedValue({
+              broker: 'alpaca',
+              account_id: 'PA1',
+              hold: { active: false, reason_code: null, reason: null, since_ms: null },
+              latest_reconciliation: null,
+              outstanding_intents: 0,
+              observed_at_ms: 1,
+            }),
           },
         },
       ],
     });
 
     expect(screen.getByRole('heading', { name: /Alpaca/i })).toBeTruthy();
-    expect(screen.getByText(/Read-only broker desk/i)).toBeTruthy();
+    expect(screen.getByText(/Broker desk · Broker System v2/i)).toBeTruthy();
   });
 });

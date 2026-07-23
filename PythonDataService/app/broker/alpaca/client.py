@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from threading import Lock
+from time import monotonic
 from typing import Any
 
 import anyio
@@ -35,20 +37,18 @@ from pydantic import ValidationError
 from requests.exceptions import RequestException
 
 from app.broker.alpaca.capture_hook import install_capture_hook
-from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
-from app.broker.alpaca.errors import map_api_error
+from app.broker.alpaca.config import (
+    BROKER_ID,
+    AlpacaSettings,
+    alpaca_configuration_error_detail,
+    get_alpaca_settings,
+)
+from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import BrokerAuthError, BrokerUnavailable
 
 _DEFAULT_TIMEOUT_S = 15.0
-
-
-def _config_detail(exc: ValidationError) -> str:
-    """Concise reason string from a settings ValidationError (no secrets)."""
-    try:
-        return "; ".join(str(error.get("msg", "")) for error in exc.errors())
-    except Exception:
-        return "invalid Alpaca configuration"
+_SUBMIT_VISIBILITY_GRACE_S = 30.0
 
 
 def _ms_to_utc(after_ms: int) -> datetime:
@@ -73,6 +73,31 @@ class AlpacaTradingClient:
         self._client_factory = client_factory
         self._timeout_s = timeout_s
         self._raw_client: Any | None = None
+        self._uncertain_submission_lock = Lock()
+        self._uncertain_submissions: dict[str, float] = {}
+
+    def _mark_submission_uncertain(self, client_order_id: str) -> None:
+        """Keep lookup absence non-terminal during Alpaca's visibility window."""
+        if not client_order_id:
+            return
+        with self._uncertain_submission_lock:
+            self._uncertain_submissions[client_order_id] = (
+                monotonic() + _SUBMIT_VISIBILITY_GRACE_S
+            )
+
+    def _clear_uncertain_submission(self, client_order_id: str) -> None:
+        with self._uncertain_submission_lock:
+            self._uncertain_submissions.pop(client_order_id, None)
+
+    def _submission_may_become_visible(self, client_order_id: str) -> bool:
+        with self._uncertain_submission_lock:
+            deadline = self._uncertain_submissions.get(client_order_id)
+            if deadline is None:
+                return False
+            if monotonic() < deadline:
+                return True
+            self._uncertain_submissions.pop(client_order_id, None)
+            return False
 
     def _build_default_client(self) -> Any:
         settings = self._settings or get_alpaca_settings()
@@ -99,7 +124,7 @@ class AlpacaTradingClient:
             raise BrokerAuthError(
                 "Alpaca is not configured — set paper credentials in .env.",
                 broker=self.broker_id,
-                detail=_config_detail(exc),
+                detail=alpaca_configuration_error_detail(exc),
             ) from exc
 
         try:
@@ -185,3 +210,90 @@ class AlpacaTradingClient:
 
     async def get_clock(self) -> dict[str, Any]:
         return await self._call(lambda c: c.get_clock(), describe="clock")
+
+    # ── Write methods (phase 2) ─────────────────────────────────────────────
+
+    async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
+        """POST one order to ``/v2/orders`` over the owned capturing session.
+
+        ``order`` is the exact JSON body Alpaca expects
+        (``symbol``, ``qty``, ``side``, ``type``, ``time_in_force``,
+        ``client_order_id``). The low-level ``post`` drives the same
+        ``requests.Session`` the read path uses, so the capture hook journals
+        the raw response verbatim, and the same timeout + ``map_api_error``
+        translation applies. Returns the raw Alpaca order payload; the adapter
+        maps it to a ``BrokerOrder``.
+        """
+        client_order_id = str(order.get("client_order_id") or "")
+        try:
+            result = await self._call(
+                lambda client: client.post("/orders", order),
+                describe="order submission",
+            )
+        except BrokerUnavailable:
+            # The synchronous SDK worker may continue after AnyIO returns a
+            # timeout, and Alpaca can accept before its lookup index catches up.
+            # Preserve uncertainty through that explicit consistency window.
+            self._mark_submission_uncertain(client_order_id)
+            raise
+        self._clear_uncertain_submission(client_order_id)
+        return result
+
+    async def cancel_order(self, order_id: str) -> None:
+        """DELETE ``/v2/orders/{order_id}`` over the owned capturing session.
+
+        ``order_id`` is Alpaca's broker-assigned UUID. The low-level ``delete``
+        drives the same ``requests.Session`` the read path uses, so the capture
+        hook journals the raw response verbatim, and the same timeout +
+        ``map_api_error`` translation applies. Alpaca returns HTTP 204 (no body)
+        on success — ``delete`` yields ``None`` — and 422 for a non-cancelable
+        order, which ``map_api_error`` translates to a typed ``BrokerError``.
+        Returns nothing; there is no order payload to map.
+        """
+        await self._call(
+            lambda c: c.delete(f"/orders/{order_id}"), describe="order cancellation"
+        )
+
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> dict[str, Any] | None:
+        """GET ``/v2/orders:by_client_order_id`` for the order we minted (S5).
+
+        The SDK's ``get_order_by_client_id(client_id=...)`` hits
+        ``GET /orders:by_client_order_id?client_order_id=...`` over the same
+        capturing session. In ``raw_data`` mode it returns the parsed order dict
+        when the order exists, and raises an ``APIError`` (HTTP 404) when it is
+        definitively absent.
+
+        Returns the raw order payload on success (the adapter maps it), or
+        ``None`` when Alpaca reports the order absent outside a post-timeout
+        visibility window. A 404 inside that window remains
+        ``BrokerUnavailable`` because the synchronous submit worker or Alpaca's
+        lookup index may still be settling. Outside the window, 404 is
+        intercepted **before** ``_call``'s taxonomy would fold it into
+        ``BrokerUnavailable``: definitively absent → the submit failed, whereas
+        unreachable must stay uncertain. Every other failure (timeout, 5xx,
+        network, other 4xx) flows through ``_call`` unchanged.
+        """
+
+        def _get(client: Any) -> dict[str, Any] | None:
+            try:
+                return client.get_order_by_client_id(client_id=client_order_id)
+            except APIError as exc:
+                if status_of(exc) == 404:
+                    if self._submission_may_become_visible(client_order_id):
+                        raise BrokerUnavailable(
+                            "Alpaca order submission may still become visible.",
+                            broker=self.broker_id,
+                            detail=(
+                                "Alpaca returned 404 inside the post-timeout "
+                                "visibility window; the outcome remains uncertain."
+                            ),
+                        ) from exc
+                    return None
+                raise
+
+        result = await self._call(_get, describe="order lookup by client_order_id")
+        if result is not None:
+            self._clear_uncertain_submission(client_order_id)
+        return result

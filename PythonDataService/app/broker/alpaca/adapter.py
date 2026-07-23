@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -29,6 +30,7 @@ from app.broker.contract.models import (
     BrokerClockEvidence,
     BrokerOrder,
     BrokerOrderEvent,
+    BrokerOrderLeg,
     BrokerPosition,
 )
 
@@ -62,8 +64,23 @@ def opt_str(value: Any) -> str | None:
 
 
 def opt_bool(value: Any) -> bool | None:
-    """Coerce an optional value to ``bool``; ``None`` stays ``None``."""
-    return None if value is None else bool(value)
+    """Parse an optional vendor boolean; reject truthy non-boolean values."""
+    if value is None or isinstance(value, bool):
+        return value
+    raise TypeError(f"Expected a boolean or null, got {type(value).__name__}")
+
+
+def to_bool(value: Any) -> bool:
+    """Parse a required vendor boolean without truthiness coercion."""
+    parsed = opt_bool(value)
+    if parsed is None:
+        raise TypeError("Expected a boolean, got null")
+    return parsed
+
+
+def _decimal_string(value: float) -> str:
+    """Format a numeric contract value as non-scientific vendor text."""
+    return format(Decimal(str(value)), "f")
 
 
 def _parse_rfc3339(value: str) -> datetime:
@@ -147,9 +164,9 @@ def from_alpaca_account(
         portfolio_value=to_float(payload["portfolio_value"]),
         long_market_value=to_float(payload["long_market_value"]),
         short_market_value=to_float(payload["short_market_value"]),
-        pattern_day_trader=bool(payload["pattern_day_trader"]),
-        trading_blocked=bool(payload["trading_blocked"]),
-        account_blocked=bool(payload["account_blocked"]),
+        pattern_day_trader=opt_bool(payload.get("pattern_day_trader")),
+        trading_blocked=to_bool(payload["trading_blocked"]),
+        account_blocked=to_bool(payload["account_blocked"]),
         created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
         observed_at_ms=_observed(observed_at_ms),
     )
@@ -199,6 +216,32 @@ def _order_events(payload: Mapping[str, Any]) -> list[BrokerOrderEvent]:
     return []
 
 
+def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dict[str, Any]:
+    """Build the Alpaca ``POST /v2/orders`` JSON body for one equity leg.
+
+    The **outbound** boundary sibling of ``from_alpaca_order``: contract →
+    vendor. Vendor field names (``qty``, ``type``, ``time_in_force``,
+    ``limit_price``) stay inside this layer. S2 sends EQUITY MARKET or LIMIT with
+    the operator's chosen ``time_in_force``; a limit leg adds ``limit_price`` and
+    a market leg omits it (the contract validator guarantees this pairing).
+    ``client_order_id`` is the Clerk-minted ``order_ref`` — Alpaca echoes it back
+    so ownership is recoverable from a read.
+    """
+    body: dict[str, Any] = {
+        "symbol": leg.symbol,
+        # Alpaca accepts the qty as a string; send the operator's share count.
+        "qty": _decimal_string(leg.quantity),
+        "side": str(leg.side),
+        "type": str(leg.order_type),
+        "time_in_force": str(leg.time_in_force),
+        "client_order_id": client_order_id,
+    }
+    if leg.limit_price is not None:
+        # Alpaca expects the price as a string; only present for a limit order.
+        body["limit_price"] = _decimal_string(leg.limit_price)
+    return body
+
+
 def from_alpaca_order(
     payload: Mapping[str, Any],
     *,
@@ -228,6 +271,83 @@ def from_alpaca_order(
         expired_at_ms=opt_rfc3339_to_ms(payload.get("expired_at")),
         events=_order_events(payload),
         observed_at_ms=_observed(observed_at_ms),
+    )
+
+
+# The full set of Alpaca ``trade_updates`` event names, per Alpaca's websocket
+# docs (verified 2026-07 against alpaca-py TradingStream, the schema authority).
+# Kept as data so an unrecognized event surfaces (see ``from_alpaca_trade_update``)
+# rather than being silently mapped — a new vendor event is a schema signal.
+ALPACA_TRADE_UPDATE_EVENTS: frozenset[str] = frozenset(
+    {
+        # Common lifecycle.
+        "new",
+        "fill",
+        "partial_fill",
+        "canceled",
+        "expired",
+        "done_for_day",
+        "replaced",
+        # Less common but documented.
+        "accepted",
+        "rejected",
+        "pending_new",
+        "stopped",
+        "pending_cancel",
+        "pending_replace",
+        "calculated",
+        "suspended",
+        "order_replace_rejected",
+        "order_cancel_rejected",
+    }
+)
+
+
+def trade_update_occurred_at_ms(payload: Mapping[str, Any]) -> int:
+    """Resolve a ``trade_updates`` event's instant as ``int64`` ms UTC.
+
+    Alpaca stamps each frame with a top-level ``timestamp`` (the event instant).
+    A fill/partial_fill also carries the embedded order's ``filled_at``; the
+    event ``timestamp`` is the authoritative per-event instant and is always
+    present, so it is preferred. Fails fast (no timestamp) — a lifecycle event
+    with no instant is corruption, not something to default to "now".
+    """
+    timestamp = payload.get("timestamp")
+    if timestamp:
+        return rfc3339_to_ms(str(timestamp))
+    raise ValueError("Alpaca trade_updates event is missing its timestamp.")
+
+
+def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
+    """Map one Alpaca ``trade_updates`` ``data`` payload to a ``BrokerOrderEvent``.
+
+    ``payload`` is the ``data`` object of a ``{"stream":"trade_updates","data":…}``
+    frame: ``event`` (the lifecycle transition), ``timestamp`` (the event
+    instant), an embedded ``order`` object, and — on a fill/partial_fill —
+    top-level ``price``/``qty`` (the **execution slice** that filled, distinct
+    from the order's cumulative ``filled_avg_price``/``filled_qty``).
+
+    ``BrokerOrderEvent.price``/``quantity`` are the *per-execution* figures, so
+    they carry the top-level ``price``/``qty`` when present (fills) and are
+    ``None`` otherwise (``new``/``canceled``/``rejected`` carry no execution).
+    The order's cumulative fill totals live on the ``BrokerOrder`` the caller
+    maps separately from the embedded ``order`` object — they are deliberately
+    NOT folded in here, which would mislabel a cumulative figure as a slice.
+
+    An unrecognized ``event`` is surfaced by name — a new vendor event is a
+    schema signal, never silently coerced.
+    """
+    event = str(payload["event"])
+    if event not in ALPACA_TRADE_UPDATE_EVENTS:
+        raise ValueError(
+            f"Unrecognized Alpaca trade_updates event {event!r}; "
+            "alpaca-py may have added a lifecycle event — extend the adapter."
+        )
+    return BrokerOrderEvent(
+        event_type=event,
+        occurred_at_ms=trade_update_occurred_at_ms(payload),
+        price=opt_float(payload.get("price")),
+        quantity=opt_float(payload.get("qty")),
     )
 
 

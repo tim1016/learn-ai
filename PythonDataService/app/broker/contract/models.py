@@ -20,13 +20,114 @@ Two conventions are load-bearing:
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from decimal import Decimal
+from enum import StrEnum
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.engine.live.identity import INSTANCE_ID_PATTERN
 
 
 class _ContractModel(BaseModel):
     """Base for contract models: reject unknown fields to catch adapter typos."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class OrderSide(StrEnum):
+    """The two order sides (broker-neutral)."""
+
+    BUY = "buy"
+    SELL = "sell"
+
+
+class OrderType(StrEnum):
+    """Order types. S1 shipped ``MARKET``; S2 adds ``LIMIT`` (a resting order at
+    a chosen price). ``stop``/… land in later slices as additive members, so
+    callers already switch on the enum rather than a bare string.
+    """
+
+    MARKET = "market"
+    LIMIT = "limit"
+
+
+class TimeInForce(StrEnum):
+    """How long an order stays working. S2 supports the two equity durations an
+    operator needs for a resting order: ``DAY`` (expires at session close) and
+    ``GTC`` (good-til-canceled). ``ioc``/``opg``/… are additive later members.
+    """
+
+    DAY = "day"
+    GTC = "gtc"
+
+
+US_EQUITY_SYMBOL_PATTERN = r"^[A-Z]{1,5}(?:[.-][A-Z])?$"
+
+
+class BrokerOrderLeg(_ContractModel):
+    """One equity leg of an order request (broker-neutral).
+
+    S2 adds ``LIMIT`` orders alongside S1's ``MARKET``: a limit leg carries a
+    ``limit_price`` and rests until filled or canceled. ``time_in_force`` selects
+    how long a resting order stays working (``DAY``/``GTC``). All additions are
+    additive — a bare S1 market leg (no ``limit_price``, default ``DAY``) still
+    validates. The quantity is a positive share count; the *sign* is ``side``.
+    """
+
+    # S1 accepts listed US-equity tickers only. Keeping this at the transport
+    # boundary prevents a direct caller from bypassing the option-disabled UI
+    # and submitting an Alpaca crypto pair or OCC option identifier.
+    symbol: str = Field(
+        min_length=1,
+        max_length=7,
+        pattern=US_EQUITY_SYMBOL_PATTERN,
+    )
+    side: OrderSide
+    quantity: float = Field(gt=0)
+    order_type: Literal[OrderType.MARKET, OrderType.LIMIT] = OrderType.MARKET
+    # Required for a limit order, forbidden for a market order — enforced below.
+    limit_price: float | None = Field(default=None, gt=0)
+    time_in_force: TimeInForce = TimeInForce.DAY
+
+    @model_validator(mode="after")
+    def _limit_price_matches_order_type(self) -> BrokerOrderLeg:
+        """A limit order requires a price; a market order must not carry one."""
+        if self.order_type is OrderType.LIMIT and self.limit_price is None:
+            raise ValueError("A limit order requires a limit_price.")
+        if self.order_type is OrderType.MARKET and self.limit_price is not None:
+            raise ValueError("A market order must not carry a limit_price.")
+        if self.limit_price is not None:
+            price = Decimal(str(self.limit_price))
+            max_decimal_places = 2 if price >= 1 else 4
+            if -price.as_tuple().exponent > max_decimal_places:
+                raise ValueError(
+                    "Alpaca limit prices at or above $1 allow at most 2 decimal "
+                    "places; prices below $1 allow at most 4."
+                )
+        if self.time_in_force is TimeInForce.GTC and not self.quantity.is_integer():
+            raise ValueError("Alpaca fractional-share orders must use DAY time in force.")
+        return self
+
+
+class BrokerOrderRequest(_ContractModel):
+    """An operator-authored order request: one or more legs to submit.
+
+    Each leg is journaled independently. A definitive per-leg failure does not
+    block later legs, but an uncertain outcome stops the batch before it can
+    create contradictory new exposure. The clerk mints a distinct ``order_ref``
+    identity per submitted leg.
+    """
+
+    # ``operator`` becomes the manual-namespace path segment
+    # (``manual/{operator}/v1``), so it must satisfy the same single-segment
+    # charset the identity path boundary enforces — a value with a space, '/',
+    # '\\', NUL, or a '.'/'..' traversal segment is rejected here as a 422,
+    # never allowed to reach ``validate_strategy_instance_id`` and raise an
+    # uncaught ``ValueError``. Pattern is the source-of-truth from
+    # ``app.engine.live.identity`` (kept in lockstep with the path validator).
+    operator: str = Field(min_length=1, max_length=64, pattern=INSTANCE_ID_PATTERN)
+    legs: list[BrokerOrderLeg] = Field(min_length=1, max_length=32)
 
 
 class BrokerAccountSnapshot(_ContractModel):
@@ -42,7 +143,8 @@ class BrokerAccountSnapshot(_ContractModel):
     portfolio_value: float
     long_market_value: float
     short_market_value: float
-    pattern_day_trader: bool
+    # Alpaca omits this field for some paper accounts; absence is unknown, not false.
+    pattern_day_trader: bool | None
     trading_blocked: bool
     account_blocked: bool
     created_at_ms: int | None

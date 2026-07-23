@@ -1,0 +1,238 @@
+"""Pure ledger-derivation helpers for the Alpaca Clerk (phase 2, S6).
+
+The Clerk's durable state is the append-only journal — namespaces, terminals,
+unresolved intents, the exposure hold, and the latest reconciliation verdict are
+all *derived* from the ledger, never held as an in-memory flag, so they survive a
+restart. These functions are the S6 derivations: pure functions over a pre-read
+``list[OrderJournalEntry]``, with no I/O and no Clerk state, so they are trivially
+testable and share one place with the ``clerk.py`` intent/terminal scanners.
+"""
+
+from __future__ import annotations
+
+from app.broker.alpaca.clerk.models import (
+    UNEXPLAINED_ORDER_HOLD_CODE,
+    ClerkEntryKind,
+    ClerkStatus,
+    HoldState,
+    OrderJournalEntry,
+    OrderLegError,
+    OrderLegResult,
+    ReconciliationSummary,
+)
+from app.broker.contract.models import BrokerOrder, BrokerPosition
+
+
+def build_status(
+    entries: list[OrderJournalEntry],
+    *,
+    broker_id: str,
+    account_id: str,
+    outstanding_intents: int,
+    observed_at_ms: int,
+) -> ClerkStatus:
+    """Shape one ``ClerkStatus`` from a pre-read ledger (the single builder).
+
+    ``outstanding_intents`` is supplied by the Clerk (it owns the intent-scan);
+    hold and latest verdict are derived here so status is a pure read of the
+    durable ledger and survives a restart.
+    """
+    return ClerkStatus(
+        broker=broker_id,
+        account_id=account_id,
+        hold=hold_state(entries),
+        latest_reconciliation=latest_reconciliation(entries),
+        outstanding_intents=outstanding_intents,
+        observed_at_ms=observed_at_ms,
+    )
+
+
+def hold_state(entries: list[OrderJournalEntry]) -> HoldState:
+    """Derive the exposure-hold state from the ledger.
+
+    A ``HOLD_SET`` with no later ``HOLD_CLEARED`` is active. An
+    ``UNEXPLAINED_ORDER`` after the latest clear is also an active hold: this
+    fail-closed derivation covers a crash or append failure between recording the
+    foreign order and the separate ``HOLD_SET`` receipt. Last write wins, so an
+    operator's later clear remains effective until another observation arrives.
+    """
+    active = False
+    reason_code: str | None = None
+    reason: str | None = None
+    since_ms: int | None = None
+    for entry in entries:
+        if entry.kind is ClerkEntryKind.HOLD_SET:
+            active = True
+            reason_code = entry.reason_code
+            reason = entry.reason
+            since_ms = entry.recorded_at_ms
+        elif entry.kind is ClerkEntryKind.HOLD_CLEARED:
+            active = False
+            reason_code = None
+            reason = None
+            since_ms = None
+        elif entry.kind is ClerkEntryKind.UNEXPLAINED_ORDER:
+            active = True
+            reason_code = UNEXPLAINED_ORDER_HOLD_CODE
+            reason = (
+                "An order this account did not submit was recorded in the "
+                "Alpaca clerk journal."
+            )
+            since_ms = entry.recorded_at_ms
+    return HoldState(
+        active=active, reason_code=reason_code, reason=reason, since_ms=since_ms
+    )
+
+
+def latest_reconciliation(
+    entries: list[OrderJournalEntry],
+) -> ReconciliationSummary | None:
+    """The most recent RECONCILIATION verdict, or ``None`` if never swept."""
+    latest: OrderJournalEntry | None = None
+    for entry in entries:
+        if entry.kind is ClerkEntryKind.RECONCILIATION and entry.verdict:
+            latest = entry
+    if latest is None or latest.verdict is None:
+        return None
+    return ReconciliationSummary(
+        verdict=latest.verdict, recorded_at_ms=latest.recorded_at_ms
+    )
+
+
+def unexplained_order_ids(entries: list[OrderJournalEntry]) -> set[str]:
+    """Broker order ids already journaled as ``UNEXPLAINED_ORDER``.
+
+    The dedup key for the reconciliation sweep: a foreign order the sweep has
+    already recorded must not be re-journaled (nor re-counted) on every later
+    pass, or a single persistent foreign order would grow the ledger without
+    bound while the account is held.
+    """
+    return {
+        entry.broker_order_id
+        for entry in entries
+        if entry.kind is ClerkEntryKind.UNEXPLAINED_ORDER and entry.broker_order_id
+    }
+
+
+def reconstruct_terminal(entry: OrderJournalEntry) -> OrderLegResult:
+    """Rebuild the result represented by one terminal submit-side ledger line."""
+    if entry.kind is ClerkEntryKind.SUBMIT_ACKED:
+        return OrderLegResult(
+            status="acked",
+            order_ref=entry.order_ref,
+            intent_id=entry.intent_id,
+            order=entry.order,
+        )
+    return OrderLegResult(
+        status="failed",
+        order_ref=entry.order_ref,
+        intent_id=entry.intent_id,
+        error=OrderLegError(
+            message=entry.error_message or "The order did not reach the broker.",
+            why=entry.error_detail,
+        ),
+    )
+
+
+def terminal_outcome(
+    entries: list[OrderJournalEntry], order_ref: str
+) -> OrderLegResult | None:
+    """Last terminal result for an order ref, if any (journal last-write-wins)."""
+    terminal: OrderJournalEntry | None = None
+    for entry in entries:
+        if (
+            entry.kind in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED)
+            and entry.order_ref == order_ref
+        ):
+            terminal = entry
+    return None if terminal is None else reconstruct_terminal(terminal)
+
+
+def terminal_map(entries: list[OrderJournalEntry]) -> dict[str, OrderLegResult]:
+    """Order ref → terminal result from one ledger scan (last-write-wins)."""
+    latest: dict[str, OrderJournalEntry] = {}
+    for entry in entries:
+        if (
+            entry.order_ref
+            and entry.kind in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED)
+        ):
+            latest[entry.order_ref] = entry
+    return {order_ref: reconstruct_terminal(entry) for order_ref, entry in latest.items()}
+
+
+def uncertain_timestamp_map(entries: list[OrderJournalEntry]) -> dict[str, int]:
+    """Most recent response-lost-submit timestamp per durable order ref."""
+    return {
+        entry.order_ref: entry.recorded_at_ms
+        for entry in entries
+        if entry.order_ref and entry.kind is ClerkEntryKind.SUBMIT_UNCERTAIN
+    }
+
+
+def unresolved_intents(entries: list[OrderJournalEntry]) -> list[OrderJournalEntry]:
+    """Owning intent lines whose latest submit-side state is not terminal."""
+    origin: dict[str, OrderJournalEntry] = {}
+    terminal_refs: set[str] = set()
+    order: list[str] = []
+    for entry in entries:
+        if not entry.order_ref:
+            continue
+        if entry.kind is ClerkEntryKind.INTENT_RECORDED:
+            if entry.order_ref not in origin:
+                origin[entry.order_ref] = entry
+                order.append(entry.order_ref)
+        elif entry.kind in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED):
+            terminal_refs.add(entry.order_ref)
+    return [
+        origin[order_ref]
+        for order_ref in order
+        if order_ref not in terminal_refs and origin[order_ref].leg is not None
+    ]
+
+
+def has_missing_intent(
+    entries: list[OrderJournalEntry],
+    orders: list[BrokerOrder],
+    positions: list[BrokerPosition],
+) -> bool:
+    """True when the broker reflects owned exposure with no recorded intent.
+
+    Every non-foreign order the sweep saw carries a ``client_order_id`` that is
+    one of our namespaces (foreign orders are handled before this check). An owned
+    order for which the ledger has no ``intent_recorded`` line means the broker
+    knows about an order we never recorded intent for — drift. Position-side drift
+    compares each live symbol/quantity to the latest journaled order state; an old
+    unrelated intent can therefore never mask manual exposure. Observational
+    either way.
+    """
+    recorded_refs = {
+        entry.order_ref
+        for entry in entries
+        if entry.kind is ClerkEntryKind.INTENT_RECORDED and entry.order_ref
+    }
+    for order in orders:
+        coid = order.client_order_id
+        if coid and coid not in recorded_refs:
+            return True
+    latest_order_by_ref: dict[str, BrokerOrder] = {}
+    for entry in entries:
+        if entry.order_ref and entry.order is not None:
+            latest_order_by_ref[entry.order_ref] = entry.order
+
+    expected_quantity_by_symbol: dict[str, float] = {}
+    for order in latest_order_by_ref.values():
+        signed_quantity = order.filled_quantity
+        if order.side.lower() == "sell":
+            signed_quantity = -signed_quantity
+        expected_quantity_by_symbol[order.symbol] = (
+            expected_quantity_by_symbol.get(order.symbol, 0.0) + signed_quantity
+        )
+
+    for position in positions:
+        actual_quantity = position.quantity
+        if position.side.lower() == "short":
+            actual_quantity = -actual_quantity
+        expected_quantity = expected_quantity_by_symbol.get(position.symbol, 0.0)
+        if abs(actual_quantity - expected_quantity) > 1e-9:
+            return True
+    return False

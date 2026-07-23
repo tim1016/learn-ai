@@ -1,0 +1,60 @@
+<div class="flex flex-col gap-3">
+  <div class="flex flex-wrap items-center gap-2">
+    <p-button
+      label="Add equity leg"
+      icon="pi pi-plus"
+      size="small"
+      (onClick)="addEquityLeg()"
+    />
+    <p-button
+      label="Add option leg"
+      icon="pi pi-plus"
+      size="small"
+      severity="secondary"
+      [disabled]="true"
+      pTooltip="Option legs are coming in 2b"
+      title="Option legs are coming in 2b"
+    />
+    <span class="text-xs text-color-secondary">Option legs are coming in 2b.</span>
+  </div>
+
+  @if (legs().length === 0) {
+    <p class="m-0 py-2 text-sm text-color-secondary" role="status">
+      No legs yet. Add an equity leg to build an order.
+    </p>
+  } @else {
+    <div class="flex flex-col gap-2" role="list" aria-label="Order legs">
+      @for (leg of legs(); track leg.id) {
+        <app-alpaca-order-leg-row
+          [legForm]="legsForm[$index]"
+          [position]="$index"
+          (removed)="removeLeg(leg.id)"
+        />
+      }
+    </div>
+
+    <div>
+      <p-button
+        label="Preview order"
+        icon="pi pi-eye"
+        size="small"
+        [disabled]="!canSubmit()"
+        (onClick)="openPreview()"
+      />
+    </div>
+  }
+
+  @if (submitError(); as error) {
+    <p-message severity="error" [text]="error" />
+  }
+
+  <app-alpaca-order-results [results]="results()" />
+</div>
+
+<app-alpaca-order-preview
+  [legs]="legs()"
+  [visible]="previewOpen()"
+  [submitting]="submitting()"
+  (closed)="closePreview()"
+  (confirmed)="confirmSubmit()"
+/>

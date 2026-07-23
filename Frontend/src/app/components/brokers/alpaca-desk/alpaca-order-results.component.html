@@ -1,0 +1,43 @@
+@if (results(); as rows) {
+  <section class="flex flex-col gap-2" aria-label="Submission results">
+    <h3 class="m-0 text-sm font-semibold">Submission results</h3>
+    <p-table [value]="rows" [stripedRows]="true" aria-label="Per-leg submission results">
+      <ng-template #header>
+        <tr>
+          <th scope="col">Status</th>
+          <th scope="col">Order ref</th>
+          <th scope="col">Detail</th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-row>
+        <tr>
+          <td>
+            @switch (row.status) {
+              @case ('acked') {
+                <p-tag severity="success" [value]="row.status | receiptLabel" />
+              }
+              @case ('uncertain') {
+                <p-tag severity="warn" [value]="row.status | receiptLabel" />
+              }
+              @default {
+                <p-tag severity="danger" [value]="row.status | receiptLabel" />
+              }
+            }
+          </td>
+          <td class="font-mono text-xs break-all">{{ row.order_ref }}</td>
+          <td class="text-sm">
+            @if (row.status === 'acked' && row.order; as order) {
+              {{ order.symbol }} · {{ order.side | receiptLabel }} ·
+              <span [attr.title]="order.order_id">{{ order.status | receiptLabel }}</span>
+            } @else if (row.error; as err) {
+              <span [class.text-red-500]="row.status === 'failed'">{{ err.message }}</span>
+              @if (err.why) {
+                <span class="text-color-secondary"> ({{ err.why }})</span>
+              }
+            }
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
+  </section>
+}

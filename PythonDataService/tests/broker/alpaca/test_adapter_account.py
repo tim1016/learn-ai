@@ -7,6 +7,8 @@ regenerated against a real sanitized capture in HITL slice #1178.
 
 from __future__ import annotations
 
+import pytest
+
 from app.broker.alpaca.adapter import from_alpaca_account, rfc3339_to_ms
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
@@ -50,3 +52,24 @@ def test_missing_created_at_is_none(load_alpaca_fixture: AlpacaFixtureLoader) ->
     payload.pop("created_at")
 
     assert from_alpaca_account(payload, observed_at_ms=_OBSERVED).created_at_ms is None
+
+
+def test_missing_pattern_day_trader_preserves_unknown(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload.pop("pattern_day_trader")
+
+    snapshot = from_alpaca_account(payload, observed_at_ms=_OBSERVED)
+
+    assert snapshot.pattern_day_trader is None
+
+
+def test_malformed_pattern_day_trader_is_rejected(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    payload = dict(load_alpaca_fixture("account", "account.json"))
+    payload["pattern_day_trader"] = "false"
+
+    with pytest.raises(TypeError, match="boolean or null"):
+        from_alpaca_account(payload, observed_at_ms=_OBSERVED)

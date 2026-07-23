@@ -1,8 +1,9 @@
-"""AlpacaBroker — the read-port implementation (Broker System v2).
+"""AlpacaBroker — the read-port and trade-port implementation (Broker System v2).
 
 Composes the SDK client, the adapter, and the capability descriptor into a
-single :class:`BrokerReadPort`. Each read-path slice adds one method here; the
-router only ever sees contract models.
+single object implementing both :class:`BrokerReadPort` and (from phase 2)
+:class:`BrokerTradePort`. Each slice adds one method here; the router and Clerk
+only ever see contract models.
 
 The port is cheap to construct (the underlying client builds credentials and
 network lazily), so it can be registered at startup without keys.
@@ -20,6 +21,7 @@ from app.broker.contract.models import (
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
+    BrokerOrderLeg,
     BrokerPosition,
 )
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
@@ -44,7 +46,7 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
 
 
 class AlpacaBroker:
-    """Alpaca implementation of :class:`BrokerReadPort`."""
+    """Alpaca implementation of :class:`BrokerReadPort` and :class:`BrokerTradePort`."""
 
     broker_id = BROKER_ID
 
@@ -102,6 +104,50 @@ class AlpacaBroker:
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         payload = await self._client.get_clock()
         return adapter.from_alpaca_clock(payload)
+
+    # ── Trade port (phase 2) ────────────────────────────────────────────────
+
+    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        """Submit one equity leg; map the accepted order to a ``BrokerOrder``.
+
+        The vendor request body is built by the adapter (contract → vendor),
+        POSTed over the capturing session, and the raw response mapped back
+        (vendor → contract). A vendor rejection raises a ``BrokerError`` the
+        Clerk journals as ``submit_failed``.
+        """
+        body = adapter.to_alpaca_order_request(leg, client_order_id=client_order_id)
+        payload = await self._client.submit_order(body)
+        return adapter.from_alpaca_order(payload)
+
+    async def cancel(self, order_id: str) -> None:
+        """Cancel one working order by its broker-assigned id (S3).
+
+        Delegates to the SDK client's ``DELETE /v2/orders/{order_id}``. A
+        non-cancelable order (already filled/canceled) surfaces as a vendor 422,
+        which ``map_api_error`` translates to a ``BrokerError`` the Clerk
+        journals as ``cancel_failed``. There is no order body to map back —
+        Alpaca returns 204 — so this returns ``None``.
+        """
+        await self._client.cancel_order(order_id)
+
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> BrokerOrder | None:
+        """Look an order up by the ``client_order_id`` the Clerk minted (S5).
+
+        Resolves an uncertain submit: the Clerk asks whether the order it may
+        have sent actually landed. Delegates to the SDK client's
+        ``GET /v2/orders:by_client_order_id`` and maps the raw payload to a
+        ``BrokerOrder`` when found. Returns ``None`` when Alpaca reports the
+        order definitively absent (HTTP 404 — it never landed); a
+        ``BrokerUnavailable`` from the client (timeout / 5xx / network) keeps the
+        outcome uncertain and propagates so the Clerk leaves the intent
+        unresolved rather than fabricating a terminal state.
+        """
+        payload = await self._client.get_order_by_client_order_id(client_order_id)
+        if payload is None:
+            return None
+        return adapter.from_alpaca_order(payload)
 
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:
