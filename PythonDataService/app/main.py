@@ -109,6 +109,37 @@ async def lifespan(app: FastAPI):
         "Broker v2 registry ready: %s", get_broker_registry().registered_brokers()
     )
 
+    # Alpaca Clerk (phase 2) — the in-process single-writer for order
+    # submission. Installed only when Alpaca keys are present, independent of
+    # the IBKR broker_enabled block below (Alpaca is a peer vendor, not part of
+    # the IBKR gateway lifecycle). No keys → no clerk → the write endpoint
+    # honestly reports "not configured".
+    from pydantic import ValidationError
+
+    from app.broker.alpaca.broker import AlpacaBroker
+    from app.broker.alpaca.clerk import AlpacaClerk, set_alpaca_clerk
+    from app.broker.alpaca.config import get_alpaca_settings
+
+    try:
+        get_alpaca_settings()
+    except ValidationError as exc:
+        # get_alpaca_settings() raises ValidationError both for benign
+        # missing-keys (no Alpaca configured) AND for an ALPACA_MODE safety
+        # misconfig (the paper-only validator). Do NOT abort startup — no clerk
+        # means no submit, which is money-safe — but log the actual detail with
+        # exc_info so a live-mode misconfig is VISIBLE in logs, not masked as
+        # "keys absent".
+        logger.warning(
+            "Alpaca settings invalid; order-submission clerk not installed. "
+            "Detail: %s",
+            exc,
+            exc_info=True,
+        )
+    else:
+        alpaca_broker = AlpacaBroker()
+        set_alpaca_clerk(AlpacaClerk(read=alpaca_broker, trade=alpaca_broker))
+        logger.info("Alpaca Clerk ready (order submission enabled).")
+
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
     ibkr_settings = get_ibkr_settings()

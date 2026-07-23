@@ -8394,6 +8394,67 @@
         "title": "BrokerOrderEvent",
         "type": "object"
       },
+      "BrokerOrderLeg": {
+        "additionalProperties": false,
+        "description": "One equity leg of an order request (broker-neutral).\n\nS1 is EQUITY + MARKET only. ``limit_price`` / ``time_in_force`` are added in\nS2 as optional fields \u2014 additive, so this model is forward-compatible. The\nquantity is a positive share count; the *sign* is carried by ``side``.",
+        "properties": {
+          "order_type": {
+            "const": "market",
+            "default": "market",
+            "title": "Order Type"
+          },
+          "quantity": {
+            "exclusiveMinimum": 0.0,
+            "title": "Quantity",
+            "type": "number"
+          },
+          "side": {
+            "$ref": "#/components/schemas/OrderSide"
+          },
+          "symbol": {
+            "maxLength": 7,
+            "minLength": 1,
+            "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "side",
+          "quantity"
+        ],
+        "title": "BrokerOrderLeg",
+        "type": "object"
+      },
+      "BrokerOrderRequest": {
+        "additionalProperties": false,
+        "description": "An operator-authored order request: one or more legs to submit.\n\nEach leg is submitted independently and journaled independently, so a\nper-leg failure never blocks the others. The clerk mints a distinct\n``order_ref`` identity per leg.",
+        "properties": {
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/BrokerOrderLeg"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Legs",
+            "type": "array"
+          },
+          "operator": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "title": "Operator",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operator",
+          "legs"
+        ],
+        "title": "BrokerOrderRequest",
+        "type": "object"
+      },
       "BrokerPosition": {
         "additionalProperties": false,
         "description": "A single open position (symbol, quantity, entry, value, unrealized PnL).",
@@ -28371,6 +28432,119 @@
         "title": "OptionsExpirationsResponse",
         "type": "object"
       },
+      "OrderLegError": {
+        "additionalProperties": false,
+        "description": "A typed leg failure: a what/why the UI renders, never a raw 500.",
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "OrderLegError",
+        "type": "object"
+      },
+      "OrderLegResult": {
+        "additionalProperties": false,
+        "description": "The per-leg outcome the router shapes into its response.\n\n``acked`` carries the accepted ``order``; ``failed`` is a definitive\nrejection or a lookup that proved the order absent; ``uncertain`` means the\nbroker could not confirm the result. ``order_ref`` is always present \u2014 an\noperator can find the durable intent in the journal before retrying.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLegError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intent_id": {
+            "title": "Intent Id",
+            "type": "string"
+          },
+          "order": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrokerOrder"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "acked",
+              "failed",
+              "uncertain"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "order_ref",
+          "intent_id"
+        ],
+        "title": "OrderLegResult",
+        "type": "object"
+      },
+      "OrderSide": {
+        "description": "The two order sides (broker-neutral).",
+        "enum": [
+          "buy",
+          "sell"
+        ],
+        "title": "OrderSide",
+        "type": "string"
+      },
+      "OrderSubmitResult": {
+        "additionalProperties": false,
+        "description": "The whole request's outcome: one result per submitted leg, in order.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/OrderLegResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "results"
+        ],
+        "title": "OrderSubmitResult",
+        "type": "object"
+      },
       "ParameterStabilityResponse": {
         "description": "Parameter stability assessment.",
         "properties": {
@@ -43463,6 +43637,73 @@
           }
         },
         "summary": "List Orders",
+        "tags": [
+          "brokers-v2"
+        ]
+      },
+      "post": {
+        "description": "Submit one or more equity market legs (phase-2 S1 write path).\n\nTransport only: FastAPI validates the body, this resolves the account-scoped\nClerk facade, and the Clerk owns identity minting, fail-closed journaling,\nthe broker call, and per-leg result shaping. A per-leg broker rejection is a\n*failed* leg in a ``200`` response (the request itself succeeded), never a\n``500``.",
+        "operationId": "submit_orders_api_brokers__broker__orders_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrokerOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderSubmitResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit Orders",
         "tags": [
           "brokers-v2"
         ]

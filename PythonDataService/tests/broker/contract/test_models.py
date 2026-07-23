@@ -11,6 +11,7 @@ from app.broker.contract.models import (
     BrokerClockEvidence,
     BrokerOrder,
     BrokerOrderEvent,
+    BrokerOrderLeg,
     BrokerPosition,
 )
 
@@ -48,6 +49,13 @@ def test_account_snapshot_round_trips_snake_case() -> None:
 def test_contract_models_reject_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         _account(unexpected="boom")
+
+
+@pytest.mark.parametrize("symbol", ["BTC/USD", "AAPL240621C00200000", "spy"])
+def test_order_leg_rejects_non_equity_symbol_shape(symbol: str) -> None:
+    """S1 cannot submit crypto pairs or OCC option identifiers as equity legs."""
+    with pytest.raises(ValidationError):
+        BrokerOrderLeg(symbol=symbol, side="buy", quantity=1)
 
 
 def test_created_at_ms_is_nullable() -> None:

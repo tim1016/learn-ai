@@ -25,6 +25,8 @@ class _FakeAlpaca:
         self.orders_filter: Any = None
         self.assets_filter: Any = None
         self.activities_call: Any = None
+        self.post_call: Any = None
+        self.lookup_call: str | None = None
 
     def get_account(self) -> dict:
         return {"account_number": "PA1", "status": "ACTIVE"}
@@ -46,6 +48,18 @@ class _FakeAlpaca:
 
     def get_clock(self) -> dict:
         return {"is_open": True}
+
+    def post(self, path: str, data: Any = None) -> dict:
+        self.post_call = (path, data)
+        return {"id": "broker-order-1", "status": "accepted"}
+
+    def get_order_by_client_id(self, *, client_id: str) -> dict:
+        self.lookup_call = client_id
+        return {
+            "id": "broker-order-1",
+            "client_order_id": client_id,
+            "status": "accepted",
+        }
 
 
 def _client(fake: _FakeAlpaca) -> AlpacaTradingClient:
@@ -91,6 +105,42 @@ async def test_list_activities_calls_low_level_endpoint() -> None:
 
 async def test_get_clock_returns_raw() -> None:
     assert await _client(_FakeAlpaca()).get_clock() == {"is_open": True}
+
+
+async def test_submit_order_posts_to_orders_endpoint_and_returns_raw() -> None:
+    fake = _FakeAlpaca()
+    body = {"symbol": "SPY", "qty": "1", "side": "buy", "type": "market"}
+
+    payload = await _client(fake).submit_order(body)
+
+    assert fake.post_call == ("/orders", body)
+    assert payload == {"id": "broker-order-1", "status": "accepted"}
+
+
+async def test_get_order_by_client_order_id_returns_raw_payload() -> None:
+    fake = _FakeAlpaca()
+
+    payload = await _client(fake).get_order_by_client_order_id("manual/inkant/v1:abc")
+
+    assert fake.lookup_call == "manual/inkant/v1:abc"
+    assert payload == {
+        "id": "broker-order-1",
+        "client_order_id": "manual/inkant/v1:abc",
+        "status": "accepted",
+    }
+
+
+async def test_get_order_by_client_order_id_404_returns_none(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    fake = _FakeAlpaca()
+
+    def raise_not_found(*, client_id: str) -> dict:
+        raise make_api_error(404, message="order not found")
+
+    fake.get_order_by_client_id = raise_not_found  # type: ignore[method-assign]
+
+    assert await _client(fake).get_order_by_client_order_id("manual/inkant/v1:abc") is None
 
 
 async def test_api_error_maps_to_contract_error(make_api_error: ApiErrorFactory) -> None:

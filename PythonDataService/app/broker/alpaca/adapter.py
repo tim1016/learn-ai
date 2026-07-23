@@ -29,8 +29,13 @@ from app.broker.contract.models import (
     BrokerClockEvidence,
     BrokerOrder,
     BrokerOrderEvent,
+    BrokerOrderLeg,
     BrokerPosition,
 )
+
+# S1 submits equity market orders as DAY orders (Alpaca's required
+# ``time_in_force``); TIF selection lands in S2 alongside limit orders.
+_S1_TIME_IN_FORCE = "day"
 
 # DST-correct ET zone for anchoring bare dates (never a fixed offset).
 _ET = ZoneInfo("America/New_York")
@@ -197,6 +202,26 @@ def _order_events(payload: Mapping[str, Any]) -> list[BrokerOrderEvent]:
             )
         ]
     return []
+
+
+def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dict[str, Any]:
+    """Build the Alpaca ``POST /v2/orders`` JSON body for one equity leg.
+
+    The **outbound** boundary sibling of ``from_alpaca_order``: contract →
+    vendor. Vendor field names (``qty``, ``type``, ``time_in_force``) stay
+    inside this layer. S1 is EQUITY + MARKET + DAY; ``client_order_id`` is the
+    Clerk-minted ``order_ref`` — Alpaca echoes it back so ownership is
+    recoverable from a read.
+    """
+    return {
+        "symbol": leg.symbol,
+        # Alpaca accepts the qty as a string; send the operator's share count.
+        "qty": str(leg.quantity),
+        "side": str(leg.side),
+        "type": str(leg.order_type),
+        "time_in_force": _S1_TIME_IN_FORCE,
+        "client_order_id": client_order_id,
+    }
 
 
 def from_alpaca_order(

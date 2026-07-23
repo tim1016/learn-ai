@@ -1,8 +1,14 @@
-"""Golden-fixture test: Alpaca order payloads → BrokerOrder (with fill events)."""
+"""Golden-fixture test: Alpaca order payloads → BrokerOrder (with fill events),
+plus the outbound BrokerOrderLeg → Alpaca request-body mapper."""
 
 from __future__ import annotations
 
-from app.broker.alpaca.adapter import from_alpaca_order, rfc3339_to_ms
+from app.broker.alpaca.adapter import (
+    from_alpaca_order,
+    rfc3339_to_ms,
+    to_alpaca_order_request,
+)
+from app.broker.contract.models import BrokerOrderLeg
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
@@ -55,3 +61,18 @@ def test_open_order_has_no_events_and_nullable_prices(
     assert order.filled_avg_price is None
     assert order.filled_at_ms is None
     assert order.events == []
+
+
+def test_to_alpaca_order_request_maps_equity_market_leg() -> None:
+    leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=3)
+
+    body = to_alpaca_order_request(leg, client_order_id="manual/inkant/v1:abc123")
+
+    assert body == {
+        "symbol": "SPY",
+        "qty": "3.0",
+        "side": "buy",
+        "type": "market",
+        "time_in_force": "day",
+        "client_order_id": "manual/inkant/v1:abc123",
+    }

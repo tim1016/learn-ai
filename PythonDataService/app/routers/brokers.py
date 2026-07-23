@@ -13,8 +13,9 @@ import math
 from collections.abc import Awaitable, Callable
 from typing import Literal, NoReturn
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.broker.alpaca.clerk import OrderSubmitResult, get_alpaca_clerk
 from app.broker.contract.errors import BrokerError, BrokerRateLimited
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -22,10 +23,12 @@ from app.broker.contract.models import (
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
+    BrokerOrderRequest,
     BrokerPosition,
 )
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
+from app.security.data_plane_control import require_data_plane_control_secret
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 
@@ -112,3 +115,37 @@ async def get_clock_evidence(broker: str) -> BrokerClockEvidence:
     # Vendor evidence only — the canonical calendar module remains the sole
     # authority for scheduled session structure (no authority change).
     return await _run(broker, lambda port: port.get_clock_evidence())
+
+
+@router.post(
+    "/{broker}/orders",
+    response_model=OrderSubmitResult,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def submit_orders(broker: str, request: BrokerOrderRequest) -> OrderSubmitResult:
+    """Submit one or more equity market legs (phase-2 S1 write path).
+
+    Transport only: FastAPI validates the body, this resolves the account-scoped
+    Clerk facade, and the Clerk owns identity minting, fail-closed journaling,
+    the broker call, and per-leg result shaping. A per-leg broker rejection is a
+    *failed* leg in a ``200`` response (the request itself succeeded), never a
+    ``500``.
+    """
+    if broker != "alpaca":
+        # Only Alpaca has a trade port in S1. Surface the same 404 shape the
+        # read path uses for an unknown broker.
+        _resolve_port(broker)
+    clerk = get_alpaca_clerk()
+    if clerk is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "broker": broker,
+                "message": "Alpaca order submission is not configured.",
+                "why": "Set Alpaca paper credentials in .env and restart the service.",
+            },
+        )
+    try:
+        return await clerk.submit(request)
+    except BrokerError as error:
+        _raise_http(error)

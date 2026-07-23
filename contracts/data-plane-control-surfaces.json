@@ -2,6 +2,7 @@
   "control_prefixes": [
     "/api/accounts",
     "/api/broker",
+    "/api/brokers",
     "/api/live-instances",
     "/api/live-runs",
     "/api/strategy-validation"

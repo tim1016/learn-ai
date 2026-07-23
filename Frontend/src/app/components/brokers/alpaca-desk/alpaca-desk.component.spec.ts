@@ -20,6 +20,6 @@ describe('AlpacaDeskComponent', () => {
     });
 
     expect(screen.getByRole('heading', { name: /Alpaca/i })).toBeTruthy();
-    expect(screen.getByText(/Read-only broker desk/i)).toBeTruthy();
+    expect(screen.getByText(/Broker desk · Broker System v2/i)).toBeTruthy();
   });
 });

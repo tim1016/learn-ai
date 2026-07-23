@@ -23,7 +23,8 @@ from pathlib import Path
 # ``stop`` would later reject (e.g. one containing a space) fail closed at
 # *creation* time — via the CLI and the deploy seam — instead of producing an
 # instance that exists but can never be operated on.
-_INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+INSTANCE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+_INSTANCE_ID_RE = re.compile(INSTANCE_ID_PATTERN)
 
 
 def validate_strategy_instance_id(value: str) -> str:

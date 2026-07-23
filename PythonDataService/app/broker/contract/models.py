@@ -20,13 +20,78 @@ Two conventions are load-bearing:
 
 from __future__ import annotations
 
+from enum import StrEnum
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.engine.live.identity import INSTANCE_ID_PATTERN
 
 
 class _ContractModel(BaseModel):
     """Base for contract models: reject unknown fields to catch adapter typos."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class OrderSide(StrEnum):
+    """The two order sides (broker-neutral)."""
+
+    BUY = "buy"
+    SELL = "sell"
+
+
+class OrderType(StrEnum):
+    """Order types. Phase-2 S1 supports ``MARKET`` only; ``limit``/``stop``/…
+    land in later slices as additive members, so callers already switch on the
+    enum rather than a bare string.
+    """
+
+    MARKET = "market"
+
+
+US_EQUITY_SYMBOL_PATTERN = r"^[A-Z]{1,5}(?:[.-][A-Z])?$"
+
+
+class BrokerOrderLeg(_ContractModel):
+    """One equity leg of an order request (broker-neutral).
+
+    S1 is EQUITY + MARKET only. ``limit_price`` / ``time_in_force`` are added in
+    S2 as optional fields — additive, so this model is forward-compatible. The
+    quantity is a positive share count; the *sign* is carried by ``side``.
+    """
+
+    # S1 accepts listed US-equity tickers only. Keeping this at the transport
+    # boundary prevents a direct caller from bypassing the option-disabled UI
+    # and submitting an Alpaca crypto pair or OCC option identifier.
+    symbol: str = Field(
+        min_length=1,
+        max_length=7,
+        pattern=US_EQUITY_SYMBOL_PATTERN,
+    )
+    side: OrderSide
+    quantity: float = Field(gt=0)
+    # S1 accepts only ``market``; the enum leaves room for later types.
+    order_type: Literal[OrderType.MARKET] = OrderType.MARKET
+
+
+class BrokerOrderRequest(_ContractModel):
+    """An operator-authored order request: one or more legs to submit.
+
+    Each leg is submitted independently and journaled independently, so a
+    per-leg failure never blocks the others. The clerk mints a distinct
+    ``order_ref`` identity per leg.
+    """
+
+    # ``operator`` becomes the manual-namespace path segment
+    # (``manual/{operator}/v1``), so it must satisfy the same single-segment
+    # charset the identity path boundary enforces — a value with a space, '/',
+    # '\\', NUL, or a '.'/'..' traversal segment is rejected here as a 422,
+    # never allowed to reach ``validate_strategy_instance_id`` and raise an
+    # uncaught ``ValueError``. Pattern is the source-of-truth from
+    # ``app.engine.live.identity`` (kept in lockstep with the path validator).
+    operator: str = Field(min_length=1, max_length=64, pattern=INSTANCE_ID_PATTERN)
+    legs: list[BrokerOrderLeg] = Field(min_length=1, max_length=32)
 
 
 class BrokerAccountSnapshot(_ContractModel):

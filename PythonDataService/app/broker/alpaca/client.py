@@ -36,7 +36,7 @@ from requests.exceptions import RequestException
 
 from app.broker.alpaca.capture_hook import install_capture_hook
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
-from app.broker.alpaca.errors import map_api_error
+from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import BrokerAuthError, BrokerUnavailable
 
@@ -185,3 +185,39 @@ class AlpacaTradingClient:
 
     async def get_clock(self) -> dict[str, Any]:
         return await self._call(lambda c: c.get_clock(), describe="clock")
+
+    # ── Write methods (phase 2) ─────────────────────────────────────────────
+
+    async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
+        """POST one order to ``/v2/orders`` over the owned capturing session.
+
+        ``order`` is the exact JSON body Alpaca expects
+        (``symbol``, ``qty``, ``side``, ``type``, ``time_in_force``,
+        ``client_order_id``). The low-level ``post`` drives the same
+        ``requests.Session`` the read path uses, so the capture hook journals
+        the raw response verbatim, and the same timeout + ``map_api_error``
+        translation applies. Returns the raw Alpaca order payload; the adapter
+        maps it to a ``BrokerOrder``.
+        """
+        return await self._call(
+            lambda c: c.post("/orders", order), describe="order submission"
+        )
+
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> dict[str, Any] | None:
+        """Look up a possibly-submitted order by its durable client id.
+
+        A 404 is definitive evidence that the order did not land, so it becomes
+        ``None``. Every other error keeps the submit outcome uncertain.
+        """
+
+        def _get(client: Any) -> dict[str, Any] | None:
+            try:
+                return client.get_order_by_client_id(client_id=client_order_id)
+            except APIError as exc:
+                if status_of(exc) == 404:
+                    return None
+                raise
+
+        return await self._call(_get, describe="order lookup by client_order_id")

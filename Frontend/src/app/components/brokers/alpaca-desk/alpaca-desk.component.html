@@ -4,10 +4,15 @@
       <h1 class="m-0 text-2xl font-semibold">Alpaca</h1>
       <p-tag severity="warn" value="Paper" />
     </div>
-    <p class="mb-0 mt-1 text-sm text-color-secondary">Read-only broker desk · Broker System v2</p>
+    <p class="mb-0 mt-1 text-sm text-color-secondary">Broker desk · Broker System v2</p>
   </header>
 
   <app-alpaca-account-card />
+
+  <section class="flex flex-col gap-2" aria-label="New order">
+    <h2 class="m-0 text-lg font-semibold">New order</h2>
+    <app-alpaca-order-entry />
+  </section>
 
   <section class="flex flex-col gap-2" aria-label="Positions">
     <h2 class="m-0 text-lg font-semibold">Positions</h2>
