@@ -17989,9 +17989,10 @@ export interface components {
          * OrderLegResult
          * @description The per-leg outcome the router shapes into its response.
          *
-         *     Exactly one of ``order`` (acked) / ``error`` (failed) is set, keyed by
-         *     ``status``. ``order_ref`` is always present — an operator can find the
-         *     intent in the journal even when the submit failed.
+         *     ``acked`` carries the accepted ``order``; ``failed`` is a definitive
+         *     rejection or a lookup that proved the order absent; ``uncertain`` means the
+         *     broker could not confirm the result. ``order_ref`` is always present — an
+         *     operator can find the durable intent in the journal before retrying.
          */
         OrderLegResult: {
             error?: components["schemas"]["OrderLegError"] | null;
@@ -18000,8 +18001,11 @@ export interface components {
             order?: components["schemas"]["BrokerOrder"] | null;
             /** Order Ref */
             order_ref: string;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "acked" | "failed" | "uncertain";
         };
         /**
          * OrderSide

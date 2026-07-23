@@ -10,7 +10,9 @@ The Clerk is the sole author of order submission for Alpaca. For each leg it:
    any broker call. No journal → no order.
 3. **Calls the trade port** to submit.
 4. **Journals ``submit_acked``** (with the ``BrokerOrder``) on success, or
-   **``submit_failed``** on a ``BrokerError``, and returns a per-leg result.
+   **``submit_failed``** on a definitive ``BrokerError``. A lost broker
+   response is journaled as **``submit_uncertain``** and resolved by its minted
+   ``client_order_id`` before the operator sees a result.
 
 Serialization: a single ``asyncio.Lock`` (the intake lock) makes submission
 serial per account — combined with the single-uvicorn-worker deployment
@@ -34,7 +36,7 @@ from app.broker.alpaca.clerk.models import (
     OrderSubmitResult,
 )
 from app.broker.alpaca.config import BROKER_ID
-from app.broker.contract.errors import BrokerError
+from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerOrderRequest
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import (
@@ -71,7 +73,7 @@ class _LegIdentity:
         kind: ClerkEntryKind,
         *,
         order: BrokerOrder | None = None,
-        error: BrokerError | None = None,
+        error: BrokerError | OrderLegError | None = None,
     ) -> OrderJournalEntry:
         """A journal entry for this identity, stamped with ``kind`` and outcome."""
         return OrderJournalEntry(
@@ -85,7 +87,11 @@ class _LegIdentity:
             recorded_at_ms=_now_ms(),
             order=order,
             error_message=error.message if error is not None else None,
-            error_detail=error.detail if error is not None else None,
+            error_detail=(
+                error.why if isinstance(error, OrderLegError) else error.detail
+            )
+            if error is not None
+            else None,
         )
 
 
@@ -177,6 +183,13 @@ class AlpacaClerk:
 
         try:
             order = await self._trade.submit(leg, client_order_id=order_ref)
+        except BrokerUnavailable as exc:
+            # The timeout/network failure may have happened after Alpaca
+            # accepted the POST. Record that fact first, then resolve using the
+            # id minted before the request; a failed retry must never be made to
+            # look safe when the original market order may exist.
+            journal.append(identity.entry(ClerkEntryKind.SUBMIT_UNCERTAIN, error=exc))
+            return await self._resolve_uncertain_submit(identity, journal, exc)
         except BrokerError as exc:
             journal.append(identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=exc))
             return OrderLegResult(
@@ -189,6 +202,77 @@ class AlpacaClerk:
         journal.append(identity.entry(ClerkEntryKind.SUBMIT_ACKED, order=order))
         return OrderLegResult(
             status="acked", order_ref=order_ref, intent_id=intent_id, order=order
+        )
+
+    async def _resolve_uncertain_submit(
+        self,
+        identity: _LegIdentity,
+        journal: OrderJournal,
+        submit_error: BrokerUnavailable,
+    ) -> OrderLegResult:
+        """Probe a response-lost submit without fabricating a terminal result."""
+        try:
+            order = await self._trade.get_order_by_client_order_id(identity.order_ref)
+        except BrokerError as lookup_error:
+            logger.warning(
+                "alpaca clerk submit outcome remains uncertain",
+                extra={
+                    "action": "submit_uncertain",
+                    "account_id": identity.account_id,
+                    "order_ref": identity.order_ref,
+                    "submit_why": submit_error.detail,
+                    "lookup_why": lookup_error.detail,
+                },
+            )
+            return OrderLegResult(
+                status="uncertain",
+                order_ref=identity.order_ref,
+                intent_id=identity.intent_id,
+                error=OrderLegError(
+                    message="The order may have reached Alpaca; do not resubmit yet.",
+                    why=lookup_error.detail or submit_error.detail,
+                ),
+            )
+
+        if order is None:
+            failure = OrderLegError(
+                message="Alpaca has no order for this client order ID.",
+                why="The response-lost submission did not reach the broker.",
+            )
+            journal.append(identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=failure))
+            return OrderLegResult(
+                status="failed",
+                order_ref=identity.order_ref,
+                intent_id=identity.intent_id,
+                error=failure,
+            )
+
+        if order.client_order_id != identity.order_ref:
+            logger.error(
+                "alpaca clerk lookup returned a mismatched client order id",
+                extra={
+                    "action": "submit_uncertain_mismatch",
+                    "account_id": identity.account_id,
+                    "order_ref": identity.order_ref,
+                    "returned_client_order_id": order.client_order_id,
+                },
+            )
+            return OrderLegResult(
+                status="uncertain",
+                order_ref=identity.order_ref,
+                intent_id=identity.intent_id,
+                error=OrderLegError(
+                    message="The order may have reached Alpaca; do not resubmit yet.",
+                    why="Alpaca returned a different client order ID.",
+                ),
+            )
+
+        journal.append(identity.entry(ClerkEntryKind.SUBMIT_ACKED, order=order))
+        return OrderLegResult(
+            status="acked",
+            order_ref=identity.order_ref,
+            intent_id=identity.intent_id,
+            order=order,
         )
 
 

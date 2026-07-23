@@ -60,6 +60,7 @@ async function fillFirstLeg(symbol: string, quantity: string): Promise<void> {
   // p-inputNumber renders an inner <input>; drive it directly by its aria-label.
   const qtyInput = await screen.findByLabelText('Leg 1 quantity');
   fireEvent.input(qtyInput, { target: { value: quantity } });
+  fireEvent.change(qtyInput, { target: { value: quantity } });
   fireEvent.blur(qtyInput);
 }
 
@@ -116,5 +117,20 @@ describe('AlpacaOrderEntryComponent', () => {
 
     const results = await screen.findByLabelText('Submission results');
     expect(within(results).getByText(/insufficient buying power/)).toBeTruthy();
+  });
+
+  it('treats a lost browser response as an uncertain submission', async () => {
+    const submitOrder = vi.fn().mockRejectedValue(new Error('network lost'));
+    await renderPanel(submitOrder);
+
+    await fillFirstLeg('spy', '2');
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
+
+    expect(
+      await screen.findByText(
+        'The submission outcome is uncertain. Check Alpaca orders and the journal before submitting again.',
+      ),
+    ).toBeTruthy();
   });
 });

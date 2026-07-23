@@ -50,6 +50,9 @@ class OrderType(StrEnum):
     MARKET = "market"
 
 
+US_EQUITY_SYMBOL_PATTERN = r"^[A-Z]{1,5}(?:[.-][A-Z])?$"
+
+
 class BrokerOrderLeg(_ContractModel):
     """One equity leg of an order request (broker-neutral).
 
@@ -58,7 +61,14 @@ class BrokerOrderLeg(_ContractModel):
     quantity is a positive share count; the *sign* is carried by ``side``.
     """
 
-    symbol: str = Field(min_length=1, max_length=32)
+    # S1 accepts listed US-equity tickers only. Keeping this at the transport
+    # boundary prevents a direct caller from bypassing the option-disabled UI
+    # and submitting an Alpaca crypto pair or OCC option identifier.
+    symbol: str = Field(
+        min_length=1,
+        max_length=7,
+        pattern=US_EQUITY_SYMBOL_PATTERN,
+    )
     side: OrderSide
     quantity: float = Field(gt=0)
     # S1 accepts only ``market``; the enum leaves room for later types.

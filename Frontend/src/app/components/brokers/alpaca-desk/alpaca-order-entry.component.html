@@ -30,37 +30,34 @@
             <span>Symbol</span>
             <input
               pInputText
-              [value]="leg.symbol"
-              (input)="updateSymbol(leg.id, $any($event.target).value)"
+              [formField]="legsForm[$index].symbol"
               placeholder="e.g. SPY"
               [attr.aria-label]="'Leg ' + ($index + 1) + ' symbol'"
               class="w-28 uppercase"
             />
           </label>
-          <div class="flex flex-col gap-1 text-xs">
+          <label class="flex flex-col gap-1 text-xs">
             <span>Side</span>
-            <p-selectButton
-              [options]="sideOptions"
-              optionLabel="label"
-              optionValue="value"
-              [ngModel]="leg.side"
-              (ngModelChange)="updateSide(leg.id, $event)"
-              [allowEmpty]="false"
+            <select
+              [formField]="legsForm[$index].side"
               [attr.aria-label]="'Leg ' + ($index + 1) + ' side'"
-            />
-          </div>
-          <div class="flex flex-col gap-1 text-xs">
+              class="h-10 rounded border border-surface px-2"
+            >
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+          </label>
+          <label class="flex flex-col gap-1 text-xs">
             <span>Quantity</span>
-            <p-inputNumber
-              [ngModel]="leg.quantity"
-              (ngModelChange)="updateQuantity(leg.id, $event)"
-              [min]="0"
-              [showButtons]="false"
+            <input
+              type="number"
+              step="any"
+              [formField]="legsForm[$index].quantity"
               placeholder="Shares"
-              [inputStyleClass]="'w-24'"
-              [ariaLabel]="'Leg ' + ($index + 1) + ' quantity'"
+              [attr.aria-label]="'Leg ' + ($index + 1) + ' quantity'"
+              class="h-10 w-24 rounded border border-surface px-2"
             />
-          </div>
+          </label>
           <p-button
             icon="pi pi-trash"
             size="small"
@@ -104,6 +101,8 @@
             <td>
               @if (row.status === 'acked') {
                 <p-tag severity="success" [value]="row.status | receiptLabel" />
+              } @else if (row.status === 'uncertain') {
+                <p-tag severity="warn" [value]="row.status | receiptLabel" />
               } @else {
                 <p-tag severity="danger" [value]="row.status | receiptLabel" />
               }

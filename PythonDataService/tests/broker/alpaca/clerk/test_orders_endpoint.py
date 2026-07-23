@@ -182,6 +182,20 @@ async def test_operator_with_space_is_rejected_at_boundary_not_500(
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize("symbol", ["BTC/USD", "AAPL240621C00200000"])
+async def test_non_equity_symbol_is_rejected_at_boundary(
+    _alpaca_clerk: None, symbol: str
+) -> None:
+    response = await _post(
+        {
+            "operator": "inkant",
+            "legs": [{"symbol": symbol, "side": "buy", "quantity": 1}],
+        }
+    )
+
+    assert response.status_code == 422
+
+
 async def test_unconfigured_clerk_returns_503() -> None:
     reset_alpaca_clerk_for_testing()
 

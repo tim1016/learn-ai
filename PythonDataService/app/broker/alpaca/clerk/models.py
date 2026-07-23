@@ -5,16 +5,19 @@ imported from or coupled to the IBKR clerk journal. Entry payloads carry
 broker-neutral contract models (``BrokerOrderLeg``, ``BrokerOrder``) so the
 ledger stays vendor-portable, and every temporal field is ``int64`` ms UTC.
 
-S1 needs only three entry kinds; the full lifecycle vocabulary
-(``submit_uncertain``, ``lifecycle_update``, ``reconciled``, …) lands across
+S1 records definitive outcomes plus ``submit_uncertain``: an unavailable
+broker response may have created an order, so the clerk probes it by its minted
+``client_order_id`` before ever reporting a terminal state. The broader
+lifecycle vocabulary (``lifecycle_update``, ``reconciled``, …) lands across
 later slices. Add kinds as slices need them — never speculatively.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 
@@ -25,6 +28,7 @@ class ClerkEntryKind(StrEnum):
     INTENT_RECORDED = "intent_recorded"
     SUBMIT_ACKED = "submit_acked"
     SUBMIT_FAILED = "submit_failed"
+    SUBMIT_UNCERTAIN = "submit_uncertain"
 
 
 class OrderJournalEntry(BaseModel):
@@ -51,7 +55,7 @@ class OrderJournalEntry(BaseModel):
     recorded_at_ms: int
     # Present on submit_acked only: the accepted broker order.
     order: BrokerOrder | None = None
-    # Present on submit_failed only: why the broker rejected or was unreachable.
+    # Present on failed or uncertain submit outcomes: the broker-facing reason.
     error_message: str | None = None
     error_detail: str | None = None
 
@@ -68,14 +72,15 @@ class OrderLegError(BaseModel):
 class OrderLegResult(BaseModel):
     """The per-leg outcome the router shapes into its response.
 
-    Exactly one of ``order`` (acked) / ``error`` (failed) is set, keyed by
-    ``status``. ``order_ref`` is always present — an operator can find the
-    intent in the journal even when the submit failed.
+    ``acked`` carries the accepted ``order``; ``failed`` is a definitive
+    rejection or a lookup that proved the order absent; ``uncertain`` means the
+    broker could not confirm the result. ``order_ref`` is always present — an
+    operator can find the durable intent in the journal before retrying.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    status: str = Field(pattern="^(acked|failed)$")
+    status: Literal["acked", "failed", "uncertain"]
     order_ref: str
     intent_id: str
     order: BrokerOrder | None = None

@@ -1,11 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { FormsModule } from '@angular/forms';
+import { FormField, form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { DialogModule } from 'primeng/dialog';
-import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
 import { MessageModule } from 'primeng/message';
-import { SelectButtonModule } from 'primeng/selectbutton';
 import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 
@@ -22,18 +20,8 @@ interface DraftLeg {
   readonly id: number;
   symbol: string;
   side: OrderSide;
-  quantity: number | null;
+  quantity: string;
 }
-
-interface SideOption {
-  readonly label: string;
-  readonly value: OrderSide;
-}
-
-const SIDE_OPTIONS: SideOption[] = [
-  { label: 'Buy', value: 'buy' },
-  { label: 'Sell', value: 'sell' },
-];
 
 /**
  * Alpaca order-entry panel (phase-2 S1). Leg-based paradigm: the operator adds
@@ -45,13 +33,11 @@ const SIDE_OPTIONS: SideOption[] = [
   selector: 'app-alpaca-order-entry',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    FormsModule,
+    FormField,
     ButtonModule,
     DialogModule,
-    InputNumberModule,
     InputTextModule,
     MessageModule,
-    SelectButtonModule,
     TableModule,
     TagModule,
     ReceiptLabelPipe,
@@ -62,12 +48,12 @@ const SIDE_OPTIONS: SideOption[] = [
 export class AlpacaOrderEntryComponent {
   private readonly brokers = inject(BrokersService);
 
-  protected readonly sideOptions: SideOption[] = SIDE_OPTIONS;
   // S1 has no operator-identity plumbing yet; the manual namespace uses a fixed
   // desk operator. Later slices thread the signed-in operator through here.
   private readonly operator = 'desk';
 
   protected readonly legs = signal<DraftLeg[]>([]);
+  protected readonly legsForm = form(this.legs);
   protected readonly previewOpen = signal(false);
   protected readonly submitting = signal(false);
   protected readonly results = signal<OrderLegResult[] | null>(null);
@@ -80,13 +66,19 @@ export class AlpacaOrderEntryComponent {
   );
 
   protected legValid(leg: DraftLeg): boolean {
-    return leg.symbol.trim().length > 0 && leg.quantity != null && leg.quantity > 0;
+    const quantity = Number(leg.quantity);
+    return (
+      leg.symbol.trim().length > 0 &&
+      leg.quantity.trim().length > 0 &&
+      Number.isFinite(quantity) &&
+      quantity > 0
+    );
   }
 
   protected addEquityLeg(): void {
     this.legs.update((legs) => [
       ...legs,
-      { id: this.nextId++, symbol: '', side: 'buy', quantity: null },
+      { id: this.nextId++, symbol: '', side: 'buy', quantity: '' },
     ]);
     // A new draft invalidates the last submit's results view.
     this.results.set(null);
@@ -99,22 +91,6 @@ export class AlpacaOrderEntryComponent {
     // view, so a stale results table isn't left rendered against an empty draft.
     this.results.set(null);
     this.submitError.set(null);
-  }
-
-  protected updateSymbol(id: number, symbol: string): void {
-    this.legs.update((legs) =>
-      legs.map((leg) => (leg.id === id ? { ...leg, symbol: symbol.toUpperCase() } : leg)),
-    );
-  }
-
-  protected updateSide(id: number, side: OrderSide): void {
-    this.legs.update((legs) => legs.map((leg) => (leg.id === id ? { ...leg, side } : leg)));
-  }
-
-  protected updateQuantity(id: number, quantity: number | null): void {
-    this.legs.update((legs) =>
-      legs.map((leg) => (leg.id === id ? { ...leg, quantity } : leg)),
-    );
   }
 
   protected openPreview(): void {
@@ -132,14 +108,7 @@ export class AlpacaOrderEntryComponent {
     this.submitError.set(null);
     const request = {
       operator: this.operator,
-      legs: this.legs().map(
-        (leg): BrokerOrderLeg => ({
-          symbol: leg.symbol.trim(),
-          side: leg.side,
-          quantity: leg.quantity as number,
-          order_type: 'market',
-        }),
-      ),
+      legs: this.legs().map((leg) => this.toRequestLeg(leg)),
     };
     try {
       const result = await this.brokers.submitOrder('alpaca', request);
@@ -147,7 +116,9 @@ export class AlpacaOrderEntryComponent {
       this.previewOpen.set(false);
       this.legs.set([]);
     } catch {
-      this.submitError.set('Could not reach Alpaca to submit the order. Nothing was sent.');
+      this.submitError.set(
+        'The submission outcome is uncertain. Check Alpaca orders and the journal before submitting again.',
+      );
     } finally {
       this.submitting.set(false);
     }
@@ -155,4 +126,13 @@ export class AlpacaOrderEntryComponent {
 
   protected trackLeg = (_: number, leg: DraftLeg): number => leg.id;
   protected trackResult = (_: number, result: OrderLegResult): string => result.order_ref;
+
+  private toRequestLeg(leg: DraftLeg): BrokerOrderLeg {
+    return {
+      symbol: leg.symbol.trim().toUpperCase(),
+      side: leg.side,
+      quantity: Number(leg.quantity),
+      order_type: 'market',
+    };
+  }
 }
