@@ -14,14 +14,20 @@ from collections.abc import Awaitable, Callable
 from typing import Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk import (
     AlpacaClerk,
+    ClerkStatus,
     OrderCancelResult,
     OrderSubmitResult,
     get_alpaca_clerk,
 )
-from app.broker.contract.errors import BrokerError, BrokerRateLimited
+from app.broker.contract.errors import (
+    BrokerError,
+    BrokerRateLimited,
+    BrokerSubmissionHeld,
+)
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -48,9 +54,19 @@ def _raise_http(error: BrokerError) -> NoReturn:
     headers: dict[str, str] | None = None
     if isinstance(error, BrokerRateLimited) and error.retry_after_ms is not None:
         headers = {"Retry-After": str(max(1, math.ceil(error.retry_after_ms / 1000)))}
+    detail: dict[str, str | None] = {
+        "broker": error.broker,
+        "message": error.message,
+        "why": error.detail,
+    }
+    # A held submit (S6) carries a code-like ``reason_code`` the UI flags and
+    # renders through ``receiptLabel`` — surface it so the desk can offer the
+    # clear-hold exit rather than a generic 409.
+    if isinstance(error, BrokerSubmissionHeld):
+        detail["reason_code"] = error.reason_code
     raise HTTPException(
         status_code=error.http_status,
-        detail={"broker": error.broker, "message": error.message, "why": error.detail},
+        detail=detail,
         headers=headers,
     )
 
@@ -186,5 +202,56 @@ async def cancel_order(broker: str, order_id: str) -> OrderCancelResult:
     clerk = _require_trade_clerk(broker)
     try:
         return await clerk.cancel(order_id)
+    except BrokerError as error:
+        _raise_http(error)
+
+
+class ClearHoldRequest(BaseModel):
+    """Operator's clear-hold request body (phase-2 S6).
+
+    ``operator`` attributes the HOLD_CLEARED line (who lifted the hold);
+    ``reason`` is the operator's what/why the ledger records. Both are optional —
+    a clear with no attribution still lifts the hold, journaled with defaults.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    operator: str = Field(default="operator", max_length=64)
+    reason: str = Field(
+        default="Operator cleared the exposure hold.", max_length=512
+    )
+
+
+@router.get("/{broker}/clerk/status", response_model=ClerkStatus)
+async def get_clerk_status(broker: str) -> ClerkStatus:
+    """Report the clerk's exposure hold, latest reconciliation, and outstanding intents.
+
+    A protected read (the always-on data-plane secret gates the whole router).
+    Transport only: resolve the account-scoped Clerk facade and delegate — the
+    Clerk owns the journal-derived hold + verdict + outstanding-intent state.
+    """
+    clerk = _require_trade_clerk(broker)
+    try:
+        return await clerk.status()
+    except BrokerError as error:
+        _raise_http(error)
+
+
+@router.post(
+    "/{broker}/clerk/clear-hold",
+    response_model=ClerkStatus,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def clear_clerk_hold(broker: str, request: ClearHoldRequest) -> ClerkStatus:
+    """Clear the account exposure hold (operator exit); return the updated status.
+
+    A control mutation (the control secret gates it). Transport only: resolve the
+    Clerk and delegate. The Clerk journals HOLD_CLEARED (idempotent — a clear
+    against no active hold is a benign NO-OP) and returns the post-clear status so
+    the desk re-renders in one round-trip.
+    """
+    clerk = _require_trade_clerk(broker)
+    try:
+        return await clerk.clear_hold(operator=request.operator, reason=request.reason)
     except BrokerError as error:
         _raise_http(error)

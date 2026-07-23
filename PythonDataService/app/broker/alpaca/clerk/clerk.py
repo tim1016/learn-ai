@@ -26,17 +26,25 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from app.broker.alpaca.clerk import derive
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.models import (
+    UNEXPLAINED_ORDER_HOLD_CODE,
     ClerkEntryKind,
+    ClerkStatus,
     OrderCancelResult,
     OrderJournalEntry,
     OrderLegError,
     OrderLegResult,
     OrderSubmitResult,
+    ReconciliationVerdict,
 )
 from app.broker.alpaca.config import BROKER_ID
-from app.broker.contract.errors import BrokerError, BrokerUnavailable
+from app.broker.contract.errors import (
+    BrokerError,
+    BrokerSubmissionHeld,
+    BrokerUnavailable,
+)
 from app.broker.contract.models import (
     BrokerOrder,
     BrokerOrderEvent,
@@ -176,9 +184,32 @@ class AlpacaClerk:
         return account.account_id, journal
 
     async def submit(self, request: BrokerOrderRequest) -> OrderSubmitResult:
-        """Submit every leg serially; one journaled result per leg."""
+        """Submit every leg serially; one journaled result per leg.
+
+        The exposure hold (S6) is checked FIRST, under the intake lock, BEFORE
+        any intent is minted or journaled — capture-before-submit means a refused
+        submit records NO intent. When held, a ``BrokerSubmissionHeld`` (409,
+        ``UNEXPLAINED_ORDER_HOLD``) propagates to the router. Cancel is a separate
+        path and is never held (reducing exposure is always allowed).
+        """
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
+            hold = derive.hold_state(journal.read_entries())
+            if hold.active:
+                logger.warning(
+                    "alpaca clerk refused a submit: exposure hold is active",
+                    extra={
+                        "action": "submit_refused_hold",
+                        "account_id": account_id,
+                        "reason_code": hold.reason_code,
+                    },
+                )
+                raise BrokerSubmissionHeld(
+                    "Order submission is paused while an exposure hold is active.",
+                    reason_code=hold.reason_code or UNEXPLAINED_ORDER_HOLD_CODE,
+                    broker=self.broker_id,
+                    detail=hold.reason,
+                )
             results = [
                 await self._submit_leg(request.operator, leg, account_id, journal)
                 for leg in request.legs
@@ -335,6 +366,20 @@ class AlpacaClerk:
                         "event_key": event_key,
                     },
                 )
+                # S6 seam: an unexplained order is a safety event — raise the
+                # account exposure hold so new submits are refused until an
+                # operator clears it. Idempotent: a second unexplained event does
+                # not re-journal an already-active HOLD_SET.
+                self._set_hold(
+                    journal,
+                    account_id=account_id,
+                    reason_code=UNEXPLAINED_ORDER_HOLD_CODE,
+                    reason=(
+                        "An order this account did not submit was observed at "
+                        "Alpaca. Submission is paused until an operator confirms "
+                        "the account is safe."
+                    ),
+                )
             return kind
 
     @property
@@ -380,6 +425,114 @@ class AlpacaClerk:
             ):
                 owning = entry
         return owning
+
+    # ── S6 exposure hold (account-level, journal-derived) ────────────────────
+
+    def is_on_hold(self) -> bool:
+        """True when an account-level exposure hold is active (journal-derived)."""
+        # A read-only accessor for observability; the authoritative gate is the
+        # under-lock check inside :meth:`submit`.
+        if self._journal is None:
+            return False
+        return derive.hold_state(self._journal.read_entries()).active
+
+    async def status(self) -> ClerkStatus:
+        """The clerk's observable state: hold + latest verdict + outstanding intents.
+
+        Read-only and journal-derived, so it reflects the durable ledger and
+        survives a restart. Shares the intake lock with the writers so a status
+        read never observes a torn mid-write ledger.
+        """
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            return self._build_status(account_id, journal.read_entries())
+
+    async def clear_hold(self, *, operator: str, reason: str) -> ClerkStatus:
+        """Clear the exposure hold (operator exit); journal ``HOLD_CLEARED``.
+
+        Idempotent and benign when not held — a clear against no active hold is a
+        NO-OP that returns the (already-clear) status without a journal write, so
+        an operator double-click never litters the ledger. Returns the updated
+        status so the caller renders the post-clear state in one round-trip.
+        """
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            entries = journal.read_entries()
+            hold = derive.hold_state(entries)
+            if hold.active:
+                journal.append(
+                    OrderJournalEntry(
+                        kind=ClerkEntryKind.HOLD_CLEARED,
+                        account_id=account_id,
+                        operator=operator,
+                        reason_code=hold.reason_code or UNEXPLAINED_ORDER_HOLD_CODE,
+                        reason=reason,
+                        recorded_at_ms=self._clock(),
+                    )
+                )
+                logger.info(
+                    "alpaca clerk cleared the exposure hold",
+                    extra={
+                        "action": "hold_cleared",
+                        "account_id": account_id,
+                        "operator": operator,
+                        "reason_code": hold.reason_code,
+                    },
+                )
+                entries = journal.read_entries()
+            else:
+                logger.info(
+                    "alpaca clerk clear-hold was a no-op: no active hold",
+                    extra={"action": "hold_clear_noop", "account_id": account_id},
+                )
+            return self._build_status(account_id, entries)
+
+    def _build_status(
+        self, account_id: str, entries: list[OrderJournalEntry]
+    ) -> ClerkStatus:
+        """Shape one ``ClerkStatus`` from a pre-read ledger (the single builder)."""
+        return ClerkStatus(
+            broker=self.broker_id,
+            account_id=account_id,
+            hold=derive.hold_state(entries),
+            latest_reconciliation=derive.latest_reconciliation(entries),
+            outstanding_intents=len(self._unresolved_intents(entries)),
+            observed_at_ms=self._clock(),
+        )
+
+    def _set_hold(
+        self,
+        journal: OrderJournal,
+        *,
+        account_id: str,
+        reason_code: str,
+        reason: str,
+    ) -> None:
+        """Raise the exposure hold; idempotent (never double-journal HOLD_SET).
+
+        Callers already hold the intake lock (the S4 lifecycle path and the sweep
+        both wrap this). A ``HOLD_SET`` is journaled only when no hold is already
+        active, so a repeated unexplained observation does not litter the ledger.
+        """
+        if derive.hold_state(journal.read_entries()).active:
+            return
+        journal.append(
+            OrderJournalEntry(
+                kind=ClerkEntryKind.HOLD_SET,
+                account_id=account_id,
+                reason_code=reason_code,
+                reason=reason,
+                recorded_at_ms=self._clock(),
+            )
+        )
+        logger.warning(
+            "alpaca clerk set an exposure hold; new submits refused",
+            extra={
+                "action": "hold_set",
+                "account_id": account_id,
+                "reason_code": reason_code,
+            },
+        )
 
     @staticmethod
     def _resolve_owning_entry(
@@ -748,6 +901,128 @@ class AlpacaClerk:
             for ref in order
             if ref not in terminal_refs and origin[ref].leg is not None
         ]
+
+    # ── S6 reconciliation sweep ──────────────────────────────────────────────
+
+    async def reconcile_once(self) -> ReconciliationVerdict:
+        """Run one reconciliation pass; journal a named verdict and return it.
+
+        Compares journal-derived exposure against Alpaca's live orders +
+        positions and records a RECONCILIATION line. The four verdicts (evaluated
+        in the priority order below) are defined on ``ReconciliationVerdict`` in
+        ``models.py`` — the canonical definition. Observational EXCEPT the
+        ``unexplained_order`` verdict, which also raises the exposure hold.
+        Priority: ``stale`` (a broker read failed, so nothing else can be
+        asserted) → ``unexplained_order`` (a foreign order — journal + hold) →
+        ``missing_intent`` (owned drift; observational) → ``clean``.
+
+        The clock and cadence are injected by the caller (the sweep loop / a
+        test), so one pass is fully deterministic with no real timer.
+        """
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            try:
+                orders = await self._read.list_orders(status="all", limit=500)
+                positions = await self._read.list_positions()
+            except BrokerError as exc:
+                logger.warning(
+                    "alpaca clerk reconciliation could not read the broker; stale",
+                    extra={
+                        "action": "reconcile_stale",
+                        "account_id": account_id,
+                        "why": exc.detail,
+                    },
+                )
+                return self._record_verdict(journal, account_id, "stale")
+
+            namespaces = self._known_namespaces(journal)
+            foreign = [
+                order
+                for order in orders
+                if not order_ref_namespace_matches(order.client_order_id, namespaces)
+            ]
+            if foreign:
+                for order in foreign:
+                    await self._journal_unexplained_from_order(
+                        journal, account_id, order, namespaces
+                    )
+                self._set_hold(
+                    journal,
+                    account_id=account_id,
+                    reason_code=UNEXPLAINED_ORDER_HOLD_CODE,
+                    reason=(
+                        "The reconciliation sweep found an order this account did "
+                        "not submit at Alpaca. Submission is paused until an "
+                        "operator confirms the account is safe."
+                    ),
+                )
+                logger.warning(
+                    "alpaca clerk reconciliation found unexplained orders",
+                    extra={
+                        "action": "reconcile_unexplained_order",
+                        "account_id": account_id,
+                        "count": len(foreign),
+                    },
+                )
+                return self._record_verdict(journal, account_id, "unexplained_order")
+
+            entries = journal.read_entries()
+            if derive.has_missing_intent(entries, orders, positions):
+                logger.warning(
+                    "alpaca clerk reconciliation observed owned drift (missing intent)",
+                    extra={
+                        "action": "reconcile_missing_intent",
+                        "account_id": account_id,
+                    },
+                )
+                return self._record_verdict(journal, account_id, "missing_intent")
+
+            logger.info(
+                "alpaca clerk reconciliation clean",
+                extra={"action": "reconcile_clean", "account_id": account_id},
+            )
+            return self._record_verdict(journal, account_id, "clean")
+
+    def _record_verdict(
+        self, journal: OrderJournal, account_id: str, verdict: ReconciliationVerdict
+    ) -> ReconciliationVerdict:
+        """Journal one RECONCILIATION line and echo the verdict."""
+        journal.append(
+            OrderJournalEntry(
+                kind=ClerkEntryKind.RECONCILIATION,
+                account_id=account_id,
+                verdict=verdict,
+                recorded_at_ms=self._clock(),
+            )
+        )
+        return verdict
+
+    async def _journal_unexplained_from_order(
+        self,
+        journal: OrderJournal,
+        account_id: str,
+        order: BrokerOrder,
+        namespaces: frozenset[str],
+    ) -> None:
+        """Journal an UNEXPLAINED_ORDER for a foreign order the sweep found.
+
+        Reuses the S4 kind/shape (honest empty identity, never fabricated) so the
+        sweep and the live socket share one attribution vocabulary. The counter
+        increments too, so a foreign order surfaces regardless of which path saw
+        it first.
+        """
+        journal.append(
+            OrderJournalEntry(
+                kind=ClerkEntryKind.UNEXPLAINED_ORDER,
+                account_id=account_id,
+                client_order_id=order.client_order_id or "",
+                broker_order_id=order.order_id,
+                owned=False,
+                order=order,
+                recorded_at_ms=self._clock(),
+            )
+        )
+        self._unexplained_order_count += 1
 
 
 _clerk: AlpacaClerk | None = None

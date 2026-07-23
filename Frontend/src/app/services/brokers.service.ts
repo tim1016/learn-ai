@@ -7,6 +7,7 @@ import type {
   BrokerOrder,
   BrokerOrderRequest,
   BrokerPosition,
+  ClerkStatus,
   OrderCancelResult,
   OrderSubmitResult,
 } from '../api/alpaca.types';
@@ -78,6 +79,32 @@ export class BrokersService {
       this.http.delete<OrderCancelResult>(
         `${this.base}/${broker}/orders/${encodeURIComponent(orderId)}`,
       ),
+    );
+  }
+
+  /**
+   * Phase-2 S6 — the clerk's observable state: the exposure hold, the latest
+   * reconciliation verdict, and the outstanding-intent count. A protected read
+   * under `/api/brokers` (the proxy attaches the shared secret for that prefix).
+   */
+  getClerkStatus(broker = 'alpaca'): Promise<ClerkStatus> {
+    return firstValueFrom(
+      this.http.get<ClerkStatus>(`${this.base}/${broker}/clerk/status`),
+    );
+  }
+
+  /**
+   * Phase-2 S6 — clear the account exposure hold (operator exit). A control
+   * mutation (POST under the registered `/api/brokers` control prefix, so the
+   * interceptor marks it and the proxy authenticates). Returns the updated
+   * status so the caller re-renders in one round-trip.
+   */
+  clearHold(
+    broker: string,
+    body: { operator?: string; reason?: string } = {},
+  ): Promise<ClerkStatus> {
+    return firstValueFrom(
+      this.http.post<ClerkStatus>(`${this.base}/${broker}/clerk/clear-hold`, body),
     );
   }
 }

@@ -182,6 +182,20 @@ async def lifespan(app: FastAPI):
         set_trade_updates_consumer(alpaca_trade_updates)
         logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
 
+        # Alpaca reconciliation sweep (phase 2, S6) — periodically compares the
+        # journal-derived exposure against Alpaca's live orders + positions and
+        # records a named verdict. Observational except the unexplained-order
+        # hold (owned by the Clerk). No keys → no sweep.
+        from app.broker.alpaca.clerk import (
+            ReconciliationSweep,
+            set_reconciliation_sweep,
+        )
+
+        alpaca_sweep = ReconciliationSweep(clerk=alpaca_clerk)
+        alpaca_sweep.start()
+        set_reconciliation_sweep(alpaca_sweep)
+        logger.info("Alpaca reconciliation sweep started (S6).")
+
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
     ibkr_settings = get_ibkr_settings()
@@ -354,12 +368,22 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # Stop the Alpaca live-lifecycle consumer first — cancel its consume
-        # task and close its socket cleanly (independent of the IBKR teardown).
+        # Stop the Alpaca reconciliation sweep + live-lifecycle consumer first —
+        # cancel their background tasks (and the consumer's socket) cleanly,
+        # independent of the IBKR teardown.
+        from app.broker.alpaca.clerk import (
+            get_reconciliation_sweep,
+            set_reconciliation_sweep,
+        )
         from app.broker.alpaca.trade_updates import (
             get_trade_updates_consumer,
             set_trade_updates_consumer,
         )
+
+        alpaca_sweep = get_reconciliation_sweep()
+        if alpaca_sweep is not None:
+            await alpaca_sweep.stop()
+            set_reconciliation_sweep(None)
 
         alpaca_trade_updates = get_trade_updates_consumer()
         if alpaca_trade_updates is not None:

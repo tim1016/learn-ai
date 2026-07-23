@@ -14,14 +14,15 @@ never speculatively.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 
 
 class ClerkEntryKind(StrEnum):
-    """Order-journal entry kinds (S1 submit + S3 cancel + S4 lifecycle + S5 resolution)."""
+    """Order-journal entry kinds (S1 submit + S3 cancel + S4 lifecycle + S5 resolution + S6 sweep/hold)."""
 
     INTENT_RECORDED = "intent_recorded"
     SUBMIT_ACKED = "submit_acked"
@@ -47,6 +48,40 @@ class ClerkEntryKind(StrEnum):
     # the observation and increments a counter (see the consumer).
     ORDER_EVENT = "order_event"
     UNEXPLAINED_ORDER = "unexplained_order"
+    # S6 reconciliation + flag-and-hold path.
+    # ``RECONCILIATION``: one periodic sweep result, carrying a named ``verdict``
+    # (``clean`` / ``unexplained_order`` / ``missing_intent`` / ``stale``). It is
+    # observational — the sweep gates no lifecycle — with the sole exception that
+    # an ``unexplained_order`` verdict also raises the exposure hold.
+    # ``HOLD_SET`` / ``HOLD_CLEARED``: the account-level exposure hold's audit
+    # trail. The hold is journal-derived (a ``HOLD_SET`` with no later
+    # ``HOLD_CLEARED`` is active), so it survives a restart. ``HOLD_SET`` refuses
+    # new submits (cancels stay allowed); an operator clears it with
+    # ``HOLD_CLEARED``. Both carry a ``reason_code`` + ``reason`` what/why.
+    RECONCILIATION = "reconciliation"
+    HOLD_SET = "hold_set"
+    HOLD_CLEARED = "hold_cleared"
+
+
+# The named reconciliation verdicts (kept in lockstep with the sweep). ``clean``
+# — journal-owned exposure matches the broker. ``unexplained_order`` — an order
+# at the broker whose ``client_order_id`` is foreign/absent (raises the hold).
+# ``missing_intent`` — the broker reflects an owned order/position with no
+# recorded intent (drift; observational). ``stale`` — the sweep could not
+# complete (broker unreachable / read failed); surfaced, not fatal.
+#
+# A ``TypeAlias`` (not the PEP-695 ``type`` keyword) on purpose: this alias is
+# used as a Pydantic field annotation below, and with ``from __future__ import
+# annotations`` Pydantic resolves it via ``get_type_hints`` — which cannot
+# resolve a ``type``-statement ``TypeAliasType`` and raises a schema-generation
+# error. So UP040 is suppressed here.
+ReconciliationVerdict: TypeAlias = Literal[  # noqa: UP040
+    "clean", "unexplained_order", "missing_intent", "stale"
+]
+
+# The reason code stamped on the exposure hold raised by an unexplained order.
+# Rendered code-like through the frontend ``receiptLabel`` pipe.
+UNEXPLAINED_ORDER_HOLD_CODE = "UNEXPLAINED_ORDER_HOLD"
 
 
 class OrderJournalEntry(BaseModel):
@@ -104,6 +139,62 @@ class OrderJournalEntry(BaseModel):
     # as delivered (``None`` when the order carried no client_order_id) — honest
     # attribution, never fabricated. The stable dedup key for the event.
     event_key: str | None = None
+    # ── S6 reconciliation + flag-and-hold fields ─────────────────────────────
+    # Present on RECONCILIATION lines: the named sweep verdict.
+    verdict: ReconciliationVerdict | None = None
+    # Present on HOLD_SET / HOLD_CLEARED lines: the code-like reason code
+    # (rendered through the frontend ``receiptLabel`` pipe) and the human what/why
+    # prose (backend-authored, rendered unpiped).
+    reason_code: str | None = None
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def _kind_requires_fields(self) -> OrderJournalEntry:
+        """Codify each kind's required fields now the vocabulary is complete (S3-deferred).
+
+        A correctness net, not new behavior: every append site in the Clerk
+        already constructs these lines this way. It catches a future drift where
+        a kind is journaled without its identifying payload. Faithful to how each
+        kind is actually built in ``clerk.py``:
+
+        - ``INTENT_RECORDED`` — a submit-side line the Clerk minted, so it carries
+          the full durable identity (operator / intent_id / order_ref / leg).
+        - ``SUBMIT_ACKED`` — carries the accepted ``order``.
+        - ``SUBMIT_FAILED`` — a definitive failure, so it carries an
+          ``error_message`` (the what).
+        - ``CANCEL_*`` — key on the ``broker_order_id`` being canceled.
+        - ``UNEXPLAINED_ORDER`` — foreign/absent identity is *permitted* to be
+          empty (never fabricated); no field is required.
+        - ``RECONCILIATION`` — carries a ``verdict``.
+        - ``HOLD_SET`` / ``HOLD_CLEARED`` — carry a ``reason_code`` and ``reason``.
+        """
+        if self.kind is ClerkEntryKind.INTENT_RECORDED:
+            self._require("operator", "intent_id", "order_ref")
+            if self.leg is None:
+                raise ValueError("intent_recorded requires a leg")
+        elif self.kind is ClerkEntryKind.SUBMIT_ACKED:
+            if self.order is None:
+                raise ValueError("submit_acked requires an order")
+        elif self.kind is ClerkEntryKind.SUBMIT_FAILED:
+            self._require("error_message")
+        elif self.kind in (
+            ClerkEntryKind.CANCEL_RECORDED,
+            ClerkEntryKind.CANCEL_ACKED,
+            ClerkEntryKind.CANCEL_FAILED,
+        ):
+            self._require("broker_order_id")
+        elif self.kind is ClerkEntryKind.RECONCILIATION:
+            if self.verdict is None:
+                raise ValueError("reconciliation requires a verdict")
+        elif self.kind in (ClerkEntryKind.HOLD_SET, ClerkEntryKind.HOLD_CLEARED):
+            self._require("reason_code", "reason")
+        return self
+
+    def _require(self, *fields: str) -> None:
+        """Raise when any of the named fields is empty/None (validator helper)."""
+        for field in fields:
+            if not getattr(self, field):
+                raise ValueError(f"{self.kind.value} requires {field}")
 
 
 class OrderLegError(BaseModel):
@@ -149,6 +240,50 @@ class OrderSubmitResult(BaseModel):
     broker: str
     account_id: str
     results: list[OrderLegResult]
+
+
+class HoldState(BaseModel):
+    """The account-level exposure-hold state, journal-derived (S6).
+
+    A hold is active when a ``HOLD_SET`` line has no later ``HOLD_CLEARED``.
+    ``reason_code`` is code-like (rendered through ``receiptLabel`` on the UI);
+    ``reason`` is backend-authored what/why prose (rendered unpiped). When not
+    held, every field but ``active`` is ``None``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool
+    reason_code: str | None = None
+    reason: str | None = None
+    since_ms: int | None = None
+
+
+class ReconciliationSummary(BaseModel):
+    """The latest reconciliation-sweep result (S6), or ``None`` if never run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: ReconciliationVerdict
+    recorded_at_ms: int
+
+
+class ClerkStatus(BaseModel):
+    """The clerk's observable state for the operator status surface (S6).
+
+    Composes the exposure hold, the latest reconciliation verdict, and the count
+    of outstanding (unresolved) intents (the S5 unfinished set) — everything the
+    desk needs to render the hold banner and a health line.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    broker: str
+    account_id: str
+    hold: HoldState
+    latest_reconciliation: ReconciliationSummary | None = None
+    outstanding_intents: int
+    observed_at_ms: int
 
 
 class OrderCancelResult(BaseModel):

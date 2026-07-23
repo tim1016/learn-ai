@@ -445,11 +445,18 @@ async def test_foreign_client_order_id_journals_unexplained_and_counts(tmp_path:
     assert unexplained[0].order_ref == ""
     assert consumer.counters.unexplained == 1
     assert clerk.unexplained_order_count == 1
-    # NO hold is wired in S4 — a subsequent submit is NOT blocked.
-    result = await clerk.submit(
-        BrokerOrderRequest(operator="inkant", legs=[BrokerOrderLeg(symbol="AAPL", side="buy", quantity=1)])
-    )
-    assert result.results[0].status == "acked"
+    # S6 wires the exposure hold to this seam: an unexplained order raises the
+    # account hold, so a subsequent submit is refused (409 / UNEXPLAINED_ORDER_HOLD).
+    from app.broker.contract.errors import BrokerSubmissionHeld
+
+    assert clerk.is_on_hold() is True
+    with pytest.raises(BrokerSubmissionHeld):
+        await clerk.submit(
+            BrokerOrderRequest(
+                operator="inkant",
+                legs=[BrokerOrderLeg(symbol="AAPL", side="buy", quantity=1)],
+            )
+        )
 
 
 async def test_absent_client_order_id_journals_unexplained(tmp_path: Path) -> None:
