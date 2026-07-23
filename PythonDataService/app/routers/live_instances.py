@@ -837,14 +837,33 @@ def _resolve_readonly_default(settings: object) -> bool:
     return operator_readonly or mode != "paper"
 
 
-def _resolve_evidence_run_dir(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> Path | None:
+def _resolve_evidence_run_dir(
+    root: Path,
+    live_binding: LiveBinding | None,
+    runs: list[dict],
+    *,
+    require_started: bool = False,
+) -> Path | None:
     """The run dir the status view describes: the visible live run, else the
     latest evidence run, else None (nothing deployed). Shared by start-defaults
-    and provenance so they always read the same ledger."""
+    and provenance so they always read the same ledger.
+
+    ``require_started`` (resume-guard only) skips never-started runs absent a
+    binding, so a failed-``Deploy & run`` ledger-only child (``run_ledger.json``
+    only, no ``run_status.json``) cannot — sorted newest-first — shadow a valid
+    stopped run's resume evidence and wrongly refuse Resume; falls back to the
+    newest run so a genuinely never-started instance still resolves a dir."""
     if live_binding is not None:
         run_dir = _visible_live_run_dir(root, live_binding)
         if run_dir is not None:
             return run_dir
+    if require_started:
+        started = next(
+            (r for r in runs if (Path(r["run_dir"]) / "run_status.json").exists()),
+            None,
+        )
+        if started is not None:
+            return Path(started["run_dir"])
     if runs:
         return Path(runs[0]["run_dir"])
     return None
@@ -3772,13 +3791,13 @@ def _resolve_resume_guard_state_for(
 ) -> ResumeGuardState:
     """Resolve the canonical ``ResumeGuardState`` for an instance.
 
-    The bound run's artifacts are the truth; absent a binding the
-    most recent evidence run is consulted (so an EXITED instance
-    still surfaces its last verdict / WAL state).  When no run
-    exists at all, ``empty_guard_state()`` is returned (nothing to
-    safeguard yet).
+    The bound run's artifacts are the truth; absent a binding the most recent
+    run that produced safety evidence is consulted (``require_started`` — so an
+    EXITED instance still surfaces its last verdict / WAL state, and a
+    never-started ledger-only child from a failed Deploy & run cannot shadow it).
+    When no run exists at all, ``empty_guard_state()`` is returned.
     """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs, require_started=True)
     if run_dir is None:
         return empty_guard_state()
     return resolve_guard_state_from_paths(

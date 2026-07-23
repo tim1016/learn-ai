@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Pydantic 2.5 in the service image does not generate schemas for PEP 695
 # type aliases reliably, so keep the older spelling until the runtime moves.
-FactValue: TypeAlias = str | int | float | bool | None | list[object] | dict[str, object]  # noqa: UP040
+FactValue: TypeAlias = str | int | float | bool | list[object] | dict[str, object] | None  # noqa: UP040
 
 
 class SourceAuthority(StrEnum):
