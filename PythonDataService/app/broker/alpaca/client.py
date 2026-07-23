@@ -93,10 +93,7 @@ class AlpacaTradingClient:
         self._client_factory = client_factory
         self._timeout_s = timeout_s
         self._raw_client: Any | None = None
-        # A timed-out worker cannot be force-killed. Keep abandoned Alpaca
-        # workers off AnyIO's process-wide limiter while their request-level
-        # timeout lets them wind down.
-        self._thread_limiter = anyio.CapacityLimiter(_MAX_IN_FLIGHT_SYNC_CALLS)
+        self._thread_limiter: anyio.CapacityLimiter | None = None
         self._uncertain_submission_lock = Lock()
         self._uncertain_submissions: dict[str, float] = {}
 
@@ -143,6 +140,12 @@ class AlpacaTradingClient:
         return self._raw_client
 
     async def _call(self, fn: Callable[[Any], Any], *, describe: str) -> Any:
+        if self._thread_limiter is None:
+            # AnyIO 3 requires an active async backend when constructing a
+            # limiter. Build it lazily so sync dependency-injection fixtures
+            # can still create the broker client.
+            self._thread_limiter = anyio.CapacityLimiter(_MAX_IN_FLIGHT_SYNC_CALLS)
+
         try:
             client = self._client()
         except ValidationError as exc:
@@ -161,6 +164,9 @@ class AlpacaTradingClient:
                     # a compatibility alias. It lets fail_after return while
                     # a stuck synchronous SDK worker winds down.
                     cancellable=True,
+                    # A timed-out worker cannot be force-killed. Keep
+                    # abandoned Alpaca workers off AnyIO's process-wide
+                    # limiter while their request-level timeout winds down.
                     limiter=self._thread_limiter,
                 )
         except TimeoutError as exc:

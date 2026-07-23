@@ -78,6 +78,12 @@ def _client(fake: _FakeAlpaca) -> AlpacaTradingClient:
     return AlpacaTradingClient(client_factory=lambda: fake)
 
 
+def test_client_can_be_constructed_outside_async_context() -> None:
+    client = _client(_FakeAlpaca())
+
+    assert client.broker_id == "alpaca"
+
+
 async def test_get_account_returns_raw_payload() -> None:
     assert await _client(_FakeAlpaca()).get_account() == {
         "account_number": "PA1",
