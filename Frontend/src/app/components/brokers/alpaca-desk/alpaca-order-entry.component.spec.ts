@@ -57,22 +57,21 @@ async function fillFirstLeg(symbol: string, quantity: string): Promise<void> {
   fireEvent.input(await screen.findByLabelText('Leg 1 symbol'), {
     target: { value: symbol },
   });
-  // p-inputNumber renders an inner <input>; drive it directly by its aria-label.
   const qtyInput = await screen.findByLabelText('Leg 1 quantity');
   fireEvent.input(qtyInput, { target: { value: quantity } });
-  fireEvent.blur(qtyInput);
+  fireEvent.change(qtyInput, { target: { value: quantity } });
 }
 
-/** Click a p-selectButton option by its rendered label within a control. */
-function selectOption(controlAriaLabel: string, optionLabel: string): void {
+/** Select a native Signal Forms-backed control by its wire value. */
+function selectOption(controlAriaLabel: string, value: string): void {
   const control = screen.getByLabelText(controlAriaLabel);
-  fireEvent.click(within(control).getByText(optionLabel));
+  fireEvent.change(control, { target: { value } });
 }
 
 async function setLimitPrice(price: string): Promise<void> {
   const priceInput = await screen.findByLabelText('Leg 1 limit price');
   fireEvent.input(priceInput, { target: { value: price } });
-  fireEvent.blur(priceInput);
+  fireEvent.change(priceInput, { target: { value: price } });
 }
 
 describe('AlpacaOrderEntryComponent', () => {
@@ -113,11 +112,11 @@ describe('AlpacaOrderEntryComponent', () => {
     // Market by default → no limit-price input.
     expect(screen.queryByLabelText('Leg 1 limit price')).toBeNull();
 
-    selectOption('Leg 1 order type', 'Limit');
+    selectOption('Leg 1 order type', 'limit');
     expect(await screen.findByLabelText('Leg 1 limit price')).toBeTruthy();
 
     // Switching back to Market hides it again.
-    selectOption('Leg 1 order type', 'Market');
+    selectOption('Leg 1 order type', 'market');
     await vi.waitFor(() =>
       expect(screen.queryByLabelText('Leg 1 limit price')).toBeNull(),
     );
@@ -128,9 +127,9 @@ describe('AlpacaOrderEntryComponent', () => {
     await renderPanel(submitOrder);
 
     await fillFirstLeg('spy', '2');
-    selectOption('Leg 1 order type', 'Limit');
+    selectOption('Leg 1 order type', 'limit');
     await setLimitPrice('240.5');
-    selectOption('Leg 1 time in force', 'GTC');
+    selectOption('Leg 1 time in force', 'gtc');
 
     fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
     fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
@@ -200,5 +199,20 @@ describe('AlpacaOrderEntryComponent', () => {
 
     const results = await screen.findByLabelText('Submission results');
     expect(within(results).getByText(/insufficient buying power/)).toBeTruthy();
+  });
+
+  it('treats a lost browser response as an uncertain submission', async () => {
+    const submitOrder = vi.fn().mockRejectedValue(new Error('network lost'));
+    await renderPanel(submitOrder);
+
+    await fillFirstLeg('spy', '2');
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
+
+    expect(
+      await screen.findByText(
+        'The submission outcome is uncertain. Check Alpaca orders and the journal before submitting again.',
+      ),
+    ).toBeTruthy();
   });
 });
