@@ -88,3 +88,15 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
 - **Note for the user / follow-up:** "Require saved state" being the *recommended*
   default while it hard-crashes every brand-new bot is a footgun worth fixing
   (default new deploys to `optional`, or auto-detect first-run). Recorded as a gap.
+
+### 09:02 CDT — bot 1 (SPY) launched successfully with corrected policy
+
+- **Action:** Re-deployed a fresh SPY bot `spy-0723` (EMA Crossover Signal, SPY,
+  `long SPY x1`, Paper orders, 2000/day) with **Advanced start = "Use saved state
+  when available"** (`optional`) via Deploy & run.
+- **Result:** `spy-0723` is **On duty** with **Errors 0** — "Ready to act on the
+  next bar; all hard gates pass." Roll call: 2 ready · 1 on duty · 1 sick bay.
+  The `optional` policy resolved the crash. Bot 1 is live.
+- **Left for later:** the crashed `spy-canary-0723` remains in Sick bay (flat,
+  no runtime, harmless); to be retired during the 15-min hold. "Take off roster"
+  did not remove it; will use Retire during the lull.
