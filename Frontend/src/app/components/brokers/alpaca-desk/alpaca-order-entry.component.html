@@ -61,6 +61,46 @@
               [ariaLabel]="'Leg ' + ($index + 1) + ' quantity'"
             />
           </div>
+          <div class="flex flex-col gap-1 text-xs">
+            <span>Type</span>
+            <p-selectButton
+              [options]="orderTypeOptions"
+              optionLabel="label"
+              optionValue="value"
+              [ngModel]="leg.orderType"
+              (ngModelChange)="updateOrderType(leg.id, $event)"
+              [allowEmpty]="false"
+              [attr.aria-label]="'Leg ' + ($index + 1) + ' order type'"
+            />
+          </div>
+          @if (leg.orderType === 'limit') {
+            <div class="flex flex-col gap-1 text-xs">
+              <span>Limit price</span>
+              <p-inputNumber
+                [ngModel]="leg.limitPrice"
+                (ngModelChange)="updateLimitPrice(leg.id, $event)"
+                [min]="0"
+                [minFractionDigits]="2"
+                [maxFractionDigits]="4"
+                [showButtons]="false"
+                placeholder="Price"
+                [inputStyleClass]="'w-24'"
+                [ariaLabel]="'Leg ' + ($index + 1) + ' limit price'"
+              />
+            </div>
+          }
+          <div class="flex flex-col gap-1 text-xs">
+            <span>Time in force</span>
+            <p-selectButton
+              [options]="tifOptions"
+              optionLabel="label"
+              optionValue="value"
+              [ngModel]="leg.timeInForce"
+              (ngModelChange)="updateTimeInForce(leg.id, $event)"
+              [allowEmpty]="false"
+              [attr.aria-label]="'Leg ' + ($index + 1) + ' time in force'"
+            />
+          </div>
           <p-button
             icon="pi pi-trash"
             size="small"
@@ -135,8 +175,8 @@
   [style]="{ width: '32rem' }"
 >
   <p class="mt-0 text-sm text-color-secondary">
-    Review the legs below. Each is submitted as a market order and journaled
-    before it is sent.
+    Review the legs below. Each is journaled before it is sent. A limit leg rests
+    as a working order at its price until filled or canceled.
   </p>
   <p-table [value]="legs()" aria-label="Order preview">
     <ng-template #header>
@@ -145,6 +185,8 @@
         <th scope="col">Side</th>
         <th scope="col" class="text-right">Qty</th>
         <th scope="col">Type</th>
+        <th scope="col" class="text-right">Limit</th>
+        <th scope="col">TIF</th>
       </tr>
     </ng-template>
     <ng-template #body let-leg>
@@ -152,7 +194,11 @@
         <th scope="row">{{ leg.symbol }}</th>
         <td>{{ leg.side | receiptLabel }}</td>
         <td class="text-right tabular-nums">{{ leg.quantity }}</td>
-        <td>Market</td>
+        <td>{{ leg.orderType | receiptLabel }}</td>
+        <td class="text-right tabular-nums">
+          {{ leg.orderType === 'limit' ? leg.limitPrice : '—' }}
+        </td>
+        <td>{{ leg.timeInForce | receiptLabel }}</td>
       </tr>
     </ng-template>
   </p-table>

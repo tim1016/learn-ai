@@ -11,7 +11,10 @@ from app.broker.contract.models import (
     BrokerClockEvidence,
     BrokerOrder,
     BrokerOrderEvent,
+    BrokerOrderLeg,
     BrokerPosition,
+    OrderType,
+    TimeInForce,
 )
 
 
@@ -127,6 +130,46 @@ def test_clock_evidence_is_vendor_shaped() -> None:
 
     assert clock.is_open is True
     assert clock.next_open_ms == 1_700_050_000_000
+
+
+def test_market_leg_defaults_to_day_and_no_limit_price() -> None:
+    leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=3)
+
+    assert leg.order_type is OrderType.MARKET
+    assert leg.time_in_force is TimeInForce.DAY
+    assert leg.limit_price is None
+
+
+def test_limit_leg_carries_price_and_selected_tif() -> None:
+    leg = BrokerOrderLeg(
+        symbol="SPY",
+        side="sell",
+        quantity=2,
+        order_type="limit",
+        limit_price=240.5,
+        time_in_force="gtc",
+    )
+
+    assert leg.order_type is OrderType.LIMIT
+    assert leg.limit_price == 240.5
+    assert leg.time_in_force is TimeInForce.GTC
+
+
+def test_limit_order_without_price_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="limit order requires a limit_price"):
+        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1, order_type="limit")
+
+
+def test_market_order_with_price_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="market order must not carry a limit_price"):
+        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1, limit_price=100.0)
+
+
+def test_non_positive_limit_price_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        BrokerOrderLeg(
+            symbol="SPY", side="buy", quantity=1, order_type="limit", limit_price=0
+        )
 
 
 def test_capabilities_are_frozen_data() -> None:

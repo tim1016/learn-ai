@@ -8396,12 +8396,28 @@
       },
       "BrokerOrderLeg": {
         "additionalProperties": false,
-        "description": "One equity leg of an order request (broker-neutral).\n\nS1 is EQUITY + MARKET only. ``limit_price`` / ``time_in_force`` are added in\nS2 as optional fields \u2014 additive, so this model is forward-compatible. The\nquantity is a positive share count; the *sign* is carried by ``side``.",
+        "description": "One equity leg of an order request (broker-neutral).\n\nS2 adds ``LIMIT`` orders alongside S1's ``MARKET``: a limit leg carries a\n``limit_price`` and rests until filled or canceled. ``time_in_force`` selects\nhow long a resting order stays working (``DAY``/``GTC``). All additions are\nadditive \u2014 a bare S1 market leg (no ``limit_price``, default ``DAY``) still\nvalidates. The quantity is a positive share count; the *sign* is ``side``.",
         "properties": {
+          "limit_price": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Price"
+          },
           "order_type": {
-            "const": "market",
             "default": "market",
-            "title": "Order Type"
+            "enum": [
+              "market",
+              "limit"
+            ],
+            "title": "Order Type",
+            "type": "string"
           },
           "quantity": {
             "exclusiveMinimum": 0.0,
@@ -8416,6 +8432,14 @@
             "minLength": 1,
             "title": "Symbol",
             "type": "string"
+          },
+          "time_in_force": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TimeInForce"
+              }
+            ],
+            "default": "day"
           }
         },
         "required": [
@@ -36882,6 +36906,15 @@
         "title": "TickerListResponse",
         "type": "object"
       },
+      "TimeInForce": {
+        "description": "How long an order stays working. S2 supports the two equity durations an\noperator needs for a resting order: ``DAY`` (expires at session close) and\n``GTC`` (good-til-canceled). ``ioc``/``opg``/\u2026 are additive later members.",
+        "enum": [
+          "day",
+          "gtc"
+        ],
+        "title": "TimeInForce",
+        "type": "string"
+      },
       "TimeOfDay": {
         "additionalProperties": false,
         "properties": {
@@ -43637,7 +43670,7 @@
         ]
       },
       "post": {
-        "description": "Submit one or more equity market legs (phase-2 S1 write path).\n\nTransport only: FastAPI validates the body, this resolves the account-scoped\nClerk facade, and the Clerk owns identity minting, fail-closed journaling,\nthe broker call, and per-leg result shaping. A per-leg broker rejection is a\n*failed* leg in a ``200`` response (the request itself succeeded), never a\n``500``.",
+        "description": "Submit one or more equity market/limit legs (phase-2 write path).\n\nTransport only: FastAPI validates the body \u2014 an inconsistent leg (a limit\norder with no ``limit_price``, a market order carrying one) is a Pydantic\n``422`` here, never a ``500`` \u2014 this resolves the account-scoped Clerk\nfacade, and the Clerk owns identity minting, fail-closed journaling, the\nbroker call, and per-leg result shaping. A per-leg broker rejection is a\n*failed* leg in a ``200`` response (the request itself succeeded), never a\n``500``.",
         "operationId": "submit_orders_api_brokers__broker__orders_post",
         "parameters": [
           {

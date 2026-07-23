@@ -50,19 +50,25 @@ _ACCOUNT_BODY = json.dumps(
 )
 
 
-def _accepted_order_body(client_order_id: str, symbol: str) -> str:
+def _accepted_order_body(payload: dict) -> str:
+    """Echo the submitted body back as an accepted order (the Alpaca shape).
+
+    Reflects the vendor fields the caller sent (``type``, ``time_in_force``,
+    ``limit_price``) so a limit submit round-trips its own attributes.
+    """
     return json.dumps(
         {
             "id": "broker-order-xyz",
-            "client_order_id": client_order_id,
-            "symbol": symbol,
+            "client_order_id": payload["client_order_id"],
+            "symbol": payload["symbol"],
             "asset_class": "us_equity",
-            "side": "buy",
-            "order_type": "market",
-            "type": "market",
-            "time_in_force": "day",
-            "qty": "1",
+            "side": payload["side"],
+            "order_type": payload["type"],
+            "type": payload["type"],
+            "time_in_force": payload["time_in_force"],
+            "qty": payload["qty"],
             "filled_qty": "0",
+            "limit_price": payload.get("limit_price"),
             "status": "accepted",
             "submitted_at": "2026-07-22T14:30:00Z",
             "created_at": "2026-07-22T14:30:00Z",
@@ -110,11 +116,7 @@ async def test_accepted_leg_returns_acked_result(_alpaca_clerk: None) -> None:
 
     def _order_callback(request):
         payload = json.loads(request.body)
-        return (
-            200,
-            {},
-            _accepted_order_body(payload["client_order_id"], payload["symbol"]),
-        )
+        return (200, {}, _accepted_order_body(payload))
 
     responses.add_callback(
         responses.POST, f"{_BASE}/v2/orders", callback=_order_callback
@@ -134,6 +136,83 @@ async def test_accepted_leg_returns_acked_result(_alpaca_clerk: None) -> None:
     # client_order_id echoed back equals the minted order_ref.
     assert leg["order"]["client_order_id"] == leg["order_ref"]
     assert leg["order_ref"].startswith("manual/inkant/v1:")
+
+
+@responses.activate
+async def test_accepted_limit_gtc_leg_sends_price_and_tif(_alpaca_clerk: None) -> None:
+    responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
+
+    sent: list[dict] = []
+
+    def _order_callback(request):
+        payload = json.loads(request.body)
+        sent.append(payload)
+        return (200, {}, _accepted_order_body(payload))
+
+    responses.add_callback(
+        responses.POST, f"{_BASE}/v2/orders", callback=_order_callback
+    )
+
+    response = await _post(
+        {
+            "operator": "inkant",
+            "legs": [
+                {
+                    "symbol": "SPY",
+                    "side": "sell",
+                    "quantity": 2,
+                    "order_type": "limit",
+                    "limit_price": 999.99,
+                    "time_in_force": "gtc",
+                }
+            ],
+        }
+    )
+
+    assert response.status_code == 200
+    [leg] = response.json()["results"]
+    assert leg["status"] == "acked"
+    assert leg["order"]["order_type"] == "limit"
+    assert leg["order"]["limit_price"] == 999.99
+    assert leg["order"]["time_in_force"] == "gtc"
+    # The wire body carried the vendor-shaped price + tif.
+    assert sent[0]["type"] == "limit"
+    assert sent[0]["limit_price"] == "999.99"
+    assert sent[0]["time_in_force"] == "gtc"
+
+
+async def test_limit_leg_without_price_is_rejected_at_boundary(_alpaca_clerk: None) -> None:
+    # An inconsistent leg (limit order, no limit_price) is a Pydantic 422 at the
+    # transport boundary — never a 500, never reaches the broker.
+    response = await _post(
+        {
+            "operator": "inkant",
+            "legs": [
+                {"symbol": "SPY", "side": "buy", "quantity": 1, "order_type": "limit"}
+            ],
+        }
+    )
+
+    assert response.status_code == 422
+
+
+async def test_market_leg_with_price_is_rejected_at_boundary(_alpaca_clerk: None) -> None:
+    response = await _post(
+        {
+            "operator": "inkant",
+            "legs": [
+                {
+                    "symbol": "SPY",
+                    "side": "buy",
+                    "quantity": 1,
+                    "order_type": "market",
+                    "limit_price": 100.0,
+                }
+            ],
+        }
+    )
+
+    assert response.status_code == 422
 
 
 @responses.activate

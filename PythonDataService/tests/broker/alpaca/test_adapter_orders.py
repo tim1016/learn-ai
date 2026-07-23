@@ -76,3 +76,28 @@ def test_to_alpaca_order_request_maps_equity_market_leg() -> None:
         "time_in_force": "day",
         "client_order_id": "manual/inkant/v1:abc123",
     }
+    # A market leg never carries a limit_price on the wire.
+    assert "limit_price" not in body
+
+
+def test_to_alpaca_order_request_maps_limit_leg_with_price_and_tif() -> None:
+    leg = BrokerOrderLeg(
+        symbol="SPY",
+        side="sell",
+        quantity=2,
+        order_type="limit",
+        limit_price=240.5,
+        time_in_force="gtc",
+    )
+
+    body = to_alpaca_order_request(leg, client_order_id="manual/inkant/v1:def456")
+
+    assert body == {
+        "symbol": "SPY",
+        "qty": "2.0",
+        "side": "sell",
+        "type": "limit",
+        "time_in_force": "gtc",
+        "limit_price": "240.5",
+        "client_order_id": "manual/inkant/v1:def456",
+    }

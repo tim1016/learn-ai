@@ -1425,11 +1425,13 @@ export interface paths {
         put?: never;
         /**
          * Submit Orders
-         * @description Submit one or more equity market legs (phase-2 S1 write path).
+         * @description Submit one or more equity market/limit legs (phase-2 write path).
          *
-         *     Transport only: FastAPI validates the body, this resolves the account-scoped
-         *     Clerk facade, and the Clerk owns identity minting, fail-closed journaling,
-         *     the broker call, and per-leg result shaping. A per-leg broker rejection is a
+         *     Transport only: FastAPI validates the body — an inconsistent leg (a limit
+         *     order with no ``limit_price``, a market order carrying one) is a Pydantic
+         *     ``422`` here, never a ``500`` — this resolves the account-scoped Clerk
+         *     facade, and the Clerk owns identity minting, fail-closed journaling, the
+         *     broker call, and per-leg result shaping. A per-leg broker rejection is a
          *     *failed* leg in a ``200`` response (the request itself succeeded), never a
          *     ``500``.
          */
@@ -8878,22 +8880,28 @@ export interface components {
          * BrokerOrderLeg
          * @description One equity leg of an order request (broker-neutral).
          *
-         *     S1 is EQUITY + MARKET only. ``limit_price`` / ``time_in_force`` are added in
-         *     S2 as optional fields — additive, so this model is forward-compatible. The
-         *     quantity is a positive share count; the *sign* is carried by ``side``.
+         *     S2 adds ``LIMIT`` orders alongside S1's ``MARKET``: a limit leg carries a
+         *     ``limit_price`` and rests until filled or canceled. ``time_in_force`` selects
+         *     how long a resting order stays working (``DAY``/``GTC``). All additions are
+         *     additive — a bare S1 market leg (no ``limit_price``, default ``DAY``) still
+         *     validates. The quantity is a positive share count; the *sign* is ``side``.
          */
         BrokerOrderLeg: {
+            /** Limit Price */
+            limit_price?: number | null;
             /**
              * Order Type
              * @default market
-             * @constant
+             * @enum {string}
              */
-            order_type?: "market";
+            order_type?: "market" | "limit";
             /** Quantity */
             quantity: number;
             side: components["schemas"]["OrderSide"];
             /** Symbol */
             symbol: string;
+            /** @default day */
+            time_in_force?: components["schemas"]["TimeInForce"];
         };
         /**
          * BrokerOrderRequest
@@ -21950,6 +21958,14 @@ export interface components {
              */
             tickers?: components["schemas"]["TickerInfo"][];
         };
+        /**
+         * TimeInForce
+         * @description How long an order stays working. S2 supports the two equity durations an
+         *     operator needs for a resting order: ``DAY`` (expires at session close) and
+         *     ``GTC`` (good-til-canceled). ``ioc``/``opg``/… are additive later members.
+         * @enum {string}
+         */
+        TimeInForce: "day" | "gtc";
         /** TimeOfDay */
         TimeOfDay: {
             /** After */

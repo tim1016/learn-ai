@@ -25,7 +25,7 @@ from alpaca.trading.models import (
     TradeAccount,
     TradeActivity,
 )
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 from pydantic import BaseModel
 
 from app.broker.alpaca.adapter import to_alpaca_order_request
@@ -131,12 +131,45 @@ def test_order_submit_body_keys_are_all_known_to_the_sdk() -> None:
         f"{sorted(unknown)}. Either alpaca-py renamed a field or the adapter "
         f"emits a wrong key."
     )
-    # The S1 contract keys are exactly these — pin them so a silent drop surfaces.
+    # The market contract keys are exactly these — pin them so a silent drop surfaces.
     assert set(body) == {
         "symbol",
         "qty",
         "side",
         "type",
         "time_in_force",
+        "client_order_id",
+    }
+
+
+def test_limit_order_submit_body_keys_are_all_known_to_the_sdk() -> None:
+    # The limit-order twin: the added ``limit_price`` key must be a field the
+    # SDK's limit-order-request model defines, and the body pins the full key set.
+    body = to_alpaca_order_request(
+        BrokerOrderLeg(
+            symbol="SPY",
+            side="sell",
+            quantity=2,
+            order_type="limit",
+            limit_price=240.5,
+            time_in_force="gtc",
+        ),
+        client_order_id="manual/inkant/v1:abc123",
+    )
+
+    unknown = set(body) - _known_names(LimitOrderRequest)
+
+    assert unknown == set(), (
+        f"limit order-submit body carries keys the SDK order model does not "
+        f"define: {sorted(unknown)}. Either alpaca-py renamed a field or the "
+        f"adapter emits a wrong key."
+    )
+    assert set(body) == {
+        "symbol",
+        "qty",
+        "side",
+        "type",
+        "time_in_force",
+        "limit_price",
         "client_order_id",
     }
