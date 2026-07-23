@@ -130,6 +130,13 @@ class AlpacaBroker:
         """
         await self._client.cancel_order(order_id)
 
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> BrokerOrder | None:
+        """Resolve a possibly-submitted order by the Clerk-minted identity."""
+        payload = await self._client.get_order_by_client_order_id(client_order_id)
+        return adapter.from_alpaca_order(payload) if payload is not None else None
+
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:
     """Register the phase-1 brokers (Alpaca only) into the registry."""

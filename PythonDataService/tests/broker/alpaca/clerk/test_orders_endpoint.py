@@ -224,6 +224,35 @@ async def test_market_leg_with_price_is_rejected_at_boundary(_alpaca_clerk: None
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "leg",
+    [
+        {
+            "symbol": "SPY",
+            "side": "buy",
+            "quantity": 1,
+            "order_type": "limit",
+            "limit_price": 240.555,
+        },
+        {
+            "symbol": "SPY",
+            "side": "buy",
+            "quantity": 0.5,
+            "order_type": "limit",
+            "limit_price": 240.5,
+            "time_in_force": "gtc",
+        },
+    ],
+)
+async def test_unsupported_alpaca_order_leg_is_rejected_at_boundary(
+    _alpaca_clerk: None,
+    leg: dict[str, object],
+) -> None:
+    response = await _post({"operator": "inkant", "legs": [leg]})
+
+    assert response.status_code == 422
+
+
 @responses.activate
 async def test_rejected_leg_surfaces_what_why_not_500(_alpaca_clerk: None) -> None:
     responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
@@ -264,6 +293,20 @@ async def test_operator_with_space_is_rejected_at_boundary_not_500(
         {
             "operator": "bad operator",
             "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}],
+        }
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("symbol", ["BTC/USD", "AAPL240621C00200000"])
+async def test_non_equity_symbol_is_rejected_at_boundary(
+    _alpaca_clerk: None, symbol: str
+) -> None:
+    response = await _post(
+        {
+            "operator": "inkant",
+            "legs": [{"symbol": symbol, "side": "buy", "quantity": 1}],
         }
     )
 
