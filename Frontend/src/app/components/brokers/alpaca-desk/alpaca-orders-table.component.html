@@ -19,6 +19,7 @@
           <th scope="col" class="text-right">Filled</th>
           <th scope="col">Status</th>
           <th scope="col">Submitted</th>
+          <th scope="col">Actions</th>
         </tr>
       </ng-template>
       <ng-template #body let-row>
@@ -31,6 +32,23 @@
             <td><p-tag severity="info" [value]="row.status | receiptLabel" /></td>
             <td>
               <app-timestamp-display [value]="row.submitted_at_ms" mode="local" />
+            </td>
+            <td>
+              @if (isCancelable(row)) {
+                <p-button
+                  label="Cancel"
+                  severity="danger"
+                  size="small"
+                  [text]="true"
+                  [loading]="cancelingId() === row.order_id"
+                  [disabled]="cancelingId() !== null"
+                  [ariaLabel]="'Cancel order for ' + row.symbol"
+                  (onClick)="cancel(row)"
+                />
+                @if (cancelError()[row.order_id]; as message) {
+                  <p class="m-0 mt-1 text-xs text-red-500" role="alert">{{ message }}</p>
+                }
+              }
             </td>
           </tr>
       </ng-template>

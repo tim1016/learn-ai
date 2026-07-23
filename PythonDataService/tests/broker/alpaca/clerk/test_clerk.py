@@ -92,6 +92,8 @@ class _FakeBroker:
         lookup_error: Exception | None = None,
         lookup_absent: bool = False,
         on_submit: Any = None,
+        cancel_error: Exception | None = None,
+        on_cancel: Any = None,
     ) -> None:
         self._account = account or _account()
         self._error = error
@@ -99,7 +101,10 @@ class _FakeBroker:
         self._lookup_error = lookup_error
         self._lookup_absent = lookup_absent
         self._on_submit = on_submit
+        self._cancel_error = cancel_error
+        self._on_cancel = on_cancel
         self.submit_calls: list[tuple[BrokerOrderLeg, str]] = []
+        self.cancel_calls: list[str] = []
         self.lookup_calls: list[str] = []
 
     async def get_account(self) -> BrokerAccountSnapshot:
@@ -114,6 +119,14 @@ class _FakeBroker:
         if self._error is not None:
             raise self._error
         return _accepted_order(client_order_id, symbol=leg.symbol)
+
+    async def cancel(self, order_id: str) -> None:
+        self.cancel_calls.append(order_id)
+        if self._on_cancel is not None:
+            await self._on_cancel(order_id)
+        if self._cancel_error is not None:
+            raise self._cancel_error
+        return None
 
     async def get_order_by_client_order_id(
         self, client_order_id: str
@@ -356,3 +369,138 @@ async def test_journal_path_is_account_scoped_and_separate() -> None:
     assert journal_dir.name == "PA-9999"
     assert journal_dir.parent.name == "alpaca"
     assert journal_dir.parent.parent.name == "accounts"
+
+
+# ── S3 cancel path ──────────────────────────────────────────────────────────
+
+
+async def test_cancel_recorded_is_journaled_before_broker_cancel() -> None:
+    # "No journal → no cancel": the cancel_recorded entry must be in the ledger
+    # by the time the broker's cancel runs.
+    seen_kinds: list[str] = []
+
+    async def _inspect(order_id: str) -> None:
+        entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+        seen_kinds.extend(entry.kind for entry in entries)
+
+    broker = _FakeBroker(on_cancel=_inspect)
+    clerk = AlpacaClerk(read=broker, trade=broker)
+
+    await clerk.cancel("broker-order-1")
+
+    assert ClerkEntryKind.CANCEL_RECORDED in seen_kinds
+    assert broker.cancel_calls == ["broker-order-1"]
+
+
+async def test_cancel_of_owned_order_resolves_intent_and_acks() -> None:
+    # A prior submit_acked binds the broker order_id to the minted order_ref.
+    # The cancel must recover that identity (owned=True) and journal cancel_acked.
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+
+    submit_result = await clerk.submit(_request())
+    order_ref = submit_result.results[0].order_ref
+
+    result = await clerk.cancel("broker-order-1")
+
+    assert result.status == "acked"
+    assert result.owned is True
+    assert result.order_id == "broker-order-1"
+    # The originating intent is recoverable from the cancel result.
+    assert result.order_ref == order_ref
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    cancel_entries = [
+        entry
+        for entry in entries
+        if entry.kind
+        in (ClerkEntryKind.CANCEL_RECORDED, ClerkEntryKind.CANCEL_ACKED)
+    ]
+    assert [entry.kind for entry in cancel_entries] == [
+        ClerkEntryKind.CANCEL_RECORDED,
+        ClerkEntryKind.CANCEL_ACKED,
+    ]
+    # The owning identity is copied onto both cancel lines — never re-derived.
+    for entry in cancel_entries:
+        assert entry.owned is True
+        assert entry.order_ref == order_ref
+        assert entry.broker_order_id == "broker-order-1"
+        assert entry.leg is not None
+        assert entry.leg.symbol == "SPY"
+
+
+async def test_cancel_of_unowned_order_still_cancels_journaled_honestly() -> None:
+    # A foreign order (never submitted through this Clerk) has no submit_acked
+    # entry. Canceling it reduces exposure — the safe direction — so it succeeds,
+    # but the ledger records owned=False with NO fabricated intent identity.
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    # Warm the journal (resolve account id) without an owning order.
+    await clerk.submit(_request(symbol="AAA"))
+
+    result = await clerk.cancel("foreign-order-999")
+
+    assert result.status == "acked"
+    assert result.owned is False
+    assert result.order_ref is None
+    assert broker.cancel_calls == ["foreign-order-999"]
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    acked = next(
+        entry for entry in entries if entry.kind is ClerkEntryKind.CANCEL_ACKED
+    )
+    assert acked.owned is False
+    assert acked.broker_order_id == "foreign-order-999"
+    # No fabricated attribution.
+    assert acked.order_ref == ""
+    assert acked.intent_id == ""
+    assert acked.operator == ""
+    assert acked.leg is None
+
+
+async def test_cancel_of_non_cancelable_order_fails_typed_not_500() -> None:
+    broker = _FakeBroker(
+        cancel_error=BrokerRequestInvalid(
+            "Alpaca rejected the request as invalid: order is not cancelable",
+            broker="alpaca",
+            detail="HTTP 422",
+        )
+    )
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    await clerk.submit(_request())
+
+    result = await clerk.cancel("broker-order-1")
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert "not cancelable" in result.error.message
+    assert result.error.why == "HTTP 422"
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    failed = entries[-1]
+    assert failed.kind is ClerkEntryKind.CANCEL_FAILED
+    assert failed.error_message is not None
+    assert "not cancelable" in failed.error_message
+
+
+async def test_cancel_does_not_consult_the_submit_path() -> None:
+    # Hold-independence guard (the S6 exposure hold lands on submit only).
+    # Cancel must reach the broker via its OWN path — never through submit or its
+    # per-leg gating. We assert the cancel neither invokes submit nor mints new
+    # order identity: no submit call, and no INTENT_RECORDED entry appears from
+    # the cancel. When S6 adds a hold to submit, this order-reducing path stays
+    # reachable. (The full "cancel succeeds while a hold is active" test belongs
+    # to S6, once the hold exists — we do not fabricate one here.)
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+
+    # Cancel with a cold journal (no prior submit): if cancel were routed through
+    # submit it would mint identity / call submit. It must do neither.
+    await clerk.cancel("some-order")
+
+    assert broker.submit_calls == []
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    kinds = [entry.kind for entry in entries]
+    assert ClerkEntryKind.INTENT_RECORDED not in kinds
+    assert ClerkEntryKind.SUBMIT_ACKED not in kinds
+    assert kinds == [ClerkEntryKind.CANCEL_RECORDED, ClerkEntryKind.CANCEL_ACKED]

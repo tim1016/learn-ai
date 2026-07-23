@@ -1442,6 +1442,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/orders/{order_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Order
+         * @description Cancel one working order by its broker-assigned id (phase-2 S3 write path).
+         *
+         *     Transport only: resolve the account-scoped Clerk facade and delegate. The
+         *     Clerk owns ownership resolution, fail-closed journaling, the broker call, and
+         *     result shaping. A non-cancelable order is a *failed* result in a ``200``
+         *     response with a typed what/why (never a ``500``). Cancel is intentionally a
+         *     first-class Clerk path, independent of the submit gate, so a future exposure
+         *     hold (S6) that blocks new submission never blocks reducing exposure.
+         */
+        delete: operations["cancel_order_api_brokers__broker__orders__order_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/positions": {
         parameters: {
             query?: never;
@@ -17984,6 +18011,32 @@ export interface components {
             success: boolean;
         };
         /**
+         * OrderCancelResult
+         * @description The outcome of a cancel request the router shapes into its response.
+         *
+         *     ``status`` is ``acked`` when the broker accepted the cancel (HTTP 204) or
+         *     ``failed`` when it rejected it (a typed what/why, never a raw 500).
+         *     ``order_id`` always echoes the broker-assigned id the operator targeted, so
+         *     the ledger line is findable. ``owned`` reports whether this Clerk submitted
+         *     the canceled order — a foreign order still cancels (reducing exposure is the
+         *     safe direction), but the fact is surfaced honestly, not hidden.
+         */
+        OrderCancelResult: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            error?: components["schemas"]["OrderLegError"] | null;
+            /** Order Id */
+            order_id: string;
+            /** Order Ref */
+            order_ref?: string | null;
+            /** Owned */
+            owned: boolean;
+            /** Status */
+            status: string;
+        };
+        /**
          * OrderLegError
          * @description A typed leg failure: a what/why the UI renders, never a raw 500.
          */
@@ -25387,6 +25440,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrderSubmitResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_order_api_brokers__broker__orders__order_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                order_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderCancelResult"];
                 };
             };
             /** @description Validation Error */

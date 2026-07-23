@@ -30,6 +30,9 @@ from app.main import app
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 
 _BASE = "https://paper-api.alpaca.markets"
+_ORDER_ID = "11111111-1111-4111-8111-111111111111"
+_FOREIGN_ORDER_ID = "22222222-2222-4222-8222-222222222222"
+_REJECTED_ORDER_ID = "33333333-3333-4333-8333-333333333333"
 
 _ACCOUNT_BODY = json.dumps(
     {
@@ -58,7 +61,7 @@ def _accepted_order_body(payload: dict) -> str:
     """
     return json.dumps(
         {
-            "id": "broker-order-xyz",
+            "id": _ORDER_ID,
             "client_order_id": payload["client_order_id"],
             "symbol": payload["symbol"],
             "asset_class": "us_equity",
@@ -107,6 +110,15 @@ async def _post(body: dict) -> Response:
     ) as client:
         return await client.post(
             "/api/brokers/alpaca/orders", json=body, headers=_control_headers()
+        )
+
+
+async def _delete(order_id: str) -> Response:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.delete(
+            f"/api/brokers/alpaca/orders/{order_id}", headers=_control_headers()
         )
 
 
@@ -313,3 +325,98 @@ async def test_unconfigured_clerk_returns_503() -> None:
 
     assert response.status_code == 503
     assert "not configured" in response.json()["detail"]["message"]
+
+
+# ── S3 cancel path (DELETE /api/brokers/alpaca/orders/{order_id}) ────────────
+
+
+async def _submit_one() -> str:
+    """Submit one accepted leg and return its broker-assigned order id."""
+
+    def _order_callback(request):
+        payload = json.loads(request.body)
+        return (200, {}, _accepted_order_body(payload))
+
+    responses.add_callback(
+        responses.POST, f"{_BASE}/v2/orders", callback=_order_callback
+    )
+    response = await _post(
+        {"operator": "inkant", "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}]}
+    )
+    assert response.status_code == 200
+    return response.json()["results"][0]["order"]["order_id"]
+
+
+@responses.activate
+async def test_cancel_owned_order_returns_acked(_alpaca_clerk: None) -> None:
+    responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
+    order_id = await _submit_one()
+    # Alpaca returns 204 (no body) on a successful cancel.
+    responses.add(
+        responses.DELETE, f"{_BASE}/v2/orders/{order_id}", body="", status=204
+    )
+
+    response = await _delete(order_id)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "acked"
+    assert body["owned"] is True
+    assert body["order_id"] == order_id
+    assert body["order_ref"].startswith("manual/inkant/v1:")
+    assert body["error"] is None
+
+
+@responses.activate
+async def test_cancel_unowned_order_still_acks_honestly(_alpaca_clerk: None) -> None:
+    responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
+    # A foreign order id never submitted through this clerk.
+    responses.add(
+        responses.DELETE, f"{_BASE}/v2/orders/{_FOREIGN_ORDER_ID}", body="", status=204
+    )
+
+    response = await _delete(_FOREIGN_ORDER_ID)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "acked"
+    assert body["owned"] is False
+    assert body["order_ref"] is None
+
+
+@responses.activate
+async def test_cancel_non_cancelable_order_surfaces_what_why_not_500(
+    _alpaca_clerk: None,
+) -> None:
+    responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
+    responses.add(
+        responses.DELETE,
+        f"{_BASE}/v2/orders/{_REJECTED_ORDER_ID}",
+        body=json.dumps({"code": 42210000, "message": "order is not cancelable"}),
+        status=422,
+    )
+
+    response = await _delete(_REJECTED_ORDER_ID)
+
+    # The request succeeded (200); the cancel failed with a typed what/why.
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["owned"] is False
+    assert "not cancelable" in body["error"]["message"]
+    assert body["error"]["why"] == "HTTP 422"
+
+
+async def test_cancel_unconfigured_clerk_returns_503() -> None:
+    reset_alpaca_clerk_for_testing()
+
+    response = await _delete(_REJECTED_ORDER_ID)
+
+    assert response.status_code == 503
+    assert "not configured" in response.json()["detail"]["message"]
+
+
+async def test_cancel_invalid_order_id_is_rejected_at_boundary(_alpaca_clerk: None) -> None:
+    response = await _delete("not-a-uuid")
+
+    assert response.status_code == 422

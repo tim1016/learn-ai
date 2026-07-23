@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
+    OrderCancelResult,
     OrderJournalEntry,
     OrderLegError,
     OrderLegResult,
@@ -140,6 +141,101 @@ class AlpacaClerk:
         return OrderSubmitResult(
             broker=self.broker_id, account_id=account_id, results=results
         )
+
+    async def cancel(self, order_id: str) -> OrderCancelResult:
+        """Cancel one working order by its broker-assigned id.
+
+        This is a **first-class path, deliberately NOT routed through ``submit``
+        or its per-leg gating.** A later slice (S6) adds an exposure hold that
+        blocks *new exposure* — i.e. submission — but canceling a working order
+        *reduces* exposure and must never be blocked by that hold. Keeping cancel
+        off the submit path means S6 can add the hold to submit alone, and cancel
+        stays reachable while a hold is active. (The hold does not exist yet; do
+        not add it here — this comment records the intended seam.)
+
+        Flow, sharing the intake lock (so a cancel and a submit never interleave)
+        and the same fail-closed journal:
+
+        1. Resolve ownership from the journal: an order this Clerk submitted has a
+           ``submit_acked`` line mapping ``broker order_id → order_ref``. A
+           foreign/unowned order is still cancelable (safe direction), journaled
+           with honest ``owned=False`` attribution — never a fabricated intent.
+        2. Journal ``cancel_recorded`` and ``fsync`` it BEFORE the broker call.
+        3. Call the trade port's ``cancel``.
+        4. Journal ``cancel_acked`` on success, or ``cancel_failed`` on a
+           ``BrokerError`` (a non-cancelable order is a typed what/why, not 500).
+        """
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            owning = self._resolve_owning_entry(order_id, journal)
+            owned = owning is not None
+
+            def _entry(
+                kind: ClerkEntryKind, *, error: BrokerError | None = None
+            ) -> OrderJournalEntry:
+                return OrderJournalEntry(
+                    kind=kind,
+                    account_id=account_id,
+                    operator=owning.operator if owning is not None else "",
+                    intent_id=owning.intent_id if owning is not None else "",
+                    order_ref=owning.order_ref if owning is not None else "",
+                    client_order_id=owning.client_order_id if owning is not None else "",
+                    leg=owning.leg if owning is not None else None,
+                    broker_order_id=order_id,
+                    owned=owned,
+                    recorded_at_ms=_now_ms(),
+                    error_message=error.message if error is not None else None,
+                    error_detail=error.detail if error is not None else None,
+                )
+
+            order_ref = owning.order_ref if owning is not None else None
+
+            # No journal → no cancel: record + fsync BEFORE the broker call.
+            journal.append(_entry(ClerkEntryKind.CANCEL_RECORDED))
+
+            try:
+                await self._trade.cancel(order_id)
+            except BrokerError as exc:
+                journal.append(_entry(ClerkEntryKind.CANCEL_FAILED, error=exc))
+                return OrderCancelResult(
+                    broker=self.broker_id,
+                    account_id=account_id,
+                    order_id=order_id,
+                    status="failed",
+                    owned=owned,
+                    order_ref=order_ref,
+                    error=OrderLegError(message=exc.message, why=exc.detail),
+                )
+
+            journal.append(_entry(ClerkEntryKind.CANCEL_ACKED))
+            return OrderCancelResult(
+                broker=self.broker_id,
+                account_id=account_id,
+                order_id=order_id,
+                status="acked",
+                owned=owned,
+                order_ref=order_ref,
+            )
+
+    @staticmethod
+    def _resolve_owning_entry(
+        order_id: str, journal: OrderJournal
+    ) -> OrderJournalEntry | None:
+        """Find the ``submit_acked`` entry that minted the given broker order_id.
+
+        The ``submit_acked`` line is the sole place the broker-assigned
+        ``order_id`` is bound to our minted ``order_ref``/leg. Return the most
+        recent match (last write wins) or ``None`` when the order is unowned.
+        """
+        owning: OrderJournalEntry | None = None
+        for entry in journal.read_entries():
+            if (
+                entry.kind is ClerkEntryKind.SUBMIT_ACKED
+                and entry.order is not None
+                and entry.order.order_id == order_id
+            ):
+                owning = entry
+        return owning
 
     async def _submit_leg(
         self,

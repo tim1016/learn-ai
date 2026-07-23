@@ -203,6 +203,21 @@ class AlpacaTradingClient:
             lambda c: c.post("/orders", order), describe="order submission"
         )
 
+    async def cancel_order(self, order_id: str) -> None:
+        """DELETE ``/v2/orders/{order_id}`` over the owned capturing session.
+
+        ``order_id`` is Alpaca's broker-assigned UUID. The low-level ``delete``
+        drives the same ``requests.Session`` the read path uses, so the capture
+        hook journals the raw response verbatim, and the same timeout +
+        ``map_api_error`` translation applies. Alpaca returns HTTP 204 (no body)
+        on success — ``delete`` yields ``None`` — and 422 for a non-cancelable
+        order, which ``map_api_error`` translates to a typed ``BrokerError``.
+        Returns nothing; there is no order payload to map.
+        """
+        await self._call(
+            lambda c: c.delete(f"/orders/{order_id}"), describe="order cancellation"
+        )
+
     async def get_order_by_client_order_id(
         self, client_order_id: str
     ) -> dict[str, Any] | None:

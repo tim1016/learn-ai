@@ -67,7 +67,7 @@ class BrokerReadPort(Protocol):
 
 @runtime_checkable
 class BrokerTradePort(Protocol):
-    """Write surface: submit an order (phase 2). Cancel arrives in S3.
+    """Write surface: submit an order (phase 2); cancel a working order (S3).
 
     ``submit`` takes a single, already-identity-minted leg plus the
     ``client_order_id`` the caller (the Clerk) minted — the port does **not**
@@ -77,6 +77,14 @@ class BrokerTradePort(Protocol):
     ``BrokerError`` subclass. A submit-side ``BrokerUnavailable`` is not a
     definitive failure: the Clerk resolves it through
     ``get_order_by_client_order_id`` before journaling a terminal outcome.
+
+    ``cancel`` requests cancellation of a working order by its **broker-assigned
+    order id** (the ``BrokerOrder.order_id`` — a UUID for Alpaca), not the
+    ``client_order_id``. Alpaca's cancel endpoint returns no order body (HTTP
+    204), so the port returns ``None`` on success; a non-cancelable order (HTTP
+    422) raises a ``BrokerError`` subclass the Clerk journals as
+    ``cancel_failed``. The port does not read the journal or resolve ownership —
+    that is the Clerk's concern; the port only speaks to the vendor.
     """
 
     broker_id: str
@@ -84,6 +92,8 @@ class BrokerTradePort(Protocol):
     async def submit(
         self, leg: BrokerOrderLeg, *, client_order_id: str
     ) -> BrokerOrder: ...
+
+    async def cancel(self, order_id: str) -> None: ...
 
     async def get_order_by_client_order_id(
         self, client_order_id: str

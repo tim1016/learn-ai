@@ -57,4 +57,23 @@ describe('BrokersService', () => {
 
     await expect(promise).resolves.toMatchObject({ account_id: 'PA1' });
   });
+
+  it('DELETEs an order by its broker id on the control-prefixed endpoint', async () => {
+    const promise = service.cancelOrder('alpaca', 'broker-order-xyz');
+
+    const req = httpMock.expectOne('/api/brokers/alpaca/orders/broker-order-xyz');
+    expect(req.request.method).toBe('DELETE');
+    // DELETE under /api/brokers is a control mutation — the interceptor marks it.
+    req.flush({
+      broker: 'alpaca',
+      account_id: 'PA1',
+      order_id: 'broker-order-xyz',
+      status: 'acked',
+      owned: true,
+      order_ref: 'manual/desk/v1:abc',
+      error: null,
+    });
+
+    await expect(promise).resolves.toMatchObject({ status: 'acked', owned: true });
+  });
 });

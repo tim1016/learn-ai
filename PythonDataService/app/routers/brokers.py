@@ -12,10 +12,16 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Callable
 from typing import Literal, NoReturn
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.broker.alpaca.clerk import OrderSubmitResult, get_alpaca_clerk
+from app.broker.alpaca.clerk import (
+    AlpacaClerk,
+    OrderCancelResult,
+    OrderSubmitResult,
+    get_alpaca_clerk,
+)
 from app.broker.contract.errors import BrokerError, BrokerRateLimited
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -117,6 +123,38 @@ async def get_clock_evidence(broker: str) -> BrokerClockEvidence:
     return await _run(broker, lambda port: port.get_clock_evidence())
 
 
+def _require_trade_clerk(broker: str) -> AlpacaClerk:
+    """Resolve the account-scoped Alpaca Clerk, or raise the right HTTP error.
+
+    Shared by the write endpoints (submit + cancel). An unknown broker surfaces
+    the read path's ``404``; an unconfigured Clerk surfaces a ``503`` with a
+    what/why. Only Alpaca has a trade port in phase 2.
+    """
+    if broker != "alpaca":
+        # Preserve the read-path 404 for an unknown broker, then reject a known
+        # read-only broker instead of accidentally dispatching through Alpaca.
+        _resolve_port(broker)
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "broker": broker,
+                "message": "Order management is not supported for this broker.",
+                "why": "Only Alpaca has a phase-2 trade port.",
+            },
+        )
+    clerk = get_alpaca_clerk()
+    if clerk is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "broker": broker,
+                "message": "Alpaca order management is not configured.",
+                "why": "Set Alpaca paper credentials in .env and restart the service.",
+            },
+        )
+    return clerk
+
+
 @router.post(
     "/{broker}/orders",
     response_model=OrderSubmitResult,
@@ -133,21 +171,30 @@ async def submit_orders(broker: str, request: BrokerOrderRequest) -> OrderSubmit
     *failed* leg in a ``200`` response (the request itself succeeded), never a
     ``500``.
     """
-    if broker != "alpaca":
-        # Only Alpaca has a trade port in S1. Surface the same 404 shape the
-        # read path uses for an unknown broker.
-        _resolve_port(broker)
-    clerk = get_alpaca_clerk()
-    if clerk is None:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "broker": broker,
-                "message": "Alpaca order submission is not configured.",
-                "why": "Set Alpaca paper credentials in .env and restart the service.",
-            },
-        )
+    clerk = _require_trade_clerk(broker)
     try:
         return await clerk.submit(request)
+    except BrokerError as error:
+        _raise_http(error)
+
+
+@router.delete(
+    "/{broker}/orders/{order_id}",
+    response_model=OrderCancelResult,
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def cancel_order(broker: str, order_id: UUID) -> OrderCancelResult:
+    """Cancel one working order by its broker-assigned id (phase-2 S3 write path).
+
+    Transport only: resolve the account-scoped Clerk facade and delegate. The
+    Clerk owns ownership resolution, fail-closed journaling, the broker call, and
+    result shaping. A non-cancelable order is a *failed* result in a ``200``
+    response with a typed what/why (never a ``500``). Cancel is intentionally a
+    first-class Clerk path, independent of the submit gate, so a future exposure
+    hold (S6) that blocks new submission never blocks reducing exposure.
+    """
+    clerk = _require_trade_clerk(broker)
+    try:
+        return await clerk.cancel(str(order_id))
     except BrokerError as error:
         _raise_http(error)
