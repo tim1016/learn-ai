@@ -24,6 +24,7 @@ from alpaca.trading.models import (
     Position,
     TradeAccount,
     TradeActivity,
+    TradeUpdate,
 )
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 from pydantic import BaseModel
@@ -173,3 +174,25 @@ def test_limit_order_submit_body_keys_are_all_known_to_the_sdk() -> None:
         "limit_price",
         "client_order_id",
     }
+
+
+def test_trade_updates_frame_has_no_schema_drift(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    # S4 inbound drift guard: every key in a trade_updates event's ``data``
+    # payload (the envelope wrapper keys AND the nested order object) must be a
+    # field the SDK's TradeUpdate + Order models define. If Alpaca adds a
+    # lifecycle-event key alpaca-py doesn't know, this fails and names it.
+    frames = load_alpaca_fixture("trade_updates", "trade_updates.json")
+    models = (TradeUpdate, Order)
+    for frame in frames:
+        # The ``stream`` envelope key is the websocket framing, not an SDK model
+        # field — the SDK parses ``msg["data"]`` into a TradeUpdate — so drift is
+        # checked against the ``data`` payload only.
+        assert set(frame) == {"stream", "data"}
+        drift = unknown_keys(frame["data"], models)
+        assert drift == set(), (
+            "trade_updates: Alpaca event carries keys the SDK model(s) do not "
+            f"define: {sorted(drift)}. Either alpaca-py is behind (upgrade + "
+            f"extend the adapter) or the fixture is wrong."
+        )

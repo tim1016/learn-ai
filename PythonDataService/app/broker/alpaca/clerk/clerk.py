@@ -36,12 +36,19 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerOrderRequest
+from app.broker.contract.models import (
+    BrokerOrder,
+    BrokerOrderEvent,
+    BrokerOrderLeg,
+    BrokerOrderRequest,
+)
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import (
     build_manual_order_namespace,
     build_order_ref,
     mint_intent_id,
+    order_ref_namespace_matches,
+    parse_order_ref,
 )
 
 logger = logging.getLogger(__name__)
@@ -111,6 +118,10 @@ class AlpacaClerk:
         self._intake_lock = asyncio.Lock()
         self._account_id: str | None = None
         self._journal: OrderJournal | None = None
+        # S4 observable counter: unexplained (foreign/absent-coid) lifecycle
+        # events. S6 reads this (and the UNEXPLAINED_ORDER lines) to raise the
+        # exposure hold; S4 only counts.
+        self._unexplained_order_count = 0
 
     async def _ensure_journal(self) -> tuple[str, OrderJournal]:
         """Resolve + cache the account id and its journal (once)."""
@@ -210,6 +221,125 @@ class AlpacaClerk:
                 owned=owned,
                 order_ref=order_ref,
             )
+
+    # ── S4 live-lifecycle path (trade_updates websocket) ─────────────────────
+
+    async def record_lifecycle_event(
+        self,
+        *,
+        client_order_id: str | None,
+        event: BrokerOrderEvent,
+        event_key: str,
+        order: BrokerOrder | None = None,
+    ) -> ClerkEntryKind:
+        """Journal one parsed ``trade_updates`` lifecycle event, with attribution.
+
+        The consumer captures the raw frame verbatim, parses it to a
+        ``BrokerOrderEvent`` (via the adapter), and hands it here with the
+        wire's ``client_order_id`` and a stable ``event_key`` (the dedup key the
+        consumer already resolved: ``execution_id`` for a fill, else a synthetic
+        ``order_id|event|timestamp``).
+
+        Attribution runs against **this Clerk's known namespaces** using the
+        canonical ``order_ref_namespace_matches`` — exact namespace equality,
+        never a prefix. OWNED (``client_order_id`` namespace is ours) → an
+        ``ORDER_EVENT`` line; UNOWNED / foreign / absent / unparseable →
+        an ``UNEXPLAINED_ORDER`` line plus the observable
+        :pyattr:`unexplained_order_count` counter.
+
+        **S6 seam:** the exposure hold that blocks *new submits* on an
+        unexplained order is NOT implemented here — S4 only records the
+        observation. S6 reads these ``UNEXPLAINED_ORDER`` lines (and/or the
+        counter) to raise the hold on ``submit``. Do not couple this to submit.
+        Returns the kind journaled (test/observability seam).
+        """
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            owned = order_ref_namespace_matches(
+                client_order_id, self._known_namespaces(journal)
+            )
+            kind = (
+                ClerkEntryKind.ORDER_EVENT if owned else ClerkEntryKind.UNEXPLAINED_ORDER
+            )
+            owning = (
+                self._resolve_owning_entry_by_ref(client_order_id, journal)
+                if owned and client_order_id is not None
+                else None
+            )
+            journal.append(
+                OrderJournalEntry(
+                    kind=kind,
+                    account_id=account_id,
+                    operator=owning.operator if owning is not None else "",
+                    intent_id=owning.intent_id if owning is not None else "",
+                    order_ref=owning.order_ref if owning is not None else "",
+                    client_order_id=client_order_id or "",
+                    leg=owning.leg if owning is not None else None,
+                    broker_order_id=order.order_id if order is not None else None,
+                    owned=owned,
+                    recorded_at_ms=_now_ms(),
+                    order=order,
+                    event=event,
+                    event_key=event_key,
+                )
+            )
+            if not owned:
+                self._unexplained_order_count += 1
+                logger.warning(
+                    "alpaca clerk observed an unexplained order lifecycle event",
+                    extra={
+                        "action": "unexplained_order",
+                        "account_id": account_id,
+                        "client_order_id": client_order_id,
+                        "event": event.event_type,
+                        "event_key": event_key,
+                    },
+                )
+            return kind
+
+    @property
+    def unexplained_order_count(self) -> int:
+        """Observable counter: lifecycle events on orders this Clerk did not own."""
+        return self._unexplained_order_count
+
+    def _known_namespaces(self, journal: OrderJournal) -> frozenset[str]:
+        """The manual-order namespaces this Clerk has minted, from the journal.
+
+        Every owned order's ``order_ref`` parses to ``manual/{operator}/v1``;
+        the set of those namespaces is the allowlist attribution matches against
+        (exact equality). Rebuilt from the ledger so it survives a restart —
+        the journal is the durable source of what this Clerk owns.
+        """
+        namespaces: set[str] = set()
+        for entry in journal.read_entries():
+            if not entry.order_ref:
+                continue
+            try:
+                namespace, _ = parse_order_ref(entry.order_ref)
+            except ValueError:
+                continue
+            namespaces.add(namespace)
+        return frozenset(namespaces)
+
+    @staticmethod
+    def _resolve_owning_entry_by_ref(
+        client_order_id: str, journal: OrderJournal
+    ) -> OrderJournalEntry | None:
+        """Find the owning submit entry for a client_order_id (== order_ref).
+
+        Returns the most recent submit-side entry (``submit_acked`` preferred,
+        else ``intent_recorded``) whose ``order_ref`` matches, so the event line
+        can copy the originating identity + leg. ``None`` when unresolvable.
+        """
+        owning: OrderJournalEntry | None = None
+        for entry in journal.read_entries():
+            if (
+                entry.kind
+                in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.INTENT_RECORDED)
+                and entry.order_ref == client_order_id
+            ):
+                owning = entry
+        return owning
 
     @staticmethod
     def _resolve_owning_entry(
