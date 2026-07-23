@@ -38,3 +38,27 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
   SPY and QQQ both **RTH live + tradeable** (paper). Auto-reconcile-after-bot-trades
   enabled.
 - **Result:** Account is deploy-ready. Proceeding to bot launches.
+
+### 08:40–08:50 — reuse attempt on overnight-stopped bots; pivot to fresh deploy
+
+- **Context:** The fleet already held two off-duty bots from prior smoke runs —
+  `smoke-spy-1522` (SPY) and `smoke-qqq-1525` (QQQ) — both **Flat**, 0 positions,
+  account **Clear**, last run **Clean**, and each with a fresh roll-call **Start**
+  offer. Both had filled orders yesterday (bot event stream shows `Order Filled`).
+  Plan was to reuse them as bots 1–2 and deploy one fresh NVDA bot.
+- **Symptom:** Clicking **Start** on `smoke-spy-1522` was refused with
+  *"This bot is durably STOPPED. Resume it before starting. A precondition is not
+  met."* Retrying after account re-verification gave the same refusal.
+- **Investigation:** No **Resume** control was reachable — not in the Trader view
+  (only Start / View operations), the Operations "•••" menu (Take off roster /
+  Retire & Replace / Change settings / Full history), or the lifecycle overview
+  (the "Desired state · STOPPED · Blocking step" card and its sub-stages are
+  read-only receipts, exposing only *Select* and *Show receipts*). The graceful
+  stop from a prior session wrote a durable STOPPED intent that the roster
+  roll-call **Start** offer does not clear.
+- **Decision:** Pivot to **fresh deploy** for the launch sequence — a newly
+  deployed bot comes up desired-state RUNNING with no durable STOPPED intent, so
+  it starts cleanly. The two smoke bots are left off-duty (flat, harmless). The
+  "Resume a durably-stopped bot" gap is flagged to be nailed down at the
+  stop/restart steps, where it is core to the test (and may need the same kind of
+  control-restore done previously for the stop card).
