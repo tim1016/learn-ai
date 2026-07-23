@@ -11,6 +11,8 @@ import type {
   BrokerOrderLeg,
   OrderLegResult,
   OrderSide,
+  OrderType,
+  TimeInForce,
 } from '../../../api/alpaca.types';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokersService } from '../../../services/brokers.service';
@@ -21,13 +23,18 @@ interface DraftLeg {
   symbol: string;
   side: OrderSide;
   quantity: string;
+  orderType: OrderType;
+  limitPrice: string;
+  timeInForce: TimeInForce;
 }
 
 /**
- * Alpaca order-entry panel (phase-2 S1). Leg-based paradigm: the operator adds
- * equity legs, previews, confirms, and submits. Option legs are present but
- * disabled ("coming in 2b"). Per-leg results render after submit — acked or a
- * typed failure. Market-only in S1; limit/TIF land in S2.
+ * Alpaca order-entry panel (phase-2). Leg-based paradigm: the operator adds
+ * equity legs, previews, confirms, and submits. S2 adds a per-leg order-type
+ * selector (Market | Limit) — a limit leg reveals a limit-price input and rests
+ * as a working order — plus a time-in-force selector (Day | GTC). Option legs
+ * are present but disabled ("coming in 2b"). Per-leg results render after
+ * submit — acked or a typed failure.
  */
 @Component({
   selector: 'app-alpaca-order-entry',
@@ -67,18 +74,34 @@ export class AlpacaOrderEntryComponent {
 
   protected legValid(leg: DraftLeg): boolean {
     const quantity = Number(leg.quantity);
-    return (
+    const baseValid =
       leg.symbol.trim().length > 0 &&
       leg.quantity.trim().length > 0 &&
       Number.isFinite(quantity) &&
-      quantity > 0
+      quantity > 0;
+    if (leg.orderType !== 'limit') return baseValid;
+
+    const limitPrice = Number(leg.limitPrice);
+    return (
+      baseValid &&
+      leg.limitPrice.trim().length > 0 &&
+      Number.isFinite(limitPrice) &&
+      limitPrice > 0
     );
   }
 
   protected addEquityLeg(): void {
     this.legs.update((legs) => [
       ...legs,
-      { id: this.nextId++, symbol: '', side: 'buy', quantity: '' },
+      {
+        id: this.nextId++,
+        symbol: '',
+        side: 'buy',
+        quantity: '',
+        orderType: 'market',
+        limitPrice: '',
+        timeInForce: 'day',
+      },
     ]);
     // A new draft invalidates the last submit's results view.
     this.results.set(null);
@@ -128,11 +151,15 @@ export class AlpacaOrderEntryComponent {
   protected trackResult = (_: number, result: OrderLegResult): string => result.order_ref;
 
   private toRequestLeg(leg: DraftLeg): BrokerOrderLeg {
-    return {
+    const base: BrokerOrderLeg = {
       symbol: leg.symbol.trim().toUpperCase(),
       side: leg.side,
       quantity: Number(leg.quantity),
-      order_type: 'market',
+      order_type: leg.orderType,
+      time_in_force: leg.timeInForce,
     };
+    return leg.orderType === 'limit'
+      ? { ...base, limit_price: Number(leg.limitPrice) }
+      : base;
   }
 }

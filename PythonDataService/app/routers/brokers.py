@@ -123,11 +123,13 @@ async def get_clock_evidence(broker: str) -> BrokerClockEvidence:
     dependencies=[Depends(require_data_plane_control_secret)],
 )
 async def submit_orders(broker: str, request: BrokerOrderRequest) -> OrderSubmitResult:
-    """Submit one or more equity market legs (phase-2 S1 write path).
+    """Submit one or more equity market/limit legs (phase-2 write path).
 
-    Transport only: FastAPI validates the body, this resolves the account-scoped
-    Clerk facade, and the Clerk owns identity minting, fail-closed journaling,
-    the broker call, and per-leg result shaping. A per-leg broker rejection is a
+    Transport only: FastAPI validates the body — an inconsistent leg (a limit
+    order with no ``limit_price``, a market order carrying one) is a Pydantic
+    ``422`` here, never a ``500`` — this resolves the account-scoped Clerk
+    facade, and the Clerk owns identity minting, fail-closed journaling, the
+    broker call, and per-leg result shaping. A per-leg broker rejection is a
     *failed* leg in a ``200`` response (the request itself succeeded), never a
     ``500``.
     """

@@ -33,10 +33,6 @@ from app.broker.contract.models import (
     BrokerPosition,
 )
 
-# S1 submits equity market orders as DAY orders (Alpaca's required
-# ``time_in_force``); TIF selection lands in S2 alongside limit orders.
-_S1_TIME_IN_FORCE = "day"
-
 # DST-correct ET zone for anchoring bare dates (never a fixed offset).
 _ET = ZoneInfo("America/New_York")
 
@@ -208,20 +204,26 @@ def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dic
     """Build the Alpaca ``POST /v2/orders`` JSON body for one equity leg.
 
     The **outbound** boundary sibling of ``from_alpaca_order``: contract →
-    vendor. Vendor field names (``qty``, ``type``, ``time_in_force``) stay
-    inside this layer. S1 is EQUITY + MARKET + DAY; ``client_order_id`` is the
-    Clerk-minted ``order_ref`` — Alpaca echoes it back so ownership is
-    recoverable from a read.
+    vendor. Vendor field names (``qty``, ``type``, ``time_in_force``,
+    ``limit_price``) stay inside this layer. S2 sends EQUITY MARKET or LIMIT with
+    the operator's chosen ``time_in_force``; a limit leg adds ``limit_price`` and
+    a market leg omits it (the contract validator guarantees this pairing).
+    ``client_order_id`` is the Clerk-minted ``order_ref`` — Alpaca echoes it back
+    so ownership is recoverable from a read.
     """
-    return {
+    body: dict[str, Any] = {
         "symbol": leg.symbol,
         # Alpaca accepts the qty as a string; send the operator's share count.
         "qty": str(leg.quantity),
         "side": str(leg.side),
         "type": str(leg.order_type),
-        "time_in_force": _S1_TIME_IN_FORCE,
+        "time_in_force": str(leg.time_in_force),
         "client_order_id": client_order_id,
     }
+    if leg.limit_price is not None:
+        # Alpaca expects the price as a string; only present for a limit order.
+        body["limit_price"] = str(leg.limit_price)
+    return body
 
 
 def from_alpaca_order(

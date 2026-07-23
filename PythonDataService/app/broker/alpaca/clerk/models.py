@@ -51,6 +51,8 @@ class OrderJournalEntry(BaseModel):
     # ``client_order_id == order_ref`` (design invariant) — recorded explicitly
     # so a reader never re-derives it.
     client_order_id: str
+    # The full order leg — symbol, side, quantity, and (S2) order_type,
+    # limit_price, time_in_force — so the ledger line fully describes the order.
     leg: BrokerOrderLeg
     recorded_at_ms: int
     # Present on submit_acked only: the accepted broker order.
