@@ -8,6 +8,7 @@ import type {
 } from '../../../api/live-instances.types';
 import {
   makeBotLifecycleMutationResponse,
+  makeDesiredStateResponse,
   makeHostRunnerHealth,
   makeRuntimeFreshnessWithLeaseAction,
   makeStatus,
@@ -36,6 +37,20 @@ function offDutyNeedsRollCallStatus(): LiveInstanceStatus {
   status.daily_lifecycle.attention_badge = null;
   status.daily_lifecycle.reason = 'Run roll call to issue a start offer.';
   status.daily_lifecycle.primary_action = null;
+  return status;
+}
+
+function onDutyStatus(): LiveInstanceStatus {
+  const status = makeStatus({ hostState: 'RUNNING' });
+  status.daily_lifecycle.display_status = 'On duty';
+  status.daily_lifecycle.reason = 'The bot is running.';
+  return status;
+}
+
+function unreachableSickBayStatus(): LiveInstanceStatus {
+  const status = makeStatus({ hostState: 'UNREACHABLE' });
+  status.daily_lifecycle.display_status = 'Sick bay';
+  status.daily_lifecycle.reason = 'The host process cannot be confirmed.';
   return status;
 }
 
@@ -146,19 +161,6 @@ function crashRecoveryResponse(): CrashRecoveryOverrideResponse {
     rung_receipt: null,
     rung_receipt_warnings: [],
   };
-}
-
-function emergencyFlattenStatus(): LiveInstanceStatus {
-  const status = makeStatus();
-  status.operator_surface.account_clerk = {
-    account_id: 'DU1234567',
-    generation: 4,
-    phase: 'accepting',
-    lease_active: true,
-    recorded_at_ms: 1_700_000_000_000,
-    source: 'account_artifact',
-  };
-  return status;
 }
 
 function removeBotResponse(): BotDeleteResponse {
@@ -272,46 +274,6 @@ describe('BotControlPageComponent', () => {
     expect(element.querySelector('app-trader-guidance-timeline')).toBeNull();
   });
 
-  it('requires typed confirmation before submitting an account-wide emergency flatten', async () => {
-    const response = { accepted: true, process: makeHostRunnerHealth().process };
-    const { fixture, element, liveRuns } = await setupBotControlPage({
-      status: emergencyFlattenStatus(),
-      mutationResponses: { emergencyFlattenAccount: response },
-    });
-
-    const operations = Array.from(element.querySelectorAll<HTMLButtonElement>('.bot-lens-switch button'))
-      .find((button) => button.textContent?.trim() === 'Operations');
-    operations?.click();
-    fixture.detectChanges();
-
-    const emergencyAction = element.querySelector<HTMLButtonElement>(
-      '[data-testid="emergency-flatten-action"]',
-    );
-    expect(emergencyAction?.disabled).toBe(false);
-    emergencyAction?.click();
-    fixture.detectChanges();
-
-    const confirm = element.querySelector<HTMLButtonElement>(
-      '[data-testid="typed-halt-confirm-submit"]',
-    );
-    expect(confirm?.disabled).toBe(true);
-
-    const input = element.querySelector<HTMLInputElement>('[data-testid="typed-halt-confirm-input"]');
-    if (!input) throw new Error('Expected emergency flatten confirmation input.');
-    input.value = 'FLATTEN';
-    input.dispatchEvent(new Event('input'));
-    fixture.detectChanges();
-    expect(confirm?.disabled).toBe(false);
-
-    confirm?.click();
-    await flush(fixture);
-
-    expect(liveRuns.emergencyFlattenAccount).toHaveBeenCalledWith('sid-x', {
-      account: 'DU1234567',
-      confirm: true,
-    });
-  });
-
   it('dispatches the start-host-runner mutation when the primary verb is clicked', async () => {
     const { fixture, element, liveRuns } = await setupBotControlPage({
       status: startableReadyStatus(),
@@ -334,6 +296,39 @@ describe('BotControlPageComponent', () => {
       ibkr_host: '127.0.0.1',
       roll_call_offer_id: 'offer-run-x',
     });
+  });
+
+  it('guides an on-duty bot through graceful stop and records durable STOPPED intent', async () => {
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status: onDutyStatus(),
+      mutationResponses: { setInstanceDesiredState: makeDesiredStateResponse() },
+    });
+
+    expect(element.textContent).toContain('End this bot safely');
+    expect(element.textContent).toContain('does not submit orders or flatten the account');
+
+    const stop = element.querySelector<HTMLButtonElement>('[data-testid="trader-graceful-stop"]');
+    expect(stop?.disabled).toBe(false);
+    stop?.click();
+    await flush(fixture);
+
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+      action: 'stop',
+      reason: 'Stop',
+      updated_by: 'operator',
+    });
+  });
+
+  it('keeps graceful stop available when a sick-bay bot has unproven host liveness', async () => {
+    const { element } = await setupBotControlPage({
+      status: unreachableSickBayStatus(),
+    });
+
+    expect(element.textContent).toContain('No live process can be confirmed.');
+    expect(element.textContent).toContain('blocks a future start');
+    const stop = element.querySelector<HTMLButtonElement>('[data-testid="trader-graceful-stop"]');
+    expect(stop).not.toBeNull();
+    expect(stop?.disabled).toBe(false);
   });
 
   it('prepares a roll-call start offer in the bot cockpit when the bot is off duty', async () => {

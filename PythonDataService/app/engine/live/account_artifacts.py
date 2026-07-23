@@ -12,16 +12,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
-from app.schemas.cohort_batch_launch import (
-    COHORT_EVIDENCE_CADENCE_MS,
-    COHORT_STAGGER_PROFILES,
-    CohortBatchLaunchMemberOutcomeReason,
-    CohortStaggerProfileName,
-    validate_cohort_batch_launch_window_and_members,
-)
 from app.schemas.live_runs import GateResult
 
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
@@ -87,7 +80,9 @@ class AccountClerkLeaseUnavailableError(RuntimeError):
         self.reason = reason
 
 
-def _safe_account_path_segment(account_id: str) -> str:
+def safe_account_artifact_id(account_id: str) -> str:
+    """Return an account id that is safe to use as one artifact path segment."""
+
     if account_id != account_id.strip():
         raise AccountArtifactError(f"invalid account_id: {account_id!r}")
     match = _ACCOUNT_ID_RE.fullmatch(account_id)
@@ -98,6 +93,11 @@ def _safe_account_path_segment(account_id: str) -> str:
     if safe_account_id != matched_account_id:
         raise AccountArtifactError(f"invalid account_id: {account_id!r}")
     return safe_account_id
+
+
+# Private compatibility alias for the older binding-ledger import. New callers
+# should use the public name so the path-boundary contract is explicit.
+_safe_account_path_segment = safe_account_artifact_id
 
 
 class AccountEventRecord(BaseModel):
@@ -250,125 +250,6 @@ class RestartIntensityPolicy(BaseModel):
     source: str = RESTART_INTENSITY_SOURCE
 
 
-class CohortBatchLaunchMemberSchedule(BaseModel):
-    """One immutable server-owned start slot in a V2 paper cohort."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
-    run_id: str = Field(min_length=1, max_length=128)
-    scheduled_start_at_ms: int = Field(ge=0)
-    start_request: dict[str, object]
-
-
-class CohortBatchLaunchReceipt(BaseModel):
-    """Operator authorization for one deliberate multi-bot launch window."""
-
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    schema_version: Literal[1, 2] = 1
-    account_id: str = Field(min_length=1, max_length=64)
-    cohort_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-    member_strategy_instance_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
-    window_start_ms: int = Field(ge=0)
-    window_end_ms: int = Field(ge=0)
-    authorized_by: str = Field(min_length=1, max_length=128)
-    recorded_at_ms: int = Field(ge=0)
-    member_pins: tuple[CohortBatchLaunchMemberPin, ...] = ()
-    request_provenance: CohortBatchLaunchRequestProvenance | None = None
-    launch_profile: CohortStaggerProfileName | None = None
-    member_schedule: tuple[CohortBatchLaunchMemberSchedule, ...] = ()
-
-    @model_validator(mode="after")
-    def validate_window_and_members(self) -> CohortBatchLaunchReceipt:
-        validate_cohort_batch_launch_window_and_members(
-            self.window_start_ms,
-            self.window_end_ms,
-            self.member_strategy_instance_ids,
-        )
-        if self.member_pins and {
-            pin.strategy_instance_id for pin in self.member_pins
-        } != set(self.member_strategy_instance_ids):
-            raise ValueError("member_pins must cover exactly the authorized cohort members")
-        if self.schema_version == 1:
-            if self.launch_profile is not None or self.member_schedule:
-                raise ValueError("V1 cohort receipts cannot contain a V2 launch profile or schedule")
-            return self
-        profile = COHORT_STAGGER_PROFILES.get(self.launch_profile) if self.launch_profile else None
-        if profile is None:
-            raise ValueError("V2 cohort receipt must use a known staggered launch profile")
-        member_count = profile.member_count
-        if len(self.member_strategy_instance_ids) != member_count:
-            raise ValueError(f"{self.launch_profile} requires exactly {member_count} members")
-        if len(self.member_schedule) != member_count:
-            raise ValueError(f"{self.launch_profile} requires exactly {member_count} schedule slots")
-        if {slot.strategy_instance_id for slot in self.member_schedule} != set(self.member_strategy_instance_ids):
-            raise ValueError("member_schedule must cover exactly the authorized cohort members")
-        ordered_slots = tuple(sorted(self.member_schedule, key=lambda slot: slot.scheduled_start_at_ms))
-        first_start = ordered_slots[0].scheduled_start_at_ms
-        expected_offsets = tuple(index * profile.stagger_ms for index in range(member_count))
-        if tuple(slot.scheduled_start_at_ms - first_start for slot in ordered_slots) != expected_offsets:
-            raise ValueError(
-                f"{self.launch_profile} slots must be staggered evenly by {profile.stagger_ms} ms"
-            )
-        if self.window_start_ms != ordered_slots[-1].scheduled_start_at_ms + COHORT_EVIDENCE_CADENCE_MS:
-            raise ValueError("V2 validation window must begin one evidence cadence after the final start")
-        if self.window_end_ms - self.window_start_ms != profile.overlap_ms:
-            raise ValueError(
-                f"{self.launch_profile} validation window must require {profile.overlap_ms} ms of healthy overlap"
-            )
-        return self
-
-
-class CohortBatchLaunchMemberPin(BaseModel):
-    """Server-observed identity/version pin before a cohort receipt is durable."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
-    run_id: str = Field(min_length=1, max_length=128)
-    roll_call_offer_id: str = Field(min_length=1, max_length=128)
-
-
-class CohortBatchLaunchRequestProvenance(BaseModel):
-    """Non-authoritative request context retained for operator audit."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    operator_identity_header_present: bool
-    client_host: str | None = Field(default=None, max_length=255)
-
-
-class CohortBatchLaunchMemberOutcome(BaseModel):
-    """Durable result for one member of an authorized cohort launch."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    strategy_instance_id: str = Field(min_length=1, max_length=128)
-    state: Literal["accepted", "blocked", "skipped"]
-    reason: CohortBatchLaunchMemberOutcomeReason
-    next_safe_action: str = Field(min_length=1, max_length=512)
-
-
-class CohortBatchLaunchOutcomesReceipt(BaseModel):
-    """One immutable account event recording all outcomes of a cohort launch."""
-
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    schema_version: int = 1
-    account_id: str = Field(min_length=1, max_length=64)
-    cohort_id: str = Field(min_length=1, max_length=128)
-    outcomes: tuple[CohortBatchLaunchMemberOutcome, ...] = Field(min_length=1, max_length=128)
-    recorded_at_ms: int = Field(ge=0)
-
-    @model_validator(mode="after")
-    def validate_unique_members(self) -> CohortBatchLaunchOutcomesReceipt:
-        member_ids = tuple(outcome.strategy_instance_id for outcome in self.outcomes)
-        if len(set(member_ids)) != len(member_ids):
-            raise ValueError("cohort outcome strategy_instance_id values must be unique")
-        return self
-
-
 def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     """Return the confined account artifact directory for one account id.
 
@@ -388,9 +269,26 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     safe_account_id = match.group(0)
     resolved_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
     resolved = os.path.realpath(os.path.join(resolved_root, safe_account_id))
-    if not str(resolved).startswith(str(resolved_root) + os.sep):
+    root_prefix = resolved_root.rstrip(os.sep) + os.sep
+    if not resolved.startswith(root_prefix):
         raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
     return Path(resolved)
+
+
+def account_artifact_file_path(
+    artifacts_root: Path,
+    account_id: str,
+    filename: str,
+) -> Path:
+    """Return a static artifact filename confined below one account root.
+
+    This is the public filesystem boundary for account-scoped artifacts. The
+    account id is regex-captured in :func:`account_artifacts_root`; the static
+    filename and resolved prefix check also reject a leaf symlink that escapes
+    the account directory.
+    """
+
+    return _account_artifact_file_path(artifacts_root, account_id, filename)
 
 
 def list_account_artifact_ids(artifacts_root: Path) -> tuple[str, ...]:
@@ -425,12 +323,12 @@ def _account_artifact_file_path(
     if filename != os.path.basename(filename):
         raise AccountArtifactError(f"invalid account artifact filename: {filename!r}")
     root = account_artifacts_root(artifacts_root, account_id)
-    path = Path(os.path.realpath(os.path.join(os.fspath(root), filename)))
-    root_real = os.fspath(root)
-    root_prefix = root_real if root_real.endswith(os.sep) else f"{root_real}{os.sep}"
-    if not os.fspath(path).startswith(root_prefix):
+    root_real = os.path.realpath(os.fspath(root))
+    candidate = os.path.realpath(os.path.join(root_real, filename))
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+    if not candidate.startswith(root_prefix):
         raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
-    return path
+    return Path(candidate)
 
 
 def _existing_account_artifact_file_path(
@@ -786,38 +684,6 @@ def append_account_event(
     )
 
 
-def record_cohort_batch_launch_receipt(
-    artifacts_root: Path,
-    receipt: CohortBatchLaunchReceipt,
-) -> None:
-    """Append operator authorization for one cohort start window."""
-
-    _append_account_event(
-        artifacts_root,
-        receipt.account_id,
-        {
-            "event_type": "cohort_batch_launch_authorized",
-            **receipt.model_dump(mode="json"),
-        },
-    )
-
-
-def record_cohort_batch_launch_outcomes(
-    artifacts_root: Path,
-    receipt: CohortBatchLaunchOutcomesReceipt,
-) -> None:
-    """Append the exact accepted, blocked, or skipped cohort-member outcomes."""
-
-    _append_account_event(
-        artifacts_root,
-        receipt.account_id,
-        {
-            "event_type": "cohort_batch_launch_outcomes_recorded",
-            **receipt.model_dump(mode="json"),
-        },
-    )
-
-
 def write_account_owner_generation(
     artifacts_root: Path,
     generation: AccountOwnerGeneration,
@@ -1020,8 +886,8 @@ def evaluate_restart_intensity(
         and event.get("lifecycle_state") == "ACTIVE"
         and window_start_ms <= int(event.get("recorded_at_ms") or -1) <= now_ms
     ]
-    restart_groups = _restart_intensity_groups(events, restart_events)
-    observed_count = len(restart_groups)
+    restart_groups = _restart_intensity_groups(restart_events)
+    observed_count = _restart_intensity_count(restart_groups)
     reason = _restart_intensity_reason(
         observed_count=observed_count,
         threshold=policy.threshold,
@@ -1113,7 +979,10 @@ def project_restart_intensity_gate(
         and event.get("lifecycle_state") == "ACTIVE"
         and window_start_ms <= int(event.get("recorded_at_ms") or -1) <= now_ms
     ]
-    projected_count = len(_restart_intensity_groups(events, restart_events)) + additional_start_groups
+    # Dead pre-start projection retained for parity with ``evaluate``: it treats
+    # the proposed start(s) as repeat activations of the busiest bot, a
+    # conservative upper bound that never under-reports intensity.
+    projected_count = _restart_intensity_count(_restart_intensity_groups(restart_events)) + additional_start_groups
     reason = _restart_intensity_reason(
         observed_count=projected_count,
         threshold=policy.threshold,
@@ -1135,7 +1004,7 @@ def project_restart_intensity_gate(
         status="freeze",
         source=policy.source,
         operator_reason=reason,
-        operator_next_step="WAIT_OR_RECOVER_ACCOUNT_BEFORE_AUTHORIZING_COHORT",
+        operator_next_step="WAIT_OR_RECOVER_ACCOUNT_BEFORE_STARTING_ANOTHER_BOT",
         evidence_at_ms=now_ms,
     )
 
@@ -1154,75 +1023,27 @@ def _restart_intensity_reason(
     )
 
 
-def _restart_intensity_groups(
-    account_events: list[dict],
-    restart_events: list[dict],
-) -> dict[str, list[dict]]:
-    """Fold authorized cohort members into one restart event each.
+def _restart_intensity_groups(restart_events: list[dict]) -> dict[str, list[dict]]:
+    """Group ACTIVE activations by bot identity.
 
-    A cohort receipt applies only to a member binding authored after the
-    receipt and inside its window. Daemon-attributed crash restarts are never
-    eligible, even if their instance id appears in the operator's receipt.
+    Restart intensity is one bot restarted repeatedly (crash-churn), not a batch
+    of distinct freshly-deployed bots each starting once.  Grouping by
+    ``strategy_instance_id`` lets the caller measure the busiest bot's activation
+    count (:func:`_restart_intensity_count`), so deploying N distinct bots does
+    not read as N restarts of one account.
     """
 
-    receipts = _cohort_batch_launch_receipts(account_events)
     groups: dict[str, list[dict]] = {}
     for event in restart_events:
-        cohort_key = _cohort_key_for_binding(event, receipts)
-        event_key = cohort_key or f"binding:{event.get('seq')}"
-        groups.setdefault(event_key, []).append(event)
+        instance = str(event.get("strategy_instance_id") or f"seq:{event.get('seq')}")
+        groups.setdefault(instance, []).append(event)
     return groups
 
 
-def _cohort_batch_launch_receipts(events: list[dict]) -> tuple[tuple[int, CohortBatchLaunchReceipt], ...]:
-    receipts: list[tuple[int, CohortBatchLaunchReceipt]] = []
-    for event in events:
-        if event.get("event_type") != "cohort_batch_launch_authorized":
-            continue
-        try:
-            receipt = CohortBatchLaunchReceipt.model_validate(event)
-            seq = int(event["seq"])
-        except (KeyError, TypeError, ValueError, ValidationError):
-            logger.warning("Ignoring invalid cohort batch launch receipt in account events")
-            continue
-        receipts.append((seq, receipt))
-    return tuple(receipts)
+def _restart_intensity_count(groups: dict[str, list[dict]]) -> int:
+    """Intensity = the most activations any single bot accrued in the window."""
 
-
-def _cohort_key_for_binding(
-    binding_event: dict,
-    receipts: tuple[tuple[int, CohortBatchLaunchReceipt], ...],
-) -> str | None:
-    source = str(binding_event.get("source") or "")
-    if source.startswith("host_daemon.") and ("crash" in source or "restart" in source):
-        return None
-    strategy_instance_id = binding_event.get("strategy_instance_id")
-    recorded_at_ms = binding_event.get("recorded_at_ms")
-    if not isinstance(strategy_instance_id, str) or not isinstance(recorded_at_ms, int):
-        return None
-    cohort_id = binding_event.get("cohort_id")
-    if isinstance(cohort_id, str):
-        eligible = [
-            (seq, receipt)
-            for seq, receipt in receipts
-            if receipt.cohort_id == cohort_id
-            and strategy_instance_id in receipt.member_strategy_instance_ids
-        ]
-        if not eligible:
-            return None
-        seq, _receipt = max(eligible, key=lambda item: item[0])
-        return f"cohort:{seq}"
-    eligible = [
-        (seq, receipt)
-        for seq, receipt in receipts
-        if receipt.recorded_at_ms <= recorded_at_ms
-        and receipt.window_start_ms <= recorded_at_ms <= receipt.window_end_ms
-        and strategy_instance_id in receipt.member_strategy_instance_ids
-    ]
-    if not eligible:
-        return None
-    seq, _receipt = max(eligible, key=lambda item: item[0])
-    return f"cohort:{seq}"
+    return max((len(events) for events in groups.values()), default=0)
 
 
 def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:
@@ -1486,9 +1307,6 @@ _LOCAL_EXPORTS = [
     "AccountEventSequenceRepair",
     "AccountClerkLeaseUnavailableError",
     "AccountAuditedOverride",
-    "CohortBatchLaunchReceipt",
-    "CohortBatchLaunchMemberOutcome",
-    "CohortBatchLaunchOutcomesReceipt",
     "AccountEventRecord",
     "AccountClerkGeneration",
     "AccountClerkLease",
@@ -1514,8 +1332,6 @@ _LOCAL_EXPORTS = [
     "read_account_events_tolerant_with_hash",
     "read_account_freeze",
     "read_account_owner_generation",
-    "record_cohort_batch_launch_receipt",
-    "record_cohort_batch_launch_outcomes",
     "resolve_account_event_ts_ms",
     "write_account_freeze",
     "write_account_clerk_lease",

@@ -23,16 +23,29 @@
       </p>
       <p>Preview state: <span class="mono">{{ preview.reason_code | receiptLabel }}</span>.</p>
       @if (preview.can_cure) {
-        <p>Required adjustment direction: {{ preview.required_adjustment_sign | receiptLabel }}.</p>
-        <div class="fields">
-          <label for="account-desk-journal-quantity">Signed adjustment</label>
-          <input id="account-desk-journal-quantity" type="number" [value]="quantity()" (input)="update('quantity', $event)" />
-          <label for="account-desk-journal-evidence">Evidence reference</label>
-          <input id="account-desk-journal-evidence" [value]="evidenceRef()" (input)="update('evidenceRef', $event)" />
-          <label for="account-desk-journal-reason">Operator reason</label>
-          <textarea id="account-desk-journal-reason" rows="3" [value]="reason()" (input)="update('reason', $event)"></textarea>
-          <button type="button" [disabled]="recovery.busy()" (click)="requestConfirmation()">Review exact cure</button>
-        </div>
+        @if (transportReady()) {
+          <p>Clerk transport is ready. Required adjustment direction: {{ preview.required_adjustment_sign | receiptLabel }}.</p>
+          <div class="fields">
+            <label for="account-desk-journal-quantity">Signed adjustment</label>
+            <input id="account-desk-journal-quantity" type="number" [value]="quantity()" (input)="update('quantity', $event)" />
+            <label for="account-desk-journal-evidence">Evidence reference</label>
+            <input id="account-desk-journal-evidence" [value]="evidenceRef()" (input)="update('evidenceRef', $event)" />
+            <label for="account-desk-journal-reason">Operator reason</label>
+            <textarea id="account-desk-journal-reason" rows="3" [value]="reason()" (input)="update('reason', $event)"></textarea>
+            <button type="button" [disabled]="recovery.busy()" (click)="requestConfirmation()">Review exact cure</button>
+          </div>
+        } @else {
+          <p class="state">Check the host-to-Clerk transport before preparing this immutable cure.</p>
+          <button type="button" [disabled]="transportLoading() || recovery.busy()" (click)="recheckClerk()">
+            {{ transportLoading() ? 'Checking Clerk…' : 'Recheck Clerk' }}
+          </button>
+          @if (transportErrorMessage(); as transportErrorMessage) {
+            <p class="error" role="alert">{{ transportErrorMessage }}</p>
+          }
+          @if (transportReasonCode(); as transportReasonCode) {
+            <p>Reason: <span class="mono">{{ transportReasonCode | receiptLabel }}</span>.</p>
+          }
+        }
       } @else {
         <p class="state">The current server preview does not declare an actionable cure.</p>
       }

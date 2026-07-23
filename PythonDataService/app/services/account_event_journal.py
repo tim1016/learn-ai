@@ -98,6 +98,11 @@ _EVENT_PRESENTATION: dict[str, tuple[AccountEventKind, str | None, str]] = {
         None,
         "Account service generation recorded.",
     ),
+    "account_clerk_restore_completed": (
+        "clerk",
+        "Account Clerk restore completed.",
+        "The host daemon restored the sole Account Clerk and the cockpit re-observed its generation.",
+    ),
     "account_observation_lease_verified": (
         "reconciliation",
         "Account verification is current.",
@@ -122,21 +127,6 @@ _EVENT_PRESENTATION: dict[str, tuple[AccountEventKind, str | None, str]] = {
         "configuration",
         None,
         "Account instance binding recorded.",
-    ),
-    "cohort_batch_launch_authorized": (
-        "configuration",
-        "Account launch authorization was recorded.",
-        "Cohort batch launch authorization recorded.",
-    ),
-    "cohort_batch_launch_outcomes_recorded": (
-        "activity",
-        "Account launch outcomes were recorded.",
-        "Cohort batch launch outcomes recorded.",
-    ),
-    "cohort_batch_launch_member_start_recorded": (
-        "activity",
-        "A scheduled cohort start outcome was recorded.",
-        "Cohort scheduled member start recorded.",
     ),
 }
 

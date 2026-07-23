@@ -21,6 +21,7 @@ from app.engine.live.account_artifacts import (
 from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitRejected, AccountOwnerSubmitResult
 from app.engine.live.live_portfolio import (
     AccountFreezeBlockError,
+    AccountLiveSessionBlockError,
     AccountRegistryBlockError,
     AccountTruthBlockError,
     LivePortfolio,
@@ -618,6 +619,63 @@ async def test_submit_pending_orders_blocks_outside_allowed_session_before_broke
 
 
 @pytest.mark.asyncio
+async def test_submit_pending_orders_blocks_before_broker_call_when_account_live_session_is_unproven() -> None:
+    broker = FakeBroker()
+    gate = GateResult(
+        gate_id="account.live_session",
+        status="block",
+        source="account_session_policy",
+        operator_reason="LIVE_SESSION_LIVENESS_UNPROVEN",
+        operator_next_step="RESTORE_LIVE_FEED_AND_WAIT_FOR_FRESH_EVIDENCE",
+        evidence_at_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(
+        broker,
+        account_live_session_gate_provider=lambda: gate,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountLiveSessionBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == gate
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_account_live_session_gate_also_blocks_normal_liquidation_before_broker_call() -> None:
+    """Normal flatten queues an order and drains through the same account gate."""
+
+    broker = FakeBroker()
+    gate = GateResult(
+        gate_id="account.live_session",
+        status="block",
+        source="account_session_policy",
+        operator_reason="OUTSIDE_LIVE_TRADABLE_SESSION",
+        operator_next_step="WAIT_FOR_LIVE_TRADABLE_SESSION",
+        evidence_at_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(
+        broker,
+        account_live_session_gate_provider=lambda: gate,
+    )
+    portfolio.get_position("SPY").quantity = 17
+
+    liquidation = portfolio.liquidate("SPY", datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    assert liquidation is not None
+    with pytest.raises(AccountLiveSessionBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == gate
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
 async def test_submit_pending_orders_allows_rth_session() -> None:
     broker = FakeBroker()
     portfolio = LivePortfolio(
@@ -1063,6 +1121,123 @@ async def test_submit_pending_orders_lease_authority_blocks_on_revoked_lease(
     assert events[1].drop_reason == "account_observation_lease_block"
     assert broker.orders == []
     assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_reverts_to_account_truth_when_dynamic_promotion_is_invalidated() -> None:
+    """A Clerk restart cannot leave a live portfolio on stale proof authority."""
+
+    broker = FakeBroker()
+    truth_gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
+    lease_gate = GateResult(
+        gate_id="account.observation_lease",
+        status="block",
+        source="account_observation_lease",
+        operator_reason="ACCOUNT_OBSERVATION_LEASE_REVOKED",
+        operator_next_step="RECONCILE_NOW",
+        evidence_at_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: truth_gate,
+        account_observation_lease_gate_provider=lambda: lease_gate,
+        account_gate_authority="observation_lease",
+        account_gate_authority_provider=lambda: "account_truth",
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    acks = await portfolio.submit_pending_orders()
+
+    assert len(acks) == 1
+    assert broker.orders
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_fails_closed_on_current_weaker_clerk_proof() -> None:
+    """The first newly weaker proof cannot receive a one-submit grace period."""
+
+    broker = FakeBroker()
+    truth_gate = GateResult(
+        gate_id="account.account_truth",
+        status="block",
+        source="account_truth_snapshot",
+        operator_reason="ACCOUNT_TRUTH_STALE",
+        operator_next_step="RECONCILE_NOW",
+        evidence_at_ms=_NOW_MS,
+    )
+    lease_gate = GateResult(
+        gate_id="account.observation_lease",
+        status="pass",
+        source="account_observation_lease",
+        operator_reason="ACCOUNT_OBSERVATION_LEASE_VERIFIED",
+        operator_next_step=None,
+        evidence_at_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: truth_gate,
+        account_observation_lease_gate_provider=lambda: lease_gate,
+        account_gate_authority="observation_lease",
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == truth_gate
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+async def test_durable_submit_does_not_grant_outage_grace_to_current_weaker_clerk_proof() -> None:
+    """A passing lease cannot spend Account Truth's running-bot outage grace."""
+
+    broker = RealBrokerStub()
+    truth_gate = GateResult(
+        gate_id="account.account_truth",
+        status="block",
+        source="account_truth_snapshot",
+        operator_reason="ACCOUNT_TRUTH_STALE",
+        operator_next_step="RECONCILE_NOW",
+        evidence_at_ms=_NOW_MS,
+    )
+    lease_gate = GateResult(
+        gate_id="account.observation_lease",
+        status="pass",
+        source="account_observation_lease",
+        operator_reason="ACCOUNT_OBSERVATION_LEASE_VERIFIED",
+        operator_next_step=None,
+        evidence_at_ms=_NOW_MS,
+    )
+
+    async def unexpected_submit(_intent: AccountOwnerSubmitIntent) -> AccountOwnerSubmitResult:
+        raise AssertionError("a weaker Clerk proof must not submit during Account Truth grace")
+
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: truth_gate,
+        account_observation_lease_gate_provider=lambda: lease_gate,
+        account_gate_authority="observation_lease",
+        account_owner_submitter=unexpected_submit,
+        bot_order_namespace="learn-ai/test/v1",
+        account_id="DU123",
+        strategy_instance_id="test",
+        run_id="run",
+        owner_generation_provider=lambda: 1,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == truth_gate
+    assert portfolio.account_truth_outage_started_at_ms is None
 
 
 @pytest.mark.asyncio

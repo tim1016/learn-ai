@@ -2,7 +2,7 @@
 
 **Status:** Accepted 2026-05-31 — QC-reference sourcing decided: **manual entry for v1** (see "Decision → QC anchor").
 **Decision drivers:** A grilling session (2026-05-31, operator-deploy-ux handoff — pruned 2026-07-04; git history) scoped a "deploy/operate a strategy from the UI" effort and split it: the error-messaging pattern and the Start/Stop port ship now; **deploy (create-a-run) was deferred to this ADR** because it is not UI work. `init-ledger` — the only way to create a run today — runs a **git clean-tree check** and hashes **`git rev-parse HEAD`** plus a **`qc-cloud-backtest-id` that has no API** into the `run_id`. A "Deploy" button therefore means an HTTP request triggers git operations against a working tree and demands a QC reference with no source. That is a control-plane decision, not a form.
-**Related:** ADR 0001 (JSON/Parquet substrate), ADR 0003 (host-venv operational topology), ADR 0004 (instance-addressed operator control plane), ADR 0005 (engine-authored readiness & broker ownership), `CONTEXT.md`, `docs/ibkr-paper-deployment-plan.md` § 16, operator-deploy-ux handoff (pruned 2026-07-04; git history).
+**Related:** ADR 0001 (JSON/Parquet substrate), ADR 0003 (host-venv operational topology), ADR 0004 (instance-addressed operator control plane), ADR 0005 (engine-authored readiness & broker ownership), `CONTEXT.md`, historical plan `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16, operator-deploy-ux handoff (pruned 2026-07-04; git history).
 
 ## Context
 

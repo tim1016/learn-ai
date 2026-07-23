@@ -208,6 +208,12 @@ export interface JournalCureReceipt {
   journal_seq: number;
 }
 
+export interface AccountClerkTransportStatus {
+  account_id: string;
+  generation: number;
+  checked_at_ms: number;
+}
+
 export interface LegacyStaleClaimCandidate {
   claim_id: string;
   strategy_instance_id: string;
@@ -245,6 +251,57 @@ export interface LegacyStaleClaimRetirementReceipt {
   claimed_quantity: number;
   requested_by: string;
   retired_at_ms: number;
+}
+
+export interface BindingLedgerBaselineReceipt {
+  schema_version: number;
+  account_id: string;
+  baselined_instances: string[];
+  parity_clean: boolean;
+  unresolved_ledger_only_instances: string[];
+}
+
+export interface AccountEventSequenceRepairReceipt {
+  schema_version: number;
+  account_id: string;
+  rewritten_rows: number;
+  backup_path: string | null;
+}
+
+export interface StaleBindingRetirementCandidate {
+  strategy_instance_id: string;
+  run_id: string;
+  bot_order_namespace: string;
+  lifecycle_state: 'DEPLOYED' | 'ACTIVE';
+  source: string;
+  proof_summary: string;
+  proved_at_ms: number;
+  confirmation: OperatorConfirmationCopy;
+}
+
+export interface StaleBindingRetirementCandidatesResponse {
+  schema_version: number;
+  account_id: string;
+  generated_at_ms: number;
+  candidates: StaleBindingRetirementCandidate[];
+}
+
+export interface StaleBindingRetirementRequest {
+  strategy_instance_id: string;
+  run_id: string;
+  requested_by?: string;
+}
+
+export interface StaleBindingRetirementReceipt {
+  schema_version: number;
+  receipt_id: string;
+  account_id: string;
+  strategy_instance_id: string;
+  run_id: string;
+  bot_order_namespace: string;
+  requested_by: string;
+  retired_at_ms: number;
+  source: string;
 }
 
 export interface AccountRecoveryFlattenOrderSpec {

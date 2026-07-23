@@ -1,8 +1,8 @@
 # ADR 0001 — Control-plane substrate stays JSON + Parquet + hash sidecars; Postgres is a future projection layer, not a substrate
 
 **Status:** Accepted 2026-05-28
-**Decision drivers:** persistent IBKR paper bot work (`docs/ibkr-paper-deployment-plan.md`); shadow VWAP strategy roadmap; Angular bot control control surface.
-**Related:** ADR 0002 (shadow mode), ADR 0003 (operational topology), `docs/ibkr-paper-deployment-plan.md` § 16.
+**Decision drivers:** persistent IBKR paper bot work (historical plan under `docs/archive/plans/ibkr-paper-deployment-plan.md`); shadow VWAP strategy roadmap; Angular bot control control surface.
+**Related:** ADR 0002 (shadow mode), ADR 0003 (operational topology), historical plan § 16.
 
 ## Context
 
@@ -54,5 +54,5 @@ Until at least one of these fires, the substrate remains JSON + Parquet + hash s
 - `PythonDataService/app/engine/live/run_ledger.py` — canonical run identity.
 - `PythonDataService/app/engine/live/artifacts.py` — Decision / Execution / Trade row pin.
 - `PythonDataService/app/engine/live/reconcile.py` — three-way daily reconciler (Phase 9).
-- `docs/ibkr-paper-deployment-plan.md` § 16 — design-lock round (this ADR is Resolution 1).
+- `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16 — historical design-lock round (this ADR is Resolution 1).
 - `docs/ibkr-integration-authority.md` — authoritative live-runtime status as of `master`.

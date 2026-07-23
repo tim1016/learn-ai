@@ -229,7 +229,6 @@ export class BrokerDeployFormComponent {
   readonly error = signal<OperationError | null>(null);
   readonly deployed = signal<HostRunnerDeployResponse | null>(null);
   readonly deployedInstanceId = signal<string | null>(null);
-  readonly preparedForCohort = signal<boolean>(false);
   readonly deployedBotControlLink = computed(() => {
     const id = this.deployedInstanceId();
     return id ? ['/broker/bots', id] : ['/broker/bots'];
@@ -238,7 +237,7 @@ export class BrokerDeployFormComponent {
     const deployed = this.deployed();
     if (!deployed?.start?.accepted) return null;
     if (this.deployedInstanceId() !== this.instanceId().trim()) return null;
-    return `Start accepted for run ${deployed.run_id}. View deployment to monitor the live run.`;
+    return `Launch request accepted for run ${deployed.run_id}. Confirm On duty and fresh runtime evidence in Bot Operations before deploying another bot.`;
   });
   readonly visibleDeployPreflight = computed<DeployPreflightResponse | null>(() => {
     const current = this.deployPreflight.value();
@@ -256,7 +255,7 @@ export class BrokerDeployFormComponent {
   });
   readonly commandState = computed<DeployCommandState>(() => {
     if (this.busy()) {
-      return { kind: 'busy', message: 'Launching strategy…', canSubmit: false };
+      return { kind: 'busy', message: 'Deploying and starting strategy…', canSubmit: false };
     }
     const accepted = this.postSubmitCommandStatus();
     if (accepted !== null) {
@@ -630,7 +629,6 @@ export class BrokerDeployFormComponent {
     this.activeCoherenceRecovery.set(null);
     this.deployed.set(null);
     this.deployedInstanceId.set(null);
-    this.preparedForCohort.set(false);
     const strategyKey = this.strategyKey().trim();
     const request: HostRunnerDeployRequest = {
       strategy_spec_path: this.specPath().trim(),
@@ -682,7 +680,6 @@ export class BrokerDeployFormComponent {
       const response = await this.svc.deployInstance(request);
       this.deployed.set(response);
       this.deployedInstanceId.set(request.strategy_instance_id);
-      this.preparedForCohort.set(!start);
     } catch (err) {
       const identitySeeded = this.seedIdentityCoherenceEvidence(err);
       const exposureSeeded = this.seedExposureCoherenceEvidence(err);
@@ -693,7 +690,7 @@ export class BrokerDeployFormComponent {
     }
   }
 
-  async prepareForCohort(): Promise<void> {
+  async deployOnly(): Promise<void> {
     await this.submit(false);
   }
 

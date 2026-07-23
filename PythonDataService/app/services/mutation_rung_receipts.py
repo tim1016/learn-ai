@@ -20,6 +20,7 @@ from app.schemas.live_runs import LiveInstanceStatus, MutationRungReceipt
 MUTATION_LABELS: dict[str, str] = {
     "start": "Start",
     "stop": "Stop",
+    "clock_out": "Clock out",
     "pause": "Pause",
     "resume": "Resume",
     "reconcile": "Reconcile",

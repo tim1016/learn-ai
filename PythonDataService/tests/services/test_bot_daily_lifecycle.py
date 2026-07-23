@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import get_args
 
 from app.engine.live.bot_lifecycle_state import (
+    BotDutyOutcome,
     BotLifecyclePhase,
     BotLifecycleStateRecord,
     BotRollCallOfferRecord,
@@ -28,6 +29,7 @@ def _project(
     start_enabled: bool = False,
     persisted_state: BotLifecycleStateRecord | None = None,
     roll_call_offer: BotRollCallOfferRecord | None = None,
+    clock_out_in_progress: bool = False,
     conditions: tuple[BotLifecycleCondition, ...] = (),
 ) -> BotDailyLifecycleProjection:
     return project_bot_daily_lifecycle(
@@ -43,6 +45,7 @@ def _project(
             active_run_id="run-1" if process_state in {"running", "stopping"} else None,
             persisted_state=persisted_state,
             roll_call_offer=roll_call_offer,
+            clock_out_in_progress=clock_out_in_progress,
             conditions=conditions,
             now_ms=1_700_000_000_000,
         )
@@ -134,6 +137,39 @@ def test_project_bot_daily_lifecycle_stopping_renders_clocking_out() -> None:
     assert projection.display_status == "Clocking out"
     assert projection.primary_action is not None
     assert projection.primary_action.id == "end_day_now"
+
+
+def test_project_bot_daily_lifecycle_queued_clock_out_renders_clocking_out() -> None:
+    projection = _project(
+        process_state="running",
+        persisted_state=_state(BotLifecyclePhase.ON_DUTY, active_run_id="run-1"),
+        clock_out_in_progress=True,
+    )
+
+    assert projection.phase == "ON_DUTY"
+    assert projection.display_status == "Clocking out"
+    assert projection.reason == "Clean-exit procedure is in progress."
+
+
+def test_project_bot_daily_lifecycle_keeps_durable_exit_reason_over_start_gate() -> None:
+    state = _state().model_copy(
+        update={
+            "reason": "clock_out.flat_broker_evidence",
+            "duty_outcome": BotDutyOutcome(
+                kind="CLOCKED_OUT_FLAT",
+                reason_code="CLOCK_OUT_FLAT",
+                recorded_at_ms=1_700_000_000_100,
+                run_id="run-1",
+            ),
+        }
+    )
+
+    projection = _project(start_enabled=False, persisted_state=state)
+
+    assert projection.display_status == "Off duty"
+    assert projection.reason == "clock_out.flat_broker_evidence"
+    assert projection.duty_outcome is not None
+    assert projection.duty_outcome.reason_code == "CLOCK_OUT_FLAT"
 
 
 def test_project_bot_daily_lifecycle_off_roster_has_closed_roster_action() -> None:

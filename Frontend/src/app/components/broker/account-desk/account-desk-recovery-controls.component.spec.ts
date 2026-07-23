@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { formatTimestampDisplay } from '../../../shared/timestamp';
 import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
+import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
+import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
 import { AccountDeskRecoveryControlsComponent } from './account-desk-recovery-controls.component';
 import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
@@ -31,6 +33,32 @@ describe('AccountDeskRecoveryControlsComponent', () => {
     expect(screen.getByText('No account recovery action is currently declared safe.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Enable auto-reconcile' }));
     expect(recovery.requestAutomationChange).toHaveBeenCalledWith(triage.reconciliation_automation_policy);
+  });
+
+  it('offers binding-ledger and event-history repair when the account is dirty', async () => {
+    const recovery = recoveryStore();
+    const directory = {
+      cockpit: signal({ mode: 'NORMAL', clerk: { binding: { ledger_parity: 'dirty' } } }),
+    };
+    const events = {
+      traderErrorMessage: signal('Account event history is unavailable because its journal is invalid.'),
+      operationsErrorMessage: signal<string | null>(null),
+    };
+    await render(AccountDeskRecoveryControlsComponent, {
+      providers: [
+        { provide: AccountDeskSurfaceStore, useValue: { accountId: signal('DU1234567'), triage: signal(makeCleanAccountTriage()), loading: signal(false), error: signal(null), retry: vi.fn() } },
+        { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
+        { provide: AccountDeskRecoveryStore, useValue: recovery },
+        { provide: AccountDeskDirectoryStore, useValue: directory },
+        { provide: AccountDeskEventsStore, useValue: events },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Repair binding ledger' }));
+    expect(recovery.requestBindingLedgerBaseline).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Repair event history' }));
+    expect(recovery.requestEventSequenceRepair).toHaveBeenCalled();
   });
 
   it('renders the returned reconciliation receipt without changing opaque tokens', async () => {
@@ -170,6 +198,23 @@ describe('AccountDeskRecoveryControlsComponent', () => {
       },
       values: ['intent:opaque/1', 'order-ref:opaque/1', '7', formatTimestampDisplay(1_780_000_000_000, { mode: 'local' })],
     },
+    {
+      name: 'journal recovery',
+      success: {
+        kind: 'journal_recovery',
+        receipt: {
+          receipt_id: 'journal-recovery-quarantine:opaque/1', account_id: 'DU1234567',
+          phase: 'REBASELINE_REQUIRED', recorded_at_ms: 1_780_000_000_000,
+          quarantined_journal_name: 'clerk_journal.jsonl.corrupt-opaque', broker_evidence_positions: [],
+        },
+      },
+      values: [
+        'journal-recovery-quarantine:opaque/1',
+        'clerk_journal.jsonl.corrupt-opaque',
+        'Rebaseline Required',
+        formatTimestampDisplay(1_780_000_000_000, { mode: 'local' }),
+      ],
+    },
   ])('renders every displayed field for a returned $name receipt', async ({ success, values }) => {
     await renderRecoveryReceipt(success);
 
@@ -194,10 +239,14 @@ async function renderRecoveryReceipt(success: unknown) {
 function recoveryStore(overrides: Record<string, unknown> = {}) {
   return {
     requestAutomationChange: vi.fn(),
+    requestBindingLedgerBaseline: vi.fn(),
+    requestEventSequenceRepair: vi.fn(),
     requestJournalCure: vi.fn(),
     requestLegacyRetirement: vi.fn(),
+    requestStaleBindingRetirement: vi.fn(),
     requestEmergencyFlatten: vi.fn(),
     refreshLegacyCandidates: vi.fn(),
+    refreshStaleBindingCandidates: vi.fn(),
     cancelConfirmation: vi.fn(),
     confirm: vi.fn(),
     setExposureOverrideReason: vi.fn(),
@@ -205,10 +254,14 @@ function recoveryStore(overrides: Record<string, unknown> = {}) {
     confirmation: signal(null),
     busy: signal(false),
     errorMessage: signal<string | null>(null),
+    errorReasonCode: signal<string | null>(null),
     success: signal(null),
     legacyCandidates: signal([]),
     legacyLoading: signal(false),
     legacyErrorMessage: signal<string | null>(null),
+    staleBindingCandidates: signal([]),
+    staleBindingLoading: signal(false),
+    staleBindingErrorMessage: signal<string | null>(null),
     ...overrides,
   };
 }

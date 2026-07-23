@@ -61,7 +61,7 @@ No verified-open items remain in this section.
   branch; (c) re-evaluate the freeze each bar and resume; (d) update
   `bot_event_terminal_classifier` so a transient pause is not classified terminal;
   (e) regression test. See
-  `docs/audits/three-bot-concurrency-and-emergency-flatten-2026-07-17.md` §6.
+  `docs/archive/reports/three-bot-concurrency-and-emergency-flatten-2026-07-17.md` §6.
 
 ## 2. Architecture-investigation P1 tier (survives; not re-verified 2026-07-04)
 

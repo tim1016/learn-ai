@@ -19,21 +19,33 @@ ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S: Final = 120.0
 
 AccountClerkRpcOperation = Literal[
     "submit",
-    "register_emergency_flatten",
+    "authorize_emergency_flatten",
+    "emergency_flatten_account",
+    "prepare_emergency_flatten",
+    "mark_emergency_bots_paused",
+    "mark_emergency_requires_reconciliation",
     "cancel_namespace",
     "recovery_flatten",
     "recovery_flatten_batch",
     "operator_adjustment",
+    "record_binding_decision",
+    "fold_binding_retirements",
     "drain_events",
 ]
 WRITE_OPERATIONS = frozenset(
     {
         "submit",
-        "register_emergency_flatten",
+        "authorize_emergency_flatten",
+        "emergency_flatten_account",
+        "prepare_emergency_flatten",
+        "mark_emergency_bots_paused",
+        "mark_emergency_requires_reconciliation",
         "cancel_namespace",
         "recovery_flatten",
         "recovery_flatten_batch",
         "operator_adjustment",
+        "record_binding_decision",
+        "fold_binding_retirements",
     }
 )
 AccountClerkRpcServerErrorCode = Literal[
@@ -200,6 +212,22 @@ class AccountClerkRpcCancelNamespaceUncertainError(AccountClerkRpcError):
         )
 
 
+def clerk_rejection_reason(exc: AccountClerkRpcError) -> tuple[bool, str]:
+    """Classify a Clerk RPC error for surfacing to an operator.
+
+    Returns ``(retry_safe, reason_code)``. An ``ACCOUNT_CLERK_UNAVAILABLE:*``
+    error means the Clerk could not be reached, so the operation is retry-safe
+    (transport layers map this to HTTP 503); every other error is a durable
+    Clerk decision (HTTP 409). A deliberate rejection surfaces its domain
+    ``reason``; every other error surfaces its transport ``reason_code``. This is
+    the single home for that policy so the router and daemon can't drift.
+    """
+
+    retry_safe = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
+    reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+    return retry_safe, reason_code
+
+
 class _AccountClerkRpcRequestRejected(ValueError):
     """Safe server-side rejection for malformed or unsupported requests."""
 
@@ -214,11 +242,17 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
     operation = request.get("operation")
     if operation not in (
         "submit",
-        "register_emergency_flatten",
+        "authorize_emergency_flatten",
+        "emergency_flatten_account",
+        "prepare_emergency_flatten",
+        "mark_emergency_bots_paused",
+        "mark_emergency_requires_reconciliation",
         "cancel_namespace",
         "recovery_flatten",
         "recovery_flatten_batch",
         "operator_adjustment",
+        "record_binding_decision",
+        "fold_binding_retirements",
         "drain_events",
     ):
         raise _AccountClerkRpcRequestRejected("UNKNOWN_OPERATION")
@@ -228,7 +262,7 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
 def request_timeout_s(operation: AccountClerkRpcOperation) -> float:
     return (
         ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S
-        if operation in ("recovery_flatten", "recovery_flatten_batch")
+        if operation in ("authorize_emergency_flatten", "emergency_flatten_account", "prepare_emergency_flatten", "mark_emergency_bots_paused", "mark_emergency_requires_reconciliation", "recovery_flatten", "recovery_flatten_batch")
         else ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S
     )
 

@@ -285,6 +285,24 @@ class LegacyStaleClaimRetirementReceipt(BaseModel):
     retired_at_ms: int = Field(ge=0)
 
 
+class BindingLedgerBaselineReceipt(BaseModel):
+    """Result of seeding the binding-command ledger from the legacy registry.
+
+    Completes the reversible migration for an account whose registry predates
+    the ledger, clearing the fail-closed 'binding ledger parity is dirty'
+    posture. ``unresolved_ledger_only_instances`` stays non-empty only when a
+    genuine dual-write anomaly remains that baseline must not mask.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    baselined_instances: list[str] = Field(default_factory=list)
+    parity_clean: bool
+    unresolved_ledger_only_instances: list[str] = Field(default_factory=list)
+
+
 class AccountClearFreezeRequest(BaseModel):
     """Operator request to clear an active freeze using the latest clean receipt."""
 
@@ -308,6 +326,42 @@ class AccountClearFreezeResponse(BaseModel):
     receipt_id: str = Field(min_length=1, max_length=160)
     gate_result: GateResult
     triage: AccountTriageResponse
+
+
+class AccountSessionPolicyUpdateRequest(BaseModel):
+    """Explicit account-level future hook for outside-live-session actions."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    allow_outside_live_session: bool
+
+
+class AccountSessionPolicyUpdateResponse(BaseModel):
+    """Durable receipt for an account session-policy change."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str = Field(min_length=1, max_length=64)
+    allow_outside_live_session: bool
+    updated_at_ms: int = Field(ge=0)
+
+
+class AccountClerkRestartSmokeRequest(BaseModel):
+    """Typed acknowledgement that the current Clerk passed its restart smoke."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confirmation: Literal["CLERK_RESTART_SMOKE"]
+
+
+class AccountClerkRestartSmokeResponse(BaseModel):
+    """Durable Clerk-restart smoke receipt used by gate promotion."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str = Field(min_length=1, max_length=64)
+    clerk_generation: int = Field(ge=1)
+    recorded_at_ms: int = Field(ge=0)
 
 
 class AccountAcceptExposureOverrideRequest(BaseModel):
@@ -347,3 +401,42 @@ class AccountFalseCrashBackfillResponse(BaseModel):
     rows_skipped_no_disproof: int = Field(ge=0)
     invalid_account_dirs: int = Field(ge=0)
     repaired_run_ids: list[str] = Field(default_factory=list)
+
+
+class AccountEventSequenceRepairReceipt(BaseModel):
+    """Result of an operator-triggered account-event sequence repair.
+
+    Restores contiguous event-sequence numbers for a ledger whose JSON rows are
+    valid but whose durable ``seq`` envelope was duplicated. Evidence is never
+    discarded; the pre-repair bytes are snapshotted beside the ledger.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    rewritten_rows: int = Field(ge=0)
+    backup_path: str | None = None
+
+
+class StaleBindingRetirementRequest(BaseModel):
+    """Operator request to retire one inactive (DEPLOYED) account binding."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+
+
+class StaleBindingRetirementReceipt(BaseModel):
+    """Durable proof that a stale DEPLOYED binding was moved to RETIRED."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    bot_order_namespace: str = Field(min_length=1, max_length=256)
+    lifecycle_state: Literal["RETIRED"] = "RETIRED"
+    recorded_at_ms: int = Field(ge=0)

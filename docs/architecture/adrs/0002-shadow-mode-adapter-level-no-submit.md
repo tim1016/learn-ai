@@ -2,7 +2,7 @@
 
 **Status:** Accepted 2026-05-28
 **Decision drivers:** add a high-frequency intraday strategy (VWAP-band reversion on 1-min SPY) without committing it to live broker submission until reconciled against paper fills.
-**Related:** ADR 0001 (substrate), ADR 0003 (topology), `docs/ibkr-paper-deployment-plan.md` § 16.
+**Related:** ADR 0001 (substrate), ADR 0003 (topology), historical plan `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16.
 
 ## Context
 
@@ -30,7 +30,7 @@ Concretely:
 
 ### Five invariants that govern shadow
 
-1. **Cold-start verification:** shadow's order namespace (`bot_order_namespace` in the sidecar) must yield **zero open orders and zero executions at the broker**, ever. The cold-start broker cross-check (per Resolution 2 in `ibkr-paper-deployment-plan.md` § 16) treats any nonzero result as poisoned state and refuses to continue.
+1. **Cold-start verification:** shadow's order namespace (`bot_order_namespace` in the sidecar) must yield **zero open orders and zero executions at the broker**, ever. The cold-start broker cross-check (per Resolution 2 in the archived paper-deployment plan § 16) treats any nonzero result as poisoned state and refuses to continue.
 2. **Explicit row typing:** every `ExecutionRow` carries `execution_source ∈ {"broker_fill", "shadow_sim"}`. Mixing in any one parquet is fine; conflating in any one report category is not.
 3. **Synthetic-fill provenance:** shadow `ExecutionRow` rows declare `fill_model` and `source_bar_close_ms` explicitly. The fill model is part of the strategy spec, not a global constant.
 4. **Bounded blast radius:** shadow may write `poisoned.flag` into its own run_dir. It may not affect any other process's run_dir, supervisor state, or broker connection.
@@ -59,4 +59,4 @@ Concretely:
 - `PythonDataService/app/engine/live/live_engine.py` — engine to be made adapter-polymorphic at the order boundary.
 - `PythonDataService/app/broker/ibkr/orders.py` — `IbkrBrokerAdapter`'s current submission path; `NoSubmitBrokerAdapter` is its sibling.
 - `PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json` — strategy-spec growth template.
-- `docs/ibkr-paper-deployment-plan.md` § 16 — design-lock resolutions and PR queue.
+- `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16 — historical design-lock resolutions and PR queue.

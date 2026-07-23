@@ -15,6 +15,17 @@ authority — every session boundary in this ADR derives from the
 canonical calendar), ADR-0025 (single dominant headline — the
 attention-badge precedence in §9 reuses its dominance pattern).
 
+**Amendment 2026-07-21 — Account Clerk PRD #1153, Slice 7.** The
+single-writer decision in §4 is now implemented by
+`bot_lifecycle_evaluator.py`: it is the only durable writer of duty phase,
+roster membership, and desired-state control intent. Routers and the CLI
+submit commands; the daemon only actuates host processes and reports facts or
+terminal outcomes for the evaluator to fold. This amendment supersedes the
+historical removal of Pause/Resume in §§3 and 5: `PAUSED`, `RUNNING` (Resume),
+and `STOPPED` remain durable control-plane commands, and must work without a
+Clerk or broker connection. Start may observe but never clear `STOPPED`, and
+may enter `ON_DUTY` only after account admission has granted it.
+
 ## Context
 
 Bots have no daily life. A bot process persists overnight, idling,

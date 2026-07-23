@@ -130,7 +130,7 @@ The Activity tab's existing components are replaced, not supplemented:
 **Negative:**
 - A new template requires a code change, a test case, and a `template_version` bump. Templates are not configuration. Acceptable because templates ARE the truthfulness contract.
 - The publisher introduces a stateful background task per instance — new lifecycle surface to manage (start when instance starts, stop when instance stops, drain SSE subscribers on stop). After the 2026-06-25 amendment it is a projector over host-runner-captured callbacks, not the first durable capture point.
-- Activity-tab UX regressions are possible while operators learn the new verdict semantics. Mitigated by the runbook landing alongside (`docs/runbooks/live-trade-reconciliation.md`).
+- Activity-tab UX regressions are possible while operators learn the new verdict semantics. Mitigated by the current Bot Control manual (`docs/bot-control-operator-manual.md`).
 - Two refresh sources on the bot control page (the existing 4s poll + the new Activity-tab SSE) is more wiring than a single source. Accepted because the alternative (delete the 4s poll) would dark-fire three other tabs.
 
 **Non-consequences:**
@@ -149,4 +149,4 @@ The Activity tab's existing components are replaced, not supplemented:
 - `PythonDataService/app/routers/broker_activity.py` — SSE stream + paginated REST backfill.
 - ADR 0008 §3 — sibling WAL pattern (`intent_events.jsonl`). The amendment registering `broker_activity.jsonl` as a peer WAL ships with this slice.
 - `Frontend/src/app/components/broker/bot-control/reused/broker-activity-table/broker-activity-table.component.ts` — render-only SSE subscriber.
-- `docs/runbooks/live-trade-reconciliation.md` — operator runbook (lands with slice 4).
+- `docs/bot-control-operator-manual.md` — current operator manual.

@@ -184,6 +184,12 @@ def project_journal_account_exposure(
     quantities: dict[tuple[str, str], float] = defaultdict(float)
     seen_execution_effects: set[tuple[str, str]] = set()
     for entry in entries:
+        baseline = entry.broker_evidence_baseline
+        if entry.entry_kind == "broker_evidence_baseline" and baseline is not None:
+            if account_id is None or baseline.account_id == account_id:
+                for position in baseline.positions:
+                    quantities[(baseline.account_id, position.symbol.upper())] += position.signed_quantity
+            continue
         event = normalize_journal_broker_event(entry)
         if event is None or event.event_type != "fill" or not event.exec_id:
             continue

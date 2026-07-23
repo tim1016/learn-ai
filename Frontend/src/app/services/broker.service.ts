@@ -7,6 +7,8 @@ import type {
   AccountEmergencyFlattenResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
+  AccountEventSequenceRepairReceipt,
+  BindingLedgerBaselineReceipt,
   JournalCurePreview,
   JournalCureReceipt,
   JournalCureRequest,
@@ -21,6 +23,13 @@ import type {
   AccountTriageResponse,
 } from '../api/account-reconciliation.types';
 import type { AccountsRosterResponse, AccountServiceStatusResponse } from '../api/account-directory.types';
+import type {
+  AccountClerkRestoreReceipt,
+  AccountClerkRestoreRequest,
+  AccountCockpitResponse,
+  JournalRecoveryReceipt,
+  JournalRecoveryRequest,
+} from '../api/account-cockpit.types';
 import type { AccountEventsRequest, AccountEventsResponse } from '../api/account-events.types';
 import type {
   AccountTruthResponse,
@@ -145,6 +154,24 @@ export class BrokerService {
     );
   }
 
+  baselineBindingLedger(accountId: string): Promise<BindingLedgerBaselineReceipt> {
+    return firstValueFrom(
+      this.http.post<BindingLedgerBaselineReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/binding-ledger/baseline`,
+        {},
+      ),
+    );
+  }
+
+  repairAccountEventSequence(accountId: string): Promise<AccountEventSequenceRepairReceipt> {
+    return firstValueFrom(
+      this.http.post<AccountEventSequenceRepairReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/events/repair-sequence`,
+        {},
+      ),
+    );
+  }
+
   latestAccountReconciliation(accountId: string): Promise<AccountReconciliationReceipt> {
     return firstValueFrom(
       this.http.get<AccountReconciliationReceipt>(
@@ -181,6 +208,39 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<AccountServiceStatusResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk`,
+      ),
+    );
+  }
+
+  accountCockpit(accountId: string): Promise<AccountCockpitResponse> {
+    return firstValueFrom(
+      this.http.get<AccountCockpitResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/cockpit`,
+      ),
+    );
+  }
+
+  restoreAccountClerk(
+    accountId: string,
+    payload: AccountClerkRestoreRequest,
+  ): Promise<AccountClerkRestoreReceipt> {
+    return firstValueFrom(
+      this.http.post<AccountClerkRestoreReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk/restore`,
+        payload,
+      ),
+    );
+  }
+
+  recoverAccountJournal(
+    accountId: string,
+    step: 'quarantine' | 'rebaseline',
+    payload: JournalRecoveryRequest,
+  ): Promise<JournalRecoveryReceipt> {
+    return firstValueFrom(
+      this.http.post<JournalRecoveryReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-recovery/${step}`,
+        payload,
       ),
     );
   }
@@ -255,11 +315,14 @@ export class BrokerService {
     );
   }
 
-  emergencyFlattenAccount(accountId: string): Promise<AccountEmergencyFlattenResponse> {
+  emergencyFlattenAccount(
+    accountId: string,
+    request: { account: string; confirmation_token: 'FLATTEN'; idempotency_key: string },
+  ): Promise<AccountEmergencyFlattenResponse> {
     return firstValueFrom(
       this.http.post<AccountEmergencyFlattenResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/emergency-flatten`,
-        { account: accountId, confirm: true },
+        request,
       ),
     );
   }

@@ -47,11 +47,6 @@ import type {
   SetInstanceDesiredStateResponse,
 } from '../api/live-instances.types';
 import type { DeployPreflightResponse } from '../api/operator-blocker.types';
-import type {
-  CohortBatchLaunchCommandRequest,
-  CohortBatchLaunchStatus,
-  CohortValidationCertificate,
-} from '../api/cohort-batch-launch.types';
 
 @Injectable({ providedIn: 'root' })
 export class LiveRunsService {
@@ -245,36 +240,6 @@ export class LiveRunsService {
     );
   }
 
-  launchCohort(accountId: string, request: CohortBatchLaunchCommandRequest): Promise<CohortBatchLaunchStatus> {
-    return firstValueFrom(this.http.post<CohortBatchLaunchStatus>(
-      `${this.instancesBase}/accounts/${encodeURIComponent(accountId)}/cohort-launch`, request,
-    ));
-  }
-
-  getLatestCohortBatchLaunch(accountId: string): Promise<CohortBatchLaunchStatus | null> {
-    return firstValueFrom(this.http.get<CohortBatchLaunchStatus | null>(
-      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/latest`,
-    ));
-  }
-
-  getCohortBatchLaunch(
-    accountId: string,
-    cohortId: string,
-  ): Promise<CohortBatchLaunchStatus> {
-    return firstValueFrom(this.http.get<CohortBatchLaunchStatus>(
-      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}`,
-    ));
-  }
-
-  getCohortValidationCertificate(
-    accountId: string,
-    cohortId: string,
-  ): Promise<CohortValidationCertificate> {
-    return firstValueFrom(this.http.get<CohortValidationCertificate>(
-      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}/certificate`,
-    ));
-  }
-
   deleteBot(instanceId: string, request: BotDeleteRequest = { mode: 'soft' }): Promise<BotDeleteResponse> {
     return firstValueFrom(
       this.http.delete<BotDeleteResponse>(
@@ -425,21 +390,6 @@ export class LiveRunsService {
       this.http.post<ReconcileAckResponse>(
         `${this.instancesBase}/${encodeURIComponent(instanceId)}/reconcile`,
         {},
-      ),
-    );
-  }
-
-  /** Account-wide emergency flatten (§ 7.2 #6). Reaches the daemon's one-shot
-   * flatten on the instance's latest run, independent of a live binding — so it
-   * works after a halt/poison, when the binding-gated FLATTEN command can't. */
-  emergencyFlattenAccount(
-    instanceId: string,
-    request: { account: string; confirm: boolean },
-  ): Promise<HostRunnerActionResponse> {
-    return firstValueFrom(
-      this.http.post<HostRunnerActionResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/emergency-flatten`,
-        request,
       ),
     );
   }

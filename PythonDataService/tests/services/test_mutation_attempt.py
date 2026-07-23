@@ -172,8 +172,9 @@ def test_write_overwrites_prior_record_at_same_id(tmp_path: Path) -> None:
 
 def test_write_with_leftover_tmp_file_still_replaces_atomically(tmp_path: Path) -> None:
     # Simulate a previous process crashing mid-write: an orphaned
-    # ``att-1.json.tmp`` is sitting on disk.  The next write must
-    # overwrite the tmp via the new ``open`` and then replace cleanly.
+    # ``att-1.json.tmp`` is sitting on disk. The new writer must publish
+    # independently, preserving that legacy crash evidence rather than
+    # treating it as its active temporary file.
     repo = MutationAttemptRepo(tmp_path)
     repo.root.mkdir(parents=True, exist_ok=True)
     (repo.root / "att-1.json.tmp").write_text("garbage from crashed write", encoding="utf-8")
@@ -183,8 +184,7 @@ def test_write_with_leftover_tmp_file_still_replaces_atomically(tmp_path: Path) 
     loaded = repo.read("att-1")
     assert loaded is not None
     assert loaded.mutation_attempt_id == "att-1"
-    # The tmp file is consumed by the replace step.
-    assert not (repo.root / "att-1.json.tmp").exists()
+    assert (repo.root / "att-1.json.tmp").read_text(encoding="utf-8") == "garbage from crashed write"
 
 
 # ---------------------------------------------------------------------------

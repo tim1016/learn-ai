@@ -4,7 +4,9 @@
       <h2>Account recovery</h2>
       <p>Safe, server-declared actions for this account. Each action is confirmed before it is sent.</p>
     </header>
-    @if (surface.loading() && !surface.triage()) {
+    @if (!ordinaryCuresAvailable()) {
+      <p class="state">Recovery choices are limited to the current Account Clerk cockpit card above.</p>
+    } @else if (surface.loading() && !surface.triage()) {
       <p class="state">Loading recovery controls…</p>
     } @else if (surface.error() && !surface.triage()) {
       <div class="state state-error" role="alert">
@@ -37,6 +39,38 @@
           }}</span>
         </button>
       </section>
+      @if (bindingLedgerDirty()) {
+        <section class="binding-ledger" aria-label="Binding ledger repair">
+          <h3>Repair binding ledger</h3>
+          <p>The Clerk binding ledger disagrees with the account registry, so bot admission is fail-closed. Seed it from the registry to clear parity.</p>
+          <button
+            pButton
+            id="account-binding-ledger-baseline-action"
+            type="button"
+            severity="secondary"
+            [disabled]="recovery.busy()"
+            (click)="requestBindingLedgerBaseline()"
+          >
+            <span class="p-button-label">Repair binding ledger</span>
+          </button>
+        </section>
+      }
+      @if (eventHistoryUnavailable()) {
+        <section class="event-history" aria-label="Event history repair">
+          <h3>Repair event history</h3>
+          <p>The account event history could not be read. Restore contiguous event-sequence numbers without discarding any evidence.</p>
+          <button
+            pButton
+            id="account-event-sequence-repair-action"
+            type="button"
+            severity="secondary"
+            [disabled]="recovery.busy()"
+            (click)="requestEventSequenceRepair()"
+          >
+            <span class="p-button-label">Repair event history</span>
+          </button>
+        </section>
+      }
       <app-account-desk-journal-cure />
       <app-account-desk-legacy-claim-cure />
       @if (triage.emergency_flatten_confirmation) {
@@ -72,14 +106,5 @@
     } @else {
       <p class="state">No recovery projection is available for this account.</p>
     }
-    <app-account-desk-recovery-confirm-dialog
-      [confirmation]="recovery.confirmation()"
-      [busy]="recovery.busy()"
-      [errorMessage]="recovery.errorMessage()"
-      (cancelled)="recovery.cancelConfirmation()"
-      (confirmed)="recovery.confirm()"
-      (exposureReasonChanged)="recovery.setExposureOverrideReason($event)"
-      (confirmationTokenChanged)="recovery.setConfirmationToken($event)"
-    />
   </section>
 </p-card>

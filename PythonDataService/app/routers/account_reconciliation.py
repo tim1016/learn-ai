@@ -2,24 +2,44 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from starlette.concurrency import run_in_threadpool
 
+from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr.client import BrokerError, IbkrClient, NotConnectedError, _is_paper_account, get_client
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountArtifactError, append_account_event
+from app.engine.live.account_artifacts import (
+    AccountArtifactError,
+    append_account_event,
+    repair_account_event_sequence,
+)
 from app.engine.live.account_clerk_rpc import (
     AccountClerkRpcClient,
     AccountClerkRpcError,
-    AccountClerkRpcRejectedError,
+    clerk_rejection_reason,
 )
 from app.engine.live.account_identity import normalize_account_id
-from app.engine.live.account_registry import backfill_false_crash_registry_rows
+from app.engine.live.account_registry import (
+    account_binding_ledger_parity,
+    backfill_false_crash_registry_rows,
+    baseline_account_binding_ledger,
+)
+from app.engine.live.daemon_command_idempotency import (
+    DaemonCommandIdempotencyService,
+    DaemonCommandOutcome,
+)
+from app.engine.live.journal_recovery_state import JournalRecoveryStateCorruptError
 from app.routers.broker_dependencies import require_connected_client
+from app.schemas.account_cockpit import (
+    AccountClerkRestoreReceipt,
+    AccountClerkRestoreRequest,
+    AccountCockpitResponse,
+)
 from app.schemas.account_directory import AccountServiceStatusResponse, AccountsRosterResponse
 from app.schemas.account_events import AccountEventKind, AccountEventsResponse, AccountEventView
 from app.schemas.account_reconciliation import (
@@ -27,14 +47,22 @@ from app.schemas.account_reconciliation import (
     AccountAcceptExposureOverrideResponse,
     AccountClearFreezeRequest,
     AccountClearFreezeResponse,
+    AccountClerkRestartSmokeRequest,
+    AccountClerkRestartSmokeResponse,
+    AccountEventSequenceRepairReceipt,
     AccountFalseCrashBackfillResponse,
     AccountReconciliationAutomationPolicy,
     AccountReconciliationAutomationPolicyUpdate,
     AccountReconciliationReceipt,
+    AccountSessionPolicyUpdateRequest,
+    AccountSessionPolicyUpdateResponse,
     AccountTriageResponse,
+    BindingLedgerBaselineReceipt,
     LegacyStaleClaimCandidatesResponse,
     LegacyStaleClaimRetirementReceipt,
     LegacyStaleClaimRetireRequest,
+    StaleBindingRetirementReceipt,
+    StaleBindingRetirementRequest,
 )
 from app.schemas.journal_cures import (
     JournalCurePreview,
@@ -43,7 +71,13 @@ from app.schemas.journal_cures import (
     OperatorRecoveryFlattenRequest,
     OperatorRecoveryFlattenResponse,
 )
-from app.schemas.live_runs import AccountEmergencyFlattenResponse, EmergencyFlattenRequest
+from app.schemas.journal_recovery import JournalRecoveryReceipt, JournalRecoveryRequest
+from app.schemas.live_runs import (
+    AccountEmergencyFlattenDispatchRequest,
+    AccountEmergencyFlattenResponse,
+    EmergencyFlattenRequest,
+)
+from app.services.account_cockpit import AccountCockpitService
 from app.services.account_directory import (
     AccountDirectoryError,
     AccountDirectoryService,
@@ -51,13 +85,17 @@ from app.services.account_directory import (
     UnknownAccountError,
 )
 from app.services.account_event_journal import AccountEventJournalError, AccountEventJournalService
+from app.services.account_gate_policy import AccountGatePolicyService
+from app.services.account_gate_promotion import AccountGatePromotionError
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
-from app.services.journal_cures import JournalCureError, JournalCureService
+from app.services.journal_cures import JournalCureService
+from app.services.journal_recovery import JournalRecoveryError, JournalRecoveryService
 from app.services.legacy_stale_claim_retirement import (
     LegacyStaleClaimRetirementError,
     LegacyStaleClaimRetirementService,
 )
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
@@ -68,6 +106,20 @@ def get_account_artifacts_root() -> Path:
 
 
 AccountArtifactsRoot = Annotated[Path, Depends(get_account_artifacts_root)]
+
+
+def get_account_clerk_restore_idempotency(
+    artifacts_root: AccountArtifactsRoot,
+) -> DaemonCommandIdempotencyService:
+    """Build the durable one-shot envelope for the Clerk restore control."""
+
+    return DaemonCommandIdempotencyService(artifacts_root)
+
+
+AccountClerkRestoreIdempotency = Annotated[
+    DaemonCommandIdempotencyService,
+    Depends(get_account_clerk_restore_idempotency),
+]
 
 
 def get_account_reconciliation_service(
@@ -110,7 +162,11 @@ def get_account_directory_service(
 ) -> AccountDirectoryService:
     """Build the read-only account directory from canonical broker/artifact facts."""
 
-    return AccountDirectoryService(artifacts_root=artifacts_root, current_account=current_account)
+    return AccountDirectoryService(
+        artifacts_root=artifacts_root,
+        current_account=current_account,
+        requested_account_gate_authority=get_settings().account_gate_authority,
+    )
 
 
 def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
@@ -123,25 +179,43 @@ def get_journal_cure_service(artifacts_root: AccountArtifactsRoot) -> JournalCur
     return JournalCureService(artifacts_root=artifacts_root)
 
 
-def _outcome_unknown_http_error(exc: host_daemon_client.HostDaemonOutcomeUnknownError) -> HTTPException:
+def get_journal_recovery_service(artifacts_root: AccountArtifactsRoot) -> JournalRecoveryService:
+    """Build the sole operator-required Clerk journal recovery ceremony."""
+
+    return JournalRecoveryService(artifacts_root=artifacts_root)
+
+
+def get_account_gate_policy_service(artifacts_root: AccountArtifactsRoot) -> AccountGatePolicyService:
+    """Build the narrow account-gate mutation facade."""
+
+    return AccountGatePolicyService(artifacts_root=artifacts_root)
+
+
+def _outcome_unknown_http_error(
+    exc: host_daemon_client.HostDaemonOutcomeUnknownError,
+    *,
+    idempotency_key: str | None = None,
+) -> HTTPException:
     """Preserve ambiguous daemon mutations as a refresh-before-retry response."""
 
+    detail: dict[str, str] = {
+        "reason_code": "OUTCOME_UNKNOWN",
+        "message": exc.detail or "The Clerk readiness request may have completed; refresh before retrying.",
+    }
+    if idempotency_key is not None:
+        detail["idempotency_key"] = idempotency_key
     return HTTPException(
         status.HTTP_409_CONFLICT,
-        detail={
-            "reason_code": "OUTCOME_UNKNOWN",
-            "message": exc.detail or "The Clerk readiness request may have completed; refresh before retrying.",
-        },
+        detail=detail,
     )
 
 
 def _clerk_rpc_http_error(exc: AccountClerkRpcError) -> HTTPException:
     """Expose normal Clerk rejections without collapsing them into a server error."""
 
-    unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
-    reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+    retry_safe, reason_code = clerk_rejection_reason(exc)
     return HTTPException(
-        status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+        status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
         detail={"reason_code": reason_code, "message": "Clerk rejected or could not complete the request."},
     )
 
@@ -181,6 +255,312 @@ async def account_service_status_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
     except AccountDirectoryError as exc:
         raise _account_directory_http_error(exc) from exc
+
+
+@router.get("/{account_id}/cockpit", response_model=AccountCockpitResponse)
+async def account_cockpit_endpoint(
+    account_id: str,
+    directory: Annotated[AccountDirectoryService, Depends(get_account_directory_service)],
+) -> AccountCockpitResponse:
+    """Return the account cockpit's authoritative posture and degraded mode."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        settings = get_settings()
+        return await AccountCockpitService(
+            directory=directory,
+            fetch_daemon_health=lambda: host_daemon_client.fetch_health(
+                settings.live_runner_daemon_url
+            ),
+        ).surface(account_id=canonical_account_id)
+    except UnknownAccountError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
+    except AccountDirectoryError as exc:
+        raise _account_directory_http_error(exc) from exc
+
+
+@router.post("/{account_id}/clerk/restore", response_model=AccountClerkRestoreReceipt)
+async def restore_account_clerk_endpoint(
+    account_id: str,
+    request: AccountClerkRestoreRequest,
+    artifacts_root: AccountArtifactsRoot,
+    directory: Annotated[AccountDirectoryService, Depends(get_account_directory_service)],
+    idempotency: AccountClerkRestoreIdempotency,
+) -> AccountClerkRestoreReceipt:
+    """Restore the sole Clerk through the daemon and leave a durable receipt."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+
+    def restore_once() -> DaemonCommandOutcome:
+        """Invoke the host-only actuator after claiming this exact operation."""
+
+        settings = get_settings()
+        asyncio.run(
+            host_daemon_client.ensure_account_clerk(
+                settings.live_runner_daemon_url,
+                canonical_account_id,
+            )
+        )
+        clerk = directory.service_status(account_id=canonical_account_id)
+        if clerk.attachment != "ATTACHED" or clerk.generation is None:
+            raise _AccountClerkRestoreUnconfirmedError
+        recorded_at_ms = now_ms_utc()
+        receipt = AccountClerkRestoreReceipt(
+            receipt_id=f"account-clerk-restore:{request.idempotency_key}",
+            account_id=canonical_account_id,
+            clerk_generation=clerk.generation,
+            recorded_at_ms=recorded_at_ms,
+        )
+        append_account_event(
+            artifacts_root,
+            canonical_account_id,
+            {
+                "event_type": "account_clerk_restore_completed",
+                **receipt.model_dump(),
+            },
+            only_if_receipt_absent=True,
+        )
+        return DaemonCommandOutcome(
+            status_code=status.HTTP_200_OK,
+            body=receipt.model_dump(mode="json"),
+            replayed=False,
+        )
+
+    try:
+        outcome = await run_in_threadpool(
+            idempotency.execute,
+            idempotency_key=request.idempotency_key,
+            command="account_clerk_restore",
+            account_id=canonical_account_id,
+            semantic_payload={"confirmation_token": request.confirmation_token},
+            invoke=restore_once,
+            enforcement_enabled=True,
+        )
+        if outcome.status_code != status.HTTP_200_OK:
+            raise HTTPException(outcome.status_code, detail=outcome.body)
+        return AccountClerkRestoreReceipt.model_validate(outcome.body)
+    except _AccountClerkRestoreUnconfirmedError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_CLERK_RESTORE_UNCONFIRMED",
+                "message": "The daemon returned, but a healthy Clerk generation was not re-observed.",
+            },
+        ) from exc
+    except HTTPException:
+        raise
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc, idempotency_key=request.idempotency_key) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    except UnknownAccountError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
+    except AccountDirectoryError as exc:
+        raise _account_directory_http_error(exc) from exc
+
+
+@router.post("/{account_id}/journal-recovery/quarantine", response_model=JournalRecoveryReceipt)
+async def quarantine_account_clerk_journal_endpoint(
+    account_id: str,
+    request: JournalRecoveryRequest,
+    service: Annotated[JournalRecoveryService, Depends(get_journal_recovery_service)],
+) -> JournalRecoveryReceipt:
+    """Permanently rename aside corrupt journal evidence after typed confirmation."""
+
+    if request.confirmation_token != "QUARANTINE":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": "JOURNAL_RECOVERY_QUARANTINE_CONFIRMATION_REQUIRED"})
+    try:
+        return await run_in_threadpool(
+            service.quarantine,
+            account_id=_canonical_account_id(account_id),
+            idempotency_key=request.idempotency_key,
+        )
+    except JournalRecoveryStateCorruptError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": "JOURNAL_RECOVERY_STATE_CORRUPT"}) from exc
+    except JournalRecoveryError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": str(exc)}) from exc
+
+
+@router.post("/{account_id}/journal-recovery/rebaseline", response_model=JournalRecoveryReceipt)
+async def rebaseline_account_clerk_journal_endpoint(
+    account_id: str,
+    request: JournalRecoveryRequest,
+    service: Annotated[JournalRecoveryService, Depends(get_journal_recovery_service)],
+    client: ConnectedIbkrClient,
+) -> JournalRecoveryReceipt:
+    """Seed a fresh journal from a fresh broker snapshot; never infer bot ownership."""
+
+    if request.confirmation_token != "REBASELINE":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": "JOURNAL_RECOVERY_REBASELINE_CONFIRMATION_REQUIRED"})
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        recovery_state = await run_in_threadpool(service.state, account_id=canonical_account_id)
+        snapshot = None
+        if recovery_state.phase == "REBASELINE_REQUIRED":
+            snapshot = await ibkr_account.fetch_positions(client, allow_cache_fallback=False)
+        return await run_in_threadpool(
+            service.rebaseline,
+            account_id=canonical_account_id,
+            idempotency_key=request.idempotency_key,
+            snapshot=snapshot,
+        )
+    except JournalRecoveryStateCorruptError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": "JOURNAL_RECOVERY_STATE_CORRUPT"}) from exc
+    except JournalRecoveryError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": str(exc)}) from exc
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail={"reason_code": "JOURNAL_RECOVERY_BROKER_SNAPSHOT_UNAVAILABLE", "message": str(exc)}) from exc
+
+
+@router.post(
+    "/{account_id}/binding-ledger/baseline",
+    response_model=BindingLedgerBaselineReceipt,
+    status_code=status.HTTP_201_CREATED,
+)
+async def baseline_account_binding_ledger_endpoint(
+    account_id: str,
+    artifacts_root: AccountArtifactsRoot,
+) -> BindingLedgerBaselineReceipt:
+    """Seed the command ledger from the legacy registry to clear dirty parity.
+
+    An account whose registry rows predate the binding-command ledger stays
+    fail-closed on 'binding ledger parity is dirty' with no forward writer to
+    close the legacy-only bindings. This idempotent, non-destructive recovery
+    action folds the current registry into the ledger; it never removes rows and
+    leaves any genuine ledger-only anomaly visible.
+    """
+
+    canonical_account_id = _canonical_account_id(account_id)
+
+    def _baseline() -> BindingLedgerBaselineReceipt:
+        result = baseline_account_binding_ledger(artifacts_root, account_id=canonical_account_id)
+        parity = account_binding_ledger_parity(artifacts_root, account_id=canonical_account_id)
+        return BindingLedgerBaselineReceipt(
+            account_id=canonical_account_id,
+            baselined_instances=list(result.baselined_instances),
+            parity_clean=parity.is_clean,
+            unresolved_ledger_only_instances=list(parity.ledger_only_instances),
+        )
+
+    return await run_in_threadpool(_baseline)
+
+
+@router.post(
+    "/{account_id}/events/repair-sequence",
+    response_model=AccountEventSequenceRepairReceipt,
+    status_code=status.HTTP_201_CREATED,
+)
+async def repair_account_event_sequence_endpoint(
+    account_id: str,
+    artifacts_root: AccountArtifactsRoot,
+) -> AccountEventSequenceRepairReceipt:
+    """Resequence a corrupt account-event journal without discarding evidence.
+
+    Repairs an ACCOUNT_EVENTS_JOURNAL_CORRUPT feed whose JSON rows are valid but
+    whose durable ``seq`` envelope was duplicated. Snapshots the original bytes
+    beside the ledger, then atomically rewrites only the ``seq`` field under the
+    ledger lock. Malformed or cross-account rows are refused, not silently dropped.
+    """
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        result = await run_in_threadpool(
+            repair_account_event_sequence,
+            artifacts_root,
+            canonical_account_id,
+        )
+    except AccountArtifactError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason_code": "ACCOUNT_EVENTS_REPAIR_UNSAFE", "message": str(exc)},
+        ) from exc
+    return AccountEventSequenceRepairReceipt(
+        account_id=result.account_id,
+        rewritten_rows=result.rewritten_rows,
+        backup_path=str(result.backup_path) if result.backup_path is not None else None,
+    )
+
+
+@router.post(
+    "/{account_id}/bindings/retire",
+    response_model=StaleBindingRetirementReceipt,
+    status_code=status.HTTP_201_CREATED,
+)
+async def retire_stale_binding_endpoint(
+    account_id: str,
+    request: StaleBindingRetirementRequest,
+) -> StaleBindingRetirementReceipt:
+    """Retire one inactive (DEPLOYED) binding via the host lifecycle authority.
+
+    Binding retirement is a host-authority mutation the Clerk records, so the
+    container delegates to the daemon rather than writing the RETIRED decision
+    itself. The daemon guards that the binding is currently DEPLOYED.
+    """
+
+    canonical_account_id = _canonical_account_id(account_id)
+    settings = get_settings()
+    try:
+        body = await host_daemon_client.retire_stale_binding(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+            request.model_dump(mode="json"),
+        )
+        return StaleBindingRetirementReceipt.model_validate(body)
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+
+
+class _AccountClerkRestoreUnconfirmedError(RuntimeError):
+    """A claimed restore cannot safely be called complete without a re-observation."""
+
+
+@router.put("/{account_id}/session-policy", response_model=AccountSessionPolicyUpdateResponse)
+async def update_account_session_policy_endpoint(
+    account_id: str,
+    request: AccountSessionPolicyUpdateRequest,
+    service: Annotated[AccountGatePolicyService, Depends(get_account_gate_policy_service)],
+) -> AccountSessionPolicyUpdateResponse:
+    """Set the account-wide outside-live-session exception explicitly."""
+
+    policy = await run_in_threadpool(
+        service.update_session_policy,
+        account_id=_canonical_account_id(account_id),
+        allow_outside_live_session=request.allow_outside_live_session,
+    )
+    return AccountSessionPolicyUpdateResponse(
+        account_id=policy.account_id,
+        allow_outside_live_session=policy.allow_outside_live_session,
+        updated_at_ms=policy.updated_at_ms,
+    )
+
+
+@router.post("/{account_id}/gate-promotion/restart-smoke", response_model=AccountClerkRestartSmokeResponse)
+async def record_account_clerk_restart_smoke_endpoint(
+    account_id: str,
+    request: AccountClerkRestartSmokeRequest,
+    service: Annotated[AccountGatePolicyService, Depends(get_account_gate_policy_service)],
+) -> AccountClerkRestartSmokeResponse:
+    """Record the typed restart smoke for the current accepting Clerk."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        smoke = await run_in_threadpool(
+            service.record_restart_smoke,
+            account_id=canonical_account_id,
+            confirmation=request.confirmation,
+        )
+    except AccountGatePromotionError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason_code": str(exc), "message": "Clerk restart smoke cannot be recorded yet."},
+        ) from exc
+    return AccountClerkRestartSmokeResponse(
+        account_id=canonical_account_id,
+        clerk_generation=smoke.clerk_generation,
+        recorded_at_ms=smoke.recorded_at_ms,
+    )
 
 
 @router.post("/{account_id}/reconciliation", response_model=AccountReconciliationReceipt)
@@ -312,27 +692,26 @@ async def retire_legacy_stale_claim_endpoint(
 async def apply_journal_cure_endpoint(
     account_id: str,
     request: JournalCureRequest,
-    artifacts_root: AccountArtifactsRoot,
 ) -> JournalCureReceipt:
-    """Append a claim-reducing cure only after the account Clerk is healthy."""
+    """Append a claim-reducing cure through the host daemon's host-local Clerk RPC.
+
+    The Clerk's Unix socket lives on the host and cannot be reached from this
+    container across the podman VM boundary, so the cure RPC is delegated to the
+    daemon rather than opened here. The daemon authors the Clerk-rejection status
+    and reason_code, which propagate back verbatim.
+    """
 
     canonical_account_id = _canonical_account_id(account_id)
+    settings = get_settings()
     try:
-        settings = get_settings()
-        await host_daemon_client.ensure_account_clerk(settings.live_runner_daemon_url, canonical_account_id)
-        return await AccountClerkRpcClient(
-            artifacts_root=artifacts_root,
-            account_id=canonical_account_id,
-        ).apply_operator_adjustment(request)
-    except JournalCureError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"reason_code": exc.reason_code, "message": exc.detail},
-        ) from exc
+        body = await host_daemon_client.apply_operator_adjustment(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+            request.model_dump(mode="json"),
+        )
+        return JournalCureReceipt.model_validate(body)
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         raise _outcome_unknown_http_error(exc) from exc
-    except AccountClerkRpcError as exc:
-        raise _clerk_rpc_http_error(exc) from exc
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
@@ -410,14 +789,18 @@ async def emergency_flatten_account_endpoint(
         Depends(get_account_reconciliation_service),
     ],
 ) -> AccountEmergencyFlattenResponse:
-    """Run the audited account-wide paper flatten without a surviving bot run."""
+    """Authorize and dispatch one Clerk-owned account-wide paper flatten."""
 
     canonical_account_id = _canonical_account_id(account_id)
-    if not request.confirm:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "emergency-flatten requires confirm=true")
     if request.account != canonical_account_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "request account does not match path")
-    if reconciliation.triage(account_id=canonical_account_id).emergency_flatten_confirmation is None:
+    triage = reconciliation.triage(account_id=canonical_account_id)
+    receipt = triage.account_reconciliation_receipt
+    if (
+        triage.emergency_flatten_confirmation is None
+        or receipt is None
+        or triage.recovery_flatten_candidates
+    ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={
@@ -425,18 +808,34 @@ async def emergency_flatten_account_endpoint(
                 "message": "Fresh paper-account evidence does not declare an emergency flatten safe.",
             },
         )
+    idempotency_key = request.idempotency_key
     try:
         settings = get_settings()
         await host_daemon_client.ensure_account_clerk(
             settings.live_runner_daemon_url,
             canonical_account_id,
         )
+        authorization = await AccountClerkRpcClient(
+            artifacts_root=artifacts_root,
+            account_id=canonical_account_id,
+        ).authorize_emergency_flatten(
+            operation_id=idempotency_key,
+            reconciliation_evidence_version=receipt.receipt_id,
+        )
         payload = await host_daemon_client.emergency_flatten_account(
             settings.live_runner_daemon_url,
             canonical_account_id,
-            {"account": canonical_account_id, "confirm": True},
+            AccountEmergencyFlattenDispatchRequest(
+                account=canonical_account_id,
+                confirmation_token="FLATTEN",
+                idempotency_key=idempotency_key,
+                authorization_id=authorization.authorization_id,
+            ).model_dump(mode="json"),
         )
         response = AccountEmergencyFlattenResponse.model_validate(payload)
+        response = response.model_copy(
+            update={"idempotency_key": response.idempotency_key or idempotency_key}
+        )
         append_account_event(
             artifacts_root,
             canonical_account_id,
@@ -450,9 +849,11 @@ async def emergency_flatten_account_endpoint(
         )
         return response
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        raise _outcome_unknown_http_error(exc) from exc
+        raise _outcome_unknown_http_error(exc, idempotency_key=idempotency_key) from exc
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    except AccountClerkRpcError as exc:
+        raise _clerk_rpc_http_error(exc) from exc
 
 
 @router.get(

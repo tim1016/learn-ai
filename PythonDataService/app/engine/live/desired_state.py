@@ -91,6 +91,11 @@ class DesiredStateRecord(BaseModel):
     updated_at_ms: int
     updated_by: str
     reason: str | None = None
+    # Mirrors the lifecycle projection's witness. The evaluator uses this to
+    # finish a receipt if a crash lands after the atomic intent write but
+    # before the append-only disposition commit.
+    last_disposition_id: str | None = None
+    last_disposition_action: str | None = None
     version: int = 1
 
 
@@ -167,6 +172,8 @@ class DesiredStateRepo:
         updated_by: str,
         now_ms: int,
         reason: str | None = None,
+        disposition_id: str | None = None,
+        disposition_action: str | None = None,
     ) -> DesiredStateRecord:
         """Read-modify-write the desired state under a single lock,
         bumping ``version`` from the prior record (or starting at 1).
@@ -190,6 +197,16 @@ class DesiredStateRepo:
                 updated_at_ms=now_ms,
                 updated_by=updated_by,
                 reason=reason,
+                last_disposition_id=(
+                    disposition_id
+                    if disposition_id is not None
+                    else (existing.last_disposition_id if existing is not None else None)
+                ),
+                last_disposition_action=(
+                    disposition_action
+                    if disposition_action is not None
+                    else (existing.last_disposition_action if existing is not None else None)
+                ),
                 version=next_version,
             )
             self._write_locked(path, record)

@@ -116,5 +116,49 @@ function recoveryReceiptView(success: AccountDeskRecoverySuccess): RecoveryRecei
           field("Completed", "", "text", success.receipt.completed_at_ms),
         ],
       };
+    case "restore_clerk":
+      return {
+        message: "Account Clerk restore completed.",
+        fields: [
+          field("Receipt", success.receipt.receipt_id, "code"),
+          field("Clerk generation", success.receipt.clerk_generation),
+          field("Recorded", "", "text", success.receipt.recorded_at_ms),
+        ],
+      };
+    case "journal_recovery":
+      return {
+        message: success.receipt.phase === "COMPLETE"
+          ? "Clerk journal was re-baselined from fresh broker evidence."
+          : "Corrupt Clerk journal was quarantined as retained audit evidence.",
+        fields: [
+          field("Receipt", success.receipt.receipt_id, "code"),
+          field("Quarantined journal", success.receipt.quarantined_journal_name ?? "", "code"),
+          field("Phase", success.receipt.phase, "label"),
+          field("Broker-evidence holdings", success.receipt.broker_evidence_positions.length),
+          field("Recorded", "", "text", success.receipt.recorded_at_ms),
+        ],
+      };
+    case "binding_ledger_baseline":
+      return {
+        message: success.receipt.parity_clean
+          ? "Binding ledger repaired; parity is clean and admission is open."
+          : "Binding ledger baseline recorded; a ledger-only anomaly still needs review.",
+        fields: [
+          field("Account", success.receipt.account_id, "code"),
+          field("Baselined instances", success.receipt.baselined_instances.length),
+          field("Parity", success.receipt.parity_clean ? "Clean" : "Dirty", "label"),
+        ],
+      };
+    case "event_sequence_repair":
+      return {
+        message: success.receipt.rewritten_rows > 0
+          ? "Event history sequence was repaired."
+          : "Event history sequence was already contiguous.",
+        fields: [
+          field("Account", success.receipt.account_id, "code"),
+          field("Rewritten rows", success.receipt.rewritten_rows),
+          field("Backup", success.receipt.backup_path ?? "—", "code"),
+        ],
+      };
   }
 }

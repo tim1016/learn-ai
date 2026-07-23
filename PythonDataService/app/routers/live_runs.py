@@ -27,6 +27,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.broker.ibkr.config import get_settings
+from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import (
     DesiredState,
@@ -1155,16 +1156,14 @@ async def set_desired_state(run_id: str, body: SetDesiredStateRequest) -> Desire
         )
     _validate_strategy_instance_id(sid)
     artifacts_root = _desired_state_root(root)
-    repo = DesiredStateRepo(
-        _safe_desired_state_path(artifacts_root, sid),
-        trusted_root=artifacts_root / "live_state",
-    )
-    record = repo.set(
+    record = BotLifecycleEvaluator(artifacts_root, sid).set_desired_state(
         _ACTION_TO_STATE[body.action],
         updated_by=body.updated_by,
         reason=body.reason,
         now_ms=_now_ms(),
-    )
+    ).desired_state
+    if record is None:
+        raise OSError("lifecycle evaluator did not return a desired-state record")
     return DesiredStateRecordResponse(
         state=record.desired_state.value,
         updated_at_ms=record.updated_at_ms,
