@@ -15,19 +15,52 @@ from app.broker.alpaca.clerk.journal import (
     OrderJournal,
 )
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
-from app.broker.contract.models import BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+
+_ORDER_REF = "manual/inkant/v1:abc123"
+
+
+def _accepted_order() -> BrokerOrder:
+    return BrokerOrder(
+        broker="alpaca",
+        order_id="broker-order-1",
+        client_order_id=_ORDER_REF,
+        symbol="SPY",
+        asset_class="us_equity",
+        side="buy",
+        order_type="market",
+        time_in_force="day",
+        quantity=2.0,
+        filled_quantity=0.0,
+        limit_price=None,
+        stop_price=None,
+        filled_avg_price=None,
+        status="accepted",
+        submitted_at_ms=1_700_000_000_000,
+        created_at_ms=1_700_000_000_000,
+        updated_at_ms=1_700_000_000_000,
+        filled_at_ms=None,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        events=[],
+        observed_at_ms=1_700_000_000_000,
+    )
 
 
 def _entry(kind: ClerkEntryKind = ClerkEntryKind.INTENT_RECORDED) -> OrderJournalEntry:
+    # SUBMIT_ACKED always carries the accepted order in the real Clerk (the
+    # journal-invariant validator enforces this), so build one for that kind.
+    order = _accepted_order() if kind is ClerkEntryKind.SUBMIT_ACKED else None
     return OrderJournalEntry(
         kind=kind,
         account_id="PA-1",
         operator="inkant",
         intent_id="abc123",
-        order_ref="manual/inkant/v1:abc123",
-        client_order_id="manual/inkant/v1:abc123",
+        order_ref=_ORDER_REF,
+        client_order_id=_ORDER_REF,
         leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=2),
         recorded_at_ms=1_700_000_000_000,
+        order=order,
     )
 
 

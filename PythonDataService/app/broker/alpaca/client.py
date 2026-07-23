@@ -203,13 +203,41 @@ class AlpacaTradingClient:
             lambda c: c.post("/orders", order), describe="order submission"
         )
 
+    async def cancel_order(self, order_id: str) -> None:
+        """DELETE ``/v2/orders/{order_id}`` over the owned capturing session.
+
+        ``order_id`` is Alpaca's broker-assigned UUID. The low-level ``delete``
+        drives the same ``requests.Session`` the read path uses, so the capture
+        hook journals the raw response verbatim, and the same timeout +
+        ``map_api_error`` translation applies. Alpaca returns HTTP 204 (no body)
+        on success — ``delete`` yields ``None`` — and 422 for a non-cancelable
+        order, which ``map_api_error`` translates to a typed ``BrokerError``.
+        Returns nothing; there is no order payload to map.
+        """
+        await self._call(
+            lambda c: c.delete(f"/orders/{order_id}"), describe="order cancellation"
+        )
+
     async def get_order_by_client_order_id(
         self, client_order_id: str
     ) -> dict[str, Any] | None:
-        """Look up a possibly-submitted order by its durable client id.
+        """GET ``/v2/orders:by_client_order_id`` for the order we minted (S5).
 
-        A 404 is definitive evidence that the order did not land, so it becomes
-        ``None``. Every other error keeps the submit outcome uncertain.
+        The SDK's ``get_order_by_client_id(client_id=...)`` hits
+        ``GET /orders:by_client_order_id?client_order_id=...`` over the same
+        capturing session. In ``raw_data`` mode it returns the parsed order dict
+        when the order exists, and raises an ``APIError`` (HTTP 404) when it is
+        definitively absent.
+
+        Returns the raw order payload on success (the adapter maps it), or
+        ``None`` when Alpaca reports the order absent (404 — it never landed).
+        A 404 is intercepted **before** ``_call``'s taxonomy would fold it into
+        ``BrokerUnavailable``, because for resolution "definitively absent" and
+        "unreachable" are opposite outcomes: absent → the submit failed, whereas
+        unreachable must stay uncertain. Every other failure (timeout, 5xx,
+        network, other 4xx) flows through ``_call`` unchanged — so a lookup
+        timeout surfaces as ``BrokerUnavailable`` and the resolution stays
+        uncertain.
         """
 
         def _get(client: Any) -> dict[str, Any] | None:

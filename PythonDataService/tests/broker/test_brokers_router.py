@@ -26,7 +26,9 @@ from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
 )
+from app.config import settings
 from app.main import app
+from app.security.data_plane_control import CONTROL_SECRET_HEADER
 
 
 @pytest.fixture(autouse=True)
@@ -142,6 +144,18 @@ async def _get(path: str) -> Response:
         return await client.get(path)
 
 
+def _control_headers() -> dict[str, str]:
+    secret = settings.DATA_PLANE_CONTROL_SECRET.strip()
+    return {CONTROL_SECRET_HEADER: secret} if secret else {}
+
+
+async def _delete(path: str) -> Response:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.delete(path, headers=_control_headers())
+
+
 async def test_account_endpoint_returns_snapshot() -> None:
     get_broker_registry().register(_FakePort(account=_snapshot(account_id="PA9")))
 
@@ -161,6 +175,20 @@ async def test_unknown_broker_returns_404() -> None:
     detail = response.json()["detail"]
     assert detail["broker"] == "nope"
     assert "Unknown broker" in detail["message"]
+
+
+async def test_known_read_only_broker_cannot_use_alpaca_trade_clerk() -> None:
+    port = _FakePort()
+    port.broker_id = "ibkr"
+    get_broker_registry().register(port)
+
+    response = await _delete(
+        "/api/brokers/ibkr/orders/11111111-1111-4111-8111-111111111111"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["broker"] == "ibkr"
+    assert "not supported" in response.json()["detail"]["message"]
 
 
 async def test_auth_error_translates_to_502() -> None:

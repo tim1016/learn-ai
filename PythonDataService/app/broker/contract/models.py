@@ -113,9 +113,10 @@ class BrokerOrderLeg(_ContractModel):
 class BrokerOrderRequest(_ContractModel):
     """An operator-authored order request: one or more legs to submit.
 
-    Each leg is submitted independently and journaled independently, so a
-    per-leg failure never blocks the others. The clerk mints a distinct
-    ``order_ref`` identity per leg.
+    Each leg is journaled independently. A definitive per-leg failure does not
+    block later legs, but an uncertain outcome stops the batch before it can
+    create contradictory new exposure. The clerk mints a distinct ``order_ref``
+    identity per submitted leg.
     """
 
     # ``operator`` becomes the manual-namespace path segment

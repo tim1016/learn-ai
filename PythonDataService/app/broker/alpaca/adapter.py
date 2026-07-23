@@ -258,6 +258,83 @@ def from_alpaca_order(
     )
 
 
+# The full set of Alpaca ``trade_updates`` event names, per Alpaca's websocket
+# docs (verified 2026-07 against alpaca-py TradingStream, the schema authority).
+# Kept as data so an unrecognized event surfaces (see ``from_alpaca_trade_update``)
+# rather than being silently mapped — a new vendor event is a schema signal.
+ALPACA_TRADE_UPDATE_EVENTS: frozenset[str] = frozenset(
+    {
+        # Common lifecycle.
+        "new",
+        "fill",
+        "partial_fill",
+        "canceled",
+        "expired",
+        "done_for_day",
+        "replaced",
+        # Less common but documented.
+        "accepted",
+        "rejected",
+        "pending_new",
+        "stopped",
+        "pending_cancel",
+        "pending_replace",
+        "calculated",
+        "suspended",
+        "order_replace_rejected",
+        "order_cancel_rejected",
+    }
+)
+
+
+def trade_update_occurred_at_ms(payload: Mapping[str, Any]) -> int:
+    """Resolve a ``trade_updates`` event's instant as ``int64`` ms UTC.
+
+    Alpaca stamps each frame with a top-level ``timestamp`` (the event instant).
+    A fill/partial_fill also carries the embedded order's ``filled_at``; the
+    event ``timestamp`` is the authoritative per-event instant and is always
+    present, so it is preferred. Fails fast (no timestamp) — a lifecycle event
+    with no instant is corruption, not something to default to "now".
+    """
+    timestamp = payload.get("timestamp")
+    if timestamp:
+        return rfc3339_to_ms(str(timestamp))
+    raise ValueError("Alpaca trade_updates event is missing its timestamp.")
+
+
+def from_alpaca_trade_update(payload: Mapping[str, Any]) -> BrokerOrderEvent:
+    """Map one Alpaca ``trade_updates`` ``data`` payload to a ``BrokerOrderEvent``.
+
+    ``payload`` is the ``data`` object of a ``{"stream":"trade_updates","data":…}``
+    frame: ``event`` (the lifecycle transition), ``timestamp`` (the event
+    instant), an embedded ``order`` object, and — on a fill/partial_fill —
+    top-level ``price``/``qty`` (the **execution slice** that filled, distinct
+    from the order's cumulative ``filled_avg_price``/``filled_qty``).
+
+    ``BrokerOrderEvent.price``/``quantity`` are the *per-execution* figures, so
+    they carry the top-level ``price``/``qty`` when present (fills) and are
+    ``None`` otherwise (``new``/``canceled``/``rejected`` carry no execution).
+    The order's cumulative fill totals live on the ``BrokerOrder`` the caller
+    maps separately from the embedded ``order`` object — they are deliberately
+    NOT folded in here, which would mislabel a cumulative figure as a slice.
+
+    An unrecognized ``event`` is surfaced by name — a new vendor event is a
+    schema signal, never silently coerced.
+    """
+    event = str(payload["event"])
+    if event not in ALPACA_TRADE_UPDATE_EVENTS:
+        raise ValueError(
+            f"Unrecognized Alpaca trade_updates event {event!r}; "
+            "alpaca-py may have added a lifecycle event — extend the adapter."
+        )
+    return BrokerOrderEvent(
+        event_type=event,
+        occurred_at_ms=trade_update_occurred_at_ms(payload),
+        price=opt_float(payload.get("price")),
+        quantity=opt_float(payload.get("qty")),
+    )
+
+
 def from_alpaca_activity(
     payload: Mapping[str, Any],
     *,

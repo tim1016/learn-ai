@@ -134,12 +134,16 @@
         <ng-template #body let-row>
           <tr>
             <td>
-              @if (row.status === 'acked') {
-                <p-tag severity="success" [value]="row.status | receiptLabel" />
-              } @else if (row.status === 'uncertain') {
-                <p-tag severity="warn" [value]="row.status | receiptLabel" />
-              } @else {
-                <p-tag severity="danger" [value]="row.status | receiptLabel" />
+              @switch (row.status) {
+                @case ('acked') {
+                  <p-tag severity="success" [value]="row.status | receiptLabel" />
+                }
+                @case ('uncertain') {
+                  <p-tag severity="warn" [value]="row.status | receiptLabel" />
+                }
+                @default {
+                  <p-tag severity="danger" [value]="row.status | receiptLabel" />
+                }
               }
             </td>
             <td class="font-mono text-xs break-all">{{ row.order_ref }}</td>
@@ -148,7 +152,7 @@
                 {{ order.symbol }} · {{ order.side | receiptLabel }} ·
                 <span [attr.title]="order.order_id">{{ order.status | receiptLabel }}</span>
               } @else if (row.error; as err) {
-                <span class="text-red-500">{{ err.message }}</span>
+                <span [class.text-red-500]="row.status === 'failed'">{{ err.message }}</span>
                 @if (err.why) {
                   <span class="text-color-secondary"> ({{ err.why }})</span>
                 }

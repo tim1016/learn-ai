@@ -7,6 +7,8 @@ import type {
   BrokerOrder,
   BrokerOrderRequest,
   BrokerPosition,
+  ClerkStatus,
+  OrderCancelResult,
   OrderSubmitResult,
 } from '../api/alpaca.types';
 
@@ -62,6 +64,47 @@ export class BrokersService {
   ): Promise<OrderSubmitResult> {
     return firstValueFrom(
       this.http.post<OrderSubmitResult>(`${this.base}/${broker}/orders`, request),
+    );
+  }
+
+  /**
+   * Phase-2 S3 — cancel one working order by its broker-assigned id (write
+   * path). Like {@link submitOrder}, this is a control mutation: DELETE to the
+   * registered `/api/brokers` control prefix, so the data-plane control intent
+   * interceptor marks it and the dev proxy attaches the shared secret.
+   * `orderId` is the opaque broker id, passed through verbatim.
+   */
+  cancelOrder(broker: string, orderId: string): Promise<OrderCancelResult> {
+    return firstValueFrom(
+      this.http.delete<OrderCancelResult>(
+        `${this.base}/${broker}/orders/${encodeURIComponent(orderId)}`,
+      ),
+    );
+  }
+
+  /**
+   * Phase-2 S6 — the clerk's observable state: the exposure hold, the latest
+   * reconciliation verdict, and the outstanding-intent count. A protected read
+   * under `/api/brokers` (the proxy attaches the shared secret for that prefix).
+   */
+  getClerkStatus(broker = 'alpaca'): Promise<ClerkStatus> {
+    return firstValueFrom(
+      this.http.get<ClerkStatus>(`${this.base}/${broker}/clerk/status`),
+    );
+  }
+
+  /**
+   * Phase-2 S6 — clear the account exposure hold (operator exit). A control
+   * mutation (POST under the registered `/api/brokers` control prefix, so the
+   * interceptor marks it and the proxy authenticates). Returns the updated
+   * status so the caller re-renders in one round-trip.
+   */
+  clearHold(
+    broker: string,
+    body: { operator?: string; reason?: string } = {},
+  ): Promise<ClerkStatus> {
+    return firstValueFrom(
+      this.http.post<ClerkStatus>(`${this.base}/${broker}/clerk/clear-hold`, body),
     );
   }
 }

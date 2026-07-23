@@ -119,12 +119,35 @@ class AlpacaBroker:
         payload = await self._client.submit_order(body)
         return adapter.from_alpaca_order(payload)
 
+    async def cancel(self, order_id: str) -> None:
+        """Cancel one working order by its broker-assigned id (S3).
+
+        Delegates to the SDK client's ``DELETE /v2/orders/{order_id}``. A
+        non-cancelable order (already filled/canceled) surfaces as a vendor 422,
+        which ``map_api_error`` translates to a ``BrokerError`` the Clerk
+        journals as ``cancel_failed``. There is no order body to map back —
+        Alpaca returns 204 — so this returns ``None``.
+        """
+        await self._client.cancel_order(order_id)
+
     async def get_order_by_client_order_id(
         self, client_order_id: str
     ) -> BrokerOrder | None:
-        """Resolve a possibly-submitted order by the Clerk-minted identity."""
+        """Look an order up by the ``client_order_id`` the Clerk minted (S5).
+
+        Resolves an uncertain submit: the Clerk asks whether the order it may
+        have sent actually landed. Delegates to the SDK client's
+        ``GET /v2/orders:by_client_order_id`` and maps the raw payload to a
+        ``BrokerOrder`` when found. Returns ``None`` when Alpaca reports the
+        order definitively absent (HTTP 404 — it never landed); a
+        ``BrokerUnavailable`` from the client (timeout / 5xx / network) keeps the
+        outcome uncertain and propagates so the Clerk leaves the intent
+        unresolved rather than fabricating a terminal state.
+        """
         payload = await self._client.get_order_by_client_order_id(client_order_id)
-        return adapter.from_alpaca_order(payload) if payload is not None else None
+        if payload is None:
+            return None
+        return adapter.from_alpaca_order(payload)
 
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:

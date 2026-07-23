@@ -8428,9 +8428,8 @@
             "$ref": "#/components/schemas/OrderSide"
           },
           "symbol": {
-            "maxLength": 7,
+            "maxLength": 32,
             "minLength": 1,
-            "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
             "title": "Symbol",
             "type": "string"
           },
@@ -10145,6 +10144,71 @@
           "run_id"
         ],
         "title": "ChartSnapshotRun",
+        "type": "object"
+      },
+      "ClearHoldRequest": {
+        "additionalProperties": false,
+        "description": "Operator's clear-hold request body (phase-2 S6).\n\n``operator`` attributes the HOLD_CLEARED line (who lifted the hold);\n``reason`` is the operator's what/why the ledger records. Both are optional \u2014\na clear with no attribution still lifts the hold, journaled with defaults.",
+        "properties": {
+          "operator": {
+            "default": "operator",
+            "maxLength": 64,
+            "title": "Operator",
+            "type": "string"
+          },
+          "reason": {
+            "default": "Operator cleared the exposure hold.",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "ClearHoldRequest",
+        "type": "object"
+      },
+      "ClerkStatus": {
+        "additionalProperties": false,
+        "description": "The clerk's observable state for the operator status surface (S6).\n\nComposes the exposure hold, the latest reconciliation verdict, and the count\nof outstanding (unresolved) intents (the S5 unfinished set) \u2014 everything the\ndesk needs to render the hold banner and a health line.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "hold": {
+            "$ref": "#/components/schemas/HoldState"
+          },
+          "latest_reconciliation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReconciliationSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "outstanding_intents": {
+            "title": "Outstanding Intents",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "hold",
+          "outstanding_intents",
+          "observed_at_ms"
+        ],
+        "title": "ClerkStatus",
         "type": "object"
       },
       "CloseAllAction": {
@@ -15400,6 +15464,54 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HoldState": {
+        "additionalProperties": false,
+        "description": "The account-level exposure-hold state, journal-derived (S6).\n\nA hold is active when a ``HOLD_SET`` or ``UNEXPLAINED_ORDER`` line has no\nlater ``HOLD_CLEARED``. The latter keeps a crash between the observation and\nits companion HOLD_SET receipt fail-closed. ``reason_code`` is code-like\n(rendered through ``receiptLabel`` on the UI); ``reason`` is backend-authored\nwhat/why prose (rendered unpiped). When not held, every field but ``active``\nis ``None``.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "since_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since Ms"
+          }
+        },
+        "required": [
+          "active"
+        ],
+        "title": "HoldState",
         "type": "object"
       },
       "HorizonICResult": {
@@ -28456,6 +28568,63 @@
         "title": "OptionsExpirationsResponse",
         "type": "object"
       },
+      "OrderCancelResult": {
+        "additionalProperties": false,
+        "description": "The outcome of a cancel request the router shapes into its response.\n\n``status`` is ``acked`` when the broker accepted the cancel (HTTP 204) or\n``failed`` when it rejected it (a typed what/why, never a raw 500).\n``order_id`` always echoes the broker-assigned id the operator targeted, so\nthe ledger line is findable. ``owned`` reports whether this Clerk submitted\nthe canceled order \u2014 a foreign order still cancels (reducing exposure is the\nsafe direction), but the fact is surfaced honestly, not hidden.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLegError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "order_id": {
+            "title": "Order Id",
+            "type": "string"
+          },
+          "order_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
+          },
+          "owned": {
+            "title": "Owned",
+            "type": "boolean"
+          },
+          "status": {
+            "pattern": "^(acked|failed)$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "order_id",
+          "status",
+          "owned"
+        ],
+        "title": "OrderCancelResult",
+        "type": "object"
+      },
       "OrderLegError": {
         "additionalProperties": false,
         "description": "A typed leg failure: a what/why the UI renders, never a raw 500.",
@@ -28484,7 +28653,7 @@
       },
       "OrderLegResult": {
         "additionalProperties": false,
-        "description": "The per-leg outcome the router shapes into its response.\n\n``acked`` carries the accepted ``order``; ``failed`` is a definitive\nrejection or a lookup that proved the order absent; ``uncertain`` means the\nbroker could not confirm the result. ``order_ref`` is always present \u2014 an\noperator can find the durable intent in the journal before retrying.",
+        "description": "The per-leg outcome the router shapes into its response.\n\nKeyed by ``status``:\n\n- ``acked`` \u2014 the broker accepted the order; ``order`` is set.\n- ``failed`` \u2014 the order definitively did not land; ``error`` is set.\n- ``uncertain`` \u2014 the submit's HTTP outcome was unknown. Neither ``order`` nor\n  ``error`` is authoritative yet; the intent is durably journaled as\n  ``submit_uncertain`` and a later replay / sweep will finish it. The operator\n  must not assume the order failed \u2014 it may still have landed.\n\n``order_ref`` is always present \u2014 an operator can find the intent in the\njournal in every case, including uncertain.",
         "properties": {
           "error": {
             "anyOf": [
@@ -29994,6 +30163,32 @@
           }
         },
         "title": "ReconcileSummary",
+        "type": "object"
+      },
+      "ReconciliationSummary": {
+        "additionalProperties": false,
+        "description": "The latest reconciliation-sweep result (S6), or ``None`` if never run.",
+        "properties": {
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "verdict": {
+            "enum": [
+              "clean",
+              "unexplained_order",
+              "missing_intent",
+              "stale"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "recorded_at_ms"
+        ],
+        "title": "ReconciliationSummary",
         "type": "object"
       },
       "RecordedSnapshotItem": {
@@ -43498,6 +43693,134 @@
         ]
       }
     },
+    "/api/brokers/{broker}/clerk/clear-hold": {
+      "post": {
+        "description": "Clear the account exposure hold (operator exit); return the updated status.\n\nA control mutation (the control secret gates it). Transport only: resolve the\nClerk and delegate. The Clerk journals HOLD_CLEARED (idempotent \u2014 a clear\nagainst no active hold is a benign NO-OP) and returns the post-clear status so\nthe desk re-renders in one round-trip.",
+        "operationId": "clear_clerk_hold_api_brokers__broker__clerk_clear_hold_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClearHoldRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Clerk Hold",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerk/status": {
+      "get": {
+        "description": "Report the clerk's exposure hold, latest reconciliation, and outstanding intents.\n\nA protected read (the always-on data-plane secret gates the whole router).\nTransport only: resolve the account-scoped Clerk facade and delegate \u2014 the\nClerk owns the journal-derived hold + verdict + outstanding-intent state.",
+        "operationId": "get_clerk_status_api_brokers__broker__clerk_status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clerk Status",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clock": {
       "get": {
         "operationId": "get_clock_evidence_api_brokers__broker__clock_get",
@@ -43737,6 +44060,75 @@
           }
         },
         "summary": "Submit Orders",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/orders/{order_id}": {
+      "delete": {
+        "description": "Cancel one working order by its broker-assigned id (phase-2 S3 write path).\n\nTransport only: resolve the account-scoped Clerk facade and delegate. The\nClerk owns ownership resolution, fail-closed journaling, the broker call, and\nresult shaping. A non-cancelable order is a *failed* result in a ``200``\nresponse with a typed what/why (never a ``500``). Cancel is intentionally a\nfirst-class Clerk path, independent of the submit gate, so a future exposure\nhold (S6) that blocks new submission never blocks reducing exposure.",
+        "operationId": "cancel_order_api_brokers__broker__orders__order_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderCancelResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Order",
         "tags": [
           "brokers-v2"
         ]
