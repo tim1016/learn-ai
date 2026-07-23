@@ -519,6 +519,13 @@ def test_resume_guard_skips_never_started_ledger_only_child(tmp_path: Path) -> N
         live_instances._resolve_evidence_run_dir(root, None, runs)
         == root / "run-child"
     )
+    # Guard the production call site itself: _resolve_resume_guard_state_for must
+    # pass require_started=True, so its guard state derives from the started run
+    # (SATISFIED). A revert of that call site would read the ledger-only child and
+    # regress to SUBMISSION_CAPABILITY_UNKNOWN — this assertion catches it.
+    guard = live_instances._resolve_resume_guard_state_for(root, None, runs)
+    assert guard.submission_capability.state == "SATISFIED"
+    assert "SUBMISSION_CAPABILITY_UNKNOWN" not in guard.reason_codes
 
 
 def test_resolve_incident_headline_includes_order_and_submit_incidents(tmp_path: Path) -> None:
