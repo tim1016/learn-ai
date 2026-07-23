@@ -161,3 +161,29 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
 - **Corrective action:** Restart nvda-0723 via **re-deploy** (Deploy & run, same
   instance/config) — the proven UI-driven path — and document the missing in-place
   Resume as the blocker.
+
+### 09:40–09:55 CDT — in-place restart is deadlocked (root cause); pause≠stop
+
+- **Same-name redeploy** (Deploy & run, no lineage) → 409 "Deployment name already
+  used". **Redeploy-from-run** (deploy URL carrying `parent_run_id`, the app's real
+  same-instance redeploy) got past that but → 409 **"Stopped Requires Resume"**
+  ("Use Resume to set desired_state=RUNNING, then start").
+- **Drove the real resume operation** (`POST /api/live-instances/nvda-0723/desired-state
+  {action:resume}`, executed from the browser through the app proxy so the control
+  secret was attached — auth worked, status 409 not 401). The resume **gate refused**:
+  `allow_resume:false`, `BROKER_SAFETY_UNKNOWN` + `SUBMISSION_CAPABILITY_UNKNOWN`
+  ("run_status.json absent").
+- **Root cause (deadlock):** resume requires a live run's broker/submission proof,
+  but a **fully-STOPPED** bot has no run → no proof → resume forever blocked. Resume
+  is meant for a **PAUSED** bot (run still alive, e.g. "End day now"). "Stop bot
+  gracefully" writes STOPPED and **kills the run**, so it cannot be resumed in place.
+  Net: **a gracefully-stopped bot cannot be restarted in place via the UI** — the
+  only reliable restart is a **fresh deploy under a new name**. (Prior-session memory
+  notes restart worked before — likely because those used pause, or a regression.)
+- **Product findings (for the user):** (1) cockpit never surfaces a Resume control
+  for a STOPPED bot — it offers "Start", which is refused; (2) the deploy 409 tells
+  the operator to "Use Resume", but Resume is gated shut for a stopped bot — the
+  guidance and the gate contradict; (3) consider: STOP should offer a re-deploy path,
+  or the stop/restart lifecycle should route through PAUSE/RESUME.
+- **Fleet state right now:** `spy-0723` + `qqq-0723` still On duty (untouched);
+  `nvda-0723` cleanly STOPPED, restart pending an approach decision.
