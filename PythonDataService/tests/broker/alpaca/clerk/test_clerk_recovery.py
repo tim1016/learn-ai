@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk import journal as journal_module
-from app.broker.alpaca.clerk.clerk import AlpacaClerk, UNCERTAIN_SUBMIT_GRACE_MS
+from app.broker.alpaca.clerk.clerk import UNCERTAIN_SUBMIT_GRACE_MS, AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import (

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The registry key and ``{broker}`` path segment for this vendor.
@@ -30,6 +30,15 @@ _BASE_URL_BY_MODE: dict[str, str] = {
     "paper": "https://paper-api.alpaca.markets",
     "live": "https://api.alpaca.markets",
 }
+
+
+def alpaca_configuration_error_detail(exc: ValidationError) -> str:
+    """Return validation messages without echoing credential-bearing inputs."""
+    messages = [str(error.get("msg", "")) for error in exc.errors()]
+    return (
+        "; ".join(message for message in messages if message)
+        or "invalid Alpaca configuration"
+    )
 
 
 class AlpacaSettings(BaseSettings):

@@ -193,6 +193,40 @@ def _event_fingerprint(
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
+def _terminal_state_fingerprint(event: Any, broker_order: Any | None) -> str | None:
+    """Identify the canonical terminal state shared by stream and REST views.
+
+    A websocket fill describes the final execution slice while the REST order
+    returned by gap reconciliation describes the aggregate fill. Those payloads
+    are intentionally different even when they represent the same terminal
+    transition, so the full event fingerprint cannot deduplicate them. This
+    projection keeps the stable terminal ledger meaning while still allowing a
+    corrected aggregate state to be journaled as a variant.
+    """
+    if broker_order is None:
+        return None
+    payload = {
+        "event": event.event_type,
+        "occurred_at_ms": event.occurred_at_ms,
+        "order_id": broker_order.order_id,
+        "client_order_id": broker_order.client_order_id,
+        "symbol": broker_order.symbol,
+        "side": broker_order.side,
+        "order_type": broker_order.order_type,
+        "time_in_force": broker_order.time_in_force,
+        "quantity": broker_order.quantity,
+        "filled_quantity": broker_order.filled_quantity,
+        "limit_price": broker_order.limit_price,
+        "stop_price": broker_order.stop_price,
+        "filled_avg_price": broker_order.filled_avg_price,
+        "status": broker_order.status,
+        "filled_at_ms": broker_order.filled_at_ms,
+        "canceled_at_ms": broker_order.canceled_at_ms,
+        "expired_at_ms": broker_order.expired_at_ms,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
 def _variant_event_key(event_key: str, fingerprint: str) -> str:
     """Give a corrected observation a stable, auditable distinct journal key."""
     digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
@@ -258,10 +292,10 @@ class TradeUpdatesConsumer:
         self._max_reconnects = max_reconnects
         self._counters = TradeUpdateCounters()
         self._seen: dict[str, _SeenEvent] = {}
-        # Fingerprints of journaled terminal events by order id. An exact later
-        # observation is stale; a changed payload is a correction and remains
-        # auditable. This guards REST gap-reconcile, whose reconstructed fill
-        # lacks the socket execution key.
+        # Canonical terminal states by order id. A REST gap-reconcile projects an
+        # aggregate order instead of the websocket's final execution slice, so
+        # this state projection is the cross-path idempotency guard. Full event
+        # fingerprints still protect live redeliveries and corrections.
         self._terminal_orders: dict[str, set[str]] = {}
         self._task: asyncio.Task[None] | None = None
 
@@ -402,7 +436,9 @@ class TradeUpdatesConsumer:
                 extra={"action": "trade_updates_auth_denied", "status": status},
             )
 
-    async def _handle_trade_update(self, data: dict[str, Any]) -> None:
+    async def _handle_trade_update(
+        self, data: dict[str, Any], *, from_gap_reconcile: bool = False
+    ) -> None:
         """Parse → dedup (live_idempotent) → attribute one trade-update event."""
         order = data.get("order") or {}
         try:
@@ -424,14 +460,15 @@ class TradeUpdatesConsumer:
 
         order_id = str(order.get("id") or "")
         fingerprint = _event_fingerprint(event, order, broker_order)
-        # Cross-path idempotency: once an order has a journaled terminal event,
-        # an exact later event for it — a socket redelivery, or a REST
-        # gap-reconcile re-pull that keys differently (a fill's socket ``exec:``
-        # key cannot be reconstructed from a REST order) — is a stale
-        # re-observation of a finalized order. Surface + count; never re-journal.
+        terminal_state = _terminal_state_fingerprint(event, broker_order)
+        # Cross-path idempotency applies specifically to the synthetic REST
+        # projection. A live correction must continue to the full fingerprint
+        # check below even when the order is already terminal.
         if (
-            order_id
-            and fingerprint in self._terminal_orders.get(order_id, set())
+            from_gap_reconcile
+            and order_id
+            and terminal_state is not None
+            and terminal_state in self._terminal_orders.get(order_id, set())
         ):
             self._counters.stale_terminal += 1
             logger.warning(
@@ -507,8 +544,8 @@ class TradeUpdatesConsumer:
             self._counters.events_applied += 1
         # Mark the order finalized (owned or not) so a later re-observation of
         # this terminal order is recognized as stale regardless of its key.
-        if order_id and _is_terminal(order):
-            self._terminal_orders.setdefault(order_id, set()).add(fingerprint)
+        if order_id and _is_terminal(order) and terminal_state is not None:
+            self._terminal_orders.setdefault(order_id, set()).add(terminal_state)
 
     # ── Reconnect gap-reconcile ──────────────────────────────────────────────
 
@@ -548,7 +585,7 @@ class TradeUpdatesConsumer:
             if synthetic is None:
                 continue
             self._counters.gap_reconciled += 1
-            await self._handle_trade_update(synthetic)
+            await self._handle_trade_update(synthetic, from_gap_reconcile=True)
 
     # ── Real-socket adapter ──────────────────────────────────────────────────
 

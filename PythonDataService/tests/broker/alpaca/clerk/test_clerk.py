@@ -14,10 +14,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk import journal as journal_module
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
-from app.broker.alpaca.clerk.models import ClerkEntryKind
+from app.broker.alpaca.clerk.models import (
+    ClerkEntryKind,
+    OrderLegError,
+    OrderLegResult,
+)
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -152,6 +157,33 @@ def _request(operator: str = "inkant", **leg: Any) -> BrokerOrderRequest:
     base: dict[str, Any] = {"symbol": "SPY", "side": "buy", "quantity": 1}
     base.update(leg)
     return BrokerOrderRequest(operator=operator, legs=[BrokerOrderLeg(**base)])
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "acked"},
+        {
+            "status": "acked",
+            "order": _accepted_order("manual/inkant/v1:abc"),
+            "error": OrderLegError(message="contradiction"),
+        },
+        {
+            "status": "failed",
+            "order": _accepted_order("manual/inkant/v1:abc"),
+        },
+        {"status": "uncertain"},
+    ],
+)
+def test_order_leg_result_rejects_status_payload_contradictions(
+    payload: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError):
+        OrderLegResult(
+            order_ref="manual/inkant/v1:abc",
+            intent_id="abc",
+            **payload,
+        )
 
 
 async def test_intent_is_fsynced_before_broker_submit() -> None:

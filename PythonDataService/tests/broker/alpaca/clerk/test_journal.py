@@ -6,12 +6,14 @@ Append + fsync + reload; the Alpaca-scoped, traversal-safe path.
 from __future__ import annotations
 
 from pathlib import Path
+from threading import get_ident
 
 import pytest
 
 from app.broker.alpaca.clerk.journal import (
     INBOX_FILENAME,
     JOURNAL_FILENAME,
+    ClerkSettings,
     OrderJournal,
 )
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
@@ -75,6 +77,25 @@ def test_append_writes_inbox_and_journal(tmp_path: Path) -> None:
     assert journal.appended == 1
 
 
+async def test_append_async_offloads_the_durable_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = OrderJournal(account_id="PA-1", root=tmp_path)
+    event_loop_thread = get_ident()
+    append_threads: list[int] = []
+
+    def record_append(entry: OrderJournalEntry) -> None:
+        assert entry.kind is ClerkEntryKind.INTENT_RECORDED
+        append_threads.append(get_ident())
+
+    monkeypatch.setattr(journal, "append", record_append)
+
+    await journal.append_async(_entry())
+
+    assert len(append_threads) == 1
+    assert append_threads[0] != event_loop_thread
+
+
 def test_first_append_fsyncs_the_account_directory_and_new_ancestors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -115,9 +136,10 @@ def test_read_entries_on_empty_journal_returns_empty(tmp_path: Path) -> None:
     assert OrderJournal(account_id="PA-1", root=tmp_path).read_entries() == []
 
 
-def test_unsafe_account_id_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.parametrize("account_id", ["../escape", ".", ".."])
+def test_unsafe_account_id_is_rejected(tmp_path: Path, account_id: str) -> None:
     with pytest.raises(ValueError, match="unsafe account_id"):
-        OrderJournal(account_id="../escape", root=tmp_path)
+        OrderJournal(account_id=account_id, root=tmp_path)
 
 
 def test_alpaca_path_is_separate_from_other_brokers(tmp_path: Path) -> None:
@@ -125,3 +147,14 @@ def test_alpaca_path_is_separate_from_other_brokers(tmp_path: Path) -> None:
     # The Alpaca scope segment is always present, so an IBKR journal at the same
     # root would never collide with this account's files.
     assert journal.account_dir == tmp_path / "accounts" / "alpaca" / "PA-1"
+
+
+def test_default_clerk_dir_uses_the_mounted_artifacts_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ALPACA_CLERK_DIR", raising=False)
+
+    settings = ClerkSettings(_env_file=None)
+
+    assert settings.dir.name == "alpaca_clerk"
+    assert settings.dir.parent.name == "artifacts"

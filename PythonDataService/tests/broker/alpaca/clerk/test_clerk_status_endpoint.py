@@ -37,6 +37,7 @@ from app.main import app
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
 
 _BASE = "https://paper-api.alpaca.markets"
+_FOREIGN_ORDER_ID = "00000000-0000-4000-8000-000000000001"
 
 _ACCOUNT_BODY = json.dumps(
     {
@@ -62,7 +63,7 @@ def _foreign_order_body() -> str:
     return json.dumps(
         [
             {
-                "id": "foreign-order-1",
+                "id": _FOREIGN_ORDER_ID,
                 "client_order_id": "someone-elses-order",
                 "symbol": "SPY",
                 "asset_class": "us_equity",
@@ -191,10 +192,10 @@ async def test_cancel_is_allowed_while_held(_alpaca_clerk: None) -> None:
     responses.add(responses.GET, f"{_BASE}/v2/positions", body="[]", status=200)
     await _raise_hold_via_sweep()
     responses.add(
-        responses.DELETE, f"{_BASE}/v2/orders/foreign-order-1", body="", status=204
+        responses.DELETE, f"{_BASE}/v2/orders/{_FOREIGN_ORDER_ID}", body="", status=204
     )
 
-    response = await _delete("/api/brokers/alpaca/orders/foreign-order-1")
+    response = await _delete(f"/api/brokers/alpaca/orders/{_FOREIGN_ORDER_ID}")
 
     # Cancel reduces exposure and is never blocked by the hold.
     assert response.status_code == 200

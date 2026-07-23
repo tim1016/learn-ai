@@ -3,6 +3,8 @@ plus the outbound BrokerOrderLeg → Alpaca request-body mapper."""
 
 from __future__ import annotations
 
+import pytest
+
 from app.broker.alpaca.adapter import (
     from_alpaca_order,
     rfc3339_to_ms,
@@ -101,3 +103,21 @@ def test_to_alpaca_order_request_maps_limit_leg_with_price_and_tif() -> None:
         "limit_price": "240.5",
         "client_order_id": "manual/inkant/v1:def456",
     }
+
+
+@pytest.mark.parametrize(
+    ("quantity", "expected"),
+    [
+        (0.00001, "0.00001"),
+        (1e20, "100000000000000000000"),
+    ],
+)
+def test_to_alpaca_order_request_never_uses_scientific_quantity_notation(
+    quantity: float,
+    expected: str,
+) -> None:
+    leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=quantity)
+
+    body = to_alpaca_order_request(leg, client_order_id="manual/inkant/v1:decimal")
+
+    assert body["qty"] == expected

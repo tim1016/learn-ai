@@ -5559,11 +5559,8 @@ export interface components {
             renewed_at_ms?: number | null;
             /** Started At Ms */
             started_at_ms: number;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "acked" | "failed" | "uncertain";
+            /** Status */
+            status: string;
             /** Valid Until Ms */
             valid_until_ms?: number | null;
         };
@@ -8986,9 +8983,10 @@ export interface components {
          * BrokerOrderRequest
          * @description An operator-authored order request: one or more legs to submit.
          *
-         *     Each leg is submitted independently and journaled independently, so a
-         *     per-leg failure never blocks the others. The clerk mints a distinct
-         *     ``order_ref`` identity per leg.
+         *     Each leg is journaled independently. A definitive per-leg failure does not
+         *     block later legs, but an uncertain outcome stops the batch before it can
+         *     create contradictory new exposure. The clerk mints a distinct ``order_ref``
+         *     identity per submitted leg.
          */
         BrokerOrderRequest: {
             /** Legs */
@@ -18167,10 +18165,10 @@ export interface components {
          *
          *     - ``acked`` — the broker accepted the order; ``order`` is set.
          *     - ``failed`` — the order definitively did not land; ``error`` is set.
-         *     - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order`` nor
-         *       ``error`` is authoritative yet; the intent is durably journaled as
-         *       ``submit_uncertain`` and a later replay / sweep will finish it. The operator
-         *       must not assume the order failed — it may still have landed.
+         *     - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order``
+         *       nor ``error`` is authoritative yet; the intent is durably journaled as
+         *       ``submit_uncertain`` and a later replay / sweep will finish it. The
+         *       operator must not assume the order failed — it may still have landed.
          *
          *     ``order_ref`` is always present — an operator can find the intent in the
          *     journal in every case, including uncertain.

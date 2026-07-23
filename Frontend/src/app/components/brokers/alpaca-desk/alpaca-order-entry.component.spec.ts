@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -65,6 +66,7 @@ async function fillFirstLeg(symbol: string, quantity: string): Promise<void> {
 /** Select a native Signal Forms-backed control by its wire value. */
 function selectOption(controlAriaLabel: string, value: string): void {
   const control = screen.getByLabelText(controlAriaLabel);
+  fireEvent.input(control, { target: { value } });
   fireEvent.change(control, { target: { value } });
 }
 
@@ -245,5 +247,26 @@ describe('AlpacaOrderEntryComponent', () => {
         'The submission outcome is uncertain. Check Alpaca orders and the journal before submitting again.',
       ),
     ).toBeTruthy();
+    await vi.waitFor(() => expect(screen.queryByText('Confirm order')).toBeNull());
+  });
+
+  it('renders a definite HTTP rejection and closes the confirmation dialog', async () => {
+    const submitOrder = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 422,
+        statusText: 'Unprocessable Entity',
+        error: { detail: 'GTC fractional orders are not supported.' },
+      }),
+    );
+    await renderPanel(submitOrder);
+
+    await fillFirstLeg('spy', '2');
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
+
+    expect(
+      await screen.findByText('Order rejected: GTC fractional orders are not supported.'),
+    ).toBeTruthy();
+    await vi.waitFor(() => expect(screen.queryByText('Confirm order')).toBeNull());
   });
 });

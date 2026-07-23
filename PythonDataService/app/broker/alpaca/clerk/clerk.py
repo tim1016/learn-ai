@@ -295,12 +295,14 @@ class AlpacaClerk:
             order_ref = owning.order_ref if owning is not None else None
 
             # No journal → no cancel: record + fsync BEFORE the broker call.
-            journal.append(_entry(ClerkEntryKind.CANCEL_RECORDED))
+            await journal.append_async(_entry(ClerkEntryKind.CANCEL_RECORDED))
 
             try:
                 await self._trade.cancel(order_id)
             except BrokerError as exc:
-                journal.append(_entry(ClerkEntryKind.CANCEL_FAILED, error=exc))
+                await journal.append_async(
+                    _entry(ClerkEntryKind.CANCEL_FAILED, error=exc)
+                )
                 return OrderCancelResult(
                     broker=self.broker_id,
                     account_id=account_id,
@@ -311,7 +313,7 @@ class AlpacaClerk:
                     error=OrderLegError(message=exc.message, why=exc.detail),
                 )
 
-            journal.append(_entry(ClerkEntryKind.CANCEL_ACKED))
+            await journal.append_async(_entry(ClerkEntryKind.CANCEL_ACKED))
             return OrderCancelResult(
                 broker=self.broker_id,
                 account_id=account_id,
@@ -365,7 +367,7 @@ class AlpacaClerk:
                 if owned and client_order_id is not None
                 else None
             )
-            journal.append(
+            await journal.append_async(
                 OrderJournalEntry(
                     kind=kind,
                     account_id=account_id,
@@ -398,7 +400,7 @@ class AlpacaClerk:
                 # account exposure hold so new submits are refused until an
                 # operator clears it. Idempotent: a second unexplained event does
                 # not re-journal an already-active HOLD_SET.
-                self._set_hold(
+                await self._set_hold(
                     journal,
                     account_id=account_id,
                     reason_code=UNEXPLAINED_ORDER_HOLD_CODE,
@@ -484,7 +486,7 @@ class AlpacaClerk:
             entries = journal.read_entries()
             hold = derive.hold_state(entries)
             if hold.active:
-                journal.append(
+                await journal.append_async(
                     OrderJournalEntry(
                         kind=ClerkEntryKind.HOLD_CLEARED,
                         account_id=account_id,
@@ -523,7 +525,7 @@ class AlpacaClerk:
             observed_at_ms=self._clock(),
         )
 
-    def _set_hold(
+    async def _set_hold(
         self,
         journal: OrderJournal,
         *,
@@ -546,7 +548,7 @@ class AlpacaClerk:
         # explicit receipt makes this append redundant.
         if last_explicit_hold is ClerkEntryKind.HOLD_SET:
             return
-        journal.append(
+        await journal.append_async(
             OrderJournalEntry(
                 kind=ClerkEntryKind.HOLD_SET,
                 account_id=account_id,
@@ -624,7 +626,7 @@ class AlpacaClerk:
         )
 
         # No journal → no order: record + fsync the intent BEFORE the broker call.
-        journal.append(identity.entry(ClerkEntryKind.INTENT_RECORDED))
+        await journal.append_async(identity.entry(ClerkEntryKind.INTENT_RECORDED))
 
         try:
             order = await self._trade.submit(leg, client_order_id=order_ref)
@@ -635,7 +637,7 @@ class AlpacaClerk:
             # whether the order actually exists. A resolution that is itself
             # uncertain leaves the intent at ``submit_uncertain`` for startup
             # replay / a later sweep to finish — never a fabricated terminal.
-            journal.append(
+            await journal.append_async(
                 identity.entry(ClerkEntryKind.SUBMIT_UNCERTAIN, error=_leg_error(exc))
             )
             logger.warning(
@@ -655,7 +657,9 @@ class AlpacaClerk:
             # Every other BrokerError (invalid 4xx, rejected 409, auth, rate
             # limit) is a DEFINITIVE failure — the order did not land.
             failure = _leg_error(exc)
-            journal.append(identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=failure))
+            await journal.append_async(
+                identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=failure)
+            )
             return OrderLegResult(
                 status="failed",
                 order_ref=order_ref,
@@ -663,7 +667,9 @@ class AlpacaClerk:
                 error=failure,
             )
 
-        journal.append(identity.entry(ClerkEntryKind.SUBMIT_ACKED, order=order))
+        await journal.append_async(
+            identity.entry(ClerkEntryKind.SUBMIT_ACKED, order=order)
+        )
         return OrderLegResult(
             status="acked", order_ref=order_ref, intent_id=intent_id, order=order
         )
@@ -832,7 +838,9 @@ class AlpacaClerk:
                 message="The order did not reach the broker.",
                 why="Alpaca has no order for this client_order_id (definitively absent).",
             )
-            journal.append(identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=failure))
+            await journal.append_async(
+                identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=failure)
+            )
             logger.info(
                 "alpaca clerk resolved uncertain submit: order absent (failed)",
                 extra={
@@ -851,7 +859,9 @@ class AlpacaClerk:
                 terminal_outcomes[identity.order_ref] = result
             return result
 
-        journal.append(identity.entry(ClerkEntryKind.SUBMIT_ACKED, order=order))
+        await journal.append_async(
+            identity.entry(ClerkEntryKind.SUBMIT_ACKED, order=order)
+        )
         logger.info(
             "alpaca clerk resolved uncertain submit: order found (acked)",
             extra={
@@ -904,7 +914,7 @@ class AlpacaClerk:
                 plan = reconcile.plan_stale(
                     journal.read_entries(), account_id=account_id, now_ms=self._clock()
                 )
-                return self._apply_reconcile_plan(journal, account_id, plan)
+                return await self._apply_reconcile_plan(journal, account_id, plan)
 
         working_orders = [
             order
@@ -936,9 +946,9 @@ class AlpacaClerk:
                     "new_unexplained": plan.new_unexplained_count,
                 },
             )
-            return self._apply_reconcile_plan(journal, account_id, plan)
+            return await self._apply_reconcile_plan(journal, account_id, plan)
 
-    def _apply_reconcile_plan(
+    async def _apply_reconcile_plan(
         self, journal: OrderJournal, account_id: str, plan: reconcile.ReconcilePlan
     ) -> ReconciliationVerdict:
         """Apply a pure :class:`reconcile.ReconcilePlan` under the intake lock:
@@ -947,10 +957,10 @@ class AlpacaClerk:
         (``_set_hold`` is idempotent, so a persistent foreign order does not
         re-journal HOLD_SET)."""
         for entry in plan.entries_to_append:
-            journal.append(entry)
+            await journal.append_async(entry)
         self._unexplained_order_count += plan.new_unexplained_count
         if plan.set_hold:
-            self._set_hold(
+            await self._set_hold(
                 journal,
                 account_id=account_id,
                 reason_code=UNEXPLAINED_ORDER_HOLD_CODE,

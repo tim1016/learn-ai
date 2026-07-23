@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { FormField, form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
@@ -138,10 +139,9 @@ export class AlpacaOrderEntryComponent {
       this.results.set(result.results);
       this.previewOpen.set(false);
       this.legs.set([]);
-    } catch {
-      this.submitError.set(
-        'The submission outcome is uncertain. Check Alpaca orders and the journal before submitting again.',
-      );
+    } catch (err) {
+      this.submitError.set(this.submissionErrorMessage(err));
+      this.previewOpen.set(false);
     } finally {
       this.submitting.set(false);
     }
@@ -161,5 +161,23 @@ export class AlpacaOrderEntryComponent {
     return leg.orderType === 'limit'
       ? { ...base, limit_price: Number(leg.limitPrice) }
       : base;
+  }
+
+  private submissionErrorMessage(err: unknown): string {
+    if (err instanceof HttpErrorResponse && err.status !== 0) {
+      const detail = err.error?.detail;
+      const nestedMessage =
+        detail && typeof detail === 'object' && 'message' in detail
+          ? detail.message
+          : undefined;
+      const message =
+        typeof detail === 'string'
+          ? detail
+          : typeof nestedMessage === 'string'
+            ? nestedMessage
+            : err.statusText || `HTTP ${err.status}`;
+      return `Order rejected: ${message}`;
+    }
+    return 'The submission outcome is uncertain. Check Alpaca orders and the journal before submitting again.';
   }
 }

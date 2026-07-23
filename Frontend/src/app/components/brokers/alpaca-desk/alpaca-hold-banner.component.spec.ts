@@ -63,7 +63,9 @@ describe('AlpacaHoldBannerComponent', () => {
   });
 
   it('refreshes a desk already open when the sweep raises a hold', async () => {
-    vi.useFakeTimers();
+    // Fake only the polling interval. Testing Library's async queries use
+    // timeouts internally and must keep their real clock.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     try {
       const getClerkStatus = vi
         .fn()
@@ -76,6 +78,7 @@ describe('AlpacaHoldBannerComponent', () => {
 
       expect(await screen.findByText(/Unexplained Order Hold/)).toBeTruthy();
     } finally {
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });

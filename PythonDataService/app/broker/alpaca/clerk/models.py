@@ -230,6 +230,19 @@ class OrderLegResult(BaseModel):
     order: BrokerOrder | None = None
     error: OrderLegError | None = None
 
+    @model_validator(mode="after")
+    def _status_matches_payload(self) -> OrderLegResult:
+        """Reject contradictory result shapes before they reach the wire."""
+        if self.status == "acked":
+            if self.order is None or self.error is not None:
+                raise ValueError("acked results require order and forbid error")
+        elif self.status == "failed":
+            if self.error is None or self.order is not None:
+                raise ValueError("failed results require error and forbid order")
+        elif self.error is None or self.order is not None:
+            raise ValueError("uncertain results require error and forbid order")
+        return self
+
 
 class OrderSubmitResult(BaseModel):
     """The whole request's outcome: one result per submitted leg, in order."""

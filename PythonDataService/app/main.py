@@ -81,6 +81,28 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 
+def _alpaca_clerk_configuration_is_valid() -> bool:
+    """Clear stale runtime state, validate settings, and log only safe detail."""
+    from pydantic import ValidationError
+
+    from app.broker.alpaca.clerk import set_alpaca_clerk
+    from app.broker.alpaca.config import (
+        alpaca_configuration_error_detail,
+        get_alpaca_settings,
+    )
+
+    set_alpaca_clerk(None)
+    try:
+        get_alpaca_settings()
+    except ValidationError as exc:
+        logger.warning(
+            "Alpaca settings invalid; order-submission clerk not installed.",
+            extra={"detail": alpaca_configuration_error_detail(exc)},
+        )
+        return False
+    return True
+
+
 async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: object) -> bool:
     """Run S5 recovery before enabling submits; preserve a safe disabled state.
 
@@ -136,28 +158,10 @@ async def lifespan(app: FastAPI):
     # the IBKR broker_enabled block below (Alpaca is a peer vendor, not part of
     # the IBKR gateway lifecycle). No keys → no clerk → the write endpoint
     # honestly reports "not configured".
-    from pydantic import ValidationError
-
     from app.broker.alpaca.broker import AlpacaBroker
     from app.broker.alpaca.clerk import AlpacaClerk, set_alpaca_clerk
-    from app.broker.alpaca.config import get_alpaca_settings
 
-    try:
-        get_alpaca_settings()
-    except ValidationError as exc:
-        # get_alpaca_settings() raises ValidationError both for benign
-        # missing-keys (no Alpaca configured) AND for an ALPACA_MODE safety
-        # misconfig (the paper-only validator). Do NOT abort startup — no clerk
-        # means no submit, which is money-safe — but log the actual detail with
-        # exc_info so a live-mode misconfig is VISIBLE in logs, not masked as
-        # "keys absent".
-        logger.warning(
-            "Alpaca settings invalid; order-submission clerk not installed. "
-            "Detail: %s",
-            exc,
-            exc_info=True,
-        )
-    else:
+    if _alpaca_clerk_configuration_is_valid():
         alpaca_broker = AlpacaBroker()
         alpaca_clerk = AlpacaClerk(read=alpaca_broker, trade=alpaca_broker)
 
@@ -381,6 +385,7 @@ async def lifespan(app: FastAPI):
         # independent of the IBKR teardown.
         from app.broker.alpaca.clerk import (
             get_reconciliation_sweep,
+            set_alpaca_clerk,
             set_reconciliation_sweep,
         )
         from app.broker.alpaca.trade_updates import (
@@ -397,6 +402,7 @@ async def lifespan(app: FastAPI):
         if alpaca_trade_updates is not None:
             await alpaca_trade_updates.stop()
             set_trade_updates_consumer(None)
+        set_alpaca_clerk(None)
         await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()
         # Stop the daemon monitor first — its probe traffic stops cleanly

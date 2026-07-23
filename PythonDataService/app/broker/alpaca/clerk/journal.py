@@ -22,6 +22,7 @@ this class serializes the file appends themselves with a ``threading.Lock``).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import threading
@@ -37,6 +38,7 @@ _SERVICE_ROOT = Path(__file__).resolve().parents[4]
 # Traversal-safe path component (the CodeQL-recognised sanitiser): an unsafe
 # account id never reaches the filesystem path.
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
+_RESERVED_COMPONENTS = frozenset({".", ".."})
 
 INBOX_FILENAME = "order_inbox.jsonl"
 JOURNAL_FILENAME = "order_journal.jsonl"
@@ -45,10 +47,10 @@ JOURNAL_FILENAME = "order_journal.jsonl"
 class ClerkSettings(BaseSettings):
     """Alpaca-clerk journal settings.
 
-    ``ALPACA_CLERK_DIR`` roots the order journals under a git-ignored ``var/``
-    tree, **separate** from the broker capture journals (``BROKER_CAPTURE_DIR``)
-    and from any IBKR live-runs artifacts. Each broker's journaling stays in its
-    own tree.
+    ``ALPACA_CLERK_DIR`` roots the order journals under the service's mounted,
+    git-ignored ``artifacts/`` tree, **separate** from the broker capture
+    journals (``BROKER_CAPTURE_DIR``) and from IBKR live-runs artifacts. Each
+    broker's journaling stays in its own tree.
     """
 
     model_config = SettingsConfigDict(
@@ -58,12 +60,12 @@ class ClerkSettings(BaseSettings):
         extra="ignore",
     )
 
-    dir: Path = _SERVICE_ROOT / "var" / "alpaca_clerk"
+    dir: Path = _SERVICE_ROOT / "artifacts" / "alpaca_clerk"
 
 
 def _safe_component(value: str, kind: str) -> str:
     """Return a traversal-safe path component or raise."""
-    if not _SAFE_COMPONENT.match(value):
+    if value in _RESERVED_COMPONENTS or not _SAFE_COMPONENT.match(value):
         raise ValueError(f"unsafe {kind} path component: {value!r}")
     return value
 
@@ -126,6 +128,10 @@ class OrderJournal:
             if needs_directory_sync:
                 self._fsync_directory_chain()
             self._appended += 1
+
+    async def append_async(self, entry: OrderJournalEntry) -> None:
+        """Append durably without blocking the async service's event loop."""
+        await asyncio.to_thread(self.append, entry)
 
     @staticmethod
     def _append_fsynced(path: Path, line: str) -> None:

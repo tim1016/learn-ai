@@ -8428,8 +8428,9 @@
             "$ref": "#/components/schemas/OrderSide"
           },
           "symbol": {
-            "maxLength": 32,
+            "maxLength": 7,
             "minLength": 1,
+            "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
             "title": "Symbol",
             "type": "string"
           },
@@ -8452,7 +8453,7 @@
       },
       "BrokerOrderRequest": {
         "additionalProperties": false,
-        "description": "An operator-authored order request: one or more legs to submit.\n\nEach leg is submitted independently and journaled independently, so a\nper-leg failure never blocks the others. The clerk mints a distinct\n``order_ref`` identity per leg.",
+        "description": "An operator-authored order request: one or more legs to submit.\n\nEach leg is journaled independently. A definitive per-leg failure does not\nblock later legs, but an uncertain outcome stops the batch before it can\ncreate contradictory new exposure. The clerk mints a distinct ``order_ref``\nidentity per submitted leg.",
         "properties": {
           "legs": {
             "items": {
@@ -28653,7 +28654,7 @@
       },
       "OrderLegResult": {
         "additionalProperties": false,
-        "description": "The per-leg outcome the router shapes into its response.\n\nKeyed by ``status``:\n\n- ``acked`` \u2014 the broker accepted the order; ``order`` is set.\n- ``failed`` \u2014 the order definitively did not land; ``error`` is set.\n- ``uncertain`` \u2014 the submit's HTTP outcome was unknown. Neither ``order`` nor\n  ``error`` is authoritative yet; the intent is durably journaled as\n  ``submit_uncertain`` and a later replay / sweep will finish it. The operator\n  must not assume the order failed \u2014 it may still have landed.\n\n``order_ref`` is always present \u2014 an operator can find the intent in the\njournal in every case, including uncertain.",
+        "description": "The per-leg outcome the router shapes into its response.\n\nKeyed by ``status``:\n\n- ``acked`` \u2014 the broker accepted the order; ``order`` is set.\n- ``failed`` \u2014 the order definitively did not land; ``error`` is set.\n- ``uncertain`` \u2014 the submit's HTTP outcome was unknown. Neither ``order``\n  nor ``error`` is authoritative yet; the intent is durably journaled as\n  ``submit_uncertain`` and a later replay / sweep will finish it. The\n  operator must not assume the order failed \u2014 it may still have landed.\n\n``order_ref`` is always present \u2014 an operator can find the intent in the\njournal in every case, including uncertain.",
         "properties": {
           "error": {
             "anyOf": [

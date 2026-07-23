@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Generator
+from pathlib import Path
+from typing import Any
 
 import pytest
 import responses
 from httpx import ASGITransport, AsyncClient, Response
+from requests import PreparedRequest
 
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk import journal as journal_module
@@ -53,7 +56,7 @@ _ACCOUNT_BODY = json.dumps(
 )
 
 
-def _accepted_order_body(payload: dict) -> str:
+def _accepted_order_body(payload: dict[str, Any]) -> str:
     """Echo the submitted body back as an accepted order (the Alpaca shape).
 
     Reflects the vendor fields the caller sent (``type``, ``time_in_force``,
@@ -81,7 +84,9 @@ def _accepted_order_body(payload: dict) -> str:
 
 
 @pytest.fixture
-def _alpaca_clerk(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+def _alpaca_clerk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Generator[None, None, None]:
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
     journal_module.reset_clerk_settings_for_testing()
     reset_alpaca_settings_for_testing()
@@ -104,7 +109,7 @@ def _control_headers() -> dict[str, str]:
     return {CONTROL_SECRET_HEADER: secret} if secret else {}
 
 
-async def _post(body: dict) -> Response:
+async def _post(body: dict[str, Any]) -> Response:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -126,7 +131,9 @@ async def _delete(order_id: str) -> Response:
 async def test_accepted_leg_returns_acked_result(_alpaca_clerk: None) -> None:
     responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
 
-    def _order_callback(request):
+    def _order_callback(
+        request: PreparedRequest,
+    ) -> tuple[int, dict[str, str], str]:
         payload = json.loads(request.body)
         return (200, {}, _accepted_order_body(payload))
 
@@ -156,7 +163,9 @@ async def test_accepted_limit_gtc_leg_sends_price_and_tif(_alpaca_clerk: None) -
 
     sent: list[dict] = []
 
-    def _order_callback(request):
+    def _order_callback(
+        request: PreparedRequest,
+    ) -> tuple[int, dict[str, str], str]:
         payload = json.loads(request.body)
         sent.append(payload)
         return (200, {}, _accepted_order_body(payload))
@@ -333,7 +342,9 @@ async def test_unconfigured_clerk_returns_503() -> None:
 async def _submit_one() -> str:
     """Submit one accepted leg and return its broker-assigned order id."""
 
-    def _order_callback(request):
+    def _order_callback(
+        request: PreparedRequest,
+    ) -> tuple[int, dict[str, str], str]:
         payload = json.loads(request.body)
         return (200, {}, _accepted_order_body(payload))
 

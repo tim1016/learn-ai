@@ -6,7 +6,9 @@ behavior (raw passthrough, request building, error translation), not alpaca-py.
 
 from __future__ import annotations
 
+import asyncio
 import time
+from threading import Event
 from typing import Any
 
 import pytest
@@ -176,6 +178,70 @@ async def test_get_order_by_client_order_id_404_returns_none(
     result = await _client(fake).get_order_by_client_order_id("manual/inkant/v1:abc")
 
     assert result is None
+
+
+async def test_timed_out_submit_stays_uncertain_while_sdk_worker_is_in_flight(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    fake = _FakeAlpaca()
+    started = Event()
+    release = Event()
+    completed = Event()
+    lookup_calls: list[str] = []
+
+    def delayed_post(path: str, data: Any = None) -> dict[str, Any]:
+        started.set()
+        release.wait(timeout=1)
+        completed.set()
+        return {
+            "id": "broker-order-delayed",
+            "client_order_id": data["client_order_id"],
+            "status": "accepted",
+        }
+
+    def lookup_after_visibility(client_id: str) -> dict[str, Any]:
+        lookup_calls.append(client_id)
+        if not completed.is_set():
+            raise make_api_error(404, message="order not found")
+        return {
+            "id": "broker-order-delayed",
+            "client_order_id": client_id,
+            "status": "accepted",
+        }
+
+    fake.post = delayed_post  # type: ignore[method-assign]
+    fake.get_order_by_client_id = lookup_after_visibility  # type: ignore[method-assign]
+    client = AlpacaTradingClient(client_factory=lambda: fake, timeout_s=0.001)
+    order = {
+        "symbol": "SPY",
+        "qty": "1",
+        "side": "buy",
+        "type": "market",
+        "client_order_id": "manual/inkant/v1:delayed",
+    }
+
+    with pytest.raises(BrokerUnavailable, match="timed out"):
+        await client.submit_order(order)
+    assert started.is_set()
+
+    with pytest.raises(BrokerUnavailable, match="still become visible"):
+        await client.get_order_by_client_order_id(order["client_order_id"])
+    assert lookup_calls == [order["client_order_id"]]
+
+    release.set()
+    for _ in range(100):
+        try:
+            result = await client.get_order_by_client_order_id(
+                order["client_order_id"]
+            )
+            break
+        except BrokerUnavailable:
+            await asyncio.sleep(0.005)
+    else:
+        pytest.fail("timed-out SDK worker did not settle")
+
+    assert result is not None
+    assert result["id"] == "broker-order-delayed"
 
 
 async def test_get_order_by_client_order_id_5xx_maps_to_unavailable(

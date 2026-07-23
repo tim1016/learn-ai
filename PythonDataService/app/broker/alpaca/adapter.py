@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -63,8 +64,23 @@ def opt_str(value: Any) -> str | None:
 
 
 def opt_bool(value: Any) -> bool | None:
-    """Coerce an optional value to ``bool``; ``None`` stays ``None``."""
-    return None if value is None else bool(value)
+    """Parse an optional vendor boolean; reject truthy non-boolean values."""
+    if value is None or isinstance(value, bool):
+        return value
+    raise TypeError(f"Expected a boolean or null, got {type(value).__name__}")
+
+
+def to_bool(value: Any) -> bool:
+    """Parse a required vendor boolean without truthiness coercion."""
+    parsed = opt_bool(value)
+    if parsed is None:
+        raise TypeError("Expected a boolean, got null")
+    return parsed
+
+
+def _decimal_string(value: float) -> str:
+    """Format a numeric contract value as non-scientific vendor text."""
+    return format(Decimal(str(value)), "f")
 
 
 def _parse_rfc3339(value: str) -> datetime:
@@ -149,8 +165,8 @@ def from_alpaca_account(
         long_market_value=to_float(payload["long_market_value"]),
         short_market_value=to_float(payload["short_market_value"]),
         pattern_day_trader=opt_bool(payload.get("pattern_day_trader")),
-        trading_blocked=bool(payload["trading_blocked"]),
-        account_blocked=bool(payload["account_blocked"]),
+        trading_blocked=to_bool(payload["trading_blocked"]),
+        account_blocked=to_bool(payload["account_blocked"]),
         created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
         observed_at_ms=_observed(observed_at_ms),
     )
@@ -214,7 +230,7 @@ def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dic
     body: dict[str, Any] = {
         "symbol": leg.symbol,
         # Alpaca accepts the qty as a string; send the operator's share count.
-        "qty": str(leg.quantity),
+        "qty": _decimal_string(leg.quantity),
         "side": str(leg.side),
         "type": str(leg.order_type),
         "time_in_force": str(leg.time_in_force),
@@ -222,7 +238,7 @@ def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dic
     }
     if leg.limit_price is not None:
         # Alpaca expects the price as a string; only present for a limit order.
-        body["limit_price"] = str(leg.limit_price)
+        body["limit_price"] = _decimal_string(leg.limit_price)
     return body
 
 
