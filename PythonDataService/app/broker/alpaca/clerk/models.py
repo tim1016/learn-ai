@@ -16,7 +16,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 
@@ -316,7 +316,7 @@ class OrderCancelResult(BaseModel):
     broker: str
     account_id: str
     order_id: str
-    status: str = Field(pattern="^(acked|failed)$")
+    status: Literal["acked", "failed"]
     owned: bool
     # ``order_ref`` present only when the canceled order was owned (resolved from
     # the journal); the operator can then find the originating intent.

@@ -20,6 +20,7 @@ from app.broker.alpaca.clerk import journal as journal_module
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
+    OrderCancelResult,
     OrderLegError,
     OrderLegResult,
 )
@@ -184,6 +185,12 @@ def test_order_leg_result_rejects_status_payload_contradictions(
             intent_id="abc",
             **payload,
         )
+
+
+def test_order_cancel_result_schema_exposes_closed_status_vocabulary() -> None:
+    status_schema = OrderCancelResult.model_json_schema()["properties"]["status"]
+
+    assert status_schema["enum"] == ["acked", "failed"]
 
 
 async def test_intent_is_fsynced_before_broker_submit() -> None:

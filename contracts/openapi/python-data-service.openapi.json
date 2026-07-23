@@ -28611,7 +28611,10 @@
             "type": "boolean"
           },
           "status": {
-            "pattern": "^(acked|failed)$",
+            "enum": [
+              "acked",
+              "failed"
+            ],
             "title": "Status",
             "type": "string"
           }

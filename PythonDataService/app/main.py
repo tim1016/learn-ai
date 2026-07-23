@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -80,6 +81,8 @@ from app.utils.error_handlers import polygon_exception_handler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+_ALPACA_RECOVERY_TIMEOUT_S = 60.0
+
 
 def _alpaca_clerk_configuration_is_valid() -> bool:
     """Clear stale runtime state, validate settings, and log only safe detail."""
@@ -112,7 +115,10 @@ async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: object) -> bool:
     new order against that unknown state.
     """
     try:
-        await alpaca_clerk.recover()  # type: ignore[attr-defined]
+        await asyncio.wait_for(
+            alpaca_clerk.recover(),  # type: ignore[attr-defined]
+            timeout=_ALPACA_RECOVERY_TIMEOUT_S,
+        )
     except Exception as exc:
         logger.warning(
             "Alpaca clerk startup recovery failed; order submission remains disabled. "

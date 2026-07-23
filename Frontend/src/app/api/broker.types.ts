@@ -18144,8 +18144,11 @@ export interface components {
             order_ref?: string | null;
             /** Owned */
             owned: boolean;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "acked" | "failed";
         };
         /**
          * OrderLegError
