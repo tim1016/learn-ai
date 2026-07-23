@@ -7,14 +7,17 @@ behavior (raw passthrough, request building, error translation), not alpaca-py.
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from threading import Event
 from typing import Any
 
+import anyio
 import pytest
 from alpaca.trading.enums import AssetStatus, QueryOrderStatus
+from requests.sessions import Session
 
-from app.broker.alpaca.client import AlpacaTradingClient
+from app.broker.alpaca.client import AlpacaTradingClient, _install_session_timeout
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.broker.contract.errors import (
     BrokerAuthError,
@@ -110,6 +113,16 @@ async def test_list_activities_calls_low_level_endpoint() -> None:
     path, data = fake.activities_call
     assert path == "/account/activities"
     assert data == {"page_size": 25, "direction": "desc"}
+
+
+async def test_list_activities_passes_page_token_to_low_level_endpoint() -> None:
+    fake = _FakeAlpaca()
+    await _client(fake).list_activities(limit=25, page_token="activity-25")
+
+    assert fake.activities_call == (
+        "/account/activities",
+        {"page_size": 25, "direction": "desc", "page_token": "activity-25"},
+    )
 
 
 async def test_get_clock_returns_raw() -> None:
@@ -300,3 +313,58 @@ async def test_hung_sdk_call_maps_to_broker_unavailable() -> None:
         await client.get_account()
 
     assert excinfo.value.detail == "The broker did not respond within 0.001 seconds."
+
+
+def test_session_timeout_defaults_connect_and_read_timeouts() -> None:
+    session = Session()
+    captured: list[dict[str, Any]] = []
+
+    def request(method: str, url: str, **kwargs: Any) -> None:
+        captured.append(kwargs)
+
+    session.request = request  # type: ignore[method-assign]
+    _install_session_timeout(session, timeout_s=15.0)
+
+    session.get("https://example.test/default")
+    session.get("https://example.test/explicit", timeout=(1.0, 2.0))
+
+    assert captured == [
+        {"params": None, "allow_redirects": True, "timeout": (3.05, 15.0)},
+        {"params": None, "allow_redirects": True, "timeout": (1.0, 2.0)},
+    ]
+
+
+async def test_timeouts_do_not_exhaust_the_global_anyio_thread_limiter() -> None:
+    fake = _FakeAlpaca()
+    started = 0
+    started_lock = threading.Lock()
+    release = threading.Event()
+
+    def blocked_get_account() -> dict:
+        nonlocal started
+        with started_lock:
+            started += 1
+        release.wait()
+        return {"account_number": "PA1", "status": "ACTIVE"}
+
+    fake.get_account = blocked_get_account  # type: ignore[method-assign]
+    client = AlpacaTradingClient(client_factory=lambda: fake, timeout_s=0.01)
+    global_limiter = anyio.to_thread.current_default_thread_limiter()
+    original_tokens = global_limiter.total_tokens
+    global_limiter.total_tokens = 2
+    try:
+        calls = [asyncio.create_task(client.get_account()) for _ in range(2)]
+        for _ in range(100):
+            if started == 2:
+                break
+            await anyio.sleep(0.001)
+        assert started == 2
+
+        results = await asyncio.gather(*calls, return_exceptions=True)
+        assert all(isinstance(result, BrokerUnavailable) for result in results)
+
+        with anyio.fail_after(0.05):
+            assert await anyio.to_thread.run_sync(lambda: "available") == "available"
+    finally:
+        release.set()
+        global_limiter.total_tokens = original_tokens
