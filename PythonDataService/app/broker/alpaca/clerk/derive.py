@@ -12,11 +12,36 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
+    ClerkStatus,
     HoldState,
     OrderJournalEntry,
     ReconciliationSummary,
 )
 from app.broker.contract.models import BrokerOrder, BrokerPosition
+
+
+def build_status(
+    entries: list[OrderJournalEntry],
+    *,
+    broker_id: str,
+    account_id: str,
+    outstanding_intents: int,
+    observed_at_ms: int,
+) -> ClerkStatus:
+    """Shape one ``ClerkStatus`` from a pre-read ledger (the single builder).
+
+    ``outstanding_intents`` is supplied by the Clerk (it owns the intent-scan);
+    hold and latest verdict are derived here so status is a pure read of the
+    durable ledger and survives a restart.
+    """
+    return ClerkStatus(
+        broker=broker_id,
+        account_id=account_id,
+        hold=hold_state(entries),
+        latest_reconciliation=latest_reconciliation(entries),
+        outstanding_intents=outstanding_intents,
+        observed_at_ms=observed_at_ms,
+    )
 
 
 def hold_state(entries: list[OrderJournalEntry]) -> HoldState:
@@ -59,6 +84,21 @@ def latest_reconciliation(
     return ReconciliationSummary(
         verdict=latest.verdict, recorded_at_ms=latest.recorded_at_ms
     )
+
+
+def unexplained_order_ids(entries: list[OrderJournalEntry]) -> set[str]:
+    """Broker order ids already journaled as ``UNEXPLAINED_ORDER``.
+
+    The dedup key for the reconciliation sweep: a foreign order the sweep has
+    already recorded must not be re-journaled (nor re-counted) on every later
+    pass, or a single persistent foreign order would grow the ledger without
+    bound while the account is held.
+    """
+    return {
+        entry.broker_order_id
+        for entry in entries
+        if entry.kind is ClerkEntryKind.UNEXPLAINED_ORDER and entry.broker_order_id
+    }
 
 
 def has_missing_intent(

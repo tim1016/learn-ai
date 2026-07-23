@@ -211,8 +211,51 @@ async def test_reconcile_unexplained_order_journals_and_sets_hold() -> None:
     kinds = _kinds(clerk)
     assert ClerkEntryKind.UNEXPLAINED_ORDER in kinds
     assert ClerkEntryKind.HOLD_SET in kinds
-    assert kinds[-1] is ClerkEntryKind.RECONCILIATION
+    recon = [
+        e
+        for e in clerk._journal.read_entries()  # type: ignore[union-attr]
+        if e.kind is ClerkEntryKind.RECONCILIATION
+    ]
+    assert [e.verdict for e in recon] == ["unexplained_order"]
     assert clerk.is_on_hold() is True
+    assert clerk.unexplained_order_count == 1
+
+
+async def test_persistent_unexplained_order_is_journaled_once_across_sweeps() -> None:
+    # M1: a foreign order still present on later sweeps must NOT re-journal an
+    # UNEXPLAINED_ORDER / RECONCILIATION line every pass (that would grow the
+    # ledger without bound while the account is held). Dedup on the broker order
+    # id; the verdict line is written only on a change.
+    broker = _FakeBroker(orders=[_order(client_order_id="foreign")])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+
+    for _ in range(3):
+        assert await clerk.reconcile_once() == "unexplained_order"
+
+    kinds = _kinds(clerk)
+    assert kinds.count(ClerkEntryKind.UNEXPLAINED_ORDER) == 1
+    assert kinds.count(ClerkEntryKind.RECONCILIATION) == 1
+    assert kinds.count(ClerkEntryKind.HOLD_SET) == 1
+    assert clerk.unexplained_order_count == 1
+    assert clerk.is_on_hold() is True
+
+
+async def test_hold_is_re_raised_after_clear_when_foreign_order_persists() -> None:
+    # If an operator clears the hold but the foreign order is still at the broker,
+    # the next sweep must re-raise the hold (safety) — WITHOUT re-journaling a
+    # duplicate UNEXPLAINED_ORDER line (the order was already recorded).
+    broker = _FakeBroker(orders=[_order(client_order_id="foreign")])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    await clerk.reconcile_once()
+    await clerk.clear_hold(operator="inkant", reason="reviewed")
+    assert clerk.is_on_hold() is False
+
+    await clerk.reconcile_once()  # the foreign order persists
+
+    assert clerk.is_on_hold() is True
+    kinds = _kinds(clerk)
+    assert kinds.count(ClerkEntryKind.HOLD_SET) == 2  # re-held after the clear
+    assert kinds.count(ClerkEntryKind.UNEXPLAINED_ORDER) == 1  # journaled once
     assert clerk.unexplained_order_count == 1
 
 

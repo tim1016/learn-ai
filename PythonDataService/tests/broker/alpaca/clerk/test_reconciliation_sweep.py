@@ -79,10 +79,14 @@ async def test_sweep_runs_a_bounded_number_of_passes() -> None:
     )
     await sweep.run()
 
+    # Three clean passes append exactly ONE RECONCILIATION line: a verdict line
+    # is journaled only when the verdict CHANGES (bounded ledger growth), so a run
+    # of identical verdicts does not litter the journal.
     entries = clerk._journal.read_entries()  # type: ignore[union-attr]
     verdicts = [e.verdict for e in entries if e.kind is ClerkEntryKind.RECONCILIATION]
-    assert verdicts == ["clean", "clean", "clean"]
-    # Slept between passes but not after the last (budget-bounded exit).
+    assert verdicts == ["clean"]
+    # Slept between passes but not after the last — proves 3 passes ran (the
+    # budget-bounded exit), independent of how many journal lines they produced.
     assert sleeps == [15.0, 15.0]
 
 
