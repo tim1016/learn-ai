@@ -22,3 +22,5 @@ export type TimeInForce = components['schemas']['TimeInForce'];
 export type OrderSubmitResult = components['schemas']['OrderSubmitResult'];
 export type OrderLegResult = components['schemas']['OrderLegResult'];
 export type OrderLegError = components['schemas']['OrderLegError'];
+// Phase-2 S3 order cancellation (write path).
+export type OrderCancelResult = components['schemas']['OrderCancelResult'];

@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.clerk import (
 )
 from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
+    OrderCancelResult,
     OrderJournalEntry,
     OrderLegResult,
     OrderSubmitResult,
@@ -33,6 +34,7 @@ from app.broker.alpaca.clerk.models import (
 __all__ = [
     "AlpacaClerk",
     "ClerkEntryKind",
+    "OrderCancelResult",
     "OrderJournalEntry",
     "OrderLegResult",
     "OrderSubmitResult",

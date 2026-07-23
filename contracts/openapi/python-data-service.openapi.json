@@ -28455,6 +28455,63 @@
         "title": "OptionsExpirationsResponse",
         "type": "object"
       },
+      "OrderCancelResult": {
+        "additionalProperties": false,
+        "description": "The outcome of a cancel request the router shapes into its response.\n\n``status`` is ``acked`` when the broker accepted the cancel (HTTP 204) or\n``failed`` when it rejected it (a typed what/why, never a raw 500).\n``order_id`` always echoes the broker-assigned id the operator targeted, so\nthe ledger line is findable. ``owned`` reports whether this Clerk submitted\nthe canceled order \u2014 a foreign order still cancels (reducing exposure is the\nsafe direction), but the fact is surfaced honestly, not hidden.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLegError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "order_id": {
+            "title": "Order Id",
+            "type": "string"
+          },
+          "order_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
+          },
+          "owned": {
+            "title": "Owned",
+            "type": "boolean"
+          },
+          "status": {
+            "pattern": "^(acked|failed)$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "order_id",
+          "status",
+          "owned"
+        ],
+        "title": "OrderCancelResult",
+        "type": "object"
+      },
       "OrderLegError": {
         "additionalProperties": false,
         "description": "A typed leg failure: a what/why the UI renders, never a raw 500.",
@@ -43732,6 +43789,74 @@
           }
         },
         "summary": "Submit Orders",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/orders/{order_id}": {
+      "delete": {
+        "description": "Cancel one working order by its broker-assigned id (phase-2 S3 write path).\n\nTransport only: resolve the account-scoped Clerk facade and delegate. The\nClerk owns ownership resolution, fail-closed journaling, the broker call, and\nresult shaping. A non-cancelable order is a *failed* result in a ``200``\nresponse with a typed what/why (never a ``500``). Cancel is intentionally a\nfirst-class Clerk path, independent of the submit gate, so a future exposure\nhold (S6) that blocks new submission never blocks reducing exposure.",
+        "operationId": "cancel_order_api_brokers__broker__orders__order_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "title": "Order Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderCancelResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Order",
         "tags": [
           "brokers-v2"
         ]

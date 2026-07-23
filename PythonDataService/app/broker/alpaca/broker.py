@@ -119,6 +119,17 @@ class AlpacaBroker:
         payload = await self._client.submit_order(body)
         return adapter.from_alpaca_order(payload)
 
+    async def cancel(self, order_id: str) -> None:
+        """Cancel one working order by its broker-assigned id (S3).
+
+        Delegates to the SDK client's ``DELETE /v2/orders/{order_id}``. A
+        non-cancelable order (already filled/canceled) surfaces as a vendor 422,
+        which ``map_api_error`` translates to a ``BrokerError`` the Clerk
+        journals as ``cancel_failed``. There is no order body to map back —
+        Alpaca returns 204 — so this returns ``None``.
+        """
+        await self._client.cancel_order(order_id)
+
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:
     """Register the phase-1 brokers (Alpaca only) into the registry."""
