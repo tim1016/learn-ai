@@ -127,6 +127,20 @@ def _accepted_order(client_order_id: str, *, symbol: str = "AAPL") -> BrokerOrde
     )
 
 
+def _filled_broker_order(order_id: str, client_order_id: str) -> BrokerOrder:
+    """A terminal (filled) ``BrokerOrder`` for the gap-reconcile re-pull path."""
+    return _accepted_order(client_order_id).model_copy(
+        update={
+            "order_id": order_id,
+            "status": "filled",
+            "filled_quantity": 10.0,
+            "filled_avg_price": 135.80,
+            "filled_at_ms": _FIXED_MS,
+            "updated_at_ms": _FIXED_MS,
+        }
+    )
+
+
 class _FakeBroker:
     """Read+trade port double: submit records the owned order_ref in the journal."""
 
@@ -363,6 +377,31 @@ async def test_unparseable_frame_is_captured_counted_not_fatal(tmp_path: Path) -
     assert len(records) == 2
     assert consumer.counters.parse_errors == 1
     assert consumer.counters.events_applied == 1
+
+
+async def test_malformed_embedded_order_is_parse_error_not_stream_abort(tmp_path: Path) -> None:
+    # A frame whose event/timestamp map cleanly but whose embedded ``order`` is
+    # malformed (missing required fields) must be a parse error — captured,
+    # counted, ``_seen`` unpoisoned — and must NOT abort the drain of the frames
+    # that follow it. (Regression: the order was once mapped outside the parse
+    # guard and after ``_seen`` was set, so a bad order silently lost the event
+    # and truncated the stream.)
+    bad = _load_frames()[0]
+    bad["data"]["order"] = {"id": "malformed-1"}  # no symbol/side/tif/status
+    good = _load_frames()[0]  # a valid owned frame delivered AFTER the bad one
+    consumer, clerk, _ = await _consumer(tmp_path, [bad, good])
+    await _warm(clerk)
+
+    await consumer.run()
+
+    # Both frames captured verbatim — a parse failure never loses the audit trail.
+    assert len(_capture_records(tmp_path)) == 2
+    assert consumer.counters.parse_errors == 1
+    # The good frame after the bad one still applied — the drain was not aborted.
+    assert consumer.counters.events_applied == 1
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    events = [e for e in entries if e.kind is ClerkEntryKind.ORDER_EVENT]
+    assert len(events) == 1
 
 
 # ── (d) attribution: owned vs unexplained (NO hold — that is S6) ─────────────
@@ -639,6 +678,53 @@ async def test_gap_reconcile_dedups_socket_fill_by_terminal_order(tmp_path: Path
     # Socket (exec-keyed) once + reconcile (order-keyed) re-pull → journaled once.
     assert len(fills) == 1
     assert consumer.counters.stale_terminal >= 1
+    assert consumer.counters.gap_reconciled >= 1
+
+
+async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
+    tmp_path: Path,
+) -> None:
+    # A terminal transition missed while disconnected is recovered by re-pulling
+    # CLOSED orders — NOT by Alpaca's ``after`` filter, which keys on submission
+    # time and would exclude an order submitted before its last-seen event. The
+    # socket delivers only ``new`` (order still open at disconnect); the fill
+    # lands while down and is visible only via the REST re-pull. (Regression:
+    # the reconcile once passed last_event_ms as ``after`` and queried "all",
+    # silently missing exactly this order.)
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    await _warm(clerk)
+    new_frame = _load_frames()[0]  # event=new, owned coid, order 61e69015
+    order_id = new_frame["data"]["order"]["id"]
+    coid = new_frame["data"]["order"]["client_order_id"]
+    broker.orders = [_filled_broker_order(order_id, coid)]
+
+    journal = _capture_journal(tmp_path)
+    consumer = TradeUpdatesConsumer(
+        clerk=clerk,
+        read=broker,
+        frame_source=_frame_source([new_frame]),
+        journal=journal,
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=1,
+    )
+
+    await consumer.run()
+
+    # The gap-reconcile queried CLOSED orders with no submission-time filter.
+    assert broker.list_orders_calls
+    last_call = broker.list_orders_calls[-1]
+    assert last_call["status"] == "closed"
+    assert last_call["after_ms"] is None
+    # The missed fill was recovered exactly once.
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    fills = [
+        e
+        for e in entries
+        if e.kind is ClerkEntryKind.ORDER_EVENT and e.event is not None and e.event.event_type == "fill"
+    ]
+    assert len(fills) == 1
     assert consumer.counters.gap_reconciled >= 1
 
 

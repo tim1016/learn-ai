@@ -86,6 +86,11 @@ _TERMINAL_STATUSES: frozenset[str] = frozenset(
 _DEFAULT_MAX_BACKOFF_S = 30.0
 _DEFAULT_BASE_BACKOFF_S = 1.0
 
+# Bounded page of recently closed orders re-pulled on each reconnect to recover
+# terminal transitions missed while disconnected. Alpaca's order-list max is 500;
+# a wider historical sweep is S6's reconciliation job.
+_GAP_RECONCILE_LIMIT = 500
+
 
 def _now_ms() -> int:
     """Current instant as ``int64`` ms UTC (default observation clock)."""
@@ -195,9 +200,6 @@ class TradeUpdatesConsumer:
         # socket ``exec:`` key cannot be reconstructed from a REST order, so
         # key-only dedup would re-journal a re-pulled terminal fill.
         self._terminal_orders: set[str] = set()
-        # High-water mark of the last-seen event instant, for the REST
-        # gap-reconcile after a reconnect (trade_updates has no cursor replay).
-        self._last_event_ms: int | None = None
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -325,6 +327,13 @@ class TradeUpdatesConsumer:
         order = data.get("order") or {}
         try:
             event = adapter.from_alpaca_trade_update(data)
+            # Map the embedded order in the SAME guard, BEFORE any state mutation.
+            # ``from_alpaca_trade_update`` only reads ``event``/``timestamp`` (and
+            # the top-level execution slice), so a frame with a malformed ``order``
+            # would pass it and then raise here — outside the guard it would poison
+            # ``_seen`` and abort the drain. A bad order is a parse error: the frame
+            # is already captured, the counter is incremented, the stream continues.
+            broker_order = adapter.from_alpaca_order(order) if order else None
         except (KeyError, ValueError):
             self._counters.parse_errors += 1
             logger.warning(
@@ -381,12 +390,8 @@ class TradeUpdatesConsumer:
             return
 
         self._seen[key] = _SeenEvent(terminal=_is_terminal(order))
-        # Track the last-seen instant for the post-reconnect gap-reconcile.
-        if self._last_event_ms is None or event.occurred_at_ms > self._last_event_ms:
-            self._last_event_ms = event.occurred_at_ms
 
         client_order_id = adapter.opt_str(order.get("client_order_id"))
-        broker_order = adapter.from_alpaca_order(order) if order else None
         kind = await self._clerk.record_lifecycle_event(
             client_order_id=client_order_id,
             event=event,
@@ -405,17 +410,26 @@ class TradeUpdatesConsumer:
     # ── Reconnect gap-reconcile ──────────────────────────────────────────────
 
     async def _gap_reconcile(self) -> None:
-        """Pull orders updated since the last-seen event and re-feed them.
+        """Re-pull recently CLOSED orders and re-feed them idempotently.
 
-        ``trade_updates`` cannot replay from a cursor, so after a reconnect the
-        only way to catch events missed while down is a REST read. Each pulled
-        order is fed through the same attribution/journal path as a synthetic
-        lifecycle event; a re-observed event dedups on its stable key, so this
-        is safe to run on every reconnect.
+        ``trade_updates`` has no cursor replay, and Alpaca's order-list ``after``
+        filter keys on order *submission* time — not the transition time we care
+        about — so it cannot select "orders that changed while we were down"
+        (an order submitted before its last-seen event but filled during the gap
+        is silently excluded). Instead, pull a bounded page of recently closed
+        (terminal) orders and re-feed each through the same path: an order whose
+        terminal event we missed is recovered, and one we already saw is absorbed
+        by the terminal-order guard (:attr:`_terminal_orders`).
+
+        Only terminal orders are pulled. An order still open missed no terminal
+        transition, and re-feeding it could double-journal a non-terminal event
+        whose synthetic timestamp differs from the socket's. A full historical
+        sweep beyond the bounded page is S6's reconciliation job.
         """
-        after_ms = self._last_event_ms
         try:
-            orders = await self._read.list_orders(status="all", after_ms=after_ms)
+            orders = await self._read.list_orders(
+                status="closed", limit=_GAP_RECONCILE_LIMIT
+            )
         except Exception:
             # A gap-reconcile failure is surfaced, not fatal — the live stream
             # is already back; the next reconnect retries the gap-fill.
