@@ -133,3 +133,31 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
 - **Finding (UI):** the per-bot cockpit proof read can transiently show
   offline/resting while the runtime is healthy — worth hardening so operators don't
   mistake a proof-plane blip for a dead bot.
+
+### 09:34 CDT — stop one (nvda-0723) succeeded; restart blocked by missing Resume
+
+- **Intermittent control-plane blip:** During the stop step the container↔host-daemon
+  (`host.containers.internal:8765`) link showed ~50% `host daemon unreachable`
+  warnings for ~90s (14:32–14:33 UTC), which is why the cockpit briefly showed
+  "resting / HOST_SERVICE_OFFLINE" while the runtime kept running. It self-recovered
+  (last 60s: 14 OK, 0 fail). The host daemon itself is healthy (0.2% CPU, fast 401s
+  from host and container). Flagged as a stability finding.
+- **Graceful stop worked:** With reachability healthy, `nvda-0723`'s cockpit showed
+  "on duty / all proofs satisfied" and the **"Stop bot gracefully"** control. Clicked
+  it → `live_state/nvda-0723` went `desired_state: STOPPED` (`command_channel:STOP`),
+  phase `OFF_DUTY`, `duty_outcome: STOPPED / HOST_DAEMON_PROCESS_STOPPED`. Verified
+  **only** nvda's process (pid 56829) exited; `spy-0723` (51135) and `qqq-0723`
+  (55323) stayed alive. Account remained flat. Clean, targeted stop.
+- **Restart blocked — missing Resume control:** The stopped bot's cockpit offers
+  only **Start**, which is refused: *"This bot is durably STOPPED. Resume it before
+  starting."* The frontend **does implement** resume
+  (`bot-control-page.component.ts`: `setIntent('resume','Resume')` →
+  `setInstanceDesiredState({action:'resume'})`; canonical error "…Resume the bot to
+  clear the stop latch"), but **no Resume button is surfaced** in the Trader or
+  Operations cockpit for this state (verified via a11y-tree search + the lifecycle
+  cards being read-only). This is the 2nd time this wall appeared (first: the smoke
+  bots). **Product gap: a bot can be gracefully stopped but not resumed in-place via
+  the UI.**
+- **Corrective action:** Restart nvda-0723 via **re-deploy** (Deploy & run, same
+  instance/config) — the proven UI-driven path — and document the missing in-place
+  Resume as the blocker.
