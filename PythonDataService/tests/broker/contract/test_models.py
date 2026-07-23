@@ -172,6 +172,43 @@ def test_non_positive_limit_price_is_rejected() -> None:
         )
 
 
+@pytest.mark.parametrize("limit_price", [240.555, 0.12345])
+def test_limit_price_with_too_many_decimal_places_is_rejected(limit_price: float) -> None:
+    with pytest.raises(ValidationError, match="limit prices"):
+        BrokerOrderLeg(
+            symbol="SPY",
+            side="buy",
+            quantity=1,
+            order_type="limit",
+            limit_price=limit_price,
+        )
+
+
+def test_fractional_gtc_leg_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="fractional-share orders"):
+        BrokerOrderLeg(
+            symbol="SPY",
+            side="buy",
+            quantity=0.5,
+            order_type="limit",
+            limit_price=240.5,
+            time_in_force="gtc",
+        )
+
+
+def test_fractional_day_leg_is_accepted() -> None:
+    leg = BrokerOrderLeg(
+        symbol="SPY",
+        side="buy",
+        quantity=0.5,
+        order_type="limit",
+        limit_price=240.5,
+        time_in_force="day",
+    )
+
+    assert leg.quantity == 0.5
+
+
 def test_capabilities_are_frozen_data() -> None:
     caps = BrokerCapabilities(
         broker="alpaca",

@@ -20,6 +20,7 @@ Two conventions are load-bearing:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
@@ -86,6 +87,16 @@ class BrokerOrderLeg(_ContractModel):
             raise ValueError("A limit order requires a limit_price.")
         if self.order_type is OrderType.MARKET and self.limit_price is not None:
             raise ValueError("A market order must not carry a limit_price.")
+        if self.limit_price is not None:
+            price = Decimal(str(self.limit_price))
+            max_decimal_places = 2 if price >= 1 else 4
+            if -price.as_tuple().exponent > max_decimal_places:
+                raise ValueError(
+                    "Alpaca limit prices at or above $1 allow at most 2 decimal "
+                    "places; prices below $1 allow at most 4."
+                )
+        if self.time_in_force is TimeInForce.GTC and not self.quantity.is_integer():
+            raise ValueError("Alpaca fractional-share orders must use DAY time in force.")
         return self
 
 
