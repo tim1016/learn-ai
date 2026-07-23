@@ -11,8 +11,10 @@ on-disk records, not mocks.
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -23,7 +25,13 @@ from app.broker.alpaca.clerk import journal as journal_module
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.client import AlpacaTradingClient
-from app.broker.alpaca.trade_updates import TradeUpdatesConsumer, _stream_url
+from app.broker.alpaca.config import AlpacaSettings
+from app.broker.alpaca.trade_updates import (
+    TradeUpdatesConsumer,
+    _order_to_event_payload,
+    _stream_url,
+    alpaca_socket_frames,
+)
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -348,6 +356,27 @@ async def test_exact_redelivery_is_skipped_and_counted(tmp_path: Path) -> None:
     assert consumer.counters.events_applied == 1
 
 
+async def test_changed_payload_with_reused_event_key_is_journaled_as_a_variant(
+    tmp_path: Path,
+) -> None:
+    first = _load_frames()[1]
+    corrected = _load_frames()[1]
+    # Alpaca can correct a fill while retaining its execution id. The key is
+    # therefore identical, but the event's ledger meaning is not.
+    corrected["data"]["price"] = "136.25"
+    consumer, clerk, _ = await _consumer(tmp_path, [first, corrected])
+    await _warm(clerk)
+
+    await consumer.run()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    events = [entry for entry in entries if entry.kind is ClerkEntryKind.ORDER_EVENT]
+    assert len(events) == 2
+    assert events[0].event_key != events[1].event_key
+    assert consumer.counters.event_key_collisions == 1
+    assert consumer.counters.skipped_duplicate == 0
+
+
 async def test_redelivery_of_terminal_order_surfaces_as_stale(tmp_path: Path) -> None:
     # The fill (order status=filled == terminal) delivered twice: the second is
     # a stale redelivery of a finalized order — surfaced + counted per policy,
@@ -376,6 +405,61 @@ async def test_unparseable_frame_is_captured_counted_not_fatal(tmp_path: Path) -
     records = _capture_records(tmp_path)
     assert len(records) == 2
     assert consumer.counters.parse_errors == 1
+    assert consumer.counters.events_applied == 1
+
+
+async def test_capture_failure_refuses_to_derive_lifecycle_state(tmp_path: Path) -> None:
+    class _FailingCaptureJournal(CaptureJournal):
+        def record(self, **_: Any) -> bool:  # type: ignore[override]
+            return False
+
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    consumer = TradeUpdatesConsumer(
+        clerk=clerk,
+        read=broker,
+        frame_source=_frame_source([_load_frames()[0]]),
+        journal=_FailingCaptureJournal(capture_dir=tmp_path / "capture"),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=0,
+    )
+    await _warm(clerk)
+
+    await consumer.run()
+
+    assert consumer.counters.capture_failures == 1
+    assert consumer.counters.events_applied == 0
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    assert not [entry for entry in entries if entry.kind is ClerkEntryKind.ORDER_EVENT]
+
+
+async def test_clerk_append_failure_leaves_event_retryable(tmp_path: Path) -> None:
+    class _FailingOnceClerk(AlpacaClerk):
+        calls = 0
+
+        async def record_lifecycle_event(self, **kwargs: Any) -> ClerkEntryKind:  # type: ignore[override]
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary journal failure")
+            return await super().record_lifecycle_event(**kwargs)
+
+    broker = _FakeBroker()
+    clerk = _FailingOnceClerk(read=broker, trade=broker)
+    await _warm(clerk)
+    consumer = TradeUpdatesConsumer(
+        clerk=clerk,
+        read=broker,
+        frame_source=_frame_source([_load_frames()[1]]),
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=1,
+    )
+
+    await consumer.run()
+
+    assert clerk.calls == 2
     assert consumer.counters.events_applied == 1
 
 
@@ -464,6 +548,22 @@ async def test_absent_client_order_id_journals_unexplained(tmp_path: Path) -> No
     assert len(unexplained) == 1
     assert unexplained[0].client_order_id == ""
     assert consumer.counters.unexplained == 1
+
+
+async def test_done_for_day_does_not_hide_a_later_terminal_transition(tmp_path: Path) -> None:
+    done_for_day = _load_frames()[0]
+    done_for_day["data"]["event"] = "done_for_day"
+    done_for_day["data"]["order"]["status"] = "done_for_day"
+    later_fill = _load_frames()[2]
+    consumer, clerk, _ = await _consumer(tmp_path, [done_for_day, later_fill])
+    await _warm(clerk)
+
+    await consumer.run()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    events = [entry.event.event_type for entry in entries if entry.kind is ClerkEntryKind.ORDER_EVENT]
+    assert events == ["done_for_day", "fill"]
+    assert consumer.counters.stale_terminal == 0
 
 
 async def test_authorization_frame_is_captured_not_attributed(tmp_path: Path) -> None:
@@ -728,11 +828,110 @@ async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
     assert consumer.counters.gap_reconciled >= 1
 
 
+async def test_reconnect_opens_the_next_source_before_gap_reconcile(tmp_path: Path) -> None:
+    order: list[str] = []
+    authorization = {"stream": "authorization", "data": {"status": "authorized"}}
+
+    def frame_source() -> AsyncIterator[bytes | str]:
+        order.append("source_opened")
+        return _frame_source([authorization])()
+
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    consumer = TradeUpdatesConsumer(
+        clerk=clerk,
+        read=broker,
+        frame_source=frame_source,
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=1,
+    )
+
+    async def _record_gap_reconcile() -> None:
+        order.append("gap_reconcile")
+
+    consumer._gap_reconcile = _record_gap_reconcile  # type: ignore[method-assign]
+    await consumer.run()
+
+    assert order == ["source_opened", "source_opened", "gap_reconcile"]
+
+
+async def test_gap_reconcile_uses_the_lifecycle_timestamp_for_fills() -> None:
+    filled_at_ms = _FIXED_MS + 5_000
+    order = _filled_broker_order("filled-order", _OWNED_COID).model_copy(
+        update={"updated_at_ms": _FIXED_MS + 60_000, "filled_at_ms": filled_at_ms}
+    )
+
+    payload = _order_to_event_payload(order)
+
+    assert payload is not None
+    assert payload["timestamp"] == "2023-11-14T22:13:25Z"
+    assert payload["price"] == 135.8
+    assert payload["qty"] == 10.0
+
+
+async def test_backoff_caps_before_exponentiation(monkeypatch: pytest.MonkeyPatch) -> None:
+    delays: list[float] = []
+
+    async def _record_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("app.broker.alpaca.trade_updates.asyncio.sleep", _record_sleep)
+
+    from app.broker.alpaca.trade_updates import _default_backoff
+
+    await _default_backoff(2_000)
+
+    assert delays == [30.0]
+
+
 # ── protocol helpers ─────────────────────────────────────────────────────────
 
 
-def test_stream_url_is_paper_wss_stream() -> None:
-    from app.broker.alpaca.config import AlpacaSettings
+async def test_socket_authorizes_before_listening(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[dict[str, Any]] = []
 
+    class _Socket:
+        async def send(self, message: str) -> None:
+            sent.append(json.loads(message))
+
+        async def recv(self) -> str:
+            return json.dumps(
+                {"stream": "authorization", "data": {"status": "authorized"}}
+            )
+
+        def __aiter__(self) -> AsyncIterator[str]:
+            async def _empty() -> AsyncIterator[str]:
+                if False:
+                    yield ""
+
+            return _empty()
+
+    class _Connection:
+        socket = _Socket()
+
+        async def __aenter__(self) -> _Socket:
+            return self.socket
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+    connection = _Connection()
+    monkeypatch.setitem(
+        sys.modules, "websockets", SimpleNamespace(connect=lambda _: connection)
+    )
+    source = alpaca_socket_frames(
+        AlpacaSettings(api_key_id="key", api_secret_key="secret", mode="paper")
+    )
+
+    authorization = await anext(source)
+
+    assert json.loads(authorization)["data"]["status"] == "authorized"
+    assert [message["action"] for message in sent] == ["authenticate", "listen"]
+    await source.aclose()
+
+
+def test_stream_url_is_paper_wss_stream() -> None:
     settings = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper")
     assert _stream_url(settings) == "wss://paper-api.alpaca.markets/stream"
