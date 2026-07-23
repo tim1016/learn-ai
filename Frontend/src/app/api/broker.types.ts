@@ -5510,8 +5510,11 @@ export interface components {
             renewed_at_ms?: number | null;
             /** Started At Ms */
             started_at_ms: number;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "acked" | "failed" | "uncertain";
             /** Valid Until Ms */
             valid_until_ms?: number | null;
         };
@@ -18050,10 +18053,17 @@ export interface components {
          * OrderLegResult
          * @description The per-leg outcome the router shapes into its response.
          *
-         *     ``acked`` carries the accepted ``order``; ``failed`` is a definitive
-         *     rejection or a lookup that proved the order absent; ``uncertain`` means the
-         *     broker could not confirm the result. ``order_ref`` is always present — an
-         *     operator can find the durable intent in the journal before retrying.
+         *     Keyed by ``status``:
+         *
+         *     - ``acked`` — the broker accepted the order; ``order`` is set.
+         *     - ``failed`` — the order definitively did not land; ``error`` is set.
+         *     - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order`` nor
+         *       ``error`` is authoritative yet; the intent is durably journaled as
+         *       ``submit_uncertain`` and a later replay / sweep will finish it. The operator
+         *       must not assume the order failed — it may still have landed.
+         *
+         *     ``order_ref`` is always present — an operator can find the intent in the
+         *     journal in every case, including uncertain.
          */
         OrderLegResult: {
             error?: components["schemas"]["OrderLegError"] | null;
@@ -18062,11 +18072,8 @@ export interface components {
             order?: components["schemas"]["BrokerOrder"] | null;
             /** Order Ref */
             order_ref: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "acked" | "failed" | "uncertain";
+            /** Status */
+            status: string;
         };
         /**
          * OrderSide

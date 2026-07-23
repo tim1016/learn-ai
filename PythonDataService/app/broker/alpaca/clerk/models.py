@@ -5,10 +5,8 @@ imported from or coupled to the IBKR clerk journal. Entry payloads carry
 broker-neutral contract models (``BrokerOrderLeg``, ``BrokerOrder``) so the
 ledger stays vendor-portable, and every temporal field is ``int64`` ms UTC.
 
-S1 records definitive outcomes plus ``submit_uncertain``: an unavailable
-broker response may have created an order, so the clerk probes it by its minted
-``client_order_id`` before ever reporting a terminal state. S3 adds the three
-cancel kinds. The broader lifecycle vocabulary (``lifecycle_update``,
+S1 needs only three entry kinds; S3 adds the three cancel kinds. The full
+lifecycle vocabulary (``submit_uncertain``, ``lifecycle_update``,
 ``reconciled``, …) lands across later slices. Add kinds as slices need them —
 never speculatively.
 """
@@ -18,17 +16,25 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 
 
 class ClerkEntryKind(StrEnum):
-    """Order-journal entry kinds (S1 submit + S3 cancel + S4 lifecycle)."""
+    """Order-journal entry kinds (S1 submit + S3 cancel + S4 lifecycle + S5 resolution)."""
 
     INTENT_RECORDED = "intent_recorded"
     SUBMIT_ACKED = "submit_acked"
     SUBMIT_FAILED = "submit_failed"
+    # S5 crash-safety: the submit's HTTP outcome was UNKNOWN — the response may
+    # have been lost (timeout / 5xx / network → ``BrokerUnavailable``), so the
+    # order MAY have landed. Journaled AFTER ``intent_recorded`` and resolved by
+    # querying Alpaca for the order by ``client_order_id``: found → a terminal
+    # ``submit_acked``; an immediate 404 receives a grace period, then a later
+    # recovery/sweep may record ``submit_failed``; a failed lookup keeps the
+    # intent here. Never fabricate a terminal outcome from one lost response.
+    # NEVER a fabricated terminal outcome.
     SUBMIT_UNCERTAIN = "submit_uncertain"
     # S3 cancel path — recorded BEFORE the broker call, acked/failed after.
     CANCEL_RECORDED = "cancel_recorded"
@@ -86,8 +92,8 @@ class OrderJournalEntry(BaseModel):
     # Present on submit_acked (and copied onto S4 order_event lines) : the
     # broker order the event pertains to, when known.
     order: BrokerOrder | None = None
-    # Present on failed/uncertain submit outcomes and cancel failures: the
-    # broker-facing reason.
+    # Present on submit_failed / cancel_failed only: why the broker rejected or
+    # was unreachable.
     error_message: str | None = None
     error_detail: str | None = None
     # ── S4 live-lifecycle fields (trade_updates) ─────────────────────────────
@@ -114,10 +120,17 @@ class OrderLegError(BaseModel):
 class OrderLegResult(BaseModel):
     """The per-leg outcome the router shapes into its response.
 
-    ``acked`` carries the accepted ``order``; ``failed`` is a definitive
-    rejection or a lookup that proved the order absent; ``uncertain`` means the
-    broker could not confirm the result. ``order_ref`` is always present — an
-    operator can find the durable intent in the journal before retrying.
+    Keyed by ``status``:
+
+    - ``acked`` — the broker accepted the order; ``order`` is set.
+    - ``failed`` — the order definitively did not land; ``error`` is set.
+    - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order``
+      nor ``error`` is authoritative yet; the intent is durably journaled as
+      ``submit_uncertain`` and a later replay / sweep will finish it. The
+      operator must not assume the order failed — it may still have landed.
+
+    ``order_ref`` is always present — an operator can find the intent in the
+    journal in every case, including uncertain.
     """
 
     model_config = ConfigDict(extra="forbid")

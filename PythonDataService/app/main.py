@@ -80,6 +80,28 @@ from app.utils.error_handlers import polygon_exception_handler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
+async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: object) -> bool:
+    """Run S5 recovery before enabling submits; preserve a safe disabled state.
+
+    Recovery failure is not an availability-only concern: unresolved intents may
+    still represent live broker exposure. Keep the clerk out of the process
+    registry until recovery completes, so the write endpoint cannot accept a
+    new order against that unknown state.
+    """
+    try:
+        await alpaca_clerk.recover()  # type: ignore[attr-defined]
+    except Exception as exc:
+        logger.warning(
+            "Alpaca clerk startup recovery failed; order submission remains disabled. "
+            "Detail: %s",
+            exc,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events.
@@ -138,25 +160,35 @@ async def lifespan(app: FastAPI):
     else:
         alpaca_broker = AlpacaBroker()
         alpaca_clerk = AlpacaClerk(read=alpaca_broker, trade=alpaca_broker)
-        set_alpaca_clerk(alpaca_clerk)
-        logger.info("Alpaca Clerk ready (order submission enabled).")
 
-        # Alpaca live-lifecycle consumer (phase 2, S4) — the owned
-        # trade_updates websocket. Started alongside the Clerk (Alpaca is a peer
-        # vendor, independent of the IBKR gateway lifecycle). It captures each
-        # frame verbatim, attributes it against the Clerk's namespaces, and
-        # journals ORDER_EVENT / UNEXPLAINED_ORDER. No keys → no consumer.
-        from app.broker.alpaca.trade_updates import (
-            TradeUpdatesConsumer,
-            set_trade_updates_consumer,
-        )
+        # Alpaca crash-safety recovery (phase 2, S5) — replay the order journal
+        # and resolve every intent left uncertain by a timeout or a restart
+        # (``intent_recorded`` / ``submit_uncertain`` with no terminal outcome)
+        # by asking Alpaca whether the order landed, BEFORE the clerk is
+        # installed for new submits. Best-effort: a broker that is unreachable at
+        # startup leaves the intents uncertain for a later replay/sweep, but must
+        # not abort boot (no clerk means no submit, which is money-safe). A fresh
+        # install with no journal resolves nothing and returns cleanly.
+        if await _recover_alpaca_clerk_or_fail_closed(alpaca_clerk):
+            set_alpaca_clerk(alpaca_clerk)
+            logger.info("Alpaca Clerk ready (order submission enabled).")
 
-        alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
-            clerk=alpaca_clerk, read=alpaca_broker
-        )
-        alpaca_trade_updates.start()
-        set_trade_updates_consumer(alpaca_trade_updates)
-        logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
+            # Alpaca live-lifecycle consumer (phase 2, S4) — the owned
+            # trade_updates websocket. Started alongside the Clerk (Alpaca is a peer
+            # vendor, independent of the IBKR gateway lifecycle). It captures each
+            # frame verbatim, attributes it against the Clerk's namespaces, and
+            # journals ORDER_EVENT / UNEXPLAINED_ORDER. No keys → no consumer.
+            from app.broker.alpaca.trade_updates import (
+                TradeUpdatesConsumer,
+                set_trade_updates_consumer,
+            )
+
+            alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
+                clerk=alpaca_clerk, read=alpaca_broker
+            )
+            alpaca_trade_updates.start()
+            set_trade_updates_consumer(alpaca_trade_updates)
+            logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 

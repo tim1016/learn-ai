@@ -8428,9 +8428,8 @@
             "$ref": "#/components/schemas/OrderSide"
           },
           "symbol": {
-            "maxLength": 7,
+            "maxLength": 32,
             "minLength": 1,
-            "pattern": "^[A-Z]{1,5}(?:[.-][A-Z])?$",
             "title": "Symbol",
             "type": "string"
           },
@@ -28541,7 +28540,7 @@
       },
       "OrderLegResult": {
         "additionalProperties": false,
-        "description": "The per-leg outcome the router shapes into its response.\n\n``acked`` carries the accepted ``order``; ``failed`` is a definitive\nrejection or a lookup that proved the order absent; ``uncertain`` means the\nbroker could not confirm the result. ``order_ref`` is always present \u2014 an\noperator can find the durable intent in the journal before retrying.",
+        "description": "The per-leg outcome the router shapes into its response.\n\nKeyed by ``status``:\n\n- ``acked`` \u2014 the broker accepted the order; ``order`` is set.\n- ``failed`` \u2014 the order definitively did not land; ``error`` is set.\n- ``uncertain`` \u2014 the submit's HTTP outcome was unknown. Neither ``order`` nor\n  ``error`` is authoritative yet; the intent is durably journaled as\n  ``submit_uncertain`` and a later replay / sweep will finish it. The operator\n  must not assume the order failed \u2014 it may still have landed.\n\n``order_ref`` is always present \u2014 an operator can find the intent in the\njournal in every case, including uncertain.",
         "properties": {
           "error": {
             "anyOf": [

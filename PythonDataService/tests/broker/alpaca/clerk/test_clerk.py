@@ -268,7 +268,7 @@ async def test_unavailable_submit_stays_uncertain_when_lookup_is_unavailable() -
     ]
 
 
-async def test_unavailable_submit_becomes_failed_only_when_lookup_proves_it_absent() -> None:
+async def test_unavailable_submit_keeps_initial_absent_lookup_uncertain() -> None:
     broker = _FakeBroker(
         error=BrokerUnavailable("Alpaca timed out.", broker="alpaca", detail="timeout"),
         lookup_absent=True,
@@ -277,12 +277,11 @@ async def test_unavailable_submit_becomes_failed_only_when_lookup_proves_it_abse
 
     result = await clerk.submit(_request())
 
-    assert result.results[0].status == "failed"
+    assert result.results[0].status == "uncertain"
     entries = clerk._journal.read_entries()  # type: ignore[union-attr]
     assert [entry.kind for entry in entries] == [
         ClerkEntryKind.INTENT_RECORDED,
         ClerkEntryKind.SUBMIT_UNCERTAIN,
-        ClerkEntryKind.SUBMIT_FAILED,
     ]
 
 

@@ -221,10 +221,23 @@ class AlpacaTradingClient:
     async def get_order_by_client_order_id(
         self, client_order_id: str
     ) -> dict[str, Any] | None:
-        """Look up a possibly-submitted order by its durable client id.
+        """GET ``/v2/orders:by_client_order_id`` for the order we minted (S5).
 
-        A 404 is definitive evidence that the order did not land, so it becomes
-        ``None``. Every other error keeps the submit outcome uncertain.
+        The SDK's ``get_order_by_client_id(client_id=...)`` hits
+        ``GET /orders:by_client_order_id?client_order_id=...`` over the same
+        capturing session. In ``raw_data`` mode it returns the parsed order dict
+        when the order exists, and raises an ``APIError`` (HTTP 404) when it is
+        definitively absent.
+
+        Returns the raw order payload on success (the adapter maps it), or
+        ``None`` when Alpaca reports the order absent (404 — it never landed).
+        A 404 is intercepted **before** ``_call``'s taxonomy would fold it into
+        ``BrokerUnavailable``, because for resolution "definitively absent" and
+        "unreachable" are opposite outcomes: absent → the submit failed, whereas
+        unreachable must stay uncertain. Every other failure (timeout, 5xx,
+        network, other 4xx) flows through ``_call`` unchanged — so a lookup
+        timeout surfaces as ``BrokerUnavailable`` and the resolution stays
+        uncertain.
         """
 
         def _get(client: Any) -> dict[str, Any] | None:
