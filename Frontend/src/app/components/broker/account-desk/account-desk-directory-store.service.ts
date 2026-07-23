@@ -15,16 +15,18 @@ interface RosterState {
   readonly response: AccountsRosterResponse | null;
   readonly loading: boolean;
   readonly errorMessage: string | null;
+  readonly lastGoodAtMs: number | null;
 }
 
 interface ServiceStatusState {
   readonly response: AccountServiceStatusResponse | null;
   readonly loading: boolean;
   readonly errorMessage: string | null;
+  readonly lastGoodAtMs: number | null;
 }
 
-const EMPTY_ROSTER: RosterState = { response: null, loading: false, errorMessage: null };
-const EMPTY_STATUS: ServiceStatusState = { response: null, loading: false, errorMessage: null };
+const EMPTY_ROSTER: RosterState = { response: null, loading: false, errorMessage: null, lastGoodAtMs: null };
+const EMPTY_STATUS: ServiceStatusState = { response: null, loading: false, errorMessage: null, lastGoodAtMs: null };
 
 /**
  * Route-scoped Account desk directory state. It validates only backend-owned
@@ -47,6 +49,7 @@ export class AccountDeskDirectoryStore {
   readonly rosterShowingStaleLastGood = computed(() =>
     this.rosterState().response !== null && this.rosterState().errorMessage !== null,
   );
+  readonly rosterLastGoodAtMs = computed(() => this.rosterState().lastGoodAtMs);
   readonly rosterEmpty = computed(() => this.rosterState().response?.rows.length === 0);
   readonly statusAccountId = this.statusAccountKey.asReadonly();
   readonly serviceStatus = computed(() => this.statusState().response);
@@ -56,6 +59,7 @@ export class AccountDeskDirectoryStore {
   readonly serviceStatusShowingStaleLastGood = computed(() =>
     this.statusState().response !== null && this.statusState().errorMessage !== null,
   );
+  readonly serviceStatusLastGoodAtMs = computed(() => this.statusState().lastGoodAtMs);
 
   constructor() {
     this.destroyRef.onDestroy(() => {
@@ -71,7 +75,7 @@ export class AccountDeskDirectoryStore {
       const response = await this.broker.accounts();
       if (generation !== this.rosterGeneration) return;
       if (!isAccountsRosterResponse(response)) throw new Error('Account roster response was malformed.');
-      this.rosterState.set({ response, loading: false, errorMessage: null });
+      this.rosterState.set({ response, loading: false, errorMessage: null, lastGoodAtMs: Date.now() });
     } catch (error) {
       if (generation === this.rosterGeneration) {
         this.rosterState.update((state) => ({
@@ -97,7 +101,7 @@ export class AccountDeskDirectoryStore {
       if (!isAccountServiceStatusResponse(response, accountId)) {
         throw new Error('Account service response did not attest this route.');
       }
-      this.statusState.set({ response, loading: false, errorMessage: null });
+      this.statusState.set({ response, loading: false, errorMessage: null, lastGoodAtMs: Date.now() });
     } catch (error) {
       if (this.isCurrentStatusRequest(accountId, generation)) {
         this.statusState.update((state) => ({

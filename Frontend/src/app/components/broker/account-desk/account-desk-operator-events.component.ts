@@ -3,6 +3,7 @@ import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import type { AccountEventKind, AccountEventRow } from '../../../api/account-events.types';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
+import { AccountDeskGuidanceComponent } from './account-desk-guidance.component';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
 
 const EVENT_KINDS: readonly AccountEventKind[] = [
@@ -13,7 +14,7 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
 @Component({
   selector: 'app-account-desk-operator-events',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [AccountDeskGuidanceComponent, ReceiptLabelPipe, TimestampDisplayComponent],
   templateUrl: './account-desk-operator-events.component.html',
   styleUrl: './account-desk-operator-events.component.scss',
 })

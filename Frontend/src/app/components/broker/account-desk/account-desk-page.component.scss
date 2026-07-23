@@ -12,4 +12,7 @@ dd { margin: 0; }
 .state-stale { margin-top: 1rem; color: #8a5a00; }
 .state-error { color: #a30000; }
 .primary-move { margin-top: .5rem; }
+.operator-attention-summary { color: var(--text-color-secondary, #556070); }
+.recovery-guidance { display: grid; gap: .5rem; }
+.recovery-guidance h2 { margin: 0; }
 .account-identity code { white-space: nowrap; }

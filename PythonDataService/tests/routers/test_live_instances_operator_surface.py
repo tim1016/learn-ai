@@ -762,15 +762,14 @@ async def test_live_instance_summary_carries_readiness_verdict(app_with_root, mo
 
 
 async def test_account_summary_endpoint_returns_composed_dto(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    """PRD #616 — ``GET /api/live-instances/account-summary`` returns
-    the composed FleetAccountSummary (account identity + contamination)."""
+    """The account-summary route returns a scoped composed DTO."""
 
     app, root = app_with_root
-    _write_ledger(root, "run-fff", "spy_ema_paper", 100)
+    _write_ledger(root, "run-fff", "spy_ema_paper", 100, account_id="DU1234567")
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/account-summary")
+        response = await client.get("/api/live-instances/account-summary?account_id=DU1234567")
 
     assert response.status_code == 200
     body = response.json()
@@ -781,11 +780,43 @@ async def test_account_summary_endpoint_returns_composed_dto(app_with_root, monk
         "contamination",
     }
     assert body["account_identity"] in {"CONSISTENT", "CONFLICTING", "UNKNOWN"}
+    assert body["account_id"] == "DU1234567"
     assert isinstance(body["account_identity_reason_codes"], list)
     # ``contamination`` is the existing FleetContamination shape.
     contam = body["contamination"]
     assert contam["verdict"] in {"clean", "contaminated", "unknown"}
     assert isinstance(contam["policy_blocks_starts"], bool)
+
+
+async def test_account_summary_endpoint_excludes_other_account_ledgers(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second account cannot make the requested account identity conflict."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-primary", "spy_ema_paper", 100, account_id="DU1234567")
+    _write_ledger(root, "run-other", "qqq_ema_paper", 101, account_id="DU7654321")
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/account-summary?account_id=DU1234567")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "DU1234567"
+    assert body["account_identity"] == "CONSISTENT"
+    assert "INSTANCE_ACCOUNT_MISMATCH" not in body["account_identity_reason_codes"]
+
+
+async def test_account_summary_endpoint_requires_an_account_scope(app_with_root) -> None:
+    """The endpoint must not silently fall back to cross-account evidence."""
+
+    app, _root = app_with_root
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/account-summary")
+
+    assert response.status_code == 422
 
 
 async def test_legacy_account_endpoint_still_returns_contamination_only(

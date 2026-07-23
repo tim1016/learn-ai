@@ -17,6 +17,7 @@ interface EventViewState {
   readonly nextBeforeSeq: number | null;
   readonly loading: boolean;
   readonly errorMessage: string | null;
+  readonly lastGoodAtMs: number | null;
 }
 
 const EMPTY_STATE: EventViewState = {
@@ -25,6 +26,7 @@ const EMPTY_STATE: EventViewState = {
   nextBeforeSeq: null,
   loading: false,
   errorMessage: null,
+  lastGoodAtMs: null,
 };
 
 /**
@@ -47,17 +49,19 @@ export class AccountDeskEventsStore {
   readonly traderRows = computed(() => this.traderState().rows);
   readonly traderLoading = computed(() => this.traderState().loading);
   readonly traderErrorMessage = computed(() => this.traderState().errorMessage);
-  readonly traderHasLastGood = computed(() => this.traderState().rows.length > 0);
+  readonly traderHasLastGood = computed(() => this.traderState().lastGoodAtMs !== null);
   readonly traderShowingStaleLastGood = computed(() =>
-    this.traderState().rows.length > 0 && this.traderState().errorMessage !== null,
+    this.traderState().lastGoodAtMs !== null && this.traderState().errorMessage !== null,
   );
+  readonly traderLastGoodAtMs = computed(() => this.traderState().lastGoodAtMs);
   readonly operationRows = computed(() => this.operationsState().rows);
   readonly operationsLoading = computed(() => this.operationsState().loading);
   readonly operationsErrorMessage = computed(() => this.operationsState().errorMessage);
-  readonly operationsHasLastGood = computed(() => this.operationsState().rows.length > 0);
+  readonly operationsHasLastGood = computed(() => this.operationsState().lastGoodAtMs !== null);
   readonly operationsShowingStaleLastGood = computed(() =>
-    this.operationsState().rows.length > 0 && this.operationsState().errorMessage !== null,
+    this.operationsState().lastGoodAtMs !== null && this.operationsState().errorMessage !== null,
   );
+  readonly operationsLastGoodAtMs = computed(() => this.operationsState().lastGoodAtMs);
   readonly nextBeforeSeq = computed(() => this.operationsState().nextBeforeSeq);
   readonly operationKinds = this.operationKindsState.asReadonly();
 
@@ -129,7 +133,7 @@ export class AccountDeskEventsStore {
       });
       if (!this.isCurrentRequest(accountId, generation)) return;
       const page = validatePage(response, accountId, 'trader_today');
-      this.traderState.update((state) => applyPage(state, page, cursor));
+      this.traderState.update((state) => applyPage(state, page, cursor, Date.now()));
     } catch (error) {
       if (this.isCurrentRequest(accountId, generation)) {
         this.traderState.update((state) => ({ ...state, errorMessage: serverMessage(error) }));
@@ -158,7 +162,7 @@ export class AccountDeskEventsStore {
       });
       if (!this.isCurrentOperationsRequest(accountId, generation, filterGeneration)) return;
       const page = validatePage(response, accountId, 'operations');
-      this.operationsState.update((state) => applyPage(state, page, cursor));
+      this.operationsState.update((state) => applyPage(state, page, cursor, Date.now()));
     } catch (error) {
       if (this.isCurrentOperationsRequest(accountId, generation, filterGeneration)) {
         this.operationsState.update((state) => ({ ...state, errorMessage: serverMessage(error) }));
@@ -188,6 +192,7 @@ function applyPage(
   state: EventViewState,
   page: AccountEventsResponse,
   cursor: Pick<AccountEventsRequest, 'afterSeq' | 'beforeSeq'>,
+  lastGoodAtMs: number,
 ): EventViewState {
   return {
     rows: mergeRows(state.rows, page.rows),
@@ -195,6 +200,7 @@ function applyPage(
     nextBeforeSeq: cursor.beforeSeq === undefined ? state.nextBeforeSeq ?? page.next_before_seq : page.next_before_seq,
     loading: state.loading,
     errorMessage: null,
+    lastGoodAtMs,
   };
 }
 

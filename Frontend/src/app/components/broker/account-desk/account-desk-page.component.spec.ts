@@ -14,6 +14,8 @@ import { makeAccountSummary, makeAccountTruth, makePositionsSnapshot } from './a
 import { AccountDeskHoldingsStore } from './account-desk-holdings-store.service';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
+import { AccountDeskFleetStore } from './account-desk-fleet-store.service';
+import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 import { AccountDeskPageComponent } from './account-desk-page.component';
 
@@ -73,6 +75,26 @@ function makeDirectoryStore(rows: readonly AccountRosterRow[] = []) {
   };
 }
 
+function makeGuidanceStore() {
+  return {
+    operatorAttentionCount: signal(0),
+    blockersFor: vi.fn().mockReturnValue([]),
+  };
+}
+
+function makeFleetStore() {
+  return {
+    load: vi.fn().mockResolvedValue(undefined),
+    retry: vi.fn(),
+    summary: signal(null),
+    loading: signal(false),
+    errorMessage: signal<string | null>(null),
+    hasLastGood: signal(false),
+    showingStaleLastGood: signal(false),
+    lastGoodAtMs: signal<number | null>(null),
+  };
+}
+
 function triage(state: AccountTriageVerdictState = 'CLEAN'): AccountTriageResponse {
   const current = makeCleanAccountTriage({
     generatedAtMs: 1_780_000_002_000,
@@ -100,6 +122,8 @@ async function setup(options: { response?: AccountTriageResponse; route$?: Behav
   const route$ = options.route$ ?? new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
   const router = { navigate: vi.fn().mockResolvedValue(true) };
   const events = makeEventsStore();
+  const fleet = makeFleetStore();
+  const guidance = makeGuidanceStore();
   const directory = makeDirectoryStore([
     accountRow('DU1234567'),
     accountRow('DU7654321'),
@@ -110,13 +134,15 @@ async function setup(options: { response?: AccountTriageResponse; route$?: Behav
       AccountDeskSurfaceStore,
       { provide: AccountDeskEventsStore, useValue: events },
       { provide: AccountDeskDirectoryStore, useValue: directory },
+      { provide: AccountDeskFleetStore, useValue: fleet },
+      { provide: AccountDeskGuidanceStore, useValue: guidance },
       { provide: BrokerService, useValue: broker },
       { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
       { provide: Router, useValue: router },
     ],
   });
   await screen.findByText((options.response ?? triage()).verdict.headline);
-  return { ...view, broker, directory, events, route$, router };
+  return { ...view, broker, directory, events, fleet, guidance, route$, router };
 }
 
 describe('AccountDeskPageComponent', () => {
@@ -185,12 +211,16 @@ describe('AccountDeskPageComponent', () => {
     const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
     const events = makeEventsStore();
     const directory = makeDirectoryStore();
+    const fleet = makeFleetStore();
+    const guidance = makeGuidanceStore();
     await render(AccountDeskPageComponent, {
     providers: [
       AccountDeskHoldingsStore,
       AccountDeskSurfaceStore,
         { provide: AccountDeskEventsStore, useValue: events },
         { provide: AccountDeskDirectoryStore, useValue: directory },
+        { provide: AccountDeskFleetStore, useValue: fleet },
+        { provide: AccountDeskGuidanceStore, useValue: guidance },
         { provide: BrokerService, useValue: broker },
         { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
         { provide: Router, useValue: { navigate: vi.fn().mockResolvedValue(true) } },

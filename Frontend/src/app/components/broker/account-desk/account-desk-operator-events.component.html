@@ -24,12 +24,13 @@
               }
             </ul>
           }
+          <app-account-desk-guidance anchor="event" [subjectKey]="row.event_id" lens="operator" ariaLabel="Event guidance" />
         </li>
       }
     </ol>
   }
   @if (store.operationsShowingStaleLastGood()) {
-    <p class="state state-stale">Showing the last available event history. Refresh is unavailable.</p>
+    <p class="state state-stale">Showing the last available event history from <app-timestamp-display [value]="store.operationsLastGoodAtMs()" mode="local" />. Refresh is unavailable.</p>
   }
   @if (store.nextBeforeSeq() !== null) {
     <button type="button" [disabled]="store.operationsLoading()" (click)="loadOlder()">Load older</button>

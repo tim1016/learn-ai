@@ -23,9 +23,13 @@ export class OperatorBlockerListComponent {
   readonly moveSelected = output<OperatorBlockerMoveEvent>();
 
   moves(blocker: OperatorBlocker): OperatorMove[] {
-    return blocker.primary_move
-      ? [blocker.primary_move, ...blocker.secondary_moves]
-      : blocker.secondary_moves;
+    if (blocker.disposition === 'wait') return [];
+    if (blocker.disposition === 'terminal') {
+      return blocker.primary_move
+        ? [blocker.primary_move, ...blocker.secondary_moves]
+        : blocker.secondary_moves;
+    }
+    return blocker.primary_move ? [blocker.primary_move] : [];
   }
 
   trackBlocker(blocker: OperatorBlocker): string {

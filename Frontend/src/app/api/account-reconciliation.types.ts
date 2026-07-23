@@ -1,5 +1,6 @@
 import type { AccountTruthResponse } from './broker-models';
 import type { GateResult } from './live-instances.types';
+import type { OperatorBlocker } from './operator-blocker.types';
 
 export type AccountReconciliationState = 'CLEAN' | 'NOT_PROVEN';
 export type AccountTriageVerdictState = 'FROZEN' | 'NOT_PROVEN' | 'NEEDS_ATTENTION' | 'CLEAN';
@@ -159,6 +160,7 @@ export interface AccountTriageResponse {
   freeze_banner: AccountFreezeBanner | null;
   clear_freeze_actionable: boolean;
   affected_bots: AccountTriageBotRef[];
+  operator_blockers: OperatorBlocker[];
 }
 
 export interface JournalCurePreview {

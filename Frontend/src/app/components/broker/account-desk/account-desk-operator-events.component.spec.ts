@@ -1,8 +1,10 @@
 import { signal } from '@angular/core';
+import { Router } from '@angular/router';
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
+import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
 import { AccountDeskOperatorEventsComponent } from './account-desk-operator-events.component';
 
 function makeStore(overrides: Record<string, unknown> = {}) {
@@ -34,7 +36,11 @@ describe('AccountDeskOperatorEventsComponent', () => {
   it('renders backend operator detail, local instants, opaque evidence, filters, and load older', async () => {
     const store = makeStore();
     await render(AccountDeskOperatorEventsComponent, {
-      providers: [{ provide: AccountDeskEventsStore, useValue: store }],
+      providers: [
+        { provide: AccountDeskEventsStore, useValue: store },
+        { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
     });
 
     expect(await screen.findByText('Account event timeline')).toBeTruthy();
@@ -55,7 +61,11 @@ describe('AccountDeskOperatorEventsComponent', () => {
       nextBeforeSeq: signal(null),
     });
     await render(AccountDeskOperatorEventsComponent, {
-      providers: [{ provide: AccountDeskEventsStore, useValue: store }],
+      providers: [
+        { provide: AccountDeskEventsStore, useValue: store },
+        { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
     });
 
     expect((await screen.findByRole('alert')).textContent).toContain('Account event history is unavailable.');

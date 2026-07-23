@@ -524,6 +524,7 @@ async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
         "operator_attention_count": 0,
     }
     assert body["conditions"] == []
+    assert body["operator_blockers"] == []
     assert body["reconciliation_automation_policy"]["enabled"] is False
     assert body["account_reconciliation_valid_until_ms"] == receipt.expires_at_ms
 
