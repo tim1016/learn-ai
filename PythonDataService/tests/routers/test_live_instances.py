@@ -480,6 +480,54 @@ def test_resolve_incident_headline_uses_evidence_run_dir_guard(tmp_path: Path) -
     assert notice.message == "Latest evidence incident wins."
 
 
+def test_resume_guard_skips_never_started_ledger_only_child(tmp_path: Path) -> None:
+    """A failed ``Deploy & run`` leaves a newer ledger-only child (run_ledger
+    only, no run_status). Sorted newest-first it must NOT shadow a valid stopped
+    run's resume evidence. Regression for the 2026-07-23 STOPPED-restart
+    evidence-shadowing bug (a ledger-only child forced
+    BROKER_SAFETY_UNKNOWN / SUBMISSION_CAPABILITY_UNKNOWN and refused Resume)."""
+    root = tmp_path / "live_runs"
+    # Valid stopped run: it actually started, so it has run_status.json.
+    _write_ledger(root, "run-valid", "sid", 100)
+    (root / "run-valid" / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": "run-valid",
+                "host_pid": 1,
+                "submit_mode_at_start": "live_paper",
+                "readonly_at_start": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Newer ledger-only child from a failed Deploy & run (no run_status.json).
+    _write_ledger(root, "run-child", "sid", 200)
+    # Runs are presented newest-first (the child leads).
+    runs = [
+        {"run_dir": str(root / "run-child")},
+        {"run_dir": str(root / "run-valid")},
+    ]
+
+    # require_started skips the never-started child and reads the valid run.
+    assert (
+        live_instances._resolve_evidence_run_dir(root, None, runs, require_started=True)
+        == root / "run-valid"
+    )
+    # The default (provenance / start-defaults) still returns the newest run.
+    assert (
+        live_instances._resolve_evidence_run_dir(root, None, runs)
+        == root / "run-child"
+    )
+    # Guard the production call site itself: _resolve_resume_guard_state_for must
+    # pass require_started=True, so its guard state derives from the started run
+    # (SATISFIED). A revert of that call site would read the ledger-only child and
+    # regress to SUBMISSION_CAPABILITY_UNKNOWN — this assertion catches it.
+    guard = live_instances._resolve_resume_guard_state_for(root, None, runs)
+    assert guard.submission_capability.state == "SATISFIED"
+    assert "SUBMISSION_CAPABILITY_UNKNOWN" not in guard.reason_codes
+
+
 def test_resolve_incident_headline_includes_order_and_submit_incidents(tmp_path: Path) -> None:
     root = tmp_path / "live_runs"
     _write_ledger(root, "run-latest", "spy_ema_paper", 100)
