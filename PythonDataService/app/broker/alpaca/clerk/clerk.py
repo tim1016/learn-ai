@@ -519,7 +519,7 @@ class AlpacaClerk:
             entries,
             broker_id=self.broker_id,
             account_id=account_id,
-            outstanding_intents=len(self._unresolved_intents(entries)),
+            outstanding_intents=len(derive.unresolved_intents(entries)),
             observed_at_ms=self._clock(),
         )
 
@@ -691,7 +691,7 @@ class AlpacaClerk:
             async with self._intake_lock:
                 account_id, journal = await self._ensure_journal()
                 entries = journal.read_entries()
-            unresolved = self._unresolved_intents(entries)
+            unresolved = derive.unresolved_intents(entries)
             if not unresolved:
                 logger.info(
                     "alpaca clerk recovery: no unresolved intents",
@@ -706,8 +706,8 @@ class AlpacaClerk:
                     "count": len(unresolved),
                 },
             )
-            terminal_outcomes = self._terminal_map(entries)
-            uncertain_recorded_at = self._uncertain_timestamp_map(entries)
+            terminal_outcomes = derive.terminal_map(entries)
+            uncertain_recorded_at = derive.uncertain_timestamp_map(entries)
             for intent_entry in unresolved:
                 identity = _LegIdentity.from_entry(intent_entry, clock=self._clock)
                 await self._resolve_intent(
@@ -753,7 +753,7 @@ class AlpacaClerk:
         if terminal_outcomes is not None:
             existing = terminal_outcomes.get(identity.order_ref)
         else:
-            existing = self._terminal_outcome(identity.order_ref, journal)
+            existing = derive.terminal_outcome(journal.read_entries(), identity.order_ref)
         if existing is not None:
             return existing
 
@@ -870,113 +870,6 @@ class AlpacaClerk:
         if terminal_outcomes is not None:
             terminal_outcomes[identity.order_ref] = result
         return result
-
-    @staticmethod
-    def _reconstruct_terminal(entry: OrderJournalEntry) -> OrderLegResult:
-        """Rebuild the ``OrderLegResult`` a terminal submit-side entry represents."""
-        if entry.kind is ClerkEntryKind.SUBMIT_ACKED:
-            return OrderLegResult(
-                status="acked",
-                order_ref=entry.order_ref,
-                intent_id=entry.intent_id,
-                order=entry.order,
-            )
-        return OrderLegResult(
-            status="failed",
-            order_ref=entry.order_ref,
-            intent_id=entry.intent_id,
-            error=OrderLegError(
-                message=entry.error_message or "The order did not reach the broker.",
-                why=entry.error_detail,
-            ),
-        )
-
-    @classmethod
-    def _terminal_outcome(
-        cls, order_ref: str, journal: OrderJournal
-    ) -> OrderLegResult | None:
-        """The existing terminal outcome for ``order_ref``, or ``None``.
-
-        Scans the ledger for the most recent ``submit_acked`` / ``submit_failed``
-        line whose ``order_ref`` matches (last-write-wins, consistent with the
-        rest of the Clerk). Returns the reconstructed result so resolution is
-        idempotent — a second resolve of an already-finished intent re-derives
-        the same outcome without a second journal write. Used by the ``submit``
-        path (one lookup); ``recover`` uses :meth:`_terminal_map` to avoid a
-        per-intent re-read.
-        """
-        terminal: OrderJournalEntry | None = None
-        for entry in journal.read_entries():
-            if (
-                entry.kind
-                in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED)
-                and entry.order_ref == order_ref
-            ):
-                terminal = entry
-        return None if terminal is None else cls._reconstruct_terminal(terminal)
-
-    @classmethod
-    def _terminal_map(
-        cls, entries: list[OrderJournalEntry]
-    ) -> dict[str, OrderLegResult]:
-        """Order-ref → existing terminal outcome, from a single pre-read scan.
-
-        Last-write-wins per ``order_ref``. Threaded into :meth:`_resolve_intent`
-        by ``recover`` so idempotency costs no per-intent disk read.
-        """
-        latest: dict[str, OrderJournalEntry] = {}
-        for entry in entries:
-            if (
-                entry.order_ref
-                and entry.kind
-                in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED)
-            ):
-                latest[entry.order_ref] = entry
-        return {ref: cls._reconstruct_terminal(e) for ref, e in latest.items()}
-
-    @staticmethod
-    def _uncertain_timestamp_map(entries: list[OrderJournalEntry]) -> dict[str, int]:
-        """Most recent response-lost-submit timestamp per durable order ref."""
-        return {
-            entry.order_ref: entry.recorded_at_ms
-            for entry in entries
-            if entry.order_ref and entry.kind is ClerkEntryKind.SUBMIT_UNCERTAIN
-        }
-
-    @staticmethod
-    def _unresolved_intents(
-        entries: list[OrderJournalEntry],
-    ) -> list[OrderJournalEntry]:
-        """Every intent whose latest submit-side state is not terminal.
-
-        Groups submit-side lines by ``order_ref``; an intent is unresolved when
-        it reached ``intent_recorded`` or ``submit_uncertain`` but never a
-        terminal ``submit_acked`` / ``submit_failed``. Returns the owning
-        ``intent_recorded`` entry (the durable identity source) for each, in
-        first-seen order. Cancel and lifecycle lines are ignored — they are not
-        submit-side transitions. Takes a pre-read entries list (``recover`` reads
-        the ledger once and shares it with :meth:`_terminal_map`).
-        """
-        origin: dict[str, OrderJournalEntry] = {}
-        terminal_refs: set[str] = set()
-        order: list[str] = []
-        for entry in entries:
-            if not entry.order_ref:
-                continue
-            if entry.kind is ClerkEntryKind.INTENT_RECORDED:
-                if entry.order_ref not in origin:
-                    origin[entry.order_ref] = entry
-                    order.append(entry.order_ref)
-            elif entry.kind in (
-                ClerkEntryKind.SUBMIT_ACKED,
-                ClerkEntryKind.SUBMIT_FAILED,
-            ):
-                terminal_refs.add(entry.order_ref)
-        return [
-            origin[ref]
-            for ref in order
-            if ref not in terminal_refs and origin[ref].leg is not None
-        ]
 
     # ── S6 reconciliation sweep ──────────────────────────────────────────────
 

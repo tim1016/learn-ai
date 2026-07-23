@@ -16,6 +16,8 @@ from app.broker.alpaca.clerk.models import (
     ClerkStatus,
     HoldState,
     OrderJournalEntry,
+    OrderLegError,
+    OrderLegResult,
     ReconciliationSummary,
 )
 from app.broker.contract.models import BrokerOrder, BrokerPosition
@@ -110,6 +112,82 @@ def unexplained_order_ids(entries: list[OrderJournalEntry]) -> set[str]:
         for entry in entries
         if entry.kind is ClerkEntryKind.UNEXPLAINED_ORDER and entry.broker_order_id
     }
+
+
+def reconstruct_terminal(entry: OrderJournalEntry) -> OrderLegResult:
+    """Rebuild the result represented by one terminal submit-side ledger line."""
+    if entry.kind is ClerkEntryKind.SUBMIT_ACKED:
+        return OrderLegResult(
+            status="acked",
+            order_ref=entry.order_ref,
+            intent_id=entry.intent_id,
+            order=entry.order,
+        )
+    return OrderLegResult(
+        status="failed",
+        order_ref=entry.order_ref,
+        intent_id=entry.intent_id,
+        error=OrderLegError(
+            message=entry.error_message or "The order did not reach the broker.",
+            why=entry.error_detail,
+        ),
+    )
+
+
+def terminal_outcome(
+    entries: list[OrderJournalEntry], order_ref: str
+) -> OrderLegResult | None:
+    """Last terminal result for an order ref, if any (journal last-write-wins)."""
+    terminal: OrderJournalEntry | None = None
+    for entry in entries:
+        if (
+            entry.kind in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED)
+            and entry.order_ref == order_ref
+        ):
+            terminal = entry
+    return None if terminal is None else reconstruct_terminal(terminal)
+
+
+def terminal_map(entries: list[OrderJournalEntry]) -> dict[str, OrderLegResult]:
+    """Order ref → terminal result from one ledger scan (last-write-wins)."""
+    latest: dict[str, OrderJournalEntry] = {}
+    for entry in entries:
+        if (
+            entry.order_ref
+            and entry.kind in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED)
+        ):
+            latest[entry.order_ref] = entry
+    return {order_ref: reconstruct_terminal(entry) for order_ref, entry in latest.items()}
+
+
+def uncertain_timestamp_map(entries: list[OrderJournalEntry]) -> dict[str, int]:
+    """Most recent response-lost-submit timestamp per durable order ref."""
+    return {
+        entry.order_ref: entry.recorded_at_ms
+        for entry in entries
+        if entry.order_ref and entry.kind is ClerkEntryKind.SUBMIT_UNCERTAIN
+    }
+
+
+def unresolved_intents(entries: list[OrderJournalEntry]) -> list[OrderJournalEntry]:
+    """Owning intent lines whose latest submit-side state is not terminal."""
+    origin: dict[str, OrderJournalEntry] = {}
+    terminal_refs: set[str] = set()
+    order: list[str] = []
+    for entry in entries:
+        if not entry.order_ref:
+            continue
+        if entry.kind is ClerkEntryKind.INTENT_RECORDED:
+            if entry.order_ref not in origin:
+                origin[entry.order_ref] = entry
+                order.append(entry.order_ref)
+        elif entry.kind in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED):
+            terminal_refs.add(entry.order_ref)
+    return [
+        origin[order_ref]
+        for order_ref in order
+        if order_ref not in terminal_refs and origin[order_ref].leg is not None
+    ]
 
 
 def has_missing_intent(
