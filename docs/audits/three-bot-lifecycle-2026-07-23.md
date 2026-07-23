@@ -115,3 +115,21 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
 - **15-minute concurrent hold started 09:14:40 CDT** → stop/restart sequence at
   ~09:30. During the hold: retire the crashed `spy-canary-0723`, verify submission
   posture, and watch for fills + the nvda reconcile flag.
+
+### 09:16 CDT — hold check 1: all 3 healthy; cockpit "resting" was a stale read
+
+- **Cockpit vs. runtime discrepancy:** Opening `spy-0723`'s cockpit briefly showed
+  "This bot is resting / host runner unreachable / HOST_SERVICE_OFFLINE". Verified
+  against ground truth: host daemon (PID 31136, :8765) is up and responding;
+  account_clerk (gen 60) running; and **all three `run start` child processes are
+  alive and processing real-time bars** (`[BAR] 10:16:00-04:00 consolidator_emitted=1`
+  at the :15 boundary — the 15-min consolidator is working). So the "resting" read
+  was a transient per-bot **proof-plane** blip at page load, not a runtime failure.
+  The roster refresh then showed all three **On duty, Errors 0**, "all hard gates
+  pass" (nvda-0723's transient degraded-reconcile flag cleared).
+- **Submission posture confirmed:** run artifacts show `submit_mode_at_start:
+  "live_paper"` on all three — genuine submit-to-paper (real paper fills capable),
+  not observe-only. Positions Flat; EMA crossover has not signaled yet.
+- **Finding (UI):** the per-bot cockpit proof read can transiently show
+  offline/resting while the runtime is healthy — worth hardening so operators don't
+  mistake a proof-plane blip for a dead bot.
