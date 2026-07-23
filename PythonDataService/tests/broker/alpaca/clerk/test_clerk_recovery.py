@@ -243,6 +243,28 @@ async def test_uncertain_submit_and_uncertain_lookup_stays_uncertain() -> None:
     ]
 
 
+async def test_uncertain_submit_stays_uncertain_when_lookup_returns_mismatched_order() -> None:
+    # Boundary validation: the by-client-id lookup returns an order whose
+    # client_order_id is NOT the one we queried (a vendor integrity violation).
+    # The clerk must NOT fabricate a terminal from corrupt data — it stays at
+    # submit_uncertain for a later replay to re-resolve.
+    broker = _FakeBroker(
+        submit_error=BrokerUnavailable(
+            "Alpaca timed out.", broker="alpaca", detail="timeout"
+        ),
+        lookup_result=_accepted_order("manual/inkant/v1:someone-elses-orderxx"),
+    )
+    clerk = _clerk(broker)
+
+    result = await clerk.submit(_request())
+
+    assert result.results[0].status == "uncertain"
+    assert _kinds(clerk) == [
+        ClerkEntryKind.INTENT_RECORDED,
+        ClerkEntryKind.SUBMIT_UNCERTAIN,
+    ]
+
+
 async def test_later_resolve_finishes_a_stranded_uncertain_intent() -> None:
     # After a submit left uncertain (lookup unreachable), a later recover() with
     # the lookup now returning the order finishes it to submit_acked.

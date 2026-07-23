@@ -201,4 +201,35 @@ describe('AlpacaOrderEntryComponent', () => {
     const results = await screen.findByLabelText('Submission results');
     expect(within(results).getByText(/insufficient buying power/)).toBeTruthy();
   });
+
+  it('renders an uncertain result as a warning, not a failure', async () => {
+    // An uncertain submit MAY have landed at the broker. It must not render as a
+    // red failure — that would invite a double-submit of a live order.
+    const uncertain: OrderSubmitResult = {
+      broker: 'alpaca',
+      account_id: 'PA1',
+      results: [
+        {
+          status: 'uncertain',
+          order_ref: 'manual/desk/v1:unc',
+          intent_id: 'unc',
+          order: null,
+          error: { message: 'The order outcome is not yet known.', why: 'timeout' },
+        },
+      ],
+    };
+    const submitOrder = vi.fn().mockResolvedValue(uncertain);
+    await renderPanel(submitOrder);
+
+    await fillFirstLeg('spy', '2');
+    fireEvent.click(screen.getByRole('button', { name: /Preview order/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirm & submit/i }));
+
+    const results = await screen.findByLabelText('Submission results');
+    // Status reads "Uncertain" (not "Failed").
+    expect(within(results).getByText('Uncertain')).toBeTruthy();
+    // The detail message is not styled as an error.
+    const message = within(results).getByText(/outcome is not yet known/);
+    expect(message.classList.contains('text-red-500')).toBe(false);
+  });
 });

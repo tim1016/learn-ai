@@ -501,7 +501,13 @@ class AlpacaClerk:
         """
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
-            unresolved = self._unresolved_intents(journal)
+            # Read the ledger ONCE and scan the in-memory list for both the
+            # unresolved intents and the existing terminal outcomes; the terminal
+            # map is threaded into resolution so it never re-reads the file
+            # per-intent (an O(N^2) disk pattern under exactly the backlog
+            # recovery exists for).
+            entries = journal.read_entries()
+            unresolved = self._unresolved_intents(entries)
             if not unresolved:
                 logger.info(
                     "alpaca clerk recovery: no unresolved intents",
@@ -516,12 +522,19 @@ class AlpacaClerk:
                     "count": len(unresolved),
                 },
             )
+            terminal_outcomes = self._terminal_map(entries)
             for intent_entry in unresolved:
                 identity = _LegIdentity.from_entry(intent_entry, clock=self._clock)
-                await self._resolve_intent(identity, journal)
+                await self._resolve_intent(
+                    identity, journal, terminal_outcomes=terminal_outcomes
+                )
 
     async def _resolve_intent(
-        self, identity: _LegIdentity, journal: OrderJournal
+        self,
+        identity: _LegIdentity,
+        journal: OrderJournal,
+        *,
+        terminal_outcomes: dict[str, OrderLegResult] | None = None,
     ) -> OrderLegResult:
         """Resolve one intent by ``client_order_id``; idempotent, last-write-wins.
 
@@ -530,6 +543,9 @@ class AlpacaClerk:
         ``submit_failed`` already exists for this ``order_ref``, this is a NO-OP —
         it re-derives and returns the existing outcome without a second write, so
         running it twice never double-writes a terminal entry or double-counts.
+        ``recover`` passes a pre-scanned ``terminal_outcomes`` map so this check
+        costs no disk read; the ``submit`` path passes ``None`` and scans the
+        (single-account) ledger once.
 
         Otherwise it asks the vendor whether the order landed:
 
@@ -538,7 +554,10 @@ class AlpacaClerk:
         - lookup ``BrokerUnavailable`` → leave ``submit_uncertain``, no terminal
           write, return an ``uncertain`` result. Never fabricate a terminal.
         """
-        existing = self._terminal_outcome(identity.order_ref, journal)
+        if terminal_outcomes is not None:
+            existing = terminal_outcomes.get(identity.order_ref)
+        else:
+            existing = self._terminal_outcome(identity.order_ref, journal)
         if existing is not None:
             return existing
 
@@ -564,6 +583,30 @@ class AlpacaClerk:
                 ),
             )
 
+        if order is not None and order.client_order_id != identity.order_ref:
+            # Boundary validation: the by-client-id lookup must return the order
+            # we queried. A mismatch is an integrity violation, not a definitive
+            # outcome — never fabricate a terminal on it; leave uncertain for a
+            # later replay to re-resolve.
+            logger.error(
+                "alpaca clerk resolution returned a mismatched order; leaving uncertain",
+                extra={
+                    "action": "resolve_mismatch",
+                    "account_id": identity.account_id,
+                    "order_ref": identity.order_ref,
+                    "returned_client_order_id": order.client_order_id,
+                },
+            )
+            return OrderLegResult(
+                status="uncertain",
+                order_ref=identity.order_ref,
+                intent_id=identity.intent_id,
+                error=OrderLegError(
+                    message="The order's outcome is not yet known.",
+                    why="The broker returned an order for a different client_order_id.",
+                ),
+            )
+
         if order is None:
             failure = OrderLegError(
                 message="The order did not reach the broker.",
@@ -578,12 +621,15 @@ class AlpacaClerk:
                     "order_ref": identity.order_ref,
                 },
             )
-            return OrderLegResult(
+            result = OrderLegResult(
                 status="failed",
                 order_ref=identity.order_ref,
                 intent_id=identity.intent_id,
                 error=failure,
             )
+            if terminal_outcomes is not None:
+                terminal_outcomes[identity.order_ref] = result
+            return result
 
         journal.append(identity.entry(ClerkEntryKind.SUBMIT_ACKED, order=order))
         logger.info(
@@ -595,16 +641,39 @@ class AlpacaClerk:
                 "broker_order_id": order.order_id,
             },
         )
-        return OrderLegResult(
+        result = OrderLegResult(
             status="acked",
             order_ref=identity.order_ref,
             intent_id=identity.intent_id,
             order=order,
         )
+        if terminal_outcomes is not None:
+            terminal_outcomes[identity.order_ref] = result
+        return result
 
     @staticmethod
+    def _reconstruct_terminal(entry: OrderJournalEntry) -> OrderLegResult:
+        """Rebuild the ``OrderLegResult`` a terminal submit-side entry represents."""
+        if entry.kind is ClerkEntryKind.SUBMIT_ACKED:
+            return OrderLegResult(
+                status="acked",
+                order_ref=entry.order_ref,
+                intent_id=entry.intent_id,
+                order=entry.order,
+            )
+        return OrderLegResult(
+            status="failed",
+            order_ref=entry.order_ref,
+            intent_id=entry.intent_id,
+            error=OrderLegError(
+                message=entry.error_message or "The order did not reach the broker.",
+                why=entry.error_detail,
+            ),
+        )
+
+    @classmethod
     def _terminal_outcome(
-        order_ref: str, journal: OrderJournal
+        cls, order_ref: str, journal: OrderJournal
     ) -> OrderLegResult | None:
         """The existing terminal outcome for ``order_ref``, or ``None``.
 
@@ -612,7 +681,9 @@ class AlpacaClerk:
         line whose ``order_ref`` matches (last-write-wins, consistent with the
         rest of the Clerk). Returns the reconstructed result so resolution is
         idempotent — a second resolve of an already-finished intent re-derives
-        the same outcome without a second journal write.
+        the same outcome without a second journal write. Used by the ``submit``
+        path (one lookup); ``recover`` uses :meth:`_terminal_map` to avoid a
+        per-intent re-read.
         """
         terminal: OrderJournalEntry | None = None
         for entry in journal.read_entries():
@@ -622,27 +693,31 @@ class AlpacaClerk:
                 and entry.order_ref == order_ref
             ):
                 terminal = entry
-        if terminal is None:
-            return None
-        if terminal.kind is ClerkEntryKind.SUBMIT_ACKED:
-            return OrderLegResult(
-                status="acked",
-                order_ref=terminal.order_ref,
-                intent_id=terminal.intent_id,
-                order=terminal.order,
-            )
-        return OrderLegResult(
-            status="failed",
-            order_ref=terminal.order_ref,
-            intent_id=terminal.intent_id,
-            error=OrderLegError(
-                message=terminal.error_message or "The order did not reach the broker.",
-                why=terminal.error_detail,
-            ),
-        )
+        return None if terminal is None else cls._reconstruct_terminal(terminal)
+
+    @classmethod
+    def _terminal_map(
+        cls, entries: list[OrderJournalEntry]
+    ) -> dict[str, OrderLegResult]:
+        """Order-ref → existing terminal outcome, from a single pre-read scan.
+
+        Last-write-wins per ``order_ref``. Threaded into :meth:`_resolve_intent`
+        by ``recover`` so idempotency costs no per-intent disk read.
+        """
+        latest: dict[str, OrderJournalEntry] = {}
+        for entry in entries:
+            if (
+                entry.order_ref
+                and entry.kind
+                in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.SUBMIT_FAILED)
+            ):
+                latest[entry.order_ref] = entry
+        return {ref: cls._reconstruct_terminal(e) for ref, e in latest.items()}
 
     @staticmethod
-    def _unresolved_intents(journal: OrderJournal) -> list[OrderJournalEntry]:
+    def _unresolved_intents(
+        entries: list[OrderJournalEntry],
+    ) -> list[OrderJournalEntry]:
         """Every intent whose latest submit-side state is not terminal.
 
         Groups submit-side lines by ``order_ref``; an intent is unresolved when
@@ -650,12 +725,13 @@ class AlpacaClerk:
         terminal ``submit_acked`` / ``submit_failed``. Returns the owning
         ``intent_recorded`` entry (the durable identity source) for each, in
         first-seen order. Cancel and lifecycle lines are ignored — they are not
-        submit-side transitions.
+        submit-side transitions. Takes a pre-read entries list (``recover`` reads
+        the ledger once and shares it with :meth:`_terminal_map`).
         """
         origin: dict[str, OrderJournalEntry] = {}
         terminal_refs: set[str] = set()
         order: list[str] = []
-        for entry in journal.read_entries():
+        for entry in entries:
             if not entry.order_ref:
                 continue
             if entry.kind is ClerkEntryKind.INTENT_RECORDED:
