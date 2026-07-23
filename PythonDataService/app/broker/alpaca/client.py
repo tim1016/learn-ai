@@ -185,3 +185,20 @@ class AlpacaTradingClient:
 
     async def get_clock(self) -> dict[str, Any]:
         return await self._call(lambda c: c.get_clock(), describe="clock")
+
+    # ── Write methods (phase 2) ─────────────────────────────────────────────
+
+    async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
+        """POST one order to ``/v2/orders`` over the owned capturing session.
+
+        ``order`` is the exact JSON body Alpaca expects
+        (``symbol``, ``qty``, ``side``, ``type``, ``time_in_force``,
+        ``client_order_id``). The low-level ``post`` drives the same
+        ``requests.Session`` the read path uses, so the capture hook journals
+        the raw response verbatim, and the same timeout + ``map_api_error``
+        translation applies. Returns the raw Alpaca order payload; the adapter
+        maps it to a ``BrokerOrder``.
+        """
+        return await self._call(
+            lambda c: c.post("/orders", order), describe="order submission"
+        )

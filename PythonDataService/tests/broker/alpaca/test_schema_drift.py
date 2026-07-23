@@ -25,8 +25,11 @@ from alpaca.trading.models import (
     TradeAccount,
     TradeActivity,
 )
+from alpaca.trading.requests import MarketOrderRequest
 from pydantic import BaseModel
 
+from app.broker.alpaca.adapter import to_alpaca_order_request
+from app.broker.contract.models import BrokerOrderLeg
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 # family → (fixture filename, alpaca-py model(s) that define its known fields)
@@ -109,3 +112,31 @@ def test_asset_class_alias_is_recognized() -> None:
     # Alpaca's raw `class` key is aliased to `asset_class` in the SDK — the
     # guard must treat it as known, not as drift.
     assert "class" in _known_names(Asset)
+
+
+def test_order_submit_body_keys_are_all_known_to_the_sdk() -> None:
+    # Outbound drift guard: every key we POST to /v2/orders must be a field the
+    # SDK's order-request model defines. If a future alpaca-py renames one (or
+    # we typo a key), this fails and names it — the write-path twin of the
+    # inbound capture-drift guard above.
+    body = to_alpaca_order_request(
+        BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        client_order_id="manual/inkant/v1:abc123",
+    )
+
+    unknown = set(body) - _known_names(MarketOrderRequest)
+
+    assert unknown == set(), (
+        f"order-submit body carries keys the SDK order model does not define: "
+        f"{sorted(unknown)}. Either alpaca-py renamed a field or the adapter "
+        f"emits a wrong key."
+    )
+    # The S1 contract keys are exactly these — pin them so a silent drop surfaces.
+    assert set(body) == {
+        "symbol",
+        "qty",
+        "side",
+        "type",
+        "time_in_force",
+        "client_order_id",
+    }

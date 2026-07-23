@@ -1423,7 +1423,17 @@ export interface paths {
         /** List Orders */
         get: operations["list_orders_api_brokers__broker__orders_get"];
         put?: never;
-        post?: never;
+        /**
+         * Submit Orders
+         * @description Submit one or more equity market legs (phase-2 S1 write path).
+         *
+         *     Transport only: FastAPI validates the body, this resolves the account-scoped
+         *     Clerk facade, and the Clerk owns identity minting, fail-closed journaling,
+         *     the broker call, and per-leg result shaping. A per-leg broker rejection is a
+         *     *failed* leg in a ``200`` response (the request itself succeeded), never a
+         *     ``500``.
+         */
+        post: operations["submit_orders_api_brokers__broker__orders_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8863,6 +8873,41 @@ export interface components {
             price: number | null;
             /** Quantity */
             quantity: number | null;
+        };
+        /**
+         * BrokerOrderLeg
+         * @description One equity leg of an order request (broker-neutral).
+         *
+         *     S1 is EQUITY + MARKET only. ``limit_price`` / ``time_in_force`` are added in
+         *     S2 as optional fields — additive, so this model is forward-compatible. The
+         *     quantity is a positive share count; the *sign* is carried by ``side``.
+         */
+        BrokerOrderLeg: {
+            /**
+             * Order Type
+             * @default market
+             * @constant
+             */
+            order_type?: "market";
+            /** Quantity */
+            quantity: number;
+            side: components["schemas"]["OrderSide"];
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * BrokerOrderRequest
+         * @description An operator-authored order request: one or more legs to submit.
+         *
+         *     Each leg is submitted independently and journaled independently, so a
+         *     per-leg failure never blocks the others. The clerk mints a distinct
+         *     ``order_ref`` identity per leg.
+         */
+        BrokerOrderRequest: {
+            /** Legs */
+            legs: components["schemas"]["BrokerOrderLeg"][];
+            /** Operator */
+            operator: string;
         };
         /**
          * BrokerPosition
@@ -17931,6 +17976,52 @@ export interface components {
             success: boolean;
         };
         /**
+         * OrderLegError
+         * @description A typed leg failure: a what/why the UI renders, never a raw 500.
+         */
+        OrderLegError: {
+            /** Message */
+            message: string;
+            /** Why */
+            why?: string | null;
+        };
+        /**
+         * OrderLegResult
+         * @description The per-leg outcome the router shapes into its response.
+         *
+         *     Exactly one of ``order`` (acked) / ``error`` (failed) is set, keyed by
+         *     ``status``. ``order_ref`` is always present — an operator can find the
+         *     intent in the journal even when the submit failed.
+         */
+        OrderLegResult: {
+            error?: components["schemas"]["OrderLegError"] | null;
+            /** Intent Id */
+            intent_id: string;
+            order?: components["schemas"]["BrokerOrder"] | null;
+            /** Order Ref */
+            order_ref: string;
+            /** Status */
+            status: string;
+        };
+        /**
+         * OrderSide
+         * @description The two order sides (broker-neutral).
+         * @enum {string}
+         */
+        OrderSide: "buy" | "sell";
+        /**
+         * OrderSubmitResult
+         * @description The whole request's outcome: one result per submitted leg, in order.
+         */
+        OrderSubmitResult: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            /** Results */
+            results: components["schemas"]["OrderLegResult"][];
+        };
+        /**
          * ParameterStabilityResponse
          * @description Parameter stability assessment.
          */
@@ -25239,6 +25330,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerOrder"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_orders_api_brokers__broker__orders_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrokerOrderRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderSubmitResult"];
                 };
             };
             /** @description Validation Error */

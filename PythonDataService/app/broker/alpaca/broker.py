@@ -1,8 +1,9 @@
-"""AlpacaBroker — the read-port implementation (Broker System v2).
+"""AlpacaBroker — the read-port and trade-port implementation (Broker System v2).
 
 Composes the SDK client, the adapter, and the capability descriptor into a
-single :class:`BrokerReadPort`. Each read-path slice adds one method here; the
-router only ever sees contract models.
+single object implementing both :class:`BrokerReadPort` and (from phase 2)
+:class:`BrokerTradePort`. Each slice adds one method here; the router and Clerk
+only ever see contract models.
 
 The port is cheap to construct (the underlying client builds credentials and
 network lazily), so it can be registered at startup without keys.
@@ -20,6 +21,7 @@ from app.broker.contract.models import (
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
+    BrokerOrderLeg,
     BrokerPosition,
 )
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
@@ -44,7 +46,7 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
 
 
 class AlpacaBroker:
-    """Alpaca implementation of :class:`BrokerReadPort`."""
+    """Alpaca implementation of :class:`BrokerReadPort` and :class:`BrokerTradePort`."""
 
     broker_id = BROKER_ID
 
@@ -102,6 +104,20 @@ class AlpacaBroker:
     async def get_clock_evidence(self) -> BrokerClockEvidence:
         payload = await self._client.get_clock()
         return adapter.from_alpaca_clock(payload)
+
+    # ── Trade port (phase 2) ────────────────────────────────────────────────
+
+    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        """Submit one equity leg; map the accepted order to a ``BrokerOrder``.
+
+        The vendor request body is built by the adapter (contract → vendor),
+        POSTed over the capturing session, and the raw response mapped back
+        (vendor → contract). A vendor rejection raises a ``BrokerError`` the
+        Clerk journals as ``submit_failed``.
+        """
+        body = adapter.to_alpaca_order_request(leg, client_order_id=client_order_id)
+        payload = await self._client.submit_order(body)
+        return adapter.from_alpaca_order(payload)
 
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:

@@ -39,4 +39,22 @@ describe('BrokersService', () => {
 
     await promise;
   });
+
+  it('POSTs an order to the control-prefixed orders endpoint', async () => {
+    const request = {
+      operator: 'desk',
+      legs: [{ symbol: 'SPY', side: 'buy' as const, quantity: 1, order_type: 'market' as const }],
+    };
+    const promise = service.submitOrder('alpaca', request);
+
+    const req = httpMock.expectOne('/api/brokers/alpaca/orders');
+    expect(req.request.method).toBe('POST');
+    // The URL is under /api/brokers — a registered data-plane control prefix —
+    // so the control-intent interceptor marks it for the proxy to authenticate.
+    expect(req.request.url).toBe('/api/brokers/alpaca/orders');
+    expect(req.request.body).toEqual(request);
+    req.flush({ broker: 'alpaca', account_id: 'PA1', results: [] });
+
+    await expect(promise).resolves.toMatchObject({ account_id: 'PA1' });
+  });
 });

@@ -5,7 +5,9 @@ import { firstValueFrom } from 'rxjs';
 import type {
   BrokerAccountSnapshot,
   BrokerOrder,
+  BrokerOrderRequest,
   BrokerPosition,
+  OrderSubmitResult,
 } from '../api/alpaca.types';
 
 /**
@@ -44,6 +46,22 @@ export class BrokersService {
     }
     return firstValueFrom(
       this.http.get<BrokerOrder[]>(`${this.base}/${broker}/orders`, { params }),
+    );
+  }
+
+  /**
+   * Phase-2 S1 — submit one or more equity market legs (write path). This is a
+   * control mutation: `/api/brokers` is a registered control prefix
+   * (`contracts/data-plane-control-surfaces.json`), so the data-plane control
+   * intent interceptor marks the POST and the dev proxy attaches the shared
+   * secret. No per-call marking is needed here beyond hitting that prefix.
+   */
+  submitOrder(
+    broker: string,
+    request: BrokerOrderRequest,
+  ): Promise<OrderSubmitResult> {
+    return firstValueFrom(
+      this.http.post<OrderSubmitResult>(`${this.base}/${broker}/orders`, request),
     );
   }
 }
