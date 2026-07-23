@@ -219,3 +219,14 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
   desired-state pause; (b) STOPPED bots have no in-place restart (resume deadlock);
   (c) the container↔host-daemon link is intermittently unreachable and needs
   hardening (retry/backoff or a more robust host bridge).
+
+### 10:45–10:57 CDT — NVDA restored; step 6 (pause two + resume two)
+
+- **Restored NVDA** as a fresh instance `nvda-0723r2` (EMA, NVDA, Paper, 2000,
+  policy optional) via Deploy & run → On duty (pid 67654, RUNNING). Fleet back to
+  **3 running**: `spy-0723` (51135), `qqq-0723` (55323), `nvda-0723r2` (67654).
+- **Step 6 — pause two, resume two:** paused `spy-0723` + `qqq-0723` via
+  desired-state `pause` → both `PAUSED`, processes **ALIVE** (nvda-0723r2 left
+  RUNNING). Resumed both via desired-state `resume` → both `RUNNING`, processes
+  still ALIVE. Verified all three RUNNING at 10:57 CDT. Clean concurrent in-place
+  pause/resume of two bots.
