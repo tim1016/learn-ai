@@ -14,6 +14,7 @@ never speculatively.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,8 +31,9 @@ class ClerkEntryKind(StrEnum):
     # have been lost (timeout / 5xx / network → ``BrokerUnavailable``), so the
     # order MAY have landed. Journaled AFTER ``intent_recorded`` and resolved by
     # querying Alpaca for the order by ``client_order_id``: found → a terminal
-    # ``submit_acked``; definitively absent (404) → a terminal ``submit_failed``;
-    # lookup itself uncertain → the intent stays here for a later replay/sweep.
+    # ``submit_acked``; an immediate 404 receives a grace period, then a later
+    # recovery/sweep may record ``submit_failed``; a failed lookup keeps the
+    # intent here. Never fabricate a terminal outcome from one lost response.
     # NEVER a fabricated terminal outcome.
     SUBMIT_UNCERTAIN = "submit_uncertain"
     # S3 cancel path — recorded BEFORE the broker call, acked/failed after.
@@ -122,10 +124,9 @@ class OrderLegResult(BaseModel):
 
     - ``acked`` — the broker accepted the order; ``order`` is set.
     - ``failed`` — the order definitively did not land; ``error`` is set.
-    - ``uncertain`` — the submit's HTTP outcome was unknown AND resolving it by
-      ``client_order_id`` was itself unreachable (S5). Neither ``order`` nor
-      ``error`` is authoritative yet; the intent is durably journaled as
-      ``submit_uncertain`` and startup replay / a later sweep will finish it. The
+    - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order``
+      nor ``error`` is authoritative yet; the intent is durably journaled as
+      ``submit_uncertain`` and a later replay / sweep will finish it. The
       operator must not assume the order failed — it may still have landed.
 
     ``order_ref`` is always present — an operator can find the intent in the
@@ -134,7 +135,7 @@ class OrderLegResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    status: str = Field(pattern="^(acked|failed|uncertain)$")
+    status: Literal["acked", "failed", "uncertain"]
     order_ref: str
     intent_id: str
     order: BrokerOrder | None = None

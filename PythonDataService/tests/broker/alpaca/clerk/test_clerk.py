@@ -18,7 +18,7 @@ import pytest
 from app.broker.alpaca.clerk import journal as journal_module
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind
-from app.broker.contract.errors import BrokerRequestInvalid
+from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerOrder,
@@ -88,17 +88,24 @@ class _FakeBroker:
         *,
         account: BrokerAccountSnapshot | None = None,
         error: Exception | None = None,
+        lookup_result: BrokerOrder | None = None,
+        lookup_error: Exception | None = None,
+        lookup_absent: bool = False,
         on_submit: Any = None,
         cancel_error: Exception | None = None,
         on_cancel: Any = None,
     ) -> None:
         self._account = account or _account()
         self._error = error
+        self._lookup_result = lookup_result
+        self._lookup_error = lookup_error
+        self._lookup_absent = lookup_absent
         self._on_submit = on_submit
         self._cancel_error = cancel_error
         self._on_cancel = on_cancel
         self.submit_calls: list[tuple[BrokerOrderLeg, str]] = []
         self.cancel_calls: list[str] = []
+        self.lookup_calls: list[str] = []
 
     async def get_account(self) -> BrokerAccountSnapshot:
         return self._account
@@ -120,6 +127,16 @@ class _FakeBroker:
         if self._cancel_error is not None:
             raise self._cancel_error
         return None
+
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> BrokerOrder | None:
+        self.lookup_calls.append(client_order_id)
+        if self._lookup_error is not None:
+            raise self._lookup_error
+        if self._lookup_absent:
+            return None
+        return self._lookup_result or _accepted_order(client_order_id)
 
 
 @pytest.fixture(autouse=True)
@@ -209,6 +226,63 @@ async def test_submit_failed_is_journaled_and_returned() -> None:
     kinds = [entry.kind for entry in entries]
     assert kinds == [ClerkEntryKind.INTENT_RECORDED, ClerkEntryKind.SUBMIT_FAILED]
     assert entries[-1].error_message == "Alpaca rejected the order."
+
+
+async def test_unavailable_submit_is_resolved_by_client_order_id() -> None:
+    broker = _FakeBroker(
+        error=BrokerUnavailable("Alpaca timed out.", broker="alpaca", detail="timeout")
+    )
+    clerk = AlpacaClerk(read=broker, trade=broker)
+
+    result = await clerk.submit(_request())
+
+    [leg_result] = result.results
+    assert leg_result.status == "acked"
+    assert broker.lookup_calls == [leg_result.order_ref]
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    assert [entry.kind for entry in entries] == [
+        ClerkEntryKind.INTENT_RECORDED,
+        ClerkEntryKind.SUBMIT_UNCERTAIN,
+        ClerkEntryKind.SUBMIT_ACKED,
+    ]
+
+
+async def test_unavailable_submit_stays_uncertain_when_lookup_is_unavailable() -> None:
+    broker = _FakeBroker(
+        error=BrokerUnavailable("Alpaca timed out.", broker="alpaca", detail="timeout"),
+        lookup_error=BrokerUnavailable(
+            "Alpaca is still unavailable.", broker="alpaca", detail="timeout"
+        ),
+    )
+    clerk = AlpacaClerk(read=broker, trade=broker)
+
+    result = await clerk.submit(_request())
+
+    [leg_result] = result.results
+    assert leg_result.status == "uncertain"
+    assert leg_result.error is not None
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    assert [entry.kind for entry in entries] == [
+        ClerkEntryKind.INTENT_RECORDED,
+        ClerkEntryKind.SUBMIT_UNCERTAIN,
+    ]
+
+
+async def test_unavailable_submit_keeps_initial_absent_lookup_uncertain() -> None:
+    broker = _FakeBroker(
+        error=BrokerUnavailable("Alpaca timed out.", broker="alpaca", detail="timeout"),
+        lookup_absent=True,
+    )
+    clerk = AlpacaClerk(read=broker, trade=broker)
+
+    result = await clerk.submit(_request())
+
+    assert result.results[0].status == "uncertain"
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    assert [entry.kind for entry in entries] == [
+        ClerkEntryKind.INTENT_RECORDED,
+        ClerkEntryKind.SUBMIT_UNCERTAIN,
+    ]
 
 
 async def test_order_ref_over_cap_fails_closed_without_broker_call() -> None:

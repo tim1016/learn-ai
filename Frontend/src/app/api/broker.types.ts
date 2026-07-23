@@ -5510,8 +5510,11 @@ export interface components {
             renewed_at_ms?: number | null;
             /** Started At Ms */
             started_at_ms: number;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "acked" | "failed" | "uncertain";
             /** Valid Until Ms */
             valid_until_ms?: number | null;
         };
@@ -18054,11 +18057,10 @@ export interface components {
          *
          *     - ``acked`` — the broker accepted the order; ``order`` is set.
          *     - ``failed`` — the order definitively did not land; ``error`` is set.
-         *     - ``uncertain`` — the submit's HTTP outcome was unknown AND resolving it by
-         *       ``client_order_id`` was itself unreachable (S5). Neither ``order`` nor
+         *     - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order`` nor
          *       ``error`` is authoritative yet; the intent is durably journaled as
-         *       ``submit_uncertain`` and startup replay / a later sweep will finish it. The
-         *       operator must not assume the order failed — it may still have landed.
+         *       ``submit_uncertain`` and a later replay / sweep will finish it. The operator
+         *       must not assume the order failed — it may still have landed.
          *
          *     ``order_ref`` is always present — an operator can find the intent in the
          *     journal in every case, including uncertain.

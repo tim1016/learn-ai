@@ -21,9 +21,9 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk import journal as journal_module
-from app.broker.alpaca.clerk.clerk import AlpacaClerk
+from app.broker.alpaca.clerk.clerk import AlpacaClerk, UNCERTAIN_SUBMIT_GRACE_MS
 from app.broker.alpaca.clerk.models import ClerkEntryKind
-from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerOrder,
@@ -189,26 +189,45 @@ async def test_uncertain_submit_resolves_to_acked_when_order_is_found() -> None:
     ]
 
 
-# ── Uncertain resolution: ABSENT (404) ───────────────────────────────────────
+# ── Uncertain resolution: initial absence grace ──────────────────────────────
 
 
-async def test_uncertain_submit_resolves_to_failed_when_order_absent() -> None:
-    # submit raises BrokerUnavailable, lookup returns None (404 absent) →
-    # intent_recorded → submit_uncertain → submit_failed (the order never landed).
+async def test_uncertain_submit_keeps_initial_absence_uncertain_until_recovery() -> None:
+    # A 404 immediately after a lost submit response is not terminal: Alpaca's
+    # worker may still persist the order. The write path records uncertainty and
+    # stops; a later recovery pass may make the terminal absence decision.
     broker = _FakeBroker(
         submit_error=BrokerUnavailable(
             "Alpaca returned a server error.", broker="alpaca", detail="HTTP 503"
         ),
         lookup_absent=True,
     )
-    clerk = _clerk(broker)
+    clock = {"now": _FIXED_MS}
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=lambda: clock["now"])
 
     result = await clerk.submit(_request())
 
     leg_result = result.results[0]
-    assert leg_result.status == "failed"
+    assert leg_result.status == "uncertain"
     assert leg_result.error is not None
     assert leg_result.order is None
+
+    assert _kinds(clerk) == [
+        ClerkEntryKind.INTENT_RECORDED,
+        ClerkEntryKind.SUBMIT_UNCERTAIN,
+    ]
+
+    # A restart during the bounded grace period must still leave the lost POST
+    # uncertain rather than turning a potentially in-flight order into failed.
+    await clerk.recover()
+
+    assert _kinds(clerk) == [
+        ClerkEntryKind.INTENT_RECORDED,
+        ClerkEntryKind.SUBMIT_UNCERTAIN,
+    ]
+
+    clock["now"] += UNCERTAIN_SUBMIT_GRACE_MS
+    await clerk.recover()
 
     assert _kinds(clerk) == [
         ClerkEntryKind.INTENT_RECORDED,
@@ -241,6 +260,52 @@ async def test_uncertain_submit_and_uncertain_lookup_stays_uncertain() -> None:
         ClerkEntryKind.INTENT_RECORDED,
         ClerkEntryKind.SUBMIT_UNCERTAIN,
     ]
+
+
+async def test_uncertain_submit_stays_uncertain_for_any_lookup_broker_error() -> None:
+    # A failed resolving GET cannot prove that the preceding POST did not land,
+    # even if the GET was rejected rather than unavailable.
+    broker = _FakeBroker(
+        submit_error=BrokerUnavailable(
+            "Alpaca timed out.", broker="alpaca", detail="timeout"
+        ),
+        lookup_error=BrokerRequestInvalid(
+            "Alpaca rejected the lookup.", broker="alpaca", detail="HTTP 422"
+        ),
+    )
+    clerk = _clerk(broker)
+
+    result = await clerk.submit(_request())
+
+    assert result.results[0].status == "uncertain"
+    assert _kinds(clerk) == [
+        ClerkEntryKind.INTENT_RECORDED,
+        ClerkEntryKind.SUBMIT_UNCERTAIN,
+    ]
+
+
+async def test_uncertain_leg_stops_later_legs_before_any_broker_submit() -> None:
+    broker = _FakeBroker(
+        submit_error=BrokerUnavailable(
+            "Alpaca timed out.", broker="alpaca", detail="timeout"
+        ),
+        lookup_error=BrokerUnavailable(
+            "Alpaca still unreachable.", broker="alpaca", detail="timeout"
+        ),
+    )
+    clerk = _clerk(broker)
+    request = BrokerOrderRequest(
+        operator="inkant",
+        legs=[
+            BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+            BrokerOrderLeg(symbol="QQQ", side="buy", quantity=1),
+        ],
+    )
+
+    result = await clerk.submit(request)
+
+    assert [leg.status for leg in result.results] == ["uncertain"]
+    assert [leg.symbol for leg, _ in broker.submit_calls] == ["SPY"]
 
 
 async def test_uncertain_submit_stays_uncertain_when_lookup_returns_mismatched_order() -> None:
@@ -384,6 +449,17 @@ async def test_recover_is_noop_on_a_fresh_install_with_no_journal() -> None:
 
     assert broker.lookup_calls == []
     assert _kinds(clerk) == []
+
+
+async def test_startup_recovery_failure_keeps_submit_clerk_disabled() -> None:
+    """A failed recovery must fail closed before lifespan installs the clerk."""
+    from app.main import _recover_alpaca_clerk_or_fail_closed
+
+    class _RecoveryFailure:
+        async def recover(self) -> None:
+            raise RuntimeError("journal unavailable")
+
+    assert not await _recover_alpaca_clerk_or_fail_closed(_RecoveryFailure())
 
 
 # ── Idempotency ──────────────────────────────────────────────────────────────

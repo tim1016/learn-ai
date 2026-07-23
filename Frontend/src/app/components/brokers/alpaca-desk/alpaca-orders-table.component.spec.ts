@@ -82,12 +82,14 @@ describe('AlpacaOrdersTableComponent', () => {
     await renderTable(() =>
       Promise.resolve([
         fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' }),
+        fakeOrder({ order_id: 'o-day-end', symbol: 'GTC', status: 'done_for_day' }),
         fakeOrder({ order_id: 'o-done', symbol: 'AAPL', status: 'filled' }),
       ]),
     );
 
     // The working order gets a labeled Cancel button; the filled one does not.
     expect(await screen.findByRole('button', { name: 'Cancel order for MSFT' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel order for GTC' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Cancel order for AAPL' })).toBeNull();
   });
 

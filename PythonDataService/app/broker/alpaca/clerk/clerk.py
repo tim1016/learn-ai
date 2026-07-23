@@ -10,12 +10,16 @@ The Clerk is the sole author of order submission for Alpaca. For each leg it:
    any broker call. No journal → no order.
 3. **Calls the trade port** to submit.
 4. **Journals ``submit_acked``** (with the ``BrokerOrder``) on success, or
-   **``submit_failed``** on a ``BrokerError``, and returns a per-leg result.
+   **``submit_failed``** on a definitive ``BrokerError``, and returns a
+   per-leg result. A lost broker response remains ``submit_uncertain`` until a
+   later reconciliation can prove its outcome.
 
 Serialization: a single ``asyncio.Lock`` (the intake lock) makes submission
 serial per account — combined with the single-uvicorn-worker deployment
-constraint documented in this package's ``__init__``. A per-leg failure never
-blocks the remaining legs; each leg is an independent journaled unit.
+constraint documented in this package's ``__init__``. A definitive per-leg
+failure never blocks the remaining legs; an *uncertain* leg stops the batch so
+the clerk cannot create contradictory new exposure before it knows whether that
+leg reached the broker.
 """
 
 from __future__ import annotations
@@ -53,6 +57,11 @@ from app.engine.live.order_identity import (
 )
 
 logger = logging.getLogger(__name__)
+
+# A response-lost POST can still be executing at Alpaca when an immediate
+# by-client-id lookup says 404. Never turn that first absence into a terminal
+# failure; a later recovery/sweep may do so only after this bounded grace window.
+UNCERTAIN_SUBMIT_GRACE_MS = 30_000
 
 # An injected clock: the current instant as ``int64`` ms UTC. Defaults to the
 # ingestion-boundary wall clock; tests inject a fixed clock (mirrors the S4
@@ -176,13 +185,30 @@ class AlpacaClerk:
         return account.account_id, journal
 
     async def submit(self, request: BrokerOrderRequest) -> OrderSubmitResult:
-        """Submit every leg serially; one journaled result per leg."""
+        """Submit legs serially, stopping before any later leg after uncertainty.
+
+        The response contains one result for each leg that was actually sent to
+        the broker. A definitive rejection is independent and the next leg can
+        proceed; an ``uncertain`` result means the previous leg may have landed,
+        so remaining request legs are deliberately left unsent.
+        """
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
-            results = [
-                await self._submit_leg(request.operator, leg, account_id, journal)
-                for leg in request.legs
-            ]
+            results: list[OrderLegResult] = []
+            for leg in request.legs:
+                result = await self._submit_leg(request.operator, leg, account_id, journal)
+                results.append(result)
+                if result.status == "uncertain":
+                    logger.warning(
+                        "alpaca clerk stopped multi-leg submit after uncertain outcome",
+                        extra={
+                            "action": "submit_batch_stopped_uncertain",
+                            "account_id": account_id,
+                            "order_ref": result.order_ref,
+                            "remaining_legs": len(request.legs) - len(results),
+                        },
+                    )
+                    break
         return OrderSubmitResult(
             broker=self.broker_id, account_id=account_id, results=results
         )
@@ -465,7 +491,13 @@ class AlpacaClerk:
                     "why": exc.detail,
                 },
             )
-            return await self._resolve_intent(identity, journal)
+            # A 404 immediately after a lost POST response is not proof that the
+            # asynchronous broker worker will not finish. The first probe is a
+            # grace observation only; recovery / the periodic sweep may make a
+            # later, terminal absence decision.
+            return await self._resolve_intent(
+                identity, journal, terminal_on_absence=False
+            )
         except BrokerError as exc:
             # Every other BrokerError (invalid 4xx, rejected 409, auth, rate
             # limit) is a DEFINITIVE failure — the order did not land.
@@ -523,10 +555,16 @@ class AlpacaClerk:
                 },
             )
             terminal_outcomes = self._terminal_map(entries)
+            uncertain_recorded_at = self._uncertain_timestamp_map(entries)
             for intent_entry in unresolved:
                 identity = _LegIdentity.from_entry(intent_entry, clock=self._clock)
                 await self._resolve_intent(
-                    identity, journal, terminal_outcomes=terminal_outcomes
+                    identity,
+                    journal,
+                    terminal_outcomes=terminal_outcomes,
+                    uncertain_recorded_at_ms=uncertain_recorded_at.get(
+                        identity.order_ref
+                    ),
                 )
 
     async def _resolve_intent(
@@ -535,6 +573,8 @@ class AlpacaClerk:
         journal: OrderJournal,
         *,
         terminal_outcomes: dict[str, OrderLegResult] | None = None,
+        terminal_on_absence: bool = True,
+        uncertain_recorded_at_ms: int | None = None,
     ) -> OrderLegResult:
         """Resolve one intent by ``client_order_id``; idempotent, last-write-wins.
 
@@ -550,8 +590,11 @@ class AlpacaClerk:
         Otherwise it asks the vendor whether the order landed:
 
         - found → append ``submit_acked`` (carry the vendor ``BrokerOrder``),
-        - ``None`` (404 absent) → append ``submit_failed`` (it never landed),
-        - lookup ``BrokerUnavailable`` → leave ``submit_uncertain``, no terminal
+        - ``None`` (404 absent) → append ``submit_failed`` only after the
+          30-second grace period; the immediate post-timeout probe and early
+          recovery/sweep leave the intent uncertain for an in-flight broker
+          worker,
+        - any lookup ``BrokerError`` → leave ``submit_uncertain``, no terminal
           write, return an ``uncertain`` result. Never fabricate a terminal.
         """
         if terminal_outcomes is not None:
@@ -563,7 +606,7 @@ class AlpacaClerk:
 
         try:
             order = await self._trade.get_order_by_client_order_id(identity.order_ref)
-        except BrokerUnavailable as exc:
+        except BrokerError as exc:
             logger.warning(
                 "alpaca clerk resolution still uncertain; leaving intent for replay",
                 extra={
@@ -604,6 +647,30 @@ class AlpacaClerk:
                 error=OrderLegError(
                     message="The order's outcome is not yet known.",
                     why="The broker returned an order for a different client_order_id.",
+                ),
+            )
+
+        absence_grace_active = (
+            uncertain_recorded_at_ms is not None
+            and self._clock() - uncertain_recorded_at_ms < UNCERTAIN_SUBMIT_GRACE_MS
+        )
+        if order is None and (not terminal_on_absence or absence_grace_active):
+            logger.info(
+                "alpaca clerk initial absent lookup left uncertain for recovery",
+                extra={
+                    "action": "resolve_absence_grace",
+                    "account_id": identity.account_id,
+                    "order_ref": identity.order_ref,
+                    "grace_active": absence_grace_active,
+                },
+            )
+            return OrderLegResult(
+                status="uncertain",
+                order_ref=identity.order_ref,
+                intent_id=identity.intent_id,
+                error=OrderLegError(
+                    message="The order's outcome is not yet known.",
+                    why="Alpaca has not observed the order yet; it may still be in flight.",
                 ),
             )
 
@@ -713,6 +780,20 @@ class AlpacaClerk:
             ):
                 latest[entry.order_ref] = entry
         return {ref: cls._reconstruct_terminal(e) for ref, e in latest.items()}
+
+    @staticmethod
+    def _uncertain_timestamp_map(entries: list[OrderJournalEntry]) -> dict[str, int]:
+        """Most recent response-lost-submit timestamp per durable order ref.
+
+        ``recover`` already holds the single ledger read, so this preserves its
+        O(N) replay behavior while giving an absent lookup a real, bounded grace
+        period instead of interpreting the next process start as a safe retry.
+        """
+        return {
+            entry.order_ref: entry.recorded_at_ms
+            for entry in entries
+            if entry.order_ref and entry.kind is ClerkEntryKind.SUBMIT_UNCERTAIN
+        }
 
     @staticmethod
     def _unresolved_intents(
