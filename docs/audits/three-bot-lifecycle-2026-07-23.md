@@ -237,3 +237,49 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
   (55323), `nvda-0723r2` (67654) → all `PAUSED` with processes **ALIVE** at
   10:59:21 CDT. Starting the 10-minute wait (→ ~11:09 CDT), after which step 8
   resumes one older bot and launches two new bots (AAPL, MSFT).
+
+### 11:09–11:17 CDT — step 8: resume one older + launch two new; protocol complete
+
+- After the 10-minute pause all three processes survived (ALIVE + PAUSED).
+- **Resumed one older bot** `spy-0723` via desired-state `resume` → RUNNING.
+- **Launched two new bots** via Deploy & run (EMA, Paper, 2000, policy optional):
+  `aapl-0723` (AAPL) and `msft-0723` (MSFT) → both On duty, Errors 0, host runner
+  active, no crash (the `optional` policy held).
+- **End state (roster 11:17 CDT):** actively RUNNING — `spy-0723`, `aapl-0723`,
+  `msft-0723` (Errors 0, "all hard gates pass"); still PAUSED with live runtimes —
+  `qqq-0723`, `nvda-0723r2` (per the protocol, which only resumed one older bot).
+  Every bot **Flat / 0 open positions** — account clean. Deadlocked-STOPPED records
+  left in place: `nvda-0723`, `nvda-0723r`, plus `spy-canary-0723` (the require-policy
+  crash) in Sick bay.
+
+## Outcome
+
+**All seven protocol steps completed:** launch 3 → hold 3 concurrent 15 min →
+stop+restart 1 → stop+restart 2 → stop all 3 → wait 10 min → restart 1 older +
+launch 2 new. Account `DUM284968` stayed **CLEAN / flat** throughout; no unexplained
+exposure.
+
+**Note on fills:** the EMA-crossover strategy produced **no entry signals** during
+the ~2.3-hour window, so no paper fills occurred (all bots stayed Flat, P&L "Not
+proven"). The bots were nonetheless fully live and submit-capable the whole time —
+run artifacts show `submit_mode_at_start: "live_paper"` and real 15-min bar
+processing. (For a fill-generating run, use the `Deployment Validation` strategy or
+a faster signal.)
+
+**Corrective actions taken (all committed to master):** cold-morning account
+recovery (Restore Clerk + reconnect IBKR + reconcile); root-caused + fixed the
+fresh-deploy crash (require→optional saved-state policy); switched stop→restart to
+pause/resume after finding the in-place restart deadlock; drove pause/resume via the
+app's desired-state endpoint (the UI "pause"/"End day now" button is a clock-out →
+STOPPED); restarted the data-plane container to (attempt to) clear the container↔
+daemon flap.
+
+**Open product findings for follow-up:** (1) "Require saved state" is a footgun as
+the *recommended* default — it hard-crashes every brand-new deploy; (2) a
+gracefully-STOPPED bot has no in-place UI restart (resume deadlocks on a live-run
+proof it can't have; the cockpit only offers "Start", which is refused); (3) "End
+day now" is mislabeled/misrouted — it stops (clock-out), it does not pause; a real
+Pause control should map to desired-state `pause`; (4) the container↔host-daemon
+link (`host.containers.internal:8765`) was intermittently unreachable (~40%), which
+makes the cockpit intermittently show a healthy bot as "resting" — needs
+retry/backoff or a more robust host bridge.
