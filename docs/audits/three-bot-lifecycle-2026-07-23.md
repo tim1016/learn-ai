@@ -62,3 +62,29 @@ committed to `master` so the deploy page's clean-tree check stays satisfied.
   "Resume a durably-stopped bot" gap is flagged to be nailed down at the
   stop/restart steps, where it is core to the test (and may need the same kind of
   control-restore done previously for the stop card).
+
+### 08:52–09:00 — bot 1 fresh deploy crashed on start; root-caused to saved-state policy
+
+- **Action:** Deployed a fresh SPY bot `spy-canary-0723` via the Deploy page —
+  strategy EMA Crossover Signal, signal SPY, one `long SPY x1` leg, **Paper orders**
+  (broker orders enabled), 2000/day — using **Deploy & run**. Launch request was
+  accepted (run `e66c1a61…718891`), but the bot immediately entered **Sick bay**
+  ("Bot crashed / Exited with error"). Roll call: 2 ready · 0 on duty · 1 sick bay.
+- **Root cause (from run artifacts, not just the UI):** The host daemon
+  (`app.engine.live.host_daemon`, PID on host :8765) launched the child, which
+  **connected to IBKR paper fine** (`account=DUM284968 is_paper=True`), then
+  crashed:
+  `ERROR __main__ indicator-state hydrate failed (missing)`, `exit_code 4`,
+  `exit_reason "exception"`. `indicator_state_hydration.json` shows
+  `policy=require`, expected `live_state/ema_crossover_signal/SPY_15m.json`,
+  `accepted=false`, `failure_reason="missing"`. The **Advanced start setting
+  "Require saved state (recommended)"** makes a *new* bot's (expected) absence of
+  saved indicator state a fatal error. This also explains why the smoke bots
+  (which *have* saved state from yesterday) are the "supported" restart path.
+- **Fix:** Re-deploy with **"Use saved state when available"** (`optional`) — starts
+  fresh when no state exists (first deploy) and reuses state on later restarts, so
+  it is correct for the whole lifecycle test. Clean up the crashed
+  `spy-canary-0723` first, then redeploy with the corrected policy.
+- **Note for the user / follow-up:** "Require saved state" being the *recommended*
+  default while it hard-crashes every brand-new bot is a footgun worth fixing
+  (default new deploys to `optional`, or auto-detect first-run). Recorded as a gap.
