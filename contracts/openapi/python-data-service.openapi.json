@@ -10159,6 +10159,7 @@
           "reason": {
             "default": "Operator cleared the exposure hold.",
             "maxLength": 512,
+            "minLength": 1,
             "title": "Reason",
             "type": "string"
           }
@@ -15467,7 +15468,7 @@
       },
       "HoldState": {
         "additionalProperties": false,
-        "description": "The account-level exposure-hold state, journal-derived (S6).\n\nA hold is active when a ``HOLD_SET`` line has no later ``HOLD_CLEARED``.\n``reason_code`` is code-like (rendered through ``receiptLabel`` on the UI);\n``reason`` is backend-authored what/why prose (rendered unpiped). When not\nheld, every field but ``active`` is ``None``.",
+        "description": "The account-level exposure-hold state, journal-derived (S6).\n\nA hold is active when a ``HOLD_SET`` or ``UNEXPLAINED_ORDER`` line has no\nlater ``HOLD_CLEARED``. The latter keeps a crash between the observation and\nits companion HOLD_SET receipt fail-closed. ``reason_code`` is code-like\n(rendered through ``receiptLabel`` on the UI); ``reason`` is backend-authored\nwhat/why prose (rendered unpiped). When not held, every field but ``active``\nis ``None``.",
         "properties": {
           "active": {
             "title": "Active",
@@ -28652,7 +28653,7 @@
       },
       "OrderLegResult": {
         "additionalProperties": false,
-        "description": "The per-leg outcome the router shapes into its response.\n\nKeyed by ``status``:\n\n- ``acked`` \u2014 the broker accepted the order; ``order`` is set.\n- ``failed`` \u2014 the order definitively did not land; ``error`` is set.\n- ``uncertain`` \u2014 the submit's HTTP outcome was unknown AND resolving it by\n  ``client_order_id`` was itself unreachable (S5). Neither ``order`` nor\n  ``error`` is authoritative yet; the intent is durably journaled as\n  ``submit_uncertain`` and startup replay / a later sweep will finish it. The\n  operator must not assume the order failed \u2014 it may still have landed.\n\n``order_ref`` is always present \u2014 an operator can find the intent in the\njournal in every case, including uncertain.",
+        "description": "The per-leg outcome the router shapes into its response.\n\nKeyed by ``status``:\n\n- ``acked`` \u2014 the broker accepted the order; ``order`` is set.\n- ``failed`` \u2014 the order definitively did not land; ``error`` is set.\n- ``uncertain`` \u2014 the submit's HTTP outcome was unknown. Neither ``order`` nor\n  ``error`` is authoritative yet; the intent is durably journaled as\n  ``submit_uncertain`` and a later replay / sweep will finish it. The operator\n  must not assume the order failed \u2014 it may still have landed.\n\n``order_ref`` is always present \u2014 an operator can find the intent in the\njournal in every case, including uncertain.",
         "properties": {
           "error": {
             "anyOf": [
@@ -28683,7 +28684,11 @@
             "type": "string"
           },
           "status": {
-            "pattern": "^(acked|failed|uncertain)$",
+            "enum": [
+              "acked",
+              "failed",
+              "uncertain"
+            ],
             "title": "Status",
             "type": "string"
           }
@@ -44079,6 +44084,7 @@
             "name": "order_id",
             "required": true,
             "schema": {
+              "format": "uuid",
               "title": "Order Id",
               "type": "string"
             }

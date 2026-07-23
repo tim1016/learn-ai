@@ -9,17 +9,17 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../services/brokers.service';
 
-// Statuses for which Alpaca accepts a cancel — an order still working (resting
-// or partially filled). Terminal statuses (filled/canceled/expired/rejected)
-// are not cancelable, so the action is hidden for them rather than offered and
-// failing. Mirrors the Alpaca order-status lifecycle.
-const CANCELABLE_STATUSES: ReadonlySet<string> = new Set([
-  'new',
-  'accepted',
-  'pending_new',
-  'partially_filled',
-  'held',
-  'accepted_for_bidding',
+// Hide Cancel only for terminal states and states where Alpaca itself rejects a
+// second cancel. This intentionally leaves `done_for_day` GTC orders eligible:
+// they resume on the next session and still need an operator escape hatch.
+const NON_CANCELABLE_STATUSES: ReadonlySet<string> = new Set([
+  'filled',
+  'canceled',
+  'expired',
+  'rejected',
+  'replaced',
+  'pending_cancel',
+  'pending_replace',
 ]);
 
 /**
@@ -56,7 +56,7 @@ export class AlpacaOrdersTableComponent {
   protected readonly cancelError = signal<Record<string, string>>({});
 
   protected isCancelable(order: BrokerOrder): boolean {
-    return CANCELABLE_STATUSES.has(order.status);
+    return !NON_CANCELABLE_STATUSES.has(order.status);
   }
 
   protected async cancel(order: BrokerOrder): Promise<void> {

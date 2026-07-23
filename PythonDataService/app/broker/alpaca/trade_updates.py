@@ -38,17 +38,18 @@ Per-frame flow (the order is load-bearing):
    → ``UNEXPLAINED_ORDER`` + counter). The S6 exposure hold is NOT wired here.
 
 Reconnect: ``trade_updates`` has no replay-from-cursor, so on any disconnect the
-consumer reconnects with bounded backoff and then performs a **REST
-gap-reconcile** — ``GET /v2/orders`` for orders updated since the last-seen
-event — feeding each through the same idempotent attribution path so a
-re-observed event dedups.
+consumer reconnects with bounded backoff, re-subscribes, and then performs a
+**REST gap-reconcile** — ``GET /v2/orders`` for recently closed orders — feeding
+each through the same idempotent attribution path so a re-observed event dedups.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import math
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -80,7 +81,7 @@ _STREAM_AUTHORIZATION = "authorization"
 # key was already seen AND whose order is terminal is a stale redelivery: it is
 # surfaced + counted (per live_idempotent), never silently dropped.
 _TERMINAL_STATUSES: frozenset[str] = frozenset(
-    {"filled", "canceled", "expired", "rejected", "done_for_day", "replaced"}
+    {"filled", "canceled", "expired", "rejected", "replaced"}
 )
 
 _DEFAULT_MAX_BACKOFF_S = 30.0
@@ -99,7 +100,11 @@ def _now_ms() -> int:
 
 async def _default_backoff(attempt: int) -> None:
     """Exponential backoff capped at :data:`_DEFAULT_MAX_BACKOFF_S` seconds."""
-    delay = min(_DEFAULT_BASE_BACKOFF_S * (2 ** max(0, attempt - 1)), _DEFAULT_MAX_BACKOFF_S)
+    max_exponent = max(
+        0, math.ceil(math.log2(_DEFAULT_MAX_BACKOFF_S / _DEFAULT_BASE_BACKOFF_S))
+    )
+    exponent = min(max(0, attempt - 1), max_exponent)
+    delay = min(_DEFAULT_BASE_BACKOFF_S * (2**exponent), _DEFAULT_MAX_BACKOFF_S)
     await asyncio.sleep(delay)
 
 
@@ -115,6 +120,8 @@ class TradeUpdateCounters:
     - ``stale_terminal`` — events for an already-terminal order (surfaced).
     - ``unexplained`` — events whose order this Clerk did not own.
     - ``parse_errors`` — frames that captured but would not parse.
+    - ``capture_failures`` — frames refused because verbatim capture failed.
+    - ``event_key_collisions`` — changed payloads that reused an event key.
     - ``reconnects`` — reconnect cycles performed.
     - ``gap_reconciled`` — orders pulled by a post-reconnect REST gap-fill.
     """
@@ -126,13 +133,70 @@ class TradeUpdateCounters:
     parse_errors: int = 0
     reconnects: int = 0
     gap_reconciled: int = 0
+    capture_failures: int = 0
+    event_key_collisions: int = 0
 
 
 @dataclass
 class _SeenEvent:
-    """The terminality of the order at the time a key was first accepted."""
+    """The accepted payload fingerprint and terminality for one event key."""
 
+    fingerprint: str
     terminal: bool
+
+
+def _event_fingerprint(
+    event: Any,
+    order: dict[str, Any],
+    broker_order: Any | None,
+) -> str:
+    """Return a canonical fingerprint for exact-redelivery verification.
+
+    An event key identifies a lifecycle slot, not an immutable payload: a
+    corrected fill can reuse its ``execution_id`` and two observations can
+    collapse to the same millisecond. Only equivalent ledger meaning is an
+    idempotent redelivery. The parsed event fields are canonical
+    (timestamps are int64 ms) and the broker order captures the rest of the
+    state the Clerk journals.
+    """
+    payload = {
+        "event": event.event_type,
+        "occurred_at_ms": event.occurred_at_ms,
+        "price": event.price,
+        "quantity": event.quantity,
+        "client_order_id": order.get("client_order_id"),
+        "order": (
+            {
+                "order_id": broker_order.order_id,
+                "client_order_id": broker_order.client_order_id,
+                "symbol": broker_order.symbol,
+                "side": broker_order.side,
+                "order_type": broker_order.order_type,
+                "time_in_force": broker_order.time_in_force,
+                "quantity": broker_order.quantity,
+                "filled_quantity": broker_order.filled_quantity,
+                "limit_price": broker_order.limit_price,
+                "stop_price": broker_order.stop_price,
+                "filled_avg_price": broker_order.filled_avg_price,
+                "status": broker_order.status,
+                "submitted_at_ms": broker_order.submitted_at_ms,
+                "created_at_ms": broker_order.created_at_ms,
+                "updated_at_ms": broker_order.updated_at_ms,
+                "filled_at_ms": broker_order.filled_at_ms,
+                "canceled_at_ms": broker_order.canceled_at_ms,
+                "expired_at_ms": broker_order.expired_at_ms,
+            }
+            if broker_order is not None
+            else None
+        ),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _variant_event_key(event_key: str, fingerprint: str) -> str:
+    """Give a corrected observation a stable, auditable distinct journal key."""
+    digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
+    return f"{event_key}:variant:{digest}"
 
 
 def _event_key(
@@ -194,12 +258,11 @@ class TradeUpdatesConsumer:
         self._max_reconnects = max_reconnects
         self._counters = TradeUpdateCounters()
         self._seen: dict[str, _SeenEvent] = {}
-        # Order ids that have reached a journaled terminal event. Any later event
-        # for one is a stale re-observation of a finalized order — this is the
-        # cross-path idempotency guard the REST gap-reconcile relies on: a fill's
-        # socket ``exec:`` key cannot be reconstructed from a REST order, so
-        # key-only dedup would re-journal a re-pulled terminal fill.
-        self._terminal_orders: set[str] = set()
+        # Fingerprints of journaled terminal events by order id. An exact later
+        # observation is stale; a changed payload is a correction and remains
+        # auditable. This guards REST gap-reconcile, whose reconstructed fill
+        # lacks the socket execution key.
+        self._terminal_orders: dict[str, set[str]] = {}
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -239,7 +302,7 @@ class TradeUpdatesConsumer:
         attempt = 0
         while True:
             try:
-                await self._consume_once()
+                await self._consume_once(reconcile_after_connect=attempt > 0)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -260,11 +323,21 @@ class TradeUpdatesConsumer:
                 )
                 return
             await self._backoff(attempt)
-            await self._gap_reconcile()
 
-    async def _consume_once(self) -> None:
-        """Open one frame source and process frames until it is exhausted."""
+    async def _consume_once(self, *, reconcile_after_connect: bool) -> None:
+        """Open one source, re-subscribe, then process frames until exhaustion."""
         source = self._frame_source()
+        try:
+            first_frame = await anext(source)
+        except StopAsyncIteration:
+            return
+        # ``anext`` establishes the next source before reconciliation starts.
+        # For the real socket, it yields the auth acknowledgement only after
+        # the server accepted the ``listen`` subscription; a reconnect is live
+        # before the REST snapshot closes the previous gap.
+        if reconcile_after_connect:
+            await self._gap_reconcile()
+        await self._handle_frame(first_frame)
         async for frame in source:
             await self._handle_frame(frame)
 
@@ -275,7 +348,7 @@ class TradeUpdatesConsumer:
         raw = frame.encode("utf-8") if isinstance(frame, str) else frame
         # 1. Verbatim capture BEFORE parse: the on-disk record is exactly the
         #    wire bytes, so a parse failure still leaves an auditable frame.
-        self._journal.record(
+        captured = self._journal.record(
             broker=BROKER_ID,
             endpoint=CaptureEndpoint.STREAM,
             method="WS",
@@ -283,6 +356,13 @@ class TradeUpdatesConsumer:
             status=0,  # websocket frames carry no HTTP status.
             raw_body=raw,
         )
+        if not captured:
+            self._counters.capture_failures += 1
+            logger.error(
+                "alpaca trade_updates frame could not be captured; refusing to derive lifecycle state",
+                extra={"action": "trade_updates_capture_failed"},
+            )
+            return
 
         try:
             message = json.loads(raw)
@@ -343,12 +423,16 @@ class TradeUpdatesConsumer:
             return
 
         order_id = str(order.get("id") or "")
+        fingerprint = _event_fingerprint(event, order, broker_order)
         # Cross-path idempotency: once an order has a journaled terminal event,
-        # any later event for it — an exact socket redelivery, or a REST
+        # an exact later event for it — a socket redelivery, or a REST
         # gap-reconcile re-pull that keys differently (a fill's socket ``exec:``
         # key cannot be reconstructed from a REST order) — is a stale
         # re-observation of a finalized order. Surface + count; never re-journal.
-        if order_id and order_id in self._terminal_orders:
+        if (
+            order_id
+            and fingerprint in self._terminal_orders.get(order_id, set())
+        ):
             self._counters.stale_terminal += 1
             logger.warning(
                 "alpaca trade_updates redelivered event for a terminal order",
@@ -363,33 +447,47 @@ class TradeUpdatesConsumer:
         key = _event_key(event.event_type, event.occurred_at_ms, data, order)
         seen = self._seen.get(key)
         if seen is not None:
-            # Exact redelivery of a key we already accepted (live_idempotent).
-            if seen.terminal:
-                # The order was already terminal when first accepted; a repeat is
-                # a stale redelivery of a finalized order. Surface + count — the
-                # temporal-rigor rule forbids silently dropping it.
-                self._counters.stale_terminal += 1
+            if seen.fingerprint != fingerprint:
+                self._counters.event_key_collisions += 1
+                key = _variant_event_key(key, fingerprint)
+                variant_seen = self._seen.get(key)
+                if variant_seen is not None:
+                    self._counters.skipped_duplicate += 1
+                    return
                 logger.warning(
-                    "alpaca trade_updates redelivered event for a terminal order",
+                    "alpaca trade_updates reused an event key with a changed payload",
                     extra={
-                        "action": "trade_updates_stale_terminal",
-                        "event": event.event_type,
+                        "action": "trade_updates_event_key_collision",
                         "event_key": key,
+                        "order_id": order_id,
                     },
                 )
             else:
-                self._counters.skipped_duplicate += 1
-                logger.info(
-                    "alpaca trade_updates idempotent skip of redelivered event",
-                    extra={
-                        "action": "trade_updates_skipped_duplicate",
-                        "event": event.event_type,
-                        "event_key": key,
-                    },
-                )
-            return
-
-        self._seen[key] = _SeenEvent(terminal=_is_terminal(order))
+                # Exact redelivery of a key we already accepted (live_idempotent).
+                if seen.terminal:
+                    # The order was already terminal when first accepted; a repeat is
+                    # a stale redelivery of a finalized order. Surface + count — the
+                    # temporal-rigor rule forbids silently dropping it.
+                    self._counters.stale_terminal += 1
+                    logger.warning(
+                        "alpaca trade_updates redelivered event for a terminal order",
+                        extra={
+                            "action": "trade_updates_stale_terminal",
+                            "event": event.event_type,
+                            "event_key": key,
+                        },
+                    )
+                else:
+                    self._counters.skipped_duplicate += 1
+                    logger.info(
+                        "alpaca trade_updates idempotent skip of redelivered event",
+                        extra={
+                            "action": "trade_updates_skipped_duplicate",
+                            "event": event.event_type,
+                            "event_key": key,
+                        },
+                    )
+                return
 
         client_order_id = adapter.opt_str(order.get("client_order_id"))
         kind = await self._clerk.record_lifecycle_event(
@@ -398,6 +496,11 @@ class TradeUpdatesConsumer:
             event_key=key,
             order=broker_order,
         )
+        # Only a durable Clerk append earns idempotency state. If the Clerk
+        # raises, the reconnect loop can retry the still-unseen frame.
+        self._seen[key] = _SeenEvent(
+            fingerprint=fingerprint, terminal=_is_terminal(order)
+        )
         if kind is ClerkEntryKind.UNEXPLAINED_ORDER:
             self._counters.unexplained += 1
         else:
@@ -405,7 +508,7 @@ class TradeUpdatesConsumer:
         # Mark the order finalized (owned or not) so a later re-observation of
         # this terminal order is recognized as stale regardless of its key.
         if order_id and _is_terminal(order):
-            self._terminal_orders.add(order_id)
+            self._terminal_orders.setdefault(order_id, set()).add(fingerprint)
 
     # ── Reconnect gap-reconcile ──────────────────────────────────────────────
 
@@ -487,10 +590,10 @@ def _order_to_event_payload(broker_order: Any) -> dict[str, Any] | None:
     event = _STATUS_TO_EVENT.get(str(broker_order.status))
     if event is None:
         return None
-    timestamp_ms = broker_order.updated_at_ms or broker_order.submitted_at_ms
+    timestamp_ms = _lifecycle_timestamp_ms(broker_order, event)
     if timestamp_ms is None:
         return None
-    return {
+    payload: dict[str, Any] = {
         "event": event,
         "timestamp": _ms_to_rfc3339(timestamp_ms),
         "order": {
@@ -516,6 +619,10 @@ def _order_to_event_payload(broker_order: Any) -> dict[str, Any] | None:
             "expired_at": _opt_ms_to_rfc3339(broker_order.expired_at_ms),
         },
     }
+    if event in {"fill", "partial_fill"}:
+        payload["price"] = broker_order.filled_avg_price
+        payload["qty"] = broker_order.filled_quantity
+    return payload
 
 
 # Map a REST order status to the lifecycle event a gap-reconcile synthesizes.
@@ -531,6 +638,16 @@ _STATUS_TO_EVENT: dict[str, str] = {
     "done_for_day": "done_for_day",
     "replaced": "replaced",
 }
+
+
+def _lifecycle_timestamp_ms(broker_order: Any, event: str) -> int | None:
+    """Use the vendor's transition instant before falling back to ``updated``."""
+    event_timestamp = {
+        "fill": broker_order.filled_at_ms,
+        "canceled": broker_order.canceled_at_ms,
+        "expired": broker_order.expired_at_ms,
+    }.get(event)
+    return event_timestamp or broker_order.updated_at_ms or broker_order.submitted_at_ms
 
 
 def _ms_to_rfc3339(ms: int) -> str:
@@ -571,9 +688,24 @@ async def alpaca_socket_frames(settings: AlpacaSettings) -> AsyncIterator[bytes 
                 }
             )
         )
+        auth_frame = await socket.recv()
+        try:
+            authorization = json.loads(auth_frame)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Alpaca sent an invalid authorization response") from exc
+        if (
+            not isinstance(authorization, dict)
+            or authorization.get("stream") != _STREAM_AUTHORIZATION
+            or (authorization.get("data") or {}).get("status") != "authorized"
+        ):
+            raise RuntimeError("Alpaca did not authorize the trade_updates stream")
         await socket.send(
             json.dumps({"action": "listen", "data": {"streams": [_STREAM_TRADE_UPDATES]}})
         )
+        # Preserve the inbound authorization frame in the same capture path as
+        # every later socket frame. The listen was sent only after authorization
+        # and before this first yield, so reconnect gap-reconcile runs live.
+        yield auth_frame
         async for frame in socket:
             yield frame
 

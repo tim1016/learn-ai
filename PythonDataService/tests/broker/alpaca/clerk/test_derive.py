@@ -102,6 +102,17 @@ def _intent(order_ref: str) -> OrderJournalEntry:
     )
 
 
+def _unexplained(ms: int) -> OrderJournalEntry:
+    return OrderJournalEntry(
+        kind=ClerkEntryKind.UNEXPLAINED_ORDER,
+        account_id="A",
+        broker_order_id="foreign-order",
+        client_order_id="foreign",
+        owned=False,
+        recorded_at_ms=ms,
+    )
+
+
 def test_hold_state_empty_ledger_is_inactive() -> None:
     assert derive.hold_state([]).active is False
 
@@ -119,6 +130,20 @@ def test_hold_state_last_write_wins() -> None:
     assert derive.hold_state(entries).active is True
     # set → clear: cleared wins.
     assert derive.hold_state([_hold_set(1), _hold_cleared(2)]).active is False
+
+
+def test_unexplained_order_after_clear_derives_a_fail_closed_hold() -> None:
+    # A crash after UNEXPLAINED_ORDER but before the companion HOLD_SET append
+    # must not leave the next process able to submit new exposure.
+    state = derive.hold_state([_hold_cleared(1), _unexplained(2)])
+
+    assert state.active is True
+    assert state.reason_code == "UNEXPLAINED_ORDER_HOLD"
+    assert state.since_ms == 2
+
+
+def test_clear_after_unexplained_order_releases_the_derived_hold() -> None:
+    assert derive.hold_state([_unexplained(1), _hold_cleared(2)]).active is False
 
 
 def test_latest_reconciliation_returns_most_recent() -> None:
@@ -145,6 +170,12 @@ def test_has_missing_intent_false_when_intent_recorded() -> None:
 
 def test_has_missing_intent_true_for_position_with_no_owned_orders() -> None:
     assert derive.has_missing_intent([], [], [_position()]) is True
+
+
+def test_has_missing_intent_detects_manual_position_after_unrelated_intent() -> None:
+    # An old SPY intent cannot mask a live manual position. The journal has no
+    # filled state for it, so expected SPY exposure remains zero.
+    assert derive.has_missing_intent([_intent("manual/op/v1:old")], [], [_position()])
 
 
 def test_has_missing_intent_false_on_empty_broker_state() -> None:

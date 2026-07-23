@@ -17,6 +17,7 @@ deterministic.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import (
     UNEXPLAINED_ORDER_HOLD_CODE,
     ClerkEntryKind,
+    OrderJournalEntry,
 )
 from app.broker.contract.errors import BrokerSubmissionHeld, BrokerUnavailable
 from app.broker.contract.models import (
@@ -62,7 +64,10 @@ def _account(account_id: str = "PA-TEST") -> BrokerAccountSnapshot:
 
 
 def _order(
-    *, client_order_id: str | None, order_id: str = "broker-order-1"
+    *,
+    client_order_id: str | None,
+    order_id: str = "broker-order-1",
+    status: str = "accepted",
 ) -> BrokerOrder:
     return BrokerOrder(
         broker="alpaca",
@@ -78,7 +83,7 @@ def _order(
         limit_price=None,
         stop_price=None,
         filled_avg_price=None,
-        status="accepted",
+        status=status,
         submitted_at_ms=_FIXED_MS,
         created_at_ms=_FIXED_MS,
         updated_at_ms=_FIXED_MS,
@@ -124,13 +129,21 @@ class _FakeBroker:
         orders: list[BrokerOrder] | None = None,
         positions: list[BrokerPosition] | None = None,
         list_error: Exception | None = None,
+        submit_error: Exception | None = None,
+        lookup_error: Exception | None = None,
+        lookup_result: BrokerOrder | None = None,
     ) -> None:
         self._account = account or _account()
         self._orders = orders or []
         self._positions = positions or []
         self._list_error = list_error
+        self._submit_error = submit_error
+        self._lookup_error = lookup_error
+        self._lookup_result = lookup_result
         self.submit_calls: list[tuple[BrokerOrderLeg, str]] = []
         self.cancel_calls: list[str] = []
+        self.orders_started: asyncio.Event | None = None
+        self.release_orders: asyncio.Event | None = None
 
     async def get_account(self) -> BrokerAccountSnapshot:
         return self._account
@@ -138,6 +151,10 @@ class _FakeBroker:
     async def list_orders(self, **_: Any) -> list[BrokerOrder]:
         if self._list_error is not None:
             raise self._list_error
+        if self.orders_started is not None:
+            self.orders_started.set()
+        if self.release_orders is not None:
+            await self.release_orders.wait()
         return list(self._orders)
 
     async def list_positions(self) -> list[BrokerPosition]:
@@ -149,7 +166,16 @@ class _FakeBroker:
         self, leg: BrokerOrderLeg, *, client_order_id: str
     ) -> BrokerOrder:
         self.submit_calls.append((leg, client_order_id))
+        if self._submit_error is not None:
+            raise self._submit_error
         return _order(client_order_id=client_order_id)
+
+    async def get_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> BrokerOrder | None:
+        if self._lookup_error is not None:
+            raise self._lookup_error
+        return self._lookup_result
 
     async def cancel(self, order_id: str) -> None:
         self.cancel_calls.append(order_id)
@@ -219,6 +245,17 @@ async def test_reconcile_unexplained_order_journals_and_sets_hold() -> None:
     assert [e.verdict for e in recon] == ["unexplained_order"]
     assert clerk.is_on_hold() is True
     assert clerk.unexplained_order_count == 1
+
+
+async def test_reconcile_ignores_terminal_foreign_order_history() -> None:
+    broker = _FakeBroker(
+        orders=[_order(client_order_id="foreign", status="canceled")]
+    )
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+
+    assert await clerk.reconcile_once() == "clean"
+    assert clerk.is_on_hold() is False
+    assert ClerkEntryKind.UNEXPLAINED_ORDER not in _kinds(clerk)
 
 
 async def test_persistent_unexplained_order_is_journaled_once_across_sweeps() -> None:
@@ -310,6 +347,28 @@ async def test_submit_is_refused_while_held_and_records_no_intent() -> None:
     assert _kinds(clerk) == kinds_before
 
 
+async def test_submit_is_fail_closed_after_unexplained_entry_before_hold_receipt() -> None:
+    # Simulate a crash between durable UNEXPLAINED_ORDER and HOLD_SET. Restart
+    # must derive the hold from the observation and refuse a fresh submit.
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    account_id, journal = await clerk._ensure_journal()  # type: ignore[attr-defined]
+    journal.append(
+        OrderJournalEntry(
+            kind=ClerkEntryKind.UNEXPLAINED_ORDER,
+            account_id=account_id,
+            broker_order_id="foreign-order",
+            client_order_id="foreign",
+            owned=False,
+            recorded_at_ms=_FIXED_MS,
+        )
+    )
+
+    with pytest.raises(BrokerSubmissionHeld):
+        await clerk.submit(_request())
+    assert broker.submit_calls == []
+
+
 async def test_cancel_is_allowed_while_held() -> None:
     broker = _FakeBroker(orders=[_order(client_order_id="foreign")])
     clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
@@ -321,6 +380,23 @@ async def test_cancel_is_allowed_while_held() -> None:
     # Cancel reduces exposure — never blocked by the hold.
     assert result.status == "acked"
     assert broker.cancel_calls == ["broker-order-1"]
+
+
+async def test_slow_reconciliation_read_does_not_block_cancel() -> None:
+    broker = _FakeBroker()
+    broker.orders_started = asyncio.Event()
+    broker.release_orders = asyncio.Event()
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+
+    sweep = asyncio.create_task(clerk.reconcile_once())
+    await broker.orders_started.wait()
+
+    cancel = await clerk.cancel("order-to-reduce")
+    assert cancel.status == "acked"
+    assert broker.cancel_calls == ["order-to-reduce"]
+
+    broker.release_orders.set()
+    await sweep
 
 
 async def test_clear_hold_restores_submission() -> None:
@@ -337,6 +413,24 @@ async def test_clear_hold_restores_submission() -> None:
     broker._orders = []
     result = await clerk.submit(_request())
     assert result.results[0].status == "acked"
+
+
+async def test_periodic_sweep_resolves_a_stranded_uncertain_submit() -> None:
+    broker = _FakeBroker(
+        submit_error=BrokerUnavailable("timeout", broker="alpaca", detail="timeout"),
+        lookup_error=BrokerUnavailable("down", broker="alpaca", detail="5xx"),
+    )
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+
+    submitted = await clerk.submit(_request())
+    order_ref = submitted.results[0].order_ref
+    assert submitted.results[0].status == "uncertain"
+
+    broker._lookup_error = None
+    broker._lookup_result = _order(client_order_id=order_ref)
+    await clerk.reconcile_once()
+
+    assert ClerkEntryKind.SUBMIT_ACKED in _kinds(clerk)
 
 
 # ── Journal-derived durability + idempotency ─────────────────────────────────

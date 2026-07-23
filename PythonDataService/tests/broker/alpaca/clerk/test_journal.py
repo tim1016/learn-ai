@@ -75,6 +75,27 @@ def test_append_writes_inbox_and_journal(tmp_path: Path) -> None:
     assert journal.appended == 1
 
 
+def test_first_append_fsyncs_the_account_directory_and_new_ancestors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal = OrderJournal(account_id="PA-1", root=tmp_path)
+    synced: list[Path] = []
+
+    def record_directory_sync(path: Path) -> None:
+        synced.append(path)
+
+    monkeypatch.setattr(journal, "_fsync_directory", record_directory_sync)
+
+    journal.append(_entry())
+
+    assert synced == [
+        tmp_path / "accounts" / "alpaca" / "PA-1",
+        tmp_path / "accounts" / "alpaca",
+        tmp_path / "accounts",
+        tmp_path,
+    ]
+
+
 def test_append_then_reload_reconstructs_entries(tmp_path: Path) -> None:
     journal = OrderJournal(account_id="PA-1", root=tmp_path)
     journal.append(_entry(ClerkEntryKind.INTENT_RECORDED))

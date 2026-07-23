@@ -74,7 +74,9 @@ class BrokerTradePort(Protocol):
     mint identity; that is the Clerk's job so the journal and the wire carry the
     same ``order_ref``. The vendor layer maps the accepted order to a
     ``BrokerOrder`` (the same contract type the read path returns) or raises a
-    ``BrokerError`` subclass, which the Clerk journals as ``submit_failed``.
+    ``BrokerError`` subclass. A submit-side ``BrokerUnavailable`` is not a
+    definitive failure: the Clerk resolves it through
+    ``get_order_by_client_order_id`` before journaling a terminal outcome.
 
     ``cancel`` requests cancellation of a working order by its **broker-assigned
     order id** (the ``BrokerOrder.order_id`` — a UUID for Alpaca), not the

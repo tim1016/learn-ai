@@ -103,16 +103,28 @@ class OrderJournal:
         return path
 
     def append(self, entry: OrderJournalEntry) -> None:
-        """Append one entry to the inbox and the journal; ``fsync`` both.
+        """Append one entry to the inbox and the journal; ``fsync`` each path.
 
         Fail-closed: any I/O error propagates so the caller (the Clerk) never
         proceeds to the broker without a durable intent record.
         """
         line = entry.model_dump_json() + "\n"
         with self._lock:
+            inbox_path = self._dir / INBOX_FILENAME
+            journal_path = self._dir / JOURNAL_FILENAME
+            # Directory metadata changes only when one of the fixed journal
+            # files is first created. Avoid four unnecessary directory fsyncs
+            # on every later append while retaining the first-write guarantee.
+            needs_directory_sync = not inbox_path.is_file() or not journal_path.is_file()
             self._dir.mkdir(parents=True, exist_ok=True)
-            self._append_fsynced(self._dir / INBOX_FILENAME, line)
-            self._append_fsynced(self._dir / JOURNAL_FILENAME, line)
+            self._append_fsynced(inbox_path, line)
+            self._append_fsynced(journal_path, line)
+            # File fsync alone does not make newly-created file or directory
+            # entries durable on POSIX. Sync the account directory (for both
+            # journal files) and each ancestor created by mkdir before the
+            # caller is allowed to submit an order.
+            if needs_directory_sync:
+                self._fsync_directory_chain()
             self._appended += 1
 
     @staticmethod
@@ -122,6 +134,24 @@ class OrderJournal:
             handle.write(line)
             handle.flush()
             os.fsync(handle.fileno())
+
+    def _fsync_directory_chain(self) -> None:
+        """Persist journal file entries and any newly-created parent entries."""
+        directory = self._dir
+        while True:
+            self._fsync_directory(directory)
+            if directory == self._root:
+                return
+            directory = directory.parent
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        """``fsync`` one POSIX directory, propagating failures fail-closed."""
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def read_entries(self) -> list[OrderJournalEntry]:
         """Replay the canonical ledger into entries (recovery / test seam)."""

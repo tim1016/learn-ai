@@ -11,6 +11,7 @@ testable and share one place with the ``clerk.py`` intent/terminal scanners.
 from __future__ import annotations
 
 from app.broker.alpaca.clerk.models import (
+    UNEXPLAINED_ORDER_HOLD_CODE,
     ClerkEntryKind,
     ClerkStatus,
     HoldState,
@@ -47,9 +48,11 @@ def build_status(
 def hold_state(entries: list[OrderJournalEntry]) -> HoldState:
     """Derive the exposure-hold state from the ledger.
 
-    A ``HOLD_SET`` with no later ``HOLD_CLEARED`` is active. Last write wins: the
-    most recent of the two kinds decides, so the hold survives a restart with no
-    in-memory flag.
+    A ``HOLD_SET`` with no later ``HOLD_CLEARED`` is active. An
+    ``UNEXPLAINED_ORDER`` after the latest clear is also an active hold: this
+    fail-closed derivation covers a crash or append failure between recording the
+    foreign order and the separate ``HOLD_SET`` receipt. Last write wins, so an
+    operator's later clear remains effective until another observation arrives.
     """
     active = False
     reason_code: str | None = None
@@ -66,6 +69,14 @@ def hold_state(entries: list[OrderJournalEntry]) -> HoldState:
             reason_code = None
             reason = None
             since_ms = None
+        elif entry.kind is ClerkEntryKind.UNEXPLAINED_ORDER:
+            active = True
+            reason_code = UNEXPLAINED_ORDER_HOLD_CODE
+            reason = (
+                "An order this account did not submit was recorded in the "
+                "Alpaca clerk journal."
+            )
+            since_ms = entry.recorded_at_ms
     return HoldState(
         active=active, reason_code=reason_code, reason=reason, since_ms=since_ms
     )
@@ -111,9 +122,10 @@ def has_missing_intent(
     Every non-foreign order the sweep saw carries a ``client_order_id`` that is
     one of our namespaces (foreign orders are handled before this check). An owned
     order for which the ledger has no ``intent_recorded`` line means the broker
-    knows about an order we never recorded intent for — drift. A position while
-    the ledger has never recorded a single owned order is the same drift signal
-    from the position side. Observational either way.
+    knows about an order we never recorded intent for — drift. Position-side drift
+    compares each live symbol/quantity to the latest journaled order state; an old
+    unrelated intent can therefore never mask manual exposure. Observational
+    either way.
     """
     recorded_refs = {
         entry.order_ref
@@ -124,4 +136,25 @@ def has_missing_intent(
         coid = order.client_order_id
         if coid and coid not in recorded_refs:
             return True
-    return bool(positions and not recorded_refs)
+    latest_order_by_ref: dict[str, BrokerOrder] = {}
+    for entry in entries:
+        if entry.order_ref and entry.order is not None:
+            latest_order_by_ref[entry.order_ref] = entry.order
+
+    expected_quantity_by_symbol: dict[str, float] = {}
+    for order in latest_order_by_ref.values():
+        signed_quantity = order.filled_quantity
+        if order.side.lower() == "sell":
+            signed_quantity = -signed_quantity
+        expected_quantity_by_symbol[order.symbol] = (
+            expected_quantity_by_symbol.get(order.symbol, 0.0) + signed_quantity
+        )
+
+    for position in positions:
+        actual_quantity = position.quantity
+        if position.side.lower() == "short":
+            actual_quantity = -actual_quantity
+        expected_quantity = expected_quantity_by_symbol.get(position.symbol, 0.0)
+        if abs(actual_quantity - expected_quantity) > 1e-9:
+            return True
+    return False

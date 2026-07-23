@@ -31,9 +31,9 @@ class ClerkEntryKind(StrEnum):
     # have been lost (timeout / 5xx / network → ``BrokerUnavailable``), so the
     # order MAY have landed. Journaled AFTER ``intent_recorded`` and resolved by
     # querying Alpaca for the order by ``client_order_id``: found → a terminal
-    # ``submit_acked``; definitively absent (404) → a terminal ``submit_failed``;
-    # lookup itself uncertain → the intent stays here for a later replay/sweep.
-    # NEVER a fabricated terminal outcome.
+    # ``submit_acked``; a 404 receives a bounded grace period before a later
+    # recovery/sweep may record ``submit_failed``; a failed lookup stays here.
+    # NEVER fabricate a terminal outcome from one lost response.
     SUBMIT_UNCERTAIN = "submit_uncertain"
     # S3 cancel path — recorded BEFORE the broker call, acked/failed after.
     CANCEL_RECORDED = "cancel_recorded"
@@ -213,10 +213,9 @@ class OrderLegResult(BaseModel):
 
     - ``acked`` — the broker accepted the order; ``order`` is set.
     - ``failed`` — the order definitively did not land; ``error`` is set.
-    - ``uncertain`` — the submit's HTTP outcome was unknown AND resolving it by
-      ``client_order_id`` was itself unreachable (S5). Neither ``order`` nor
-      ``error`` is authoritative yet; the intent is durably journaled as
-      ``submit_uncertain`` and startup replay / a later sweep will finish it. The
+    - ``uncertain`` — the submit's HTTP outcome was unknown. Neither ``order``
+      nor ``error`` is authoritative yet; the intent is durably journaled as
+      ``submit_uncertain`` and a later replay / sweep will finish it. The
       operator must not assume the order failed — it may still have landed.
 
     ``order_ref`` is always present — an operator can find the intent in the
@@ -225,7 +224,7 @@ class OrderLegResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    status: str = Field(pattern="^(acked|failed|uncertain)$")
+    status: Literal["acked", "failed", "uncertain"]
     order_ref: str
     intent_id: str
     order: BrokerOrder | None = None
@@ -245,10 +244,12 @@ class OrderSubmitResult(BaseModel):
 class HoldState(BaseModel):
     """The account-level exposure-hold state, journal-derived (S6).
 
-    A hold is active when a ``HOLD_SET`` line has no later ``HOLD_CLEARED``.
-    ``reason_code`` is code-like (rendered through ``receiptLabel`` on the UI);
-    ``reason`` is backend-authored what/why prose (rendered unpiped). When not
-    held, every field but ``active`` is ``None``.
+    A hold is active when a ``HOLD_SET`` or ``UNEXPLAINED_ORDER`` line has no
+    later ``HOLD_CLEARED``. The latter keeps a crash between the observation and
+    its companion HOLD_SET receipt fail-closed. ``reason_code`` is code-like
+    (rendered through ``receiptLabel`` on the UI); ``reason`` is backend-authored
+    what/why prose (rendered unpiped). When not held, every field but ``active``
+    is ``None``.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -1,4 +1,11 @@
-import { ChangeDetectionStrategy, Component, inject, resource, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  inject,
+  resource,
+  signal,
+} from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
 
@@ -25,13 +32,26 @@ import { BrokersService } from '../../../services/brokers.service';
 })
 export class AlpacaHoldBannerComponent {
   private readonly brokers = inject(BrokersService);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly refreshEpoch = signal(0);
 
   protected readonly status = resource({
+    params: () => this.refreshEpoch(),
     loader: () => this.brokers.getClerkStatus(),
   });
 
   protected readonly clearing = signal(false);
   protected readonly clearError = signal<string | null>(null);
+
+  constructor() {
+    // Holds can be raised by the background reconciliation sweep while this
+    // desk remains open. Polling gives the operator that asynchronous safety
+    // state without requiring a route reload or a separate streaming channel.
+    const refreshTimer = setInterval(() => {
+      this.refreshEpoch.update((epoch) => epoch + 1);
+    }, 15_000);
+    this.destroyRef.onDestroy(() => clearInterval(refreshTimer));
+  }
 
   protected async clearHold(): Promise<void> {
     if (this.clearing()) return;

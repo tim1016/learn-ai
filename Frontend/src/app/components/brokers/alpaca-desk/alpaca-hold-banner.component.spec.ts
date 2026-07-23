@@ -62,6 +62,24 @@ describe('AlpacaHoldBannerComponent', () => {
     expect(screen.queryByRole('button', { name: /Clear hold/ })).toBeNull();
   });
 
+  it('refreshes a desk already open when the sweep raises a hold', async () => {
+    vi.useFakeTimers();
+    try {
+      const getClerkStatus = vi
+        .fn()
+        .mockResolvedValueOnce(clearStatus())
+        .mockResolvedValueOnce(heldStatus());
+      await renderBanner({ getClerkStatus });
+
+      await waitFor(() => expect(getClerkStatus).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await screen.findByText(/Unexplained Order Hold/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('invokes BrokersService.clearHold when the clear-hold button is clicked', async () => {
     const clearHold = vi.fn().mockResolvedValue(clearStatus());
     await renderBanner({

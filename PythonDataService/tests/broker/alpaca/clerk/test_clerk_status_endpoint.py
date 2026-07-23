@@ -254,6 +254,17 @@ async def test_clear_hold_restores_submission(_alpaca_clerk: None) -> None:
     assert submit.json()["results"][0]["status"] == "acked"
 
 
+async def test_clear_hold_rejects_a_blank_audit_reason_at_the_boundary(
+    _alpaca_clerk: None,
+) -> None:
+    response = await _post(
+        "/api/brokers/alpaca/clerk/clear-hold",
+        {"operator": "ops", "reason": "   "},
+    )
+
+    assert response.status_code == 422
+
+
 async def test_status_unconfigured_clerk_returns_503() -> None:
     reset_alpaca_clerk_for_testing()
 

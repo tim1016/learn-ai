@@ -20,6 +20,7 @@ Two conventions are load-bearing:
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import StrEnum
 from typing import Literal
 
@@ -61,6 +62,9 @@ class TimeInForce(StrEnum):
     GTC = "gtc"
 
 
+US_EQUITY_SYMBOL_PATTERN = r"^[A-Z]{1,5}(?:[.-][A-Z])?$"
+
+
 class BrokerOrderLeg(_ContractModel):
     """One equity leg of an order request (broker-neutral).
 
@@ -71,7 +75,14 @@ class BrokerOrderLeg(_ContractModel):
     validates. The quantity is a positive share count; the *sign* is ``side``.
     """
 
-    symbol: str = Field(min_length=1, max_length=32)
+    # S1 accepts listed US-equity tickers only. Keeping this at the transport
+    # boundary prevents a direct caller from bypassing the option-disabled UI
+    # and submitting an Alpaca crypto pair or OCC option identifier.
+    symbol: str = Field(
+        min_length=1,
+        max_length=7,
+        pattern=US_EQUITY_SYMBOL_PATTERN,
+    )
     side: OrderSide
     quantity: float = Field(gt=0)
     order_type: Literal[OrderType.MARKET, OrderType.LIMIT] = OrderType.MARKET
@@ -86,15 +97,26 @@ class BrokerOrderLeg(_ContractModel):
             raise ValueError("A limit order requires a limit_price.")
         if self.order_type is OrderType.MARKET and self.limit_price is not None:
             raise ValueError("A market order must not carry a limit_price.")
+        if self.limit_price is not None:
+            price = Decimal(str(self.limit_price))
+            max_decimal_places = 2 if price >= 1 else 4
+            if -price.as_tuple().exponent > max_decimal_places:
+                raise ValueError(
+                    "Alpaca limit prices at or above $1 allow at most 2 decimal "
+                    "places; prices below $1 allow at most 4."
+                )
+        if self.time_in_force is TimeInForce.GTC and not self.quantity.is_integer():
+            raise ValueError("Alpaca fractional-share orders must use DAY time in force.")
         return self
 
 
 class BrokerOrderRequest(_ContractModel):
     """An operator-authored order request: one or more legs to submit.
 
-    Each leg is submitted independently and journaled independently, so a
-    per-leg failure never blocks the others. The clerk mints a distinct
-    ``order_ref`` identity per leg.
+    Each leg is journaled independently. A definitive per-leg failure does not
+    block later legs, but an uncertain outcome stops the batch before it can
+    create contradictory new exposure. The clerk mints a distinct ``order_ref``
+    identity per submitted leg.
     """
 
     # ``operator`` becomes the manual-namespace path segment
