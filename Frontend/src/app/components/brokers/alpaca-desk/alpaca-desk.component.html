@@ -1,0 +1,21 @@
+<main class="flex min-h-full flex-col gap-4 p-6">
+  <header>
+    <div class="flex items-center gap-3">
+      <h1 class="m-0 text-2xl font-semibold">Alpaca</h1>
+      <p-tag severity="warn" value="Paper" />
+    </div>
+    <p class="mb-0 mt-1 text-sm text-color-secondary">Read-only broker desk · Broker System v2</p>
+  </header>
+
+  <app-alpaca-account-card />
+
+  <section class="flex flex-col gap-2" aria-label="Positions">
+    <h2 class="m-0 text-lg font-semibold">Positions</h2>
+    <app-alpaca-positions-table />
+  </section>
+
+  <section class="flex flex-col gap-2" aria-label="Orders">
+    <h2 class="m-0 text-lg font-semibold">Orders</h2>
+    <app-alpaca-orders-table />
+  </section>
+</main>

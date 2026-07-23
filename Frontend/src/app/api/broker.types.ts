@@ -1345,6 +1345,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Account */
+        get: operations["get_account_api_brokers__broker__account_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/activities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Activities */
+        get: operations["list_activities_api_brokers__broker__activities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Assets */
+        get: operations["list_assets_api_brokers__broker__assets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Clock Evidence */
+        get: operations["get_clock_evidence_api_brokers__broker__clock_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Orders */
+        get: operations["list_orders_api_brokers__broker__orders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/positions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Positions */
+        get: operations["list_positions_api_brokers__broker__positions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chart/allowed-timeframes": {
         parameters: {
             query?: never;
@@ -8356,6 +8458,70 @@ export interface components {
             threshold: number;
         };
         /**
+         * BrokerAccountSnapshot
+         * @description Account-level state for the account card (equity/cash/buying power).
+         */
+        BrokerAccountSnapshot: {
+            /** Account Blocked */
+            account_blocked: boolean;
+            /** Account Id */
+            account_id: string;
+            /** Account Status */
+            account_status: string;
+            /** Broker */
+            broker: string;
+            /** Buying Power */
+            buying_power: number;
+            /** Cash */
+            cash: number;
+            /** Created At Ms */
+            created_at_ms: number | null;
+            /** Currency */
+            currency: string;
+            /** Equity */
+            equity: number;
+            /** Long Market Value */
+            long_market_value: number;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Pattern Day Trader */
+            pattern_day_trader: boolean;
+            /** Portfolio Value */
+            portfolio_value: number;
+            /** Short Market Value */
+            short_market_value: number;
+            /** Trading Blocked */
+            trading_blocked: boolean;
+        };
+        /**
+         * BrokerActivity
+         * @description An account activity row (trade fills and non-trade events).
+         */
+        BrokerActivity: {
+            /** Activity Id */
+            activity_id: string;
+            /** Activity Type */
+            activity_type: string;
+            /** Broker */
+            broker: string;
+            /** Category */
+            category: string | null;
+            /** Net Amount */
+            net_amount: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Occurred At Ms */
+            occurred_at_ms: number | null;
+            /** Price */
+            price: number | null;
+            /** Quantity */
+            quantity: number | null;
+            /** Side */
+            side: string | null;
+            /** Symbol */
+            symbol: string | null;
+        };
+        /**
          * BrokerActivityHealth
          * @description PR 5 — broker-activity publisher health surface.
          *
@@ -8502,6 +8668,34 @@ export interface components {
             ts_ms: number;
             verdict: components["schemas"]["Verdict"];
         };
+        /**
+         * BrokerAsset
+         * @description A tradable (or listed) instrument descriptor.
+         */
+        BrokerAsset: {
+            /** Asset Class */
+            asset_class: string;
+            /** Asset Id */
+            asset_id: string;
+            /** Broker */
+            broker: string;
+            /** Exchange */
+            exchange: string | null;
+            /** Fractionable */
+            fractionable: boolean;
+            /** Marginable */
+            marginable: boolean | null;
+            /** Name */
+            name: string | null;
+            /** Shortable */
+            shortable: boolean | null;
+            /** Status */
+            status: string;
+            /** Symbol */
+            symbol: string;
+            /** Tradable */
+            tradable: boolean;
+        };
         /** BrokerCapabilityProbeResponse */
         BrokerCapabilityProbeResponse: {
             /** Snapshots */
@@ -8511,6 +8705,30 @@ export interface components {
         BrokerCapabilityReadResponse: {
             /** Snapshots */
             snapshots: components["schemas"]["SessionDataCapability"][];
+        };
+        /**
+         * BrokerClockEvidence
+         * @description Vendor clock/calendar reading — **evidence only, never authority**.
+         *
+         *     The canonical calendar module (``.claude/rules/temporal-rigor.md``) remains
+         *     the sole source of scheduled session structure. This model records what the
+         *     broker *claims* about market state so it can be displayed and, later,
+         *     compared against the calendar in a parity diagnostic. Nothing in session or
+         *     calendar logic may read these fields as authoritative.
+         */
+        BrokerClockEvidence: {
+            /** Broker */
+            broker: string;
+            /** Is Open */
+            is_open: boolean;
+            /** Next Close Ms */
+            next_close_ms: number | null;
+            /** Next Open Ms */
+            next_open_ms: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Vendor Timestamp Ms */
+            vendor_timestamp_ms: number;
         };
         /**
          * BrokerHealthCondition
@@ -8577,6 +8795,106 @@ export interface components {
              * @enum {string}
              */
             verdict: "CONSISTENT" | "CONFLICTING" | "UNKNOWN" | "NOT_COMPARABLE";
+        };
+        /**
+         * BrokerOrder
+         * @description An order and its status, for the recent-orders table.
+         */
+        BrokerOrder: {
+            /** Asset Class */
+            asset_class: string | null;
+            /** Broker */
+            broker: string;
+            /** Canceled At Ms */
+            canceled_at_ms: number | null;
+            /** Client Order Id */
+            client_order_id: string | null;
+            /** Created At Ms */
+            created_at_ms: number | null;
+            /** Events */
+            events?: components["schemas"]["BrokerOrderEvent"][];
+            /** Expired At Ms */
+            expired_at_ms: number | null;
+            /** Filled At Ms */
+            filled_at_ms: number | null;
+            /** Filled Avg Price */
+            filled_avg_price: number | null;
+            /** Filled Quantity */
+            filled_quantity: number;
+            /** Limit Price */
+            limit_price: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Order Id */
+            order_id: string;
+            /** Order Type */
+            order_type: string;
+            /** Quantity */
+            quantity: number | null;
+            /** Side */
+            side: string;
+            /** Status */
+            status: string;
+            /** Stop Price */
+            stop_price: number | null;
+            /** Submitted At Ms */
+            submitted_at_ms: number | null;
+            /** Symbol */
+            symbol: string;
+            /** Time In Force */
+            time_in_force: string;
+            /** Updated At Ms */
+            updated_at_ms: number | null;
+        };
+        /**
+         * BrokerOrderEvent
+         * @description A lifecycle event on an order (fill/partial-fill/cancel/...).
+         *
+         *     Phase-1 REST orders carry only their own lifecycle timestamps, from which
+         *     the adapter synthesizes a fill event when the order reports a fill. The
+         *     richer per-event stream arrives with the phase-2 ``trade_updates`` consumer.
+         */
+        BrokerOrderEvent: {
+            /** Event Type */
+            event_type: string;
+            /** Occurred At Ms */
+            occurred_at_ms: number;
+            /** Price */
+            price: number | null;
+            /** Quantity */
+            quantity: number | null;
+        };
+        /**
+         * BrokerPosition
+         * @description A single open position (symbol, quantity, entry, value, unrealized PnL).
+         */
+        BrokerPosition: {
+            /** Asset Class */
+            asset_class: string | null;
+            /** Asset Id */
+            asset_id: string | null;
+            /** Average Entry Price */
+            average_entry_price: number;
+            /** Broker */
+            broker: string;
+            /** Cost Basis */
+            cost_basis: number;
+            /** Current Price */
+            current_price: number | null;
+            /** Market Value */
+            market_value: number;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Quantity */
+            quantity: number;
+            /** Side */
+            side: string;
+            /** Symbol */
+            symbol: string;
+            /** Unrealized Pl */
+            unrealized_pl: number;
+            /** Unrealized Plpc */
+            unrealized_plpc: number | null;
         };
         /**
          * BrokerSafetyVerdict
@@ -24746,6 +25064,214 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_account_api_brokers__broker__account_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerAccountSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_activities_api_brokers__broker__activities_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                after_ms?: number | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerActivity"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_assets_api_brokers__broker__assets_get: {
+        parameters: {
+            query?: {
+                status?: ("active" | "inactive") | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerAsset"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clock_evidence_api_brokers__broker__clock_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerClockEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_orders_api_brokers__broker__orders_get: {
+        parameters: {
+            query?: {
+                status?: ("open" | "closed" | "all") | null;
+                limit?: number | null;
+                after_ms?: number | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerOrder"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_positions_api_brokers__broker__positions_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerPosition"][];
                 };
             };
             /** @description Validation Error */

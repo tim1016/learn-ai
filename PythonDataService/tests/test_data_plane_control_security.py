@@ -35,6 +35,7 @@ _PROTECTED_READ_PREFIXES = tuple(_CONTROL_SURFACE_MANIFEST_PAYLOAD["protected_re
 _MUTATION_PATH = "/api/broker/orders/what-if"
 _READ_PATH = "/api/broker/health"
 _MIRROR_READ_PATH = "/api/broker/session-mirror"
+_BROKERS_READ_PATH = "/api/brokers/alpaca/account"
 _LIVE_INSTANCES_READ_PATH = "/api/live-instances/bot-a/operator-surface/stream"
 
 
@@ -190,6 +191,52 @@ def test_broker_session_mirror_protected_reads_are_declared_in_shared_manifest()
     assert _MIRROR_READ_PATH in _PROTECTED_READ_PREFIXES
 
 
+def test_broker_v2_routes_declare_always_on_guard() -> None:
+    broker_routes = [
+        (route.path, sorted(route.methods or set()), _has_always_control_guard(route))
+        for route in _api_routes()
+        if route.path == "/api/brokers" or route.path.startswith("/api/brokers/")
+    ]
+
+    assert broker_routes
+    assert all(has_guard for _path, _methods, has_guard in broker_routes)
+
+
+def test_broker_v2_protected_reads_are_declared_in_shared_manifest() -> None:
+    assert "/api/brokers" in _PROTECTED_READ_PREFIXES
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supplied", [None, "wrong"])
+async def test_broker_v2_read_rejects_missing_or_wrong_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    supplied: str | None,
+) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    headers = {} if supplied is None else {CONTROL_SECRET_HEADER: supplied}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(_BROKERS_READ_PATH, headers=headers)
+
+    assert response.status_code == 403
+    assert CONTROL_SECRET_HEADER in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_broker_v2_read_accepts_valid_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            _BROKERS_READ_PATH,
+            headers={CONTROL_SECRET_HEADER: "test-control-secret"},
+        )
+
+    assert response.status_code != 403
+
+
 def test_live_instance_routes_declare_always_on_guard() -> None:
     routes = [
         (route.path, sorted(route.methods or set()), _has_always_control_guard(route))
@@ -206,7 +253,7 @@ def test_live_instance_routes_declare_always_on_guard() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("supplied", [None, "wrong"])
 async def test_live_instance_stream_rejects_missing_or_wrong_secret(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     supplied: str | None,
 ) -> None:
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
@@ -221,7 +268,7 @@ async def test_live_instance_stream_rejects_missing_or_wrong_secret(
 
 
 @pytest.mark.asyncio
-async def test_live_instance_stream_accepts_valid_secret(monkeypatch) -> None:
+async def test_live_instance_stream_accepts_valid_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
     monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
 
@@ -235,7 +282,9 @@ async def test_live_instance_stream_accepts_valid_secret(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_broker_session_mirror_get_rejects_missing_secret_header(monkeypatch) -> None:
+async def test_broker_session_mirror_get_rejects_missing_secret_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
     monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
 
@@ -247,7 +296,9 @@ async def test_broker_session_mirror_get_rejects_missing_secret_header(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_broker_session_mirror_get_accepts_valid_secret_header(monkeypatch) -> None:
+async def test_broker_session_mirror_get_accepts_valid_secret_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
     monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
 

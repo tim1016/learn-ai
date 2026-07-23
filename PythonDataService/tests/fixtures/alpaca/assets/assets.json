@@ -1,0 +1,32 @@
+[
+  {
+    "id": "b0b6dd9d-8b9b-48a9-ba46-b9d54906e415",
+    "class": "us_equity",
+    "exchange": "NASDAQ",
+    "symbol": "AAPL",
+    "name": "Apple Inc. Common Stock",
+    "status": "active",
+    "tradable": true,
+    "marginable": true,
+    "shortable": true,
+    "easy_to_borrow": true,
+    "fractionable": true,
+    "maintenance_margin_requirement": 30,
+    "attributes": []
+  },
+  {
+    "id": "8ccae427-5dd0-45b3-b5fe-7ba5e422c766",
+    "class": "us_equity",
+    "exchange": "NYSE",
+    "symbol": "OLDCO",
+    "name": "Delisted Co.",
+    "status": "inactive",
+    "tradable": false,
+    "marginable": false,
+    "shortable": false,
+    "easy_to_borrow": false,
+    "fractionable": false,
+    "maintenance_margin_requirement": 100,
+    "attributes": []
+  }
+]
