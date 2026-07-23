@@ -77,7 +77,8 @@ services:
     # into /app. Pass its values through Compose so the running data plane has
     # the same paper-only credentials as the local PythonDataService setup.
     env_file:
-      - ./PythonDataService/.env
+      - path: ./PythonDataService/.env
+        required: false
     restart: always
     ports:
       # Default host exposure is loopback-only; widen deliberately for remote/shared envs.
