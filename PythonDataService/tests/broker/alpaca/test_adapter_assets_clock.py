@@ -15,11 +15,14 @@ from app.broker.alpaca.adapter import (
     rfc3339_to_ms,
 )
 from app.broker.contract.models import BrokerClockEvidence
+from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
 
 
-def test_from_alpaca_asset_maps_every_field_active(load_alpaca_fixture) -> None:
+def test_from_alpaca_asset_maps_every_field_active(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
     active = load_alpaca_fixture("assets", "assets.json")[0]
 
     asset = from_alpaca_asset(active)
@@ -38,7 +41,7 @@ def test_from_alpaca_asset_maps_every_field_active(load_alpaca_fixture) -> None:
     assert asset.marginable is True
 
 
-def test_from_alpaca_asset_inactive(load_alpaca_fixture) -> None:
+def test_from_alpaca_asset_inactive(load_alpaca_fixture: AlpacaFixtureLoader) -> None:
     inactive = load_alpaca_fixture("assets", "assets.json")[1]
 
     asset = from_alpaca_asset(inactive)
@@ -64,7 +67,9 @@ def test_from_alpaca_asset_missing_class_fails_loud() -> None:
         from_alpaca_asset({"id": "a", "symbol": "AAPL", "status": "active"})
 
 
-def test_from_alpaca_clock_is_vendor_evidence(load_alpaca_fixture) -> None:
+def test_from_alpaca_clock_is_vendor_evidence(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
     payload = load_alpaca_fixture("clock", "clock.json")
 
     clock = from_alpaca_clock(payload, observed_at_ms=_OBSERVED)

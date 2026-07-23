@@ -2,9 +2,9 @@
 
 Recursively diffs the key sets of the captured raw Alpaca payloads against the
 alpaca-py model field names (and aliases). If Alpaca ships a field the SDK does
-not know, this fails and **names** the offending keys — enforcing the
-no-fields-dropped rule. The capture journal always keeps everything regardless;
-this test guards the *mapping's* field coverage.
+not know, this fails and **names** the offending keys. The capture journal
+always keeps everything regardless; adapter tests separately prove the fields
+the broker contract intentionally maps.
 
 Parameterized over all six endpoint families; it auto-covers each as its
 fixtures land. When a real capture (HITL slice #1178) surfaces an unknown key,
@@ -26,6 +26,8 @@ from alpaca.trading.models import (
     TradeActivity,
 )
 from pydantic import BaseModel
+
+from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 # family → (fixture filename, alpaca-py model(s) that define its known fields)
 _FAMILIES: dict[str, tuple[str, tuple[type[BaseModel], ...]]] = {
@@ -78,7 +80,10 @@ def unknown_keys(payload: Any, models: tuple[type[BaseModel], ...]) -> set[str]:
 
 
 @pytest.mark.parametrize("family", list(_FAMILIES))
-def test_captured_payload_has_no_schema_drift(family: str, load_alpaca_fixture) -> None:
+def test_captured_payload_has_no_schema_drift(
+    family: str,
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
     filename, models = _FAMILIES[family]
     payload = load_alpaca_fixture(family, filename)
 
@@ -92,7 +97,7 @@ def test_captured_payload_has_no_schema_drift(family: str, load_alpaca_fixture) 
 
 
 def test_schema_drift_is_detected_and_named() -> None:
-    # A field the SDK has never seen must surface by name, not be silently dropped.
+    # A field the SDK has never seen must surface by name for compatibility review.
     payload = {"id": "abc", "cash": "1000", "brand_new_alpaca_field": 1}
 
     drift = unknown_keys(payload, (TradeAccount,))

@@ -26,7 +26,7 @@ def test_live_mode_is_refused() -> None:
         AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live")
 
 
-def test_missing_credentials_raise(monkeypatch) -> None:
+def test_missing_credentials_raise(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ALPACA_API_KEY_ID", raising=False)
     monkeypatch.delenv("ALPACA_API_SECRET_KEY", raising=False)
 

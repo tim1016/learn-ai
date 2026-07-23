@@ -1,7 +1,7 @@
 # Alpaca activities fixture — attribution
 
 - **Endpoint:** `GET /v2/account/activities`
-- **reference_kind:** `vendor_observed`
+- **reference_kind:** `synthetic_representative`
 - **Status:** `pending-real-capture`
 - **Source:** hand-built from the alpaca-py `TradeActivity` / `NonTradeActivity`
   model field sets (alpaca-py 0.42.0) and Alpaca's public Account Activities

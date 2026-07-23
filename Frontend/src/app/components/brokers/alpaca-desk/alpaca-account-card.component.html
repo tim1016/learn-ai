@@ -1,47 +1,49 @@
 @if (account.isLoading()) {
-  <p class="state" role="status">Loading Alpaca account…</p>
+  <p class="m-0 p-4 text-sm text-color-secondary" role="status">Loading Alpaca account…</p>
 } @else if (account.error()) {
-  <p class="state state-error" role="alert">
+  <p class="m-0 p-4 text-sm text-red-500" role="alert">
     Couldn't reach Alpaca. The account figures are unavailable right now.
   </p>
 } @else if (account.value(); as acct) {
-  <section class="account-card" aria-label="Alpaca account summary">
-    <header class="account-card__header">
-      <h3>Account {{ acct.account_id }}</h3>
-      <span class="badge badge--paper">Paper</span>
-      <span class="badge">{{ acct.account_status | receiptLabel }}</span>
-    </header>
+  <p-card aria-label="Alpaca account summary">
+    <section>
+      <header class="mb-3 flex items-center gap-2">
+        <h3 class="m-0 flex-1 text-base font-semibold">Account {{ acct.account_id }}</h3>
+        <p-tag severity="warn" value="Paper" />
+        <p-tag severity="info" [value]="acct.account_status | receiptLabel" />
+      </header>
 
-    <dl class="account-card__grid">
-      <div>
-        <dt>Equity</dt>
-        <dd>{{ acct.equity | currency: acct.currency }}</dd>
-      </div>
-      <div>
-        <dt>Cash</dt>
-        <dd>{{ acct.cash | currency: acct.currency }}</dd>
-      </div>
-      <div>
-        <dt>Buying power</dt>
-        <dd>{{ acct.buying_power | currency: acct.currency }}</dd>
-      </div>
-      <div>
-        <dt>Portfolio value</dt>
-        <dd>{{ acct.portfolio_value | currency: acct.currency }}</dd>
-      </div>
-      <div>
-        <dt>Long market value</dt>
-        <dd>{{ acct.long_market_value | currency: acct.currency }}</dd>
-      </div>
-      <div>
-        <dt>Short market value</dt>
-        <dd>{{ acct.short_market_value | currency: acct.currency }}</dd>
-      </div>
-    </dl>
+      <dl class="m-0 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="flex flex-col gap-0.5">
+          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Equity</dt>
+          <dd class="m-0 text-base tabular-nums">{{ acct.equity | currency: acct.currency }}</dd>
+        </div>
+        <div class="flex flex-col gap-0.5">
+          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Cash</dt>
+          <dd class="m-0 text-base tabular-nums">{{ acct.cash | currency: acct.currency }}</dd>
+        </div>
+        <div class="flex flex-col gap-0.5">
+          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Buying power</dt>
+          <dd class="m-0 text-base tabular-nums">{{ acct.buying_power | currency: acct.currency }}</dd>
+        </div>
+        <div class="flex flex-col gap-0.5">
+          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Portfolio value</dt>
+          <dd class="m-0 text-base tabular-nums">{{ acct.portfolio_value | currency: acct.currency }}</dd>
+        </div>
+        <div class="flex flex-col gap-0.5">
+          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Long market value</dt>
+          <dd class="m-0 text-base tabular-nums">{{ acct.long_market_value | currency: acct.currency }}</dd>
+        </div>
+        <div class="flex flex-col gap-0.5">
+          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Short market value</dt>
+          <dd class="m-0 text-base tabular-nums">{{ acct.short_market_value | currency: acct.currency }}</dd>
+        </div>
+      </dl>
 
-    <footer class="account-card__footer">
-      <span>As of </span>
-      <app-timestamp-display [value]="acct.observed_at_ms" mode="local" />
-    </footer>
-  </section>
+      <footer class="mt-3 text-xs text-color-secondary">
+        <span>As of </span>
+        <app-timestamp-display [value]="acct.observed_at_ms" mode="local" />
+      </footer>
+    </section>
+  </p-card>
 }

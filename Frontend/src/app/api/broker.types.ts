@@ -8812,7 +8812,7 @@ export interface components {
             /** Created At Ms */
             created_at_ms: number | null;
             /** Events */
-            events: components["schemas"]["BrokerOrderEvent"][];
+            events?: components["schemas"]["BrokerOrderEvent"][];
             /** Expired At Ms */
             expired_at_ms: number | null;
             /** Filled At Ms */
@@ -25113,6 +25113,7 @@ export interface operations {
     list_activities_api_brokers__broker__activities_get: {
         parameters: {
             query?: {
+                limit?: number;
                 after_ms?: number | null;
             };
             header?: {
@@ -25149,6 +25150,7 @@ export interface operations {
         parameters: {
             query?: {
                 status?: ("active" | "inactive") | null;
+                limit?: number;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

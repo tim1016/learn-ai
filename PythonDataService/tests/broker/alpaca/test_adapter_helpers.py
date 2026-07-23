@@ -37,6 +37,10 @@ def test_rfc3339_trims_overlong_fraction() -> None:
     assert rfc3339_to_ms("1970-01-01T00:00:00.123456789Z") == 123
 
 
+def test_rfc3339_rounds_fractional_milliseconds_to_nearest_ms() -> None:
+    assert rfc3339_to_ms("1970-01-01T00:00:00.123600Z") == 124
+
+
 def test_optional_helpers_pass_through_none() -> None:
     assert opt_float(None) is None
     assert opt_float("") is None

@@ -8,11 +8,14 @@ regenerated against a real sanitized capture in HITL slice #1178.
 from __future__ import annotations
 
 from app.broker.alpaca.adapter import from_alpaca_account, rfc3339_to_ms
+from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
 
 
-def test_from_alpaca_account_maps_every_field(load_alpaca_fixture) -> None:
+def test_from_alpaca_account_maps_every_field(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
     payload = load_alpaca_fixture("account", "account.json")
 
     snapshot = from_alpaca_account(payload, observed_at_ms=_OBSERVED)
@@ -34,7 +37,7 @@ def test_from_alpaca_account_maps_every_field(load_alpaca_fixture) -> None:
     assert snapshot.observed_at_ms == _OBSERVED
 
 
-def test_observed_at_defaults_to_now(load_alpaca_fixture) -> None:
+def test_observed_at_defaults_to_now(load_alpaca_fixture: AlpacaFixtureLoader) -> None:
     payload = load_alpaca_fixture("account", "account.json")
 
     snapshot = from_alpaca_account(payload)
@@ -42,7 +45,7 @@ def test_observed_at_defaults_to_now(load_alpaca_fixture) -> None:
     assert snapshot.observed_at_ms > 1_600_000_000_000
 
 
-def test_missing_created_at_is_none(load_alpaca_fixture) -> None:
+def test_missing_created_at_is_none(load_alpaca_fixture: AlpacaFixtureLoader) -> None:
     payload = dict(load_alpaca_fixture("account", "account.json"))
     payload.pop("created_at")
 

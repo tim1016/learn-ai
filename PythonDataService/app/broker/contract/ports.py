@@ -51,12 +51,14 @@ class BrokerReadPort(Protocol):
         self,
         *,
         after_ms: int | None = None,
+        limit: int = 100,
     ) -> list[BrokerActivity]: ...
 
     async def list_assets(
         self,
         *,
         status: str | None = None,
+        limit: int = 100,
     ) -> list[BrokerAsset]: ...
 
     async def get_clock_evidence(self) -> BrokerClockEvidence: ...

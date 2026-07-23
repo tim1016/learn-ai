@@ -40,6 +40,8 @@ from app.broker.alpaca.errors import map_api_error
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import BrokerAuthError, BrokerUnavailable
 
+_DEFAULT_TIMEOUT_S = 15.0
+
 
 def _config_detail(exc: ValidationError) -> str:
     """Concise reason string from a settings ValidationError (no secrets)."""
@@ -64,10 +66,12 @@ class AlpacaTradingClient:
         settings: AlpacaSettings | None = None,
         journal: CaptureJournal | None = None,
         client_factory: Callable[[], Any] | None = None,
+        timeout_s: float = _DEFAULT_TIMEOUT_S,
     ) -> None:
         self._settings = settings
         self._journal = journal
         self._client_factory = client_factory
+        self._timeout_s = timeout_s
         self._raw_client: Any | None = None
 
     def _build_default_client(self) -> Any:
@@ -99,7 +103,21 @@ class AlpacaTradingClient:
             ) from exc
 
         try:
-            return await anyio.to_thread.run_sync(fn, client)
+            with anyio.fail_after(self._timeout_s):
+                return await anyio.to_thread.run_sync(
+                    fn,
+                    client,
+                    # AnyIO 3's cancellation option; retained by AnyIO 4 as
+                    # a compatibility alias. It lets fail_after return while
+                    # a stuck synchronous SDK worker winds down.
+                    cancellable=True,
+                )
+        except TimeoutError as exc:
+            raise BrokerUnavailable(
+                f"Alpaca timed out while fetching {describe}.",
+                broker=self.broker_id,
+                detail=f"The broker did not respond within {self._timeout_s:g} seconds.",
+            ) from exc
         except APIError as exc:
             raise map_api_error(exc, broker=self.broker_id) from exc
         except RequestException as exc:
@@ -137,13 +155,14 @@ class AlpacaTradingClient:
     async def list_activities(
         self,
         *,
-        after_ms: int | None = None,
+        limit: int,
     ) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {}
-        if after_ms is not None:
-            params["after"] = _ms_to_utc(after_ms).isoformat()
+        # Alpaca's ``after`` parameter filters a different vendor timestamp
+        # than the contract's ``occurred_at_ms``. Fetch a bounded page here;
+        # the broker filters mapped contract records by occurred_at_ms below.
+        params = {"page_size": limit, "direction": "desc"}
         return await self._call(
-            lambda c: c.get("/account/activities", data=params or None),
+            lambda c: c.get("/account/activities", data=params),
             describe="activities",
         )
 
@@ -151,14 +170,18 @@ class AlpacaTradingClient:
         self,
         *,
         status: str | None = None,
+        limit: int,
     ) -> list[dict[str, Any]]:
         kwargs: dict[str, Any] = {}
         if status is not None:
             kwargs["status"] = AssetStatus(status)
         request = GetAssetsRequest(**kwargs)
-        return await self._call(
+        payloads = await self._call(
             lambda c: c.get_all_assets(filter=request), describe="assets"
         )
+        # Alpaca's assets endpoint has no limit/pagination parameter. Cap at
+        # the SDK boundary so the adapter never maps an unbounded response.
+        return payloads[:limit]
 
     async def get_clock(self) -> dict[str, Any]:
         return await self._call(lambda c: c.get_clock(), describe="clock")

@@ -50,6 +50,14 @@ def test_hook_journals_verbatim_success(tmp_path: Path) -> None:
     assert record["method"] == "GET"
 
 
+def test_hook_requests_identity_encoding_before_capturing(tmp_path: Path) -> None:
+    session = Session()
+
+    install_capture_hook(session, _journal(tmp_path))
+
+    assert session.headers["Accept-Encoding"] == "identity"
+
+
 @responses.activate
 def test_hook_captures_error_responses(tmp_path: Path) -> None:
     journal = _journal(tmp_path)

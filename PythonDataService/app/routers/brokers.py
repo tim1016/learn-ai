@@ -9,6 +9,7 @@ only ``alpaca``; unknown brokers resolve to ``404``.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable
 from typing import Literal, NoReturn
 
@@ -28,12 +29,17 @@ from app.broker.contract.registry import get_broker_registry
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 
+_DEFAULT_READ_LIMIT = 100
+_MAX_READ_LIMIT = 500
+_MAX_ACTIVITY_LIMIT = 100
+_MAX_INT64_MS = 2**63 - 1
+
 
 def _raise_http(error: BrokerError) -> NoReturn:
     """Translate a broker-contract error into an HTTPException (what/why)."""
     headers: dict[str, str] | None = None
     if isinstance(error, BrokerRateLimited) and error.retry_after_ms is not None:
-        headers = {"Retry-After": str(max(1, round(error.retry_after_ms / 1000)))}
+        headers = {"Retry-After": str(max(1, math.ceil(error.retry_after_ms / 1000)))}
     raise HTTPException(
         status_code=error.http_status,
         detail={"broker": error.broker, "message": error.message, "why": error.detail},
@@ -71,8 +77,8 @@ async def list_positions(broker: str) -> list[BrokerPosition]:
 async def list_orders(
     broker: str,
     status: Literal["open", "closed", "all"] | None = None,
-    limit: int | None = Query(default=None, ge=1, le=500),
-    after_ms: int | None = None,
+    limit: int | None = Query(default=None, ge=1, le=_MAX_READ_LIMIT),
+    after_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
 ) -> list[BrokerOrder]:
     return await _run(
         broker,
@@ -83,17 +89,22 @@ async def list_orders(
 @router.get("/{broker}/activities", response_model=list[BrokerActivity])
 async def list_activities(
     broker: str,
-    after_ms: int | None = None,
+    limit: int = Query(default=_DEFAULT_READ_LIMIT, ge=1, le=_MAX_ACTIVITY_LIMIT),
+    after_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
 ) -> list[BrokerActivity]:
-    return await _run(broker, lambda port: port.list_activities(after_ms=after_ms))
+    return await _run(
+        broker,
+        lambda port: port.list_activities(after_ms=after_ms, limit=limit),
+    )
 
 
 @router.get("/{broker}/assets", response_model=list[BrokerAsset])
 async def list_assets(
     broker: str,
     status: Literal["active", "inactive"] | None = None,
+    limit: int = Query(default=_DEFAULT_READ_LIMIT, ge=1, le=_MAX_READ_LIMIT),
 ) -> list[BrokerAsset]:
-    return await _run(broker, lambda port: port.list_assets(status=status))
+    return await _run(broker, lambda port: port.list_assets(status=status, limit=limit))
 
 
 @router.get("/{broker}/clock", response_model=BrokerClockEvidence)

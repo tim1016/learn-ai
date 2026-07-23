@@ -8338,7 +8338,6 @@
           "filled_at_ms",
           "canceled_at_ms",
           "expired_at_ms",
-          "events",
           "observed_at_ms"
         ],
         "title": "BrokerOrder",
@@ -43114,11 +43113,25 @@
           },
           {
             "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "after_ms",
             "required": false,
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 {
@@ -43208,6 +43221,18 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
             }
           },
           {
@@ -43376,6 +43401,8 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
                   "type": "integer"
                 },
                 {

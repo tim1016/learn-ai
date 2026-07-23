@@ -7,11 +7,12 @@ Runs against the representative `pending-real-capture` fixture.
 from __future__ import annotations
 
 from app.broker.alpaca.adapter import from_alpaca_position
+from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
 
 
-def test_from_alpaca_position_maps_long(load_alpaca_fixture) -> None:
+def test_from_alpaca_position_maps_long(load_alpaca_fixture: AlpacaFixtureLoader) -> None:
     long_position = load_alpaca_fixture("positions", "positions.json")[0]
 
     position = from_alpaca_position(long_position, observed_at_ms=_OBSERVED)
@@ -31,7 +32,9 @@ def test_from_alpaca_position_maps_long(load_alpaca_fixture) -> None:
     assert position.observed_at_ms == _OBSERVED
 
 
-def test_from_alpaca_position_maps_short_with_signed_quantity(load_alpaca_fixture) -> None:
+def test_from_alpaca_position_maps_short_with_signed_quantity(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
     short_position = load_alpaca_fixture("positions", "positions.json")[1]
 
     position = from_alpaca_position(short_position, observed_at_ms=_OBSERVED)
@@ -42,7 +45,7 @@ def test_from_alpaca_position_maps_short_with_signed_quantity(load_alpaca_fixtur
     assert position.market_value == -735.00
 
 
-def test_missing_optional_fields_become_none(load_alpaca_fixture) -> None:
+def test_missing_optional_fields_become_none(load_alpaca_fixture: AlpacaFixtureLoader) -> None:
     payload = dict(load_alpaca_fixture("positions", "positions.json")[0])
     payload.pop("current_price")
     payload.pop("unrealized_plpc")

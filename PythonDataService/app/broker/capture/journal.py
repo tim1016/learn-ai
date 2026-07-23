@@ -105,11 +105,24 @@ def _utc_day(captured_at_ms: int) -> str:
 
 
 def _redact_params(params: Mapping[str, Any]) -> dict[str, Any]:
-    """Replace values of secret-like keys with a redaction placeholder."""
+    """Recursively replace values of secret-like keys with a placeholder."""
     return {
-        key: (REDACTED if _SECRET_KEY.search(str(key)) else value)
+        key: (
+            REDACTED
+            if _SECRET_KEY.search(str(key))
+            else _redact_value(value)
+        )
         for key, value in params.items()
     }
+
+
+def _redact_value(value: Any) -> Any:
+    """Redact nested mappings and sequences without changing scalar values."""
+    if isinstance(value, Mapping):
+        return _redact_params(value)
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item) for item in value]
+    return value
 
 
 def _encode_body(raw_body: bytes) -> tuple[str, str | None]:
@@ -138,12 +151,14 @@ class CaptureJournal:
     @property
     def failure_count(self) -> int:
         """Number of capture attempts that failed (observable counter)."""
-        return self._failure_count
+        with self._lock:
+            return self._failure_count
 
     @property
     def records_written(self) -> int:
         """Number of records successfully appended (observable counter)."""
-        return self._records_written
+        with self._lock:
+            return self._records_written
 
     def record(
         self,
@@ -181,9 +196,12 @@ class CaptureJournal:
 
             line = json.dumps(record, ensure_ascii=False, default=str)
             path = self._path_for(broker_component, endpoint_component, captured_at_ms)
-            self._append_line(path, line)
+            with self._lock:
+                self._append_line(path, line)
+                self._records_written += 1
         except Exception:  # capture is best-effort; never fatal on the read path.
-            self._failure_count += 1
+            with self._lock:
+                self._failure_count += 1
             logger.error(
                 "broker capture failed",
                 extra={"broker": broker, "endpoint": endpoint, "status": status},
@@ -191,7 +209,6 @@ class CaptureJournal:
             )
             return False
 
-        self._records_written += 1
         return True
 
     def _path_for(self, broker: str, endpoint: str, captured_at_ms: int) -> Path:
@@ -205,12 +222,11 @@ class CaptureJournal:
         return path
 
     def _append_line(self, path: Path, line: str) -> None:
-        """Serialize one append+flush under the single-writer lock."""
-        with self._lock:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-                handle.flush()
+        """Append and flush one line while the caller holds ``_lock``."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+            handle.flush()
 
 
 def _safe_component(value: str, kind: str) -> str:

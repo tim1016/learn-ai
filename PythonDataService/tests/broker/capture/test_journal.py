@@ -7,6 +7,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from app.broker.capture.journal import (
     REDACTED,
     CaptureEndpoint,
@@ -117,6 +119,10 @@ def test_secret_like_params_are_redacted(tmp_path: Path) -> None:
             "APCA_API_KEY_ID": "PKLIVEKEY",
             "secret": "shh",
             "authorization": "Bearer x",
+            "filters": {
+                "access_token": "nested-token",
+                "symbols": ["MSFT", {"api_secret": "nested-secret"}],
+            },
         },
         status=200,
         raw_body=b"[]",
@@ -128,6 +134,9 @@ def test_secret_like_params_are_redacted(tmp_path: Path) -> None:
     assert params["APCA_API_KEY_ID"] == REDACTED
     assert params["secret"] == REDACTED
     assert params["authorization"] == REDACTED
+    assert params["filters"]["access_token"] == REDACTED
+    assert params["filters"]["symbols"][0] == "MSFT"
+    assert params["filters"]["symbols"][1]["api_secret"] == REDACTED
 
 
 def test_unsafe_broker_component_is_nonfatal_and_counted(tmp_path: Path) -> None:
@@ -166,7 +175,10 @@ def test_multiple_records_append_to_same_day_file(tmp_path: Path) -> None:
     assert journal.records_written == 3
 
 
-def test_capture_dir_read_from_env(monkeypatch, tmp_path: Path) -> None:
+def test_capture_dir_read_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setenv("BROKER_CAPTURE_DIR", str(tmp_path / "from-env"))
     reset_capture_journal_for_testing()
     try:

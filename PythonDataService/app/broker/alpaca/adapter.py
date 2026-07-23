@@ -88,7 +88,10 @@ def rfc3339_to_ms(value: str) -> int:
     parsed = _parse_rfc3339(value)
     if parsed.tzinfo is None:
         raise ValueError(f"Alpaca timestamp is not timezone-aware: {value!r}")
-    return int(parsed.timestamp() * 1000)
+    # ``int`` truncates fractional milliseconds toward zero. The boundary
+    # contract is ms precision, so retain the closest representable instant
+    # rather than silently biasing every sub-millisecond timestamp earlier.
+    return round(parsed.timestamp() * 1000)
 
 
 def opt_rfc3339_to_ms(value: Any) -> int | None:

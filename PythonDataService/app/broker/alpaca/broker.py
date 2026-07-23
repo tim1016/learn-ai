@@ -78,16 +78,25 @@ class AlpacaBroker:
         self,
         *,
         after_ms: int | None = None,
+        limit: int = 100,
     ) -> list[BrokerActivity]:
-        payloads = await self._client.list_activities(after_ms=after_ms)
-        return [adapter.from_alpaca_activity(payload) for payload in payloads]
+        payloads = await self._client.list_activities(limit=limit)
+        activities = [adapter.from_alpaca_activity(payload) for payload in payloads]
+        if after_ms is not None:
+            activities = [
+                activity
+                for activity in activities
+                if activity.occurred_at_ms is not None and activity.occurred_at_ms >= after_ms
+            ]
+        return activities[:limit]
 
     async def list_assets(
         self,
         *,
         status: str | None = None,
+        limit: int = 100,
     ) -> list[BrokerAsset]:
-        payloads = await self._client.list_assets(status=status)
+        payloads = await self._client.list_assets(status=status, limit=limit)
         return [adapter.from_alpaca_asset(payload) for payload in payloads]
 
     async def get_clock_evidence(self) -> BrokerClockEvidence:

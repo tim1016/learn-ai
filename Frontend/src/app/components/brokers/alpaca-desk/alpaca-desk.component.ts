@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { TagModule } from 'primeng/tag';
 
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
 import { AlpacaOrdersTableComponent } from './alpaca-orders-table.component';
@@ -16,8 +17,9 @@ import { AlpacaPositionsTableComponent } from './alpaca-positions-table.componen
     AlpacaAccountCardComponent,
     AlpacaPositionsTableComponent,
     AlpacaOrdersTableComponent,
+    TagModule,
   ],
   templateUrl: './alpaca-desk.component.html',
-  styleUrl: './alpaca-desk.component.scss',
+  host: { class: 'block h-full' },
 })
 export class AlpacaDeskComponent {}

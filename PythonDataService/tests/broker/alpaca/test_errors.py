@@ -12,6 +12,7 @@ from app.broker.contract.errors import (
     BrokerRequestInvalid,
     BrokerUnavailable,
 )
+from tests.broker.alpaca.conftest import ApiErrorFactory
 
 
 @pytest.mark.parametrize(
@@ -27,7 +28,9 @@ from app.broker.contract.errors import (
     ],
 )
 def test_status_maps_to_contract_error(
-    make_api_error, status: int, expected: type[BrokerError]
+    make_api_error: ApiErrorFactory,
+    status: int,
+    expected: type[BrokerError],
 ) -> None:
     error = map_api_error(make_api_error(status), broker="alpaca")
 
@@ -36,7 +39,7 @@ def test_status_maps_to_contract_error(
     assert "denied" in error.message
 
 
-def test_rate_limited_parses_retry_after_seconds(make_api_error) -> None:
+def test_rate_limited_parses_retry_after_seconds(make_api_error: ApiErrorFactory) -> None:
     error = map_api_error(
         make_api_error(429, headers={"Retry-After": "2"}), broker="alpaca"
     )
@@ -45,14 +48,14 @@ def test_rate_limited_parses_retry_after_seconds(make_api_error) -> None:
     assert error.retry_after_ms == 2000
 
 
-def test_rate_limited_without_header_has_no_retry_hint(make_api_error) -> None:
+def test_rate_limited_without_header_has_no_retry_hint(make_api_error: ApiErrorFactory) -> None:
     error = map_api_error(make_api_error(429), broker="alpaca")
 
     assert isinstance(error, BrokerRateLimited)
     assert error.retry_after_ms is None
 
 
-def test_unknown_status_defaults_to_unavailable(make_api_error) -> None:
+def test_unknown_status_defaults_to_unavailable(make_api_error: ApiErrorFactory) -> None:
     error = map_api_error(make_api_error(None), broker="alpaca")
 
     assert isinstance(error, BrokerUnavailable)

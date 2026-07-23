@@ -1,7 +1,7 @@
 # Alpaca assets fixture — attribution
 
 - **Endpoint:** `GET /v2/assets`
-- **reference_kind:** `vendor_observed`
+- **reference_kind:** `synthetic_representative`
 - **Status:** `pending-real-capture`
 - **Source:** hand-built from the alpaca-py `Asset` model field set (alpaca-py
   0.42.0) and Alpaca's public Trading API assets documentation. The payload

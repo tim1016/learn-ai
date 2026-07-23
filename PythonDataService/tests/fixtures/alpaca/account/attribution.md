@@ -1,7 +1,7 @@
 # Alpaca account fixture — attribution
 
 - **Endpoint:** `GET /v2/account`
-- **reference_kind:** `vendor_observed`
+- **reference_kind:** `synthetic_representative`
 - **Status:** `pending-real-capture`
 - **Source:** hand-built from the alpaca-py `TradeAccount` model field set
   (alpaca-py 0.42.0) and Alpaca's public Trading API account documentation. No

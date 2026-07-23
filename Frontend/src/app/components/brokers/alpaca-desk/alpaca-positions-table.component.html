@@ -1,41 +1,39 @@
 @if (positions.isLoading()) {
-  <p class="state" role="status">Loading positions…</p>
+  <p class="m-0 py-3 text-sm text-color-secondary" role="status">Loading positions…</p>
 } @else if (positions.error()) {
-  <p class="state state-error" role="alert">
+  <p class="m-0 py-3 text-sm text-red-500" role="alert">
     Couldn't reach Alpaca. Positions are unavailable right now.
   </p>
 } @else if (positions.value(); as rows) {
   @if (rows.length === 0) {
-    <p class="state" role="status">No open positions.</p>
+    <p class="m-0 py-3 text-sm text-color-secondary" role="status">No open positions.</p>
   } @else {
-    <table class="positions">
-      <caption>Open positions</caption>
-      <thead>
+    <p-table [value]="rows" dataKey="symbol" [stripedRows]="true" aria-label="Open positions">
+      <ng-template #caption><span class="text-sm font-semibold">Open positions</span></ng-template>
+      <ng-template #header>
         <tr>
           <th scope="col">Symbol</th>
-          <th scope="col" class="num">Qty</th>
-          <th scope="col" class="num">Avg entry</th>
-          <th scope="col" class="num">Market value</th>
-          <th scope="col" class="num">Unrealized P&amp;L</th>
+          <th scope="col" class="text-right">Qty</th>
+          <th scope="col" class="text-right">Avg entry</th>
+          <th scope="col" class="text-right">Market value</th>
+          <th scope="col" class="text-right">Unrealized P&amp;L</th>
         </tr>
-      </thead>
-      <tbody>
-        @for (row of rows; track row.symbol) {
+      </ng-template>
+      <ng-template #body let-row>
           <tr>
             <th scope="row">{{ row.symbol }}</th>
-            <td class="num">{{ row.quantity | number: '1.0-4' }}</td>
-            <td class="num">{{ row.average_entry_price | currency: 'USD' }}</td>
-            <td class="num">{{ row.market_value | currency: 'USD' }}</td>
+            <td class="text-right tabular-nums">{{ row.quantity | number: '1.0-4' }}</td>
+            <td class="text-right tabular-nums">{{ row.average_entry_price | currency: 'USD' }}</td>
+            <td class="text-right tabular-nums">{{ row.market_value | currency: 'USD' }}</td>
             <td
-              class="num"
-              [class.pl-pos]="row.unrealized_pl >= 0"
-              [class.pl-neg]="row.unrealized_pl < 0"
+              class="text-right tabular-nums"
+              [class.text-green-500]="row.unrealized_pl >= 0"
+              [class.text-red-500]="row.unrealized_pl < 0"
             >
               {{ row.unrealized_pl | currency: 'USD' }}
             </td>
           </tr>
-        }
-      </tbody>
-    </table>
+      </ng-template>
+    </p-table>
   }
 }

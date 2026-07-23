@@ -1,5 +1,7 @@
 import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, resource } from '@angular/core';
+import { TableModule } from 'primeng/table';
+import { TagModule } from 'primeng/tag';
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
@@ -13,9 +15,9 @@ import { BrokersService } from '../../../services/brokers.service';
 @Component({
   selector: 'app-alpaca-orders-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DecimalPipe, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [DecimalPipe, ReceiptLabelPipe, TableModule, TagModule, TimestampDisplayComponent],
   templateUrl: './alpaca-orders-table.component.html',
-  styleUrl: './alpaca-orders-table.component.scss',
+  host: { class: 'block' },
 })
 export class AlpacaOrdersTableComponent {
   private readonly brokers = inject(BrokersService);

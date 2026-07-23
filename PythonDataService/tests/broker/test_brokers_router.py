@@ -7,10 +7,13 @@ translation — not any vendor. Grows one endpoint block per read-path slice.
 
 from __future__ import annotations
 
-import pytest
-from httpx import ASGITransport, AsyncClient
+from collections.abc import Generator
+from typing import Any
 
-from app.broker.contract.errors import BrokerAuthError, BrokerRateLimited
+import pytest
+from httpx import ASGITransport, AsyncClient, Response
+
+from app.broker.contract.errors import BrokerAuthError, BrokerError, BrokerRateLimited
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -27,14 +30,14 @@ from app.main import app
 
 
 @pytest.fixture(autouse=True)
-def _clean_registry():
+def _clean_registry() -> Generator[None, None, None]:
     reset_broker_registry_for_testing()
     yield
     reset_broker_registry_for_testing()
 
 
-def _snapshot(**overrides) -> BrokerAccountSnapshot:
-    base = dict(
+def _snapshot(**overrides: Any) -> BrokerAccountSnapshot:
+    base: dict[str, Any] = dict(
         broker="alpaca",
         account_id="PA1",
         account_status="ACTIVE",
@@ -56,18 +59,18 @@ def _snapshot(**overrides) -> BrokerAccountSnapshot:
 
 
 class _FakePort:
-    broker_id = "alpaca"
+    broker_id: str = "alpaca"
 
     def __init__(
         self,
         *,
-        account=None,
-        positions=None,
-        orders=None,
-        activities=None,
-        assets=None,
-        clock=None,
-        error=None,
+        account: BrokerAccountSnapshot | None = None,
+        positions: list[BrokerPosition] | None = None,
+        orders: list[BrokerOrder] | None = None,
+        activities: list[BrokerActivity] | None = None,
+        assets: list[BrokerAsset] | None = None,
+        clock: BrokerClockEvidence | None = None,
+        error: BrokerError | None = None,
     ) -> None:
         self._account = account
         self._positions = positions if positions is not None else []
@@ -76,45 +79,63 @@ class _FakePort:
         self._assets = assets if assets is not None else []
         self._clock = clock
         self._error = error
-        self.orders_call = None
-        self.activities_call = None
-        self.assets_call = None
+        self.orders_call: dict[str, str | int | None] | None = None
+        self.activities_call: dict[str, int | None] | None = None
+        self.assets_call: dict[str, str | int | None] | None = None
 
     async def get_account(self) -> BrokerAccountSnapshot:
         if self._error is not None:
             raise self._error
+        assert self._account is not None
         return self._account
 
-    async def list_positions(self):
+    async def list_positions(self) -> list[BrokerPosition]:
         if self._error is not None:
             raise self._error
         return self._positions
 
-    async def list_orders(self, *, status=None, limit=None, after_ms=None):
+    async def list_orders(
+        self,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        after_ms: int | None = None,
+    ) -> list[BrokerOrder]:
         if self._error is not None:
             raise self._error
         self.orders_call = {"status": status, "limit": limit, "after_ms": after_ms}
         return self._orders
 
-    async def list_activities(self, *, after_ms=None):
+    async def list_activities(
+        self,
+        *,
+        after_ms: int | None = None,
+        limit: int = 100,
+    ) -> list[BrokerActivity]:
         if self._error is not None:
             raise self._error
-        self.activities_call = {"after_ms": after_ms}
+        self.activities_call = {"after_ms": after_ms, "limit": limit}
         return self._activities
 
-    async def list_assets(self, *, status=None):
+    async def list_assets(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[BrokerAsset]:
         if self._error is not None:
             raise self._error
-        self.assets_call = {"status": status}
+        self.assets_call = {"status": status, "limit": limit}
         return self._assets
 
-    async def get_clock_evidence(self):
+    async def get_clock_evidence(self) -> BrokerClockEvidence:
         if self._error is not None:
             raise self._error
+        assert self._clock is not None
         return self._clock
 
 
-async def _get(path: str):
+async def _get(path: str) -> Response:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -166,8 +187,21 @@ async def test_rate_limited_sets_retry_after_header() -> None:
     assert response.headers["Retry-After"] == "2"
 
 
-def _position(**overrides) -> BrokerPosition:
-    base = dict(
+async def test_rate_limited_rounds_retry_after_up_to_whole_second() -> None:
+    get_broker_registry().register(
+        _FakePort(
+            error=BrokerRateLimited("Throttled.", broker="alpaca", retry_after_ms=2500)
+        )
+    )
+
+    response = await _get("/api/brokers/alpaca/account")
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "3"
+
+
+def _position(**overrides: Any) -> BrokerPosition:
+    base: dict[str, Any] = dict(
         broker="alpaca",
         symbol="AAPL",
         asset_id="a-1",
@@ -206,8 +240,8 @@ async def test_positions_endpoint_returns_empty_list() -> None:
     assert response.json() == []
 
 
-def _order(**overrides) -> BrokerOrder:
-    base = dict(
+def _order(**overrides: Any) -> BrokerOrder:
+    base: dict[str, Any] = dict(
         broker="alpaca",
         order_id="o-1",
         client_order_id=None,
@@ -235,8 +269,8 @@ def _order(**overrides) -> BrokerOrder:
     return BrokerOrder(**base)
 
 
-def _activity(**overrides) -> BrokerActivity:
-    base = dict(
+def _activity(**overrides: Any) -> BrokerActivity:
+    base: dict[str, Any] = dict(
         broker="alpaca",
         activity_id="act-1",
         activity_type="FILL",
@@ -272,19 +306,39 @@ async def test_orders_endpoint_rejects_invalid_status() -> None:
     assert response.status_code == 422
 
 
-async def test_activities_endpoint_returns_list_and_forwards_after_ms() -> None:
+async def test_activities_endpoint_returns_list_and_forwards_query_params() -> None:
     port = _FakePort(activities=[_activity(activity_id="act-9")])
     get_broker_registry().register(port)
 
-    response = await _get("/api/brokers/alpaca/activities?after_ms=999")
+    response = await _get("/api/brokers/alpaca/activities?after_ms=999&limit=5")
 
     assert response.status_code == 200
     assert response.json()[0]["activity_id"] == "act-9"
-    assert port.activities_call == {"after_ms": 999}
+    assert port.activities_call == {"after_ms": 999, "limit": 5}
 
 
-def _asset(**overrides) -> BrokerAsset:
-    base = dict(
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/brokers/alpaca/orders?after_ms=-1",
+        "/api/brokers/alpaca/orders?after_ms=9223372036854775808",
+        "/api/brokers/alpaca/activities?after_ms=-1",
+        "/api/brokers/alpaca/activities?after_ms=9223372036854775808",
+        "/api/brokers/alpaca/activities?limit=101",
+    ],
+)
+async def test_timestamp_cursors_reject_values_outside_non_negative_int64_ms(
+    path: str,
+) -> None:
+    get_broker_registry().register(_FakePort())
+
+    response = await _get(path)
+
+    assert response.status_code == 422
+
+
+def _asset(**overrides: Any) -> BrokerAsset:
+    base: dict[str, Any] = dict(
         broker="alpaca",
         asset_id="a-1",
         symbol="AAPL",
@@ -301,8 +355,8 @@ def _asset(**overrides) -> BrokerAsset:
     return BrokerAsset(**base)
 
 
-def _clock(**overrides) -> BrokerClockEvidence:
-    base = dict(
+def _clock(**overrides: Any) -> BrokerClockEvidence:
+    base: dict[str, Any] = dict(
         broker="alpaca",
         is_open=True,
         vendor_timestamp_ms=1_700_000_000_000,
@@ -314,15 +368,15 @@ def _clock(**overrides) -> BrokerClockEvidence:
     return BrokerClockEvidence(**base)
 
 
-async def test_assets_endpoint_returns_list_and_forwards_status() -> None:
+async def test_assets_endpoint_returns_list_and_forwards_query_params() -> None:
     port = _FakePort(assets=[_asset(symbol="MSFT")])
     get_broker_registry().register(port)
 
-    response = await _get("/api/brokers/alpaca/assets?status=active")
+    response = await _get("/api/brokers/alpaca/assets?status=active&limit=5")
 
     assert response.status_code == 200
     assert response.json()[0]["symbol"] == "MSFT"
-    assert port.assets_call == {"status": "active"}
+    assert port.assets_call == {"status": "active", "limit": 5}
 
 
 async def test_assets_endpoint_rejects_invalid_status() -> None:

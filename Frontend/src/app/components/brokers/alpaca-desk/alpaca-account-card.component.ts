@@ -1,5 +1,7 @@
 import { CurrencyPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, resource } from '@angular/core';
+import { CardModule } from 'primeng/card';
+import { TagModule } from 'primeng/tag';
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
@@ -13,9 +15,9 @@ import { BrokersService } from '../../../services/brokers.service';
 @Component({
   selector: 'app-alpaca-account-card',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [CardModule, CurrencyPipe, ReceiptLabelPipe, TagModule, TimestampDisplayComponent],
   templateUrl: './alpaca-account-card.component.html',
-  styleUrl: './alpaca-account-card.component.scss',
+  host: { class: 'block' },
 })
 export class AlpacaAccountCardComponent {
   private readonly brokers = inject(BrokersService);

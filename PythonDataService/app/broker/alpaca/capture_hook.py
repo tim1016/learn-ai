@@ -87,9 +87,13 @@ def install_capture_hook(
 ) -> Callable[..., Response]:
     """Append the verbatim-capture response hook to ``session``.
 
-    Returns the installed hook (useful for tests). Idempotent per session is
-    the caller's responsibility — install once per client.
+    The journal records response bytes exactly as delivered to ``requests``.
+    Request identity encoding so those bytes are not transparently decompressed
+    before the hook sees them. Returns the installed hook (useful for tests).
+    Idempotent per session is the caller's responsibility — install once per
+    client.
     """
+    session.headers["Accept-Encoding"] = "identity"
     session.hooks.setdefault("response", [])
     hook = _make_hook(journal, broker)
     session.hooks["response"].append(hook)

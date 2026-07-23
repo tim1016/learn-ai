@@ -421,10 +421,13 @@ app.include_router(broker_account_truth.router, dependencies=DATA_PLANE_CONTROL_
 app.include_router(account_reconciliation.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Broker session mirror — read-only roster/SSE observatory with sensitive runtime data.
 app.include_router(broker_session.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
-# Broker System v2 read surface (/api/brokers/{broker}/...). GET-only reads;
-# the control-secret dep gates only unsafe methods, so phase-1 reads are open
-# and the phase-2 write path is gated by the same dependency.
-app.include_router(brokers.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+# Broker System v2 read surface (/api/brokers/{broker}/...). Broker account,
+# position, order, activity, asset, and clock evidence is sensitive operator
+# data, so every v2 read requires the always-on data-plane control secret.
+app.include_router(
+    brokers.router,
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])

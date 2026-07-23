@@ -1,5 +1,6 @@
 import { CurrencyPipe, DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, resource } from '@angular/core';
+import { TableModule } from 'primeng/table';
 
 import { BrokersService } from '../../../services/brokers.service';
 
@@ -10,9 +11,9 @@ import { BrokersService } from '../../../services/brokers.service';
 @Component({
   selector: 'app-alpaca-positions-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, DecimalPipe],
+  imports: [CurrencyPipe, DecimalPipe, TableModule],
   templateUrl: './alpaca-positions-table.component.html',
-  styleUrl: './alpaca-positions-table.component.scss',
+  host: { class: 'block' },
 })
 export class AlpacaPositionsTableComponent {
   private readonly brokers = inject(BrokersService);

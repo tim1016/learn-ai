@@ -1,11 +1,12 @@
 # Alpaca golden fixtures (Broker System v2)
 
-Verbatim Alpaca REST payloads used to prove the adapter maps every field to the
-broker contract, and to feed the schema-drift guard. One subdirectory per
+Representative Alpaca REST payloads used to exercise adapter mapping behavior
+and feed the SDK schema-compatibility guard. One subdirectory per
 endpoint family (`account`, `positions`, `orders`, `activities`, `assets`,
 `clock`), each with the raw payload(s) and an `attribution.md`.
 
-These are **vendor-observed** fixtures (`reference_kind: vendor_observed`), not
+These are **synthetic representative** fixtures
+(`reference_kind: synthetic_representative`), not
 numerical oracles, so they are intentionally **outside** the numerical golden
 manifest (`tests/fixtures/golden/manifest.json`) — that system governs
 tolerance-pinned math equivalence, which does not apply to a broker payload

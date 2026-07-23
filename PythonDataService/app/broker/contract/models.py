@@ -20,7 +20,7 @@ Two conventions are load-bearing:
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class _ContractModel(BaseModel):
@@ -104,7 +104,7 @@ class BrokerOrder(_ContractModel):
     filled_at_ms: int | None
     canceled_at_ms: int | None
     expired_at_ms: int | None
-    events: list[BrokerOrderEvent]
+    events: list[BrokerOrderEvent] = Field(default_factory=list)
     observed_at_ms: int
 
 

@@ -97,7 +97,6 @@ def test_order_defaults_to_no_events() -> None:
         filled_at_ms=None,
         canceled_at_ms=None,
         expired_at_ms=None,
-        events=[],
         observed_at_ms=1_700_000_000_000,
     )
 

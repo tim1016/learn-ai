@@ -14,7 +14,7 @@ as the **legacy exception**, not the template; v1 code is untouched in phase 1.
 
 ### Four layers
 
-```
+```text
 app/broker/
 ├── contract/   # Layer 3 — broker-neutral: models, capabilities, errors, ports, registry
 ├── capture/    # Layer 2 — broker-neutral verbatim JSONL journal
@@ -52,9 +52,9 @@ no SDK needed to run them).
 
 Verbatim capture is preserved with a **`requests.Session` response hook** on the
 SDK's session (the hook reads only body + URL/method/query, never auth headers).
-A **schema-drift test** recursively diffs captured payload keys against the
-alpaca-py model fields (and aliases) and fails naming any key the SDK does not
-know — enforcing that no field is silently dropped. Because alpaca-py drives
+A **schema-compatibility test** recursively diffs captured payload keys against
+the alpaca-py model fields (and aliases) and fails naming any key the SDK does
+not know. Adapter tests independently assert the contract mappings. Because alpaca-py drives
 `requests` (which respx/pytest-httpx cannot intercept), the capture-hook tests
 use the `responses` dev-dependency, the only requests-level mock that exercises
 the real Session hook path.

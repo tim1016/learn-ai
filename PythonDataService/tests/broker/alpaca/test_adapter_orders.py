@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from app.broker.alpaca.adapter import from_alpaca_order, rfc3339_to_ms
+from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
 _OBSERVED = 1_700_000_000_000
 
 
-def test_filled_order_maps_every_field_and_synthesizes_fill_event(load_alpaca_fixture) -> None:
+def test_filled_order_maps_every_field_and_synthesizes_fill_event(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
     filled = load_alpaca_fixture("orders", "orders.json")[0]
 
     order = from_alpaca_order(filled, observed_at_ms=_OBSERVED)
@@ -38,7 +41,9 @@ def test_filled_order_maps_every_field_and_synthesizes_fill_event(load_alpaca_fi
     assert event.quantity == 10.0
 
 
-def test_open_order_has_no_events_and_nullable_prices(load_alpaca_fixture) -> None:
+def test_open_order_has_no_events_and_nullable_prices(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
     open_order = load_alpaca_fixture("orders", "orders.json")[1]
 
     order = from_alpaca_order(open_order, observed_at_ms=_OBSERVED)
