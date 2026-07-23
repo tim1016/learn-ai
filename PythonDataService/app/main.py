@@ -137,8 +137,26 @@ async def lifespan(app: FastAPI):
         )
     else:
         alpaca_broker = AlpacaBroker()
-        set_alpaca_clerk(AlpacaClerk(read=alpaca_broker, trade=alpaca_broker))
+        alpaca_clerk = AlpacaClerk(read=alpaca_broker, trade=alpaca_broker)
+        set_alpaca_clerk(alpaca_clerk)
         logger.info("Alpaca Clerk ready (order submission enabled).")
+
+        # Alpaca live-lifecycle consumer (phase 2, S4) — the owned
+        # trade_updates websocket. Started alongside the Clerk (Alpaca is a peer
+        # vendor, independent of the IBKR gateway lifecycle). It captures each
+        # frame verbatim, attributes it against the Clerk's namespaces, and
+        # journals ORDER_EVENT / UNEXPLAINED_ORDER. No keys → no consumer.
+        from app.broker.alpaca.trade_updates import (
+            TradeUpdatesConsumer,
+            set_trade_updates_consumer,
+        )
+
+        alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
+            clerk=alpaca_clerk, read=alpaca_broker
+        )
+        alpaca_trade_updates.start()
+        set_trade_updates_consumer(alpaca_trade_updates)
+        logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -312,6 +330,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Stop the Alpaca live-lifecycle consumer first — cancel its consume
+        # task and close its socket cleanly (independent of the IBKR teardown).
+        from app.broker.alpaca.trade_updates import (
+            get_trade_updates_consumer,
+            set_trade_updates_consumer,
+        )
+
+        alpaca_trade_updates = get_trade_updates_consumer()
+        if alpaca_trade_updates is not None:
+            await alpaca_trade_updates.stop()
+            set_trade_updates_consumer(None)
         await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()
         # Stop the daemon monitor first — its probe traffic stops cleanly

@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
     OrderCancelResult,
     OrderJournalEntry,
+    OrderLegError,
     OrderLegResult,
     OrderSubmitResult,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "ClerkEntryKind",
     "OrderCancelResult",
     "OrderJournalEntry",
+    "OrderLegError",
     "OrderLegResult",
     "OrderSubmitResult",
     "get_alpaca_clerk",

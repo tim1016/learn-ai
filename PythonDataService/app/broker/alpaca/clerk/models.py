@@ -20,11 +20,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 
 
 class ClerkEntryKind(StrEnum):
-    """Order-journal entry kinds (S1 submit + S3 cancel)."""
+    """Order-journal entry kinds (S1 submit + S3 cancel + S4 lifecycle)."""
 
     INTENT_RECORDED = "intent_recorded"
     SUBMIT_ACKED = "submit_acked"
@@ -34,6 +34,15 @@ class ClerkEntryKind(StrEnum):
     CANCEL_RECORDED = "cancel_recorded"
     CANCEL_ACKED = "cancel_acked"
     CANCEL_FAILED = "cancel_failed"
+    # S4 live-lifecycle path (trade_updates websocket).
+    # ``ORDER_EVENT``: a lifecycle event on an order this Clerk owns (its
+    # ``client_order_id`` namespace is one of ours). ``UNEXPLAINED_ORDER``: a
+    # lifecycle event whose ``client_order_id`` is foreign, absent, or
+    # unparseable — an order this Clerk did not submit. The exposure hold that
+    # blocks new submits on an unexplained order lands in S6; S4 only journals
+    # the observation and increments a counter (see the consumer).
+    ORDER_EVENT = "order_event"
+    UNEXPLAINED_ORDER = "unexplained_order"
 
 
 class OrderJournalEntry(BaseModel):
@@ -74,12 +83,23 @@ class OrderJournalEntry(BaseModel):
     # the journal); False on a cancel of a foreign/unowned order.
     owned: bool | None = None
     recorded_at_ms: int
-    # Present on submit_acked only: the accepted broker order.
+    # Present on submit_acked (and copied onto S4 order_event lines) : the
+    # broker order the event pertains to, when known.
     order: BrokerOrder | None = None
     # Present on failed/uncertain submit outcomes and cancel failures: the
     # broker-facing reason.
     error_message: str | None = None
     error_detail: str | None = None
+    # ── S4 live-lifecycle fields (trade_updates) ─────────────────────────────
+    # Present on order_event / unexplained_order lines: the parsed lifecycle
+    # event (fill/partial_fill/canceled/…). The verbatim vendor frame is in the
+    # capture journal; this is the contract-mapped view for the derived state.
+    event: BrokerOrderEvent | None = None
+    # The client_order_id observed on the wire. On an owned order_event it equals
+    # ``order_ref``; on an unexplained_order it is the foreign/absent id exactly
+    # as delivered (``None`` when the order carried no client_order_id) — honest
+    # attribution, never fabricated. The stable dedup key for the event.
+    event_key: str | None = None
 
 
 class OrderLegError(BaseModel):

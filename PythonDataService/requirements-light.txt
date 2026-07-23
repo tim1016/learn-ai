@@ -42,3 +42,10 @@ asyncpg==0.29.0
 # coverage (design decision D4; ADR broker-contract-v2). Pinned tight because
 # the raw-payload field set is validated against this exact version.
 alpaca-py==0.42.0
+# websockets: the raw trade_updates lifecycle consumer
+# (app.broker.alpaca.trade_updates, phase 2 S4) owns its own websocket rather
+# than alpaca-py's TradingStream, so it can capture each frame verbatim BEFORE
+# parsing (same reason phase 1 rejected the SDK client for REST). Already a
+# transitive dep of alpaca-py; declared direct because we import it directly.
+# Pinned to the version already resolved in the image.
+websockets==11.0.3
