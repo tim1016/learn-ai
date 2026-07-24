@@ -1,13 +1,16 @@
-# Alpaca clock fixture — attribution
+# Fixture attribution — clock
 
-- **Endpoint:** `GET /v2/clock`
-- **reference_kind:** `synthetic_representative`
-- **Status:** `pending-real-capture`
-- **Source:** hand-built from the alpaca-py `Clock` model field set (alpaca-py
-  0.42.0) and Alpaca's public Trading API clock documentation.
-- **Authority note:** captured and surfaced strictly as **vendor evidence**
-  (`BrokerClockEvidence`). The canonical calendar module remains the sole
-  authority for scheduled session structure — nothing reads these values as
-  authoritative (see the broker-contract-v2 ADR).
-- **Regeneration:** replace with a real sanitized capture in HITL slice #1178,
-  then remove the `pending-real-capture` marker.
+- **broker:** alpaca (paper)
+- **endpoint_family:** clock
+- **captured_at_ms:** 1784904168510
+- **captured_at:** 2026-07-24T14:42:48.510000+00:00
+- **source:** live Alpaca paper account (HITL gate — script `scripts/hitl_alpaca_capture.py`)
+- **reference_kind:** `real_sanitized_capture`
+- **sanitization:** UUIDs replaced with deterministic sentinel values (00000000-0000-0000-0000-{N:012d}); account numbers replaced with PA0SANITIZED00001.
+
+
+
+## Status: `real-capture`
+
+Replaced `pending-real-capture` synthetic fixtures on 2026-07-24 via HITL
+gate #1178 / #1198. Adapter + schema-drift tests run against this payload.

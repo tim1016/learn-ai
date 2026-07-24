@@ -43,6 +43,45 @@ _FAMILIES: dict[str, tuple[str, tuple[type[BaseModel], ...]]] = {
     "clock": ("clock.json", (Clock,)),
 }
 
+# Fields Alpaca has added since alpaca-py 0.43.5 was released, reviewed as of
+# 2026-07-24 and intentionally NOT mapped to contract fields because they have
+# no operational meaning to our layer (metadata, administrative, or redundant).
+_INTENTIONALLY_UNMAPPED: dict[str, frozenset[str]] = {
+    "account": frozenset({
+        "admin_configurations",       # internal admin config blob
+        "balance_asof",               # date string (redundant; equity is live)
+        "crypto_tier",                # crypto account tier (phase 1: no crypto)
+        "effective_buying_power",     # regt_buying_power alias
+        "intraday_adjustments",       # intraday P&L adjustment string
+        "pending_reg_taf_fees",       # accrued regulatory/TAF fee estimate
+        "position_market_value",      # duplicate of long_market_value for longs
+        "user_configurations",        # user-level config blob
+    }),
+    "orders": frozenset({
+        "source",     # internal Alpaca order-source code (not operator-visible)
+        "subtag",     # internal sub-tag (not operator-visible)
+    }),
+    "activities": frozenset({
+        "amount",      # gross trade amount = price × qty (redundant; contract maps price + quantity separately)
+        "created_at",  # activity creation time (distinct from transaction_time)
+        "currency",    # currency code (always "USD" for equity paper accounts)
+    }),
+    "assets": frozenset({
+        "borrow_status",             # "easy_to_borrow" / "hard_to_borrow" / "not_available"
+        "margin_requirement_long",   # margin req % as a string (already in maintenance_margin_requirement)
+        "margin_requirement_short",  # margin req % for shorts
+    }),
+}
+
+# trade_updates websocket fields Alpaca added since alpaca-py 0.43.5, intentionally
+# not mapped: they are internal event-routing metadata or settlement bookkeeping.
+_TRADE_UPDATES_INTENTIONALLY_UNMAPPED: frozenset[str] = frozenset({
+    "at",                   # server-side event receipt time (distinct from order timestamp)
+    "cancel_requested_at",  # time the cancel was requested (not in SDK Order model; tracked in order object)
+    "event_id",             # internal event correlation ID (not exposed in contract)
+    "settle_date",          # trade settlement date string (T+1/T+2; not part of event contract)
+})
+
 
 def _known_names(model: type[BaseModel]) -> set[str]:
     """Field names plus every alias (Alpaca's `class` → `asset_class`, etc.)."""
@@ -91,12 +130,12 @@ def test_captured_payload_has_no_schema_drift(
     filename, models = _FAMILIES[family]
     payload = load_alpaca_fixture(family, filename)
 
-    drift = unknown_keys(payload, models)
+    drift = unknown_keys(payload, models) - _INTENTIONALLY_UNMAPPED.get(family, frozenset())
 
     assert drift == set(), (
-        f"{family}: Alpaca payload carries keys the SDK model(s) do not define: "
-        f"{sorted(drift)}. Either the SDK is behind (upgrade alpaca-py and extend "
-        f"the adapter) or the fixture is wrong."
+        f"{family}: Alpaca payload carries UNKNOWN (not intentionally unmapped) keys: "
+        f"{sorted(drift)}. Either upgrade alpaca-py and extend the adapter, or add to "
+        f"_INTENTIONALLY_UNMAPPED with a comment explaining why."
     )
 
 
@@ -183,16 +222,19 @@ def test_trade_updates_frame_has_no_schema_drift(
     # payload (the envelope wrapper keys AND the nested order object) must be a
     # field the SDK's TradeUpdate + Order models define. If Alpaca adds a
     # lifecycle-event key alpaca-py doesn't know, this fails and names it.
+    #
+    # Only frames with stream == "trade_updates" carry event data the adapter
+    # processes. Authorization and listening framing frames use a different schema
+    # (no "event" key; carry "action" / "streams" instead) and are not checked.
     frames = load_alpaca_fixture("trade_updates", "trade_updates.json")
     models = (TradeUpdate, Order)
     for frame in frames:
-        # The ``stream`` envelope key is the websocket framing, not an SDK model
-        # field — the SDK parses ``msg["data"]`` into a TradeUpdate — so drift is
-        # checked against the ``data`` payload only.
         assert set(frame) == {"stream", "data"}
-        drift = unknown_keys(frame["data"], models)
+        if frame["stream"] != "trade_updates":
+            continue
+        drift = unknown_keys(frame["data"], models) - _TRADE_UPDATES_INTENTIONALLY_UNMAPPED
         assert drift == set(), (
-            "trade_updates: Alpaca event carries keys the SDK model(s) do not "
-            f"define: {sorted(drift)}. Either alpaca-py is behind (upgrade + "
-            f"extend the adapter) or the fixture is wrong."
+            "trade_updates: Alpaca event carries UNKNOWN (not intentionally unmapped) "
+            f"keys: {sorted(drift)}. Either alpaca-py is behind (upgrade + extend the "
+            f"adapter) or the fixture is wrong."
         )

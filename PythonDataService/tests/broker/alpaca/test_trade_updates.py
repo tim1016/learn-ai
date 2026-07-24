@@ -10,6 +10,7 @@ on-disk records, not mocks.
 
 from __future__ import annotations
 
+import copy
 import json
 import sys
 from collections.abc import AsyncIterator
@@ -39,6 +40,7 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerOrderRequest,
 )
+from tests.broker.alpaca.conftest import load_alpaca_fixture_file
 
 _FIXED_MS = 1_700_000_000_000
 _BASE = "https://paper-api.alpaca.markets"
@@ -252,14 +254,29 @@ async def _consumer(
 
 
 def _load_frames() -> list[dict[str, Any]]:
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "fixtures"
-        / "alpaca"
-        / "trade_updates"
-        / "trade_updates.json"
-    )
-    return json.loads(path.read_text())
+    """Return trade_updates event frames for consumer integration tests.
+
+    Filters the full real-capture fixture to only the event kinds this test
+    suite exercises, in backward-compatible index order:
+      [0]=new, [1]=partial_fill, [2]=fill, [3]=canceled, [4]=rejected.
+
+    Auth/subscribe/pending_new frames are excluded — they're validated by
+    test_adapter_trade_updates.py and test_schema_drift.py.  COIDs are
+    normalised to _OWNED_COID so the clerk's namespace allowlist (seeded by
+    _warm()) treats every frame as OWNED.
+    """
+    all_frames = load_alpaca_fixture_file("trade_updates", "trade_updates.json")
+    _ORDER = {"new": 0, "partial_fill": 1, "fill": 2, "canceled": 3, "rejected": 4}
+    trade = [f for f in all_frames if f["stream"] == "trade_updates" and f["data"].get("event") in _ORDER]
+    present_events = {str(frame["data"]["event"]) for frame in trade}
+    missing_events = set(_ORDER) - present_events
+    assert not missing_events, f"trade_updates fixture missing documented events: {missing_events}"
+    assert len(trade) == len(_ORDER), "trade_updates fixture contains duplicate documented events"
+    trade = sorted(copy.deepcopy(trade), key=lambda f: _ORDER[f["data"]["event"]])
+    for f in trade:
+        if "order" in f["data"]:
+            f["data"]["order"]["client_order_id"] = _OWNED_COID
+    return trade
 
 
 # ── (a) capture-before-parse ─────────────────────────────────────────────────
@@ -670,17 +687,30 @@ async def test_reconnect_gap_reconcile_pulls_missed_orders(tmp_path: Path) -> No
 async def test_gap_reconcile_dedups_already_seen_event(tmp_path: Path) -> None:
     # If the socket already delivered the fill, the gap-reconcile's re-observed
     # fill must dedup on the stable key — not journal a second fill.
+    # Load the fill first so we can derive the order_id for the REST mock.
+    fill = _load_frames()[2]
+    # The socket's fill has an execution_id key; the gap-reconcile synthesizes an
+    # order-derived event WITHOUT an execution_id, so their keys differ. To prove
+    # the reconcile is idempotent for the SAME event, feed a socket fill that
+    # keys the same way the reconcile will: strip its execution_id so both key on
+    # order_id|fill|timestamp.
+    fill["data"].pop("execution_id", None)
+    fill["data"]["timestamp"] = "2021-03-16T18:38:02.123456Z"
+    # Also align the embedded order's filled_at so the terminal fingerprint
+    # (_terminal_state_fingerprint uses filled_at_ms) matches the REST response.
+    fill["data"]["order"]["filled_at"] = "2021-03-16T18:38:02.123456Z"
+    order_id = fill["data"]["order"]["id"]  # must match REST response for dedup
     filled_order = {
-        "id": "61e69015-8549-4bfd-b9c3-01e75843f47d",
+        "id": order_id,
         "client_order_id": _OWNED_COID,
         "updated_at": "2021-03-16T18:38:02.123456Z",
         "submitted_at": "2021-03-16T18:38:01.937734Z",
         "filled_at": "2021-03-16T18:38:02.123456Z",
-        "symbol": "AAPL",
+        "symbol": "SPY",
         "asset_class": "us_equity",
-        "qty": "10",
-        "filled_qty": "10",
-        "filled_avg_price": "135.80",
+        "qty": "1",
+        "filled_qty": "1",
+        "filled_avg_price": "737.91",
         "order_type": "market",
         "type": "market",
         "side": "buy",
@@ -694,15 +724,6 @@ async def test_gap_reconcile_dedups_already_seen_event(tmp_path: Path) -> None:
     broker = _real_broker_with_responses([filled_order])
     clerk = AlpacaClerk(read=broker, trade=broker)
     await _warm(clerk)
-    fill = _load_frames()[2]
-    # The socket's fill has an execution_id key; the gap-reconcile synthesizes an
-    # order-derived event WITHOUT an execution_id, so their keys differ. To prove
-    # the reconcile is idempotent for the SAME event, feed a socket fill that
-    # keys the same way the reconcile will: strip its execution_id so both key on
-    # order_id|fill|timestamp.
-    fill["data"].pop("execution_id", None)
-    fill["data"]["order"]["client_order_id"] = _OWNED_COID
-    fill["data"]["timestamp"] = "2021-03-16T18:38:02.123456Z"
 
     journal = _capture_journal(tmp_path)
     consumer = TradeUpdatesConsumer(
@@ -734,17 +755,24 @@ async def test_gap_reconcile_dedups_socket_fill_by_terminal_order(tmp_path: Path
     # has NO execution_id (key ``order_id|fill|ms``). The two keys differ, so
     # key-only dedup would double-journal the fill — the terminal-order guard
     # recognizes the re-pull as a stale re-observation and does not re-journal.
+    # Load the fill first so we can derive the order_id for the REST mock.
+    fill = _load_frames()[2]
+    assert fill["data"].get("execution_id")  # guards the test premise
+    order_id = fill["data"]["order"]["id"]  # must match REST response for guard to fire
+    # The terminal fingerprint includes filled_at_ms, so the REST response must
+    # use the same filled_at as the socket fill's embedded order to match.
+    filled_at = fill["data"]["order"]["filled_at"]
     filled_order = {
-        "id": "61e69015-8549-4bfd-b9c3-01e75843f47d",
+        "id": order_id,
         "client_order_id": _OWNED_COID,
-        "updated_at": "2021-03-16T18:38:02.123456Z",
-        "submitted_at": "2021-03-16T18:38:01.937734Z",
-        "filled_at": "2021-03-16T18:38:02.123456Z",
-        "symbol": "AAPL",
+        "updated_at": filled_at,
+        "submitted_at": fill["data"]["order"]["submitted_at"],
+        "filled_at": filled_at,
+        "symbol": "SPY",
         "asset_class": "us_equity",
-        "qty": "10",
-        "filled_qty": "10",
-        "filled_avg_price": "135.80",
+        "qty": "1",
+        "filled_qty": "1",
+        "filled_avg_price": "737.91",
         "order_type": "market",
         "type": "market",
         "side": "buy",
@@ -758,10 +786,6 @@ async def test_gap_reconcile_dedups_socket_fill_by_terminal_order(tmp_path: Path
     broker = _real_broker_with_responses([filled_order])
     clerk = AlpacaClerk(read=broker, trade=broker)
     await _warm(clerk)
-    # The socket fill keeps its execution_id — the real wire shape.
-    fill = _load_frames()[2]
-    assert fill["data"].get("execution_id")  # guards the test premise
-    fill["data"]["order"]["client_order_id"] = _OWNED_COID
 
     journal = _capture_journal(tmp_path)
     consumer = TradeUpdatesConsumer(
@@ -801,7 +825,7 @@ async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
     broker = _FakeBroker()
     clerk = AlpacaClerk(read=broker, trade=broker)
     await _warm(clerk)
-    new_frame = _load_frames()[0]  # event=new, owned coid, order 61e69015
+    new_frame = _load_frames()[0]  # event=new, owned coid
     order_id = new_frame["data"]["order"]["id"]
     coid = new_frame["data"]["order"]["client_order_id"]
     broker.orders = [_filled_broker_order(order_id, coid)]
@@ -904,9 +928,7 @@ async def test_socket_authorizes_before_listening(monkeypatch: pytest.MonkeyPatc
             sent.append(json.loads(message))
 
         async def recv(self) -> str:
-            return json.dumps(
-                {"stream": "authorization", "data": {"status": "authorized"}}
-            )
+            return json.dumps({"stream": "authorization", "data": {"status": "authorized"}})
 
         def __aiter__(self) -> AsyncIterator[str]:
             async def _empty() -> AsyncIterator[str]:
@@ -925,12 +947,8 @@ async def test_socket_authorizes_before_listening(monkeypatch: pytest.MonkeyPatc
             return None
 
     connection = _Connection()
-    monkeypatch.setitem(
-        sys.modules, "websockets", SimpleNamespace(connect=lambda _: connection)
-    )
-    source = alpaca_socket_frames(
-        AlpacaSettings(api_key_id="key", api_secret_key="secret", mode="paper")
-    )
+    monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=lambda _: connection))
+    source = alpaca_socket_frames(AlpacaSettings(api_key_id="key", api_secret_key="secret", mode="paper"))
 
     authorization = await anext(source)
 

@@ -3,6 +3,10 @@
 The clock is surfaced strictly as vendor evidence — nothing in session or
 calendar logic reads it as authority (documented in the broker-contract-v2 ADR;
 asserted here at the model level).
+
+Fixture layout (assets.json):
+  [0] — real NJDCY OTC ADR (active, not tradable on paper)
+  [1] — synthetic DELISTED Corp (inactive)
 """
 
 from __future__ import annotations
@@ -28,17 +32,18 @@ def test_from_alpaca_asset_maps_every_field_active(
     asset = from_alpaca_asset(active)
 
     assert asset.broker == "alpaca"
-    assert asset.asset_id == "b0b6dd9d-8b9b-48a9-ba46-b9d54906e415"
-    assert asset.symbol == "AAPL"
-    assert asset.name == "Apple Inc. Common Stock"
+    assert asset.asset_id == "00000000-0000-0000-0000-000000000001"
+    assert asset.symbol == "NJDCY"
+    assert asset.name == "Nidec Corporation American Depositary Receipts - Sponsored"
     # Alpaca's raw "class" key maps to asset_class.
     assert asset.asset_class == "us_equity"
-    assert asset.exchange == "NASDAQ"
+    assert asset.exchange == "OTC"
     assert asset.status == "active"
-    assert asset.tradable is True
-    assert asset.fractionable is True
-    assert asset.shortable is True
-    assert asset.marginable is True
+    # OTC ADRs are not tradable on the paper account.
+    assert asset.tradable is False
+    assert asset.fractionable is False
+    assert asset.shortable is False
+    assert asset.marginable is False
 
 
 def test_from_alpaca_asset_inactive(load_alpaca_fixture: AlpacaFixtureLoader) -> None:
@@ -46,7 +51,7 @@ def test_from_alpaca_asset_inactive(load_alpaca_fixture: AlpacaFixtureLoader) ->
 
     asset = from_alpaca_asset(inactive)
 
-    assert asset.symbol == "OLDCO"
+    assert asset.symbol == "DELISTED"
     assert asset.status == "inactive"
     assert asset.tradable is False
     assert asset.shortable is False
@@ -77,7 +82,7 @@ def test_from_alpaca_clock_is_vendor_evidence(
     assert isinstance(clock, BrokerClockEvidence)
     assert clock.broker == "alpaca"
     assert clock.is_open is True
-    assert clock.vendor_timestamp_ms == rfc3339_to_ms("2022-04-28T10:00:00.123456-04:00")
-    assert clock.next_open_ms == rfc3339_to_ms("2022-04-29T09:30:00-04:00")
-    assert clock.next_close_ms == rfc3339_to_ms("2022-04-28T16:00:00-04:00")
+    assert clock.vendor_timestamp_ms == rfc3339_to_ms("2026-07-24T10:42:48.601374373-04:00")
+    assert clock.next_open_ms == rfc3339_to_ms("2026-07-27T09:30:00-04:00")
+    assert clock.next_close_ms == rfc3339_to_ms("2026-07-24T16:00:00-04:00")
     assert clock.observed_at_ms == _OBSERVED

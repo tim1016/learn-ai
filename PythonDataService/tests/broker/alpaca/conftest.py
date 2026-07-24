@@ -29,14 +29,15 @@ class ApiErrorFactory(Protocol):
     ) -> APIError: ...
 
 
+def load_alpaca_fixture_file(family: str, filename: str) -> Any:
+    """Load one committed Alpaca fixture outside pytest fixture injection."""
+    return json.loads((_ALPACA_FIXTURES / family / filename).read_text())
+
+
 @pytest.fixture
 def load_alpaca_fixture() -> AlpacaFixtureLoader:
     """Load a committed Alpaca payload fixture: (family, filename) → parsed JSON."""
-
-    def _load(family: str, filename: str) -> Any:
-        return json.loads((_ALPACA_FIXTURES / family / filename).read_text())
-
-    return _load
+    return load_alpaca_fixture_file
 
 
 @pytest.fixture

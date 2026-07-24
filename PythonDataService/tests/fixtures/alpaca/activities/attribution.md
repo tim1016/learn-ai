@@ -1,14 +1,20 @@
-# Alpaca activities fixture — attribution
+# Fixture attribution — activities
 
-- **Endpoint:** `GET /v2/account/activities`
-- **reference_kind:** `synthetic_representative`
-- **Status:** `pending-real-capture`
-- **Source:** hand-built from the alpaca-py `TradeActivity` / `NonTradeActivity`
-  model field sets (alpaca-py 0.42.0) and Alpaca's public Account Activities
-  documentation. Two rows cover both categories: a trade `FILL` (carries
-  `transaction_time` → `trade_activity`, occurred-at from the timestamp) and a
-  non-trade `DIV` (carries `date` → `non_trade_activity`, occurred-at anchored
-  at 00:00 ET of that date).
-- **Sanitization:** `id` / `order_id` are synthetic.
-- **Regeneration:** replace with a real sanitized capture in HITL slice #1178,
-  then remove the `pending-real-capture` marker.
+- **broker:** alpaca (paper)
+- **endpoint_family:** activities
+- **captured_at_ms:** 1784904166923
+- **captured_at:** 2026-07-24T14:42:46.923000+00:00
+- **source:** live Alpaca paper account (HITL gate — script `scripts/hitl_alpaca_capture.py`)
+- **reference_kind:** `mixed_real_sanitized_capture_and_synthetic_scenarios`
+- **sanitization:** UUIDs replaced with deterministic sentinel values (00000000-0000-0000-0000-{N:012d}); account numbers replaced with PA0SANITIZED00001.
+
+## Synthetic supplemental records
+
+- The FILL record with sentinel order ID ending in `000099` is synthetic; it
+  retains deterministic trade-activity coverage when a current capture has no FILL.
+  All other records are sanitized live paper-account captures.
+
+## Status: `mixed-real-capture`
+
+Replaced `pending-real-capture` synthetic fixtures on 2026-07-24 via HITL
+gate #1178 / #1198. Adapter + schema-drift tests run against this payload.

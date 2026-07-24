@@ -1,34 +1,29 @@
-# Alpaca `trade_updates` frame fixtures (Broker System v2, phase 2, S4)
+# Fixture attribution — trade_updates
 
-Representative `trade_updates` websocket event frames used to exercise the
-adapter mapping (`from_alpaca_trade_update`) and the live-lifecycle consumer
-(`app/broker/alpaca/trade_updates.py`).
+- **broker:** alpaca (paper)
+- **endpoint_family:** trade_updates
+- **captured_at_ms:** 1784904168837
+- **captured_at:** 2026-07-24T14:42:48.837000+00:00
+- **source:** live Alpaca paper account (HITL gate — script `scripts/hitl_alpaca_capture.py`)
+- **reference_kind:** `mixed_real_sanitized_capture_and_synthetic_scenarios`
+- **sanitization:** Auth frame replaced with structural placeholder (no key material). Order UUIDs replaced with sentinel values. client_order_id in lifecycle frames sanitized.
 
-- **reference_kind:** `synthetic_representative` (not a numerical oracle — a
-  wire-shape fixture; intentionally outside `tests/fixtures/golden/manifest.json`).
-- **source:** Alpaca WebSocket Streaming docs
-  (<https://docs.alpaca.markets/us/docs/websocket-streaming>) and the alpaca-py
-  `TradingStream` protocol (v0.42.0, the schema-drift authority), which sends
-  `{"action":"authenticate",…}` / `{"action":"listen",…}` and decodes each
-  frame as JSON. The trading `/stream` endpoint defaults to JSON encoding.
-- **date generated:** 2026-07-23.
-- **encoding:** JSON (verified against alpaca-py `TradingStream`).
+## Frames captured
 
-## Status: `pending-real-capture`
+- `auth_ack`
+- `subscribe_ack`
+- `lifecycle/pending_new`
+- `lifecycle/new`
+- `lifecycle/fill`
 
-These frames are hand-built from the documented event shape so the AFK slices
-can build and test parsing/idempotency/attribution without live credentials.
-The HITL closeout (S7, #1178 family) replaces them with a **real sanitized
-capture** from a live paper account's websocket (account IDs / order IDs
-scrubbed, `client_order_id` values kept in the `manual/{operator}/v1:{intent}`
-shape so ownership attribution still exercises), then re-runs the adapter +
-consumer tests against reality.
+## Synthetic supplemental records
 
-## Frames
+- `partial_fill`, `canceled`, and `rejected` lifecycle frames whose
+  `client_order_id` contains `SYNTHETIC` are synthetic; captured frames are
+  listed separately above. All other frames are sanitized live paper-account
+  captures.
 
-One JSON array of `{"stream":"trade_updates","data":{…}}` frames, covering the
-five representative lifecycle events the adapter maps: `new`, `partial_fill`,
-`fill`, `canceled`, `rejected`. Fills carry the per-execution `execution_id` +
-top-level `price`/`qty` (the slice that filled) distinct from the order's
-cumulative `filled_avg_price`/`filled_qty`. All `client_order_id` values use the
-`manual/inkant/v1:{intent}` namespace so the consumer attributes them as OWNED.
+## Status: `mixed-real-capture`
+
+Replaced `pending-real-capture` synthetic fixtures on 2026-07-24 via HITL
+gate #1178 / #1198. Adapter + schema-drift tests run against this payload.

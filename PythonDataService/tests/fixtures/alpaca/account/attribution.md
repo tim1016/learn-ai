@@ -1,13 +1,16 @@
-# Alpaca account fixture — attribution
+# Fixture attribution — account
 
-- **Endpoint:** `GET /v2/account`
-- **reference_kind:** `synthetic_representative`
-- **Status:** `pending-real-capture`
-- **Source:** hand-built from the alpaca-py `TradeAccount` model field set
-  (alpaca-py 0.42.0) and Alpaca's public Trading API account documentation. No
-  live account was contacted; values are representative and internally
-  consistent (`equity == portfolio_value`, `cash == non_marginable_buying_power`).
-- **Sanitization:** `id` and `account_number` are synthetic placeholders.
-- **Regeneration:** replace with a real sanitized capture in HITL slice #1178
-  (verbatim `raw_body` from `var/broker_captures/alpaca/account/<day>.jsonl`,
-  account identifiers scrubbed), then remove the `pending-real-capture` marker.
+- **broker:** alpaca (paper)
+- **endpoint_family:** account
+- **captured_at_ms:** 1784904166703
+- **captured_at:** 2026-07-24T14:42:46.703000+00:00
+- **source:** live Alpaca paper account (HITL gate — script `scripts/hitl_alpaca_capture.py`)
+- **reference_kind:** `real_sanitized_capture`
+- **sanitization:** UUIDs replaced with deterministic sentinel values (00000000-0000-0000-0000-{N:012d}); account numbers replaced with PA0SANITIZED00001.
+
+
+
+## Status: `real-capture`
+
+Replaced `pending-real-capture` synthetic fixtures on 2026-07-24 via HITL
+gate #1178 / #1198. Adapter + schema-drift tests run against this payload.

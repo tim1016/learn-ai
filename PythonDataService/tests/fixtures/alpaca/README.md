@@ -1,31 +1,36 @@
 # Alpaca golden fixtures (Broker System v2)
 
-Representative Alpaca REST payloads used to exercise adapter mapping behavior
-and feed the SDK schema-compatibility guard. One subdirectory per
-endpoint family (`account`, `positions`, `orders`, `activities`, `assets`,
-`clock`), each with the raw payload(s) and an `attribution.md`.
+Sanitized Alpaca REST payloads captured from a live paper account via the HITL
+gate (script `scripts/hitl_alpaca_capture.py`, run 2026-07-24).
+One subdirectory per endpoint family, each with the raw payload(s) and an
+`attribution.md`.
 
-These are **synthetic representative** fixtures
-(`reference_kind: synthetic_representative`), not
-numerical oracles, so they are intentionally **outside** the numerical golden
-manifest (`tests/fixtures/golden/manifest.json`) — that system governs
-tolerance-pinned math equivalence, which does not apply to a broker payload
-shape.
+These are **sanitized raw Alpaca wire fixtures**. UUIDs, account numbers, and
+client-order identifiers are replaced with deterministic sentinel values. The
+remaining values, including RFC3339 timestamps, retain the vendor wire shape so
+the adapter ingestion boundary is tested. The adapter immediately converts those
+raw vendor timestamps to canonical `int64 ms UTC`; the fixtures are not internal
+storage or contract payloads.
 
-## Status: `pending-real-capture`
+Most records are real paper-account captures. Deterministic synthetic
+supplemental records retain edge cases that a live recapture cannot guarantee:
+the FILL activity, inactive `DELISTED` asset, TSLA short position, open limit
+order, and `partial_fill`/`canceled`/`rejected` trade-update frames. Each
+`attribution.md` identifies its mixed provenance.
 
-The committed payloads are **representative** — hand-built from the alpaca-py
-model field sets (v0.42.0) and Alpaca's public API documentation — so the AFK
-slices can build and test the mapping without live credentials. The HITL
-closeout slice (#1178) replaces each with a **real sanitized capture** from a
-live paper account (account IDs / order IDs scrubbed), removes the
-`pending-real-capture` marker, and re-runs the adapter + schema-drift tests
-against reality.
+These fixtures are outside the numerical golden manifest
+(`tests/fixtures/golden/manifest.json`) — that system governs
+tolerance-pinned math equivalence, which does not apply to broker payload shape.
 
-## Regeneration (HITL slice #1178)
+## Status: `mixed-real-capture`
 
-With paper credentials in `.env`, run the read paths against the live paper
-account, take the verbatim payloads from the capture journal
-(`var/broker_captures/alpaca/<family>/<day>.jsonl` → `raw_body`), sanitize
-linkable identifiers, and replace the representative files here. Record source,
-date, and sanitization notes in each family's `attribution.md`.
+Replaced `pending-real-capture` synthetic fixtures on 2026-07-24.
+Adapter + schema-drift tests pass against these raw wire payloads.
+
+## Regeneration
+
+Run `python scripts/hitl_alpaca_capture.py` from `PythonDataService/` with
+paper credentials in `.env`. The script calls all read endpoints, submits the
+documented paper test order, waits for terminal websocket evidence, captures
+post-order state, and regenerates every fixture + attribution file. It fails
+without changing fixtures if the order lifecycle cannot be proven.
