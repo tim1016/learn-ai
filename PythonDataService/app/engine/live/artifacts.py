@@ -4,10 +4,12 @@ Pinned to the schemas the reconciler reads in
 ``app.engine.live.reconcile`` (decisions.parquet, executions.parquet,
 trades.parquet — see that module's docstring for the column contract).
 
-Three writer classes:
+Five writer classes:
   * ``DecisionWriter``   — one row per consolidated 15-min bar
   * ``ExecutionWriter``  — one row per broker-reported fill event
   * ``TradeWriter``      — one row per closed trade (entry + exit pair)
+  * ``InputBarWriter``   — one closed broker minute bar before strategy use
+  * ``EquityWriter``     — one post-bar portfolio snapshot
 
 Each writer is a thin file-backed buffer:
   * ``append(...)`` validates the row dict against the pinned column
@@ -22,9 +24,9 @@ mid-write cannot corrupt previously durable rows. Pandas/pyarrow reads
 dataset directories, preserving the public artifact paths while avoiding
 whole-file in-place rewrites.
 
-Phase C-2a (this PR) ships the writers as a standalone module with
-unit tests. Wiring them into ``LiveEngine`` is Phase C-2b — see the
-TODO in ``app/engine/live/live_engine.py``.
+The writers are wired into ``LiveEngine``. Native broker bars are published
+before conversion into engine bars; the remaining artifacts flush at each
+completed minute-bar state checkpoint.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ import shutil
 import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -116,6 +119,29 @@ TRADE_COLUMNS = (
     "entry_price",
     "exit_price",
     "pnl_points",
+)
+INPUT_BAR_COLUMNS = (
+    "run_id",
+    "symbol",
+    "start_ms",
+    "end_ms",
+    "fetched_at_ms",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "source",
+    "provenance",
+    "venue",
+    "session_phase",
+    "use_rth",
+)
+EQUITY_COLUMNS = (
+    "timestamp_ms",
+    "equity",
+    "cash",
+    "holdings_value",
 )
 SIGNAL_VALUES = {"ENTER", "EXIT", "HOLD"}
 _SEGMENT_PREFIX = "part-"
@@ -320,6 +346,52 @@ class TradeRow:
     pnl_points: float
 
 
+@dataclass(frozen=True)
+class InputBarRow:
+    """One closed native IBKR minute bar captured before engine conversion.
+
+    This is the run's market-input receipt, not a second calculation path.
+    Price fields are serialized as exact decimal text. A parquet dataset may
+    contain one atomic segment per minute, and Arrow Decimal schemas inferred
+    independently per segment cannot safely merge variable scales. Text keeps
+    the broker-boundary value exact without introducing float conversion or a
+    hidden fixed-scale limit; a future numeric consumer must parse explicitly.
+    Optional venue and ``use_rth`` values are likewise serialized to stable
+    text (empty venue and ``"unknown"`` respectively) so a first all-null
+    minute cannot create an Arrow null schema that later segments reject.
+    """
+
+    run_id: str
+    symbol: str
+    start_ms: int
+    end_ms: int
+    fetched_at_ms: int
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int
+    source: str
+    provenance: str
+    venue: str | None
+    session_phase: str
+    use_rth: bool | None
+
+
+@dataclass(frozen=True)
+class EquityRow:
+    """One exact-Decimal portfolio snapshot after a processed minute bar.
+
+    The writer serializes these Decimal values as exact text for the same
+    cross-segment schema stability guarantee as ``InputBarRow``.
+    """
+
+    timestamp_ms: int
+    equity: Decimal
+    cash: Decimal
+    holdings_value: Decimal
+
+
 # ──────────────────────────── Writer base ────────────────────────────
 
 
@@ -474,6 +546,49 @@ class TradeWriter(_ParquetAppendWriter):
         )
 
 
+class InputBarWriter(_ParquetAppendWriter):
+    """Writes input_bars.parquet — native minute bars before strategy use."""
+
+    columns = INPUT_BAR_COLUMNS
+
+    def append_row(self, row: InputBarRow) -> None:
+        self.append(
+            {
+                "run_id": str(row.run_id),
+                "symbol": str(row.symbol),
+                "start_ms": int(row.start_ms),
+                "end_ms": int(row.end_ms),
+                "fetched_at_ms": int(row.fetched_at_ms),
+                "open": str(row.open),
+                "high": str(row.high),
+                "low": str(row.low),
+                "close": str(row.close),
+                "volume": int(row.volume),
+                "source": str(row.source),
+                "provenance": str(row.provenance),
+                "venue": "" if row.venue is None else str(row.venue),
+                "session_phase": str(row.session_phase),
+                "use_rth": "unknown" if row.use_rth is None else str(row.use_rth).lower(),
+            }
+        )
+
+
+class EquityWriter(_ParquetAppendWriter):
+    """Writes equity_curve.parquet — one post-bar portfolio snapshot."""
+
+    columns = EQUITY_COLUMNS
+
+    def append_row(self, row: EquityRow) -> None:
+        self.append(
+            {
+                "timestamp_ms": int(row.timestamp_ms),
+                "equity": str(row.equity),
+                "cash": str(row.cash),
+                "holdings_value": str(row.holdings_value),
+            }
+        )
+
+
 # ──────────────────────────── Atomic parquet publish ─────────────────
 
 
@@ -555,15 +670,17 @@ def _write_segment_into_existing_dataset(
 
 @dataclass
 class LiveArtifactWriters:
-    """Convenience bundle — open all three writers under one ``run_dir``.
+    """Convenience bundle — open all five writers under one ``run_dir``.
 
-    Wire-in pattern (Phase C-2b):
+    LiveEngine wire-in pattern:
         writers = LiveArtifactWriters.open(run_dir)
         try:
             ...drive the live engine, calling
             writers.decisions.append_row(...) per bar,
             writers.executions.append_row(...) per fill,
-            writers.trades.append_row(...) per closed trade...
+            writers.trades.append_row(...) per closed trade,
+            writers.input_bars.append_row(...) before native-bar conversion,
+            writers.equity_curve.append_row(...) after each processed bar...
         finally:
             writers.close_all()
     """
@@ -571,6 +688,8 @@ class LiveArtifactWriters:
     decisions: DecisionWriter
     executions: ExecutionWriter
     trades: TradeWriter
+    input_bars: InputBarWriter
+    equity_curve: EquityWriter
 
     @classmethod
     def open(
@@ -582,14 +701,20 @@ class LiveArtifactWriters:
             decisions=DecisionWriter(run_dir / "decisions.parquet", decision_columns),
             executions=ExecutionWriter(run_dir / "executions.parquet"),
             trades=TradeWriter(run_dir / "trades.parquet"),
+            input_bars=InputBarWriter(run_dir / "input_bars.parquet"),
+            equity_curve=EquityWriter(run_dir / "equity_curve.parquet"),
         )
 
     def flush_all(self) -> None:
         self.decisions.flush()
         self.executions.flush()
         self.trades.flush()
+        self.input_bars.flush()
+        self.equity_curve.flush()
 
     def close_all(self) -> None:
         self.decisions.close()
         self.executions.close()
         self.trades.close()
+        self.input_bars.close()
+        self.equity_curve.close()

@@ -479,6 +479,34 @@ def test_build_hash_manifest_returns_none_for_missing_files(tmp_path: Path) -> N
     assert manifest["python_executions_parquet"] is None
 
 
+def test_build_hash_manifest_hashes_input_bar_and_equity_artifact_directories(
+    tmp_path: Path,
+) -> None:
+    json_path = tmp_path / "x.json"
+    json_path.write_text("{}")
+    input_bars = tmp_path / "input_bars.parquet"
+    equity_curve = tmp_path / "equity_curve.parquet"
+    input_bars.mkdir()
+    equity_curve.mkdir()
+    (input_bars / "part-000001.parquet").write_bytes(b"native bars")
+    (equity_curve / "part-000001.parquet").write_bytes(b"equity")
+
+    manifest = build_hash_manifest(
+        json_path=json_path,
+        parquet_path=tmp_path / "missing.parquet",
+        py_executions_path=tmp_path / "missing_exec.parquet",
+        py_trades_path=tmp_path / "missing_trades.parquet",
+        qc_trades_path=tmp_path / "missing_qc_trades.csv",
+        qc_indicators_path=tmp_path / "missing_qc_ind.csv",
+        run_ledger_path=tmp_path / "missing_ledger.json",
+        input_bars_path=input_bars,
+        equity_curve_path=equity_curve,
+    )
+
+    assert manifest["python_input_bars_parquet"] == file_sha256(input_bars)
+    assert manifest["python_equity_curve_parquet"] == file_sha256(equity_curve)
+
+
 def test_day_hashes_manifest_includes_hydration_receipt_if_present(tmp_path: Path) -> None:
     """When <run_dir>/indicator_state_hydration.json exists its SHA-256 appears in day-N.hashes.json."""
     import hashlib
