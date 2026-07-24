@@ -57,6 +57,18 @@ PYTHON SIDE — under ``live_runs/<run_id>/``::
     exit_price       float64
     pnl_points       float64
 
+  input_bars.parquet
+    Native IBKR 1-minute input receipts captured before engine conversion.
+    Includes int64-ms timestamps, exact decimal-text OHLC values, and broker
+    provenance/session metadata. Absent venue is empty text; nullable use-RTH
+    is ``true`` / ``false`` / ``unknown`` text. The day report hashes this
+    artifact; it does not yet classify bar-level differences from it.
+
+  equity_curve.parquet
+    timestamp_ms, equity, cash, holdings_value — exact decimal-text post-bar
+    portfolio snapshots. The day report hashes this artifact; equity-series
+    comparison remains a future reconciliation extension.
+
 QC SIDE — under ``artifacts/qc/<YYYY-MM-DD>/`` (manual export from QC Cloud)::
 
   indicators.csv
@@ -502,6 +514,8 @@ def build_hash_manifest(
     qc_indicators_path: Path,
     run_ledger_path: Path,
     hydration_receipt_path: Path | None = None,
+    input_bars_path: Path | None = None,
+    equity_curve_path: Path | None = None,
 ) -> dict[str, str | None]:
     manifest: dict[str, str | None] = {
         "reconcile_json": _maybe_sha256(json_path),
@@ -514,6 +528,10 @@ def build_hash_manifest(
     }
     if hydration_receipt_path is not None and hydration_receipt_path.exists():
         manifest["indicator_state_hydration.json"] = file_sha256(hydration_receipt_path)
+    if input_bars_path is not None:
+        manifest["python_input_bars_parquet"] = _maybe_sha256(input_bars_path)
+    if equity_curve_path is not None:
+        manifest["python_equity_curve_parquet"] = _maybe_sha256(equity_curve_path)
     return manifest
 
 
@@ -710,6 +728,8 @@ def write_day_report(
         qc_indicators_path=qc_dir / "indicators.csv",
         run_ledger_path=run_dir / "run_ledger.json",
         hydration_receipt_path=run_dir / "indicator_state_hydration.json",
+        input_bars_path=run_dir / "input_bars.parquet",
+        equity_curve_path=run_dir / "equity_curve.parquet",
     )
     hashes_path.write_text(json.dumps(hash_manifest, indent=2, sort_keys=True), encoding="utf-8")
 

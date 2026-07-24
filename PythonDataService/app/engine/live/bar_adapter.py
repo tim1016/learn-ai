@@ -11,7 +11,7 @@ place that converts between the two; everything downstream of
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, AsyncIterator
+from collections.abc import AsyncIterable, AsyncIterator, Callable
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -46,7 +46,16 @@ def ibkr_minute_bar_to_trade_bar(bar: IbkrMinuteBar) -> TradeBar:
 
 async def trade_bars_from_ibkr(
     source: AsyncIterable[IbkrMinuteBar],
+    *,
+    on_bar: Callable[[IbkrMinuteBar], None] | None = None,
 ) -> AsyncIterator[TradeBar]:
-    """Yield ``TradeBar`` values converted from an ``IbkrMinuteBar`` stream."""
+    """Yield ``TradeBar`` values converted from an ``IbkrMinuteBar`` stream.
+
+    ``on_bar`` observes the native bar before conversion.  The live runtime
+    uses it to durably capture the broker-boundary input before strategy code
+    can consume the derived ``TradeBar``.
+    """
     async for bar in source:
+        if on_bar is not None:
+            on_bar(bar)
         yield ibkr_minute_bar_to_trade_bar(bar)

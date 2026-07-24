@@ -45,7 +45,9 @@ from app.engine.live.artifacts import (
     CORE_DECISION_COLUMNS,
     DECISION_COLUMNS,
     DecisionRow,
+    EquityRow,
     ExecutionRow,
+    InputBarRow,
     LiveArtifactWriters,
     TradeRow,
 )
@@ -594,7 +596,7 @@ class LiveEngine:
         self._order_meta: dict[int, _OrderMeta] = {}
         # Optional artifact-writer integration. When ``output_dir`` is
         # set, the run() loop opens a LiveArtifactWriters bundle, feeds
-        # decisions / executions / trades per Phase B's reconcile schemas,
+        # input bars / decisions / executions / trades / equity snapshots,
         # and closes the bundle in finally. Tests and replay paths that
         # don't pass an output_dir see exactly the prior behavior.
         # ``account_id`` populates the executions row's account_id
@@ -1148,15 +1150,6 @@ class LiveEngine:
         if len(ctx.symbols) != 1:
             raise NotImplementedError("LiveEngine v1 supports a single symbol only")
         symbol = ctx.symbols[0]
-        using_ibkr_runtime_source = False
-        if bars is not None:
-            source = bars
-        elif ibkr_bars is not None:
-            source = trade_bars_from_ibkr(ibkr_bars)
-        else:
-            using_ibkr_runtime_source = True
-            source = trade_bars_from_ibkr(stream_minute_bars(self._client, symbol))
-
         order_events: list[OrderEvent] = []
         retained_bars: list[TradeBar] = []
         equity_curve: list[EquitySnapshot] = []
@@ -1190,6 +1183,48 @@ class LiveEngine:
         last_written_trade_count = 0
         if self._output_dir is not None:
             writers = LiveArtifactWriters.open(self._output_dir, self._decision_columns)
+
+        def persist_native_input_bar(bar: IbkrMinuteBar) -> None:
+            """Atomically publish a broker bar before strategy processing.
+
+            A write failure intentionally propagates through the source: a
+            live run must not continue consuming broker inputs it cannot
+            receipt for later reconciliation.
+            """
+            if writers is None:
+                return
+            writers.input_bars.append_row(
+                InputBarRow(
+                    run_id=self._run_id,
+                    symbol=bar.symbol,
+                    start_ms=bar.start_ms,
+                    end_ms=bar.end_ms,
+                    fetched_at_ms=bar.fetched_at_ms,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                    source=bar.source,
+                    provenance=bar.provenance,
+                    venue=bar.venue,
+                    session_phase=bar.session_phase,
+                    use_rth=bar.use_rth,
+                )
+            )
+            writers.input_bars.flush()
+
+        using_ibkr_runtime_source = False
+        if bars is not None:
+            source = bars
+        elif ibkr_bars is not None:
+            source = trade_bars_from_ibkr(ibkr_bars, on_bar=persist_native_input_bar)
+        else:
+            using_ibkr_runtime_source = True
+            source = trade_bars_from_ibkr(
+                stream_minute_bars(self._client, symbol),
+                on_bar=persist_native_input_bar,
+            )
 
         started_event_stream = False
         if isinstance(self._broker, IbkrEventAdapter):
@@ -1632,14 +1667,22 @@ class LiveEngine:
 
                 current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
                 ctx.insight_manager.step(minute_bar.end_time, current_prices)
-                equity_curve.append(
-                    EquitySnapshot(
-                        timestamp=minute_bar.end_time,
-                        equity=portfolio.total_value(),
-                        cash=portfolio.cash,
-                        holdings_value=portfolio.total_value() - portfolio.cash,
-                    )
+                equity_snapshot = EquitySnapshot(
+                    timestamp=minute_bar.end_time,
+                    equity=portfolio.total_value(),
+                    cash=portfolio.cash,
+                    holdings_value=portfolio.total_value() - portfolio.cash,
                 )
+                equity_curve.append(equity_snapshot)
+                if writers is not None:
+                    writers.equity_curve.append_row(
+                        EquityRow(
+                            timestamp_ms=bar_close_ms,
+                            equity=equity_snapshot.equity,
+                            cash=equity_snapshot.cash,
+                            holdings_value=equity_snapshot.holdings_value,
+                        )
+                    )
                 retained_bars.append(minute_bar)
                 previous_bar = minute_bar
 
@@ -2031,8 +2074,8 @@ class LiveEngine:
 
         Ordering matters: the sidecar envelope records
         ``last_processed_bar_ms`` / ``last_artifact_flush_ms`` as
-        durable cursors. The decision / execution / trade parquet rows,
-        however, are only buffered in memory until ``writers.flush_all``
+        durable cursors. The decision / execution / trade / equity parquet
+        rows, however, are only buffered in memory until ``writers.flush_all``
         (or ``close_all`` in the run finally). If we wrote the sidecar
         cursor first and the process crashed before the buffered rows
         reached disk, ColdStartReconciler would resume from a cursor
@@ -2041,24 +2084,23 @@ class LiveEngine:
         bundle to disk before advancing the cursor; the cursor then
         only ever reflects truly durable artifacts.
 
-        A flush failure is logged and suppresses the sidecar write for
-        this bar (the cursor must not advance past artifacts we failed
-        to persist), but never propagates — the sidecar is a
-        crash-recovery aid, not a precondition for processing. Likewise
-        the sidecar write itself is logged-and-swallowed; the
-        ColdStartReconciler at next boot can detect any divergence
+        Artifact flushing runs whenever writers are configured, even without a
+        live-state sidecar. A flush failure is logged and suppresses any
+        sidecar write for this bar (the cursor must not advance past artifacts
+        we failed to persist). The sidecar write itself is logged-and-swallowed;
+        the ColdStartReconciler at next boot can detect any divergence
         between sidecar and broker if writes were missed.
         """
-        if self._live_state_writer is None or bar_close_ms <= 0:
-            return
         if writers is not None:
             try:
                 writers.flush_all()
             except Exception:
                 logger.exception(
-                    "artifact flush before live-state sidecar write failed; skipping cursor advance this bar"
+                    "artifact flush failed; skipping live-state sidecar cursor advance this bar"
                 )
                 return
+        if self._live_state_writer is None or bar_close_ms <= 0:
+            return
         try:
             self._live_state_writer(portfolio, bar_close_ms)
         except Exception:

@@ -7,6 +7,7 @@ matching reconcile loader to lock the contract.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -16,13 +17,19 @@ from app.engine.live import artifacts as artifacts_module
 from app.engine.live.artifacts import (
     CORE_DECISION_COLUMNS,
     DECISION_COLUMNS,
+    EQUITY_COLUMNS,
     EXECUTION_COLUMNS,
+    INPUT_BAR_COLUMNS,
     TRADE_COLUMNS,
     ArtifactSchemaError,
     DecisionRow,
     DecisionWriter,
+    EquityRow,
+    EquityWriter,
     ExecutionRow,
     ExecutionWriter,
+    InputBarRow,
+    InputBarWriter,
     LiveArtifactWriters,
     TradeRow,
     TradeWriter,
@@ -485,10 +492,118 @@ def test_trade_writer_columns_match_pinned_set(tmp_path: Path) -> None:
     assert df.iloc[0]["pnl_points"] == pytest.approx(2.5)
 
 
+# ───────────────────── InputBarWriter / EquityWriter ─────────────────
+
+
+def test_input_bar_writer_preserves_native_bar_receipt(tmp_path: Path) -> None:
+    writer = InputBarWriter(tmp_path / "input_bars.parquet")
+    writer.append_row(
+        InputBarRow(
+            run_id="run-abc",
+            symbol="SPY",
+            start_ms=1_700_000_000_000,
+            end_ms=1_700_000_060_000,
+            fetched_at_ms=1_700_000_061_234,
+            open=Decimal("500.10"),
+            high=Decimal("501.20"),
+            low=Decimal("500.05"),
+            close=Decimal("501.00"),
+            volume=1234,
+            source="ibkr",
+            provenance="ibkr_realtime",
+            venue="SMART",
+            session_phase="RTH",
+            use_rth=True,
+        )
+    )
+    writer.close()
+
+    df = pd.read_parquet(tmp_path / "input_bars.parquet")
+    assert list(df.columns) == list(INPUT_BAR_COLUMNS)
+    assert df.iloc[0]["run_id"] == "run-abc"
+    assert int(df.iloc[0]["end_ms"]) == 1_700_000_060_000
+    assert df.iloc[0]["close"] == "501.00"
+    assert df.iloc[0]["use_rth"] == "true"
+
+
+def test_input_bar_writer_reads_variable_scale_and_optional_values_across_segments(
+    tmp_path: Path,
+) -> None:
+    """Native-bar receipt segments remain readable when metadata appears late."""
+    writer = InputBarWriter(tmp_path / "input_bars.parquet")
+    writer.append_row(
+        InputBarRow(
+            run_id="run", symbol="SPY", start_ms=0, end_ms=60_000, fetched_at_ms=60_001,
+            open=Decimal("1"), high=Decimal("1"), low=Decimal("1"), close=Decimal("1"),
+            volume=1, source="ibkr", provenance="ibkr_realtime", venue=None,
+            session_phase="UNKNOWN", use_rth=None,
+        )
+    )
+    writer.flush()
+    writer.append_row(
+        InputBarRow(
+            run_id="run", symbol="SPY", start_ms=60_000, end_ms=120_000, fetched_at_ms=120_001,
+            open=Decimal("1.125"), high=Decimal("1.125"), low=Decimal("1.125"), close=Decimal("1.125"),
+            volume=2, source="ibkr", provenance="ibkr_realtime", venue="SMART",
+            session_phase="RTH", use_rth=True,
+        )
+    )
+    writer.close()
+
+    df = pd.read_parquet(tmp_path / "input_bars.parquet")
+    assert list(df["close"]) == ["1", "1.125"]
+    assert list(df["venue"]) == ["", "SMART"]
+    assert list(df["use_rth"]) == ["unknown", "true"]
+
+
+def test_equity_writer_preserves_exact_decimal_snapshot(tmp_path: Path) -> None:
+    writer = EquityWriter(tmp_path / "equity_curve.parquet")
+    writer.append_row(
+        EquityRow(
+            timestamp_ms=1_700_000_060_000,
+            equity=Decimal("100001.125"),
+            cash=Decimal("50000.125"),
+            holdings_value=Decimal("50001.000"),
+        )
+    )
+    writer.close()
+
+    df = pd.read_parquet(tmp_path / "equity_curve.parquet")
+    assert list(df.columns) == list(EQUITY_COLUMNS)
+    assert df.iloc[0]["equity"] == "100001.125"
+    assert df.iloc[0]["holdings_value"] == "50001.000"
+
+
+def test_equity_writer_reads_decimal_values_across_variable_scale_segments(tmp_path: Path) -> None:
+    """Each atomic minute segment may have a different Decimal scale."""
+    writer = EquityWriter(tmp_path / "equity_curve.parquet")
+    writer.append_row(
+        EquityRow(
+            timestamp_ms=1,
+            equity=Decimal("100000"),
+            cash=Decimal("100000"),
+            holdings_value=Decimal("0"),
+        )
+    )
+    writer.flush()
+    writer.append_row(
+        EquityRow(
+            timestamp_ms=2,
+            equity=Decimal("99999.125"),
+            cash=Decimal("50000.125"),
+            holdings_value=Decimal("49999"),
+        )
+    )
+    writer.close()
+
+    df = pd.read_parquet(tmp_path / "equity_curve.parquet")
+    assert list(df["equity"]) == ["100000", "99999.125"]
+
+
 # ──────────────────────────── LiveArtifactWriters bundle ─────────────
 
 
-def test_live_artifact_writers_bundle_opens_three_writers_under_run_dir(tmp_path: Path) -> None:
+def test_live_artifact_writers_bundle_opens_all_writers_under_run_dir(tmp_path: Path) -> None:
     bundle = LiveArtifactWriters.open(tmp_path)
     bundle.decisions.append_row(_ema_decision(bar_close_ms=0, signal="HOLD", intended_price=1.0, ema5=1.0, ema10=1.0))
     bundle.executions.append_row(
@@ -502,11 +617,26 @@ def test_live_artifact_writers_bundle_opens_three_writers_under_run_dir(tmp_path
             entry_time_ms=0, exit_time_ms=1, entry_price=1.0, exit_price=2.0, pnl_points=1.0,
         )
     )
+    bundle.input_bars.append_row(
+        InputBarRow(
+            run_id="run", symbol="SPY", start_ms=0, end_ms=60_000, fetched_at_ms=60_100,
+            open=Decimal("1"), high=Decimal("1"), low=Decimal("1"), close=Decimal("1"),
+            volume=1, source="ibkr", provenance="ibkr_realtime", venue=None,
+            session_phase="RTH", use_rth=True,
+        )
+    )
+    bundle.equity_curve.append_row(
+        EquityRow(
+            timestamp_ms=60_000, equity=Decimal("1"), cash=Decimal("1"), holdings_value=Decimal("0"),
+        )
+    )
     bundle.close_all()
 
     assert (tmp_path / "decisions.parquet").exists()
     assert (tmp_path / "executions.parquet").exists()
     assert (tmp_path / "trades.parquet").exists()
+    assert (tmp_path / "input_bars.parquet").exists()
+    assert (tmp_path / "equity_curve.parquet").exists()
 
 
 def test_live_artifact_writers_flush_then_close_is_safe(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from app.broker.ibkr.models import (
@@ -199,6 +200,26 @@ async def test_run_with_ibkr_bars_feeds_tradebars_into_strategy() -> None:
     # Adapter event stream was started/stopped around the run.
     assert broker.stream_started is True
     assert broker.stream_stopped is True
+
+
+@pytest.mark.asyncio
+async def test_run_with_ibkr_bars_persists_native_input_and_equity_receipts(tmp_path: Path) -> None:
+    """A native bar is durably receipted before the converted TradeBar runs."""
+    broker = _StubIbkrBroker()
+    engine = LiveEngine(None, broker=broker, output_dir=tmp_path, run_id="native-input-test")
+    strategy = _RecordingStrategy()
+    bars = [
+        _ibkr_bar(datetime(2026, 5, 4, 14, 30, tzinfo=UTC)),
+        _ibkr_bar(datetime(2026, 5, 4, 14, 31, tzinfo=UTC)),
+    ]
+
+    await engine.run(strategy, ibkr_bars=_iter_ibkr(bars))
+
+    input_receipts = pd.read_parquet(tmp_path / "input_bars.parquet")
+    equity_receipts = pd.read_parquet(tmp_path / "equity_curve.parquet")
+    assert list(input_receipts["end_ms"].astype("int64")) == [bar.end_ms for bar in bars]
+    assert list(input_receipts["run_id"]) == ["native-input-test", "native-input-test"]
+    assert list(equity_receipts["timestamp_ms"].astype("int64")) == [bar.end_ms for bar in bars]
 
 
 class _OneEntryStrategy(Strategy):
