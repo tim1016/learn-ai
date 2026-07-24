@@ -27,13 +27,13 @@ def test_from_alpaca_position_maps_long(load_alpaca_fixture: AlpacaFixtureLoader
     assert position.quantity == 1.0
     assert position.side == "long"
     assert position.average_entry_price == 737.91
-    # market_value, current_price and unrealized_* reflect a real-time snapshot;
-    # assert type/sign rather than exact value to remain stable across recaptures.
-    assert isinstance(position.market_value, float) and position.market_value > 0
+    # These are fixture values; assert exact conversion from the captured payload
+    # so a mapping regression cannot hide behind a type/sign-only assertion.
+    assert position.market_value == float(long_position["market_value"])
     assert position.cost_basis == 737.91
-    assert isinstance(position.current_price, float) and position.current_price > 0
-    assert isinstance(position.unrealized_pl, float)
-    assert isinstance(position.unrealized_plpc, float)
+    assert position.current_price == float(long_position["current_price"])
+    assert position.unrealized_pl == float(long_position["unrealized_pl"])
+    assert position.unrealized_plpc == float(long_position["unrealized_plpc"])
     assert position.observed_at_ms == _OBSERVED
 
 

@@ -99,7 +99,7 @@ def test_all_fixture_frames_map(frames: list[dict[str, Any]]) -> None:
     mapped = [from_alpaca_trade_update(frame["data"]) for frame in trade_frames]
 
     # Assert the full documented set is represented somewhere in the fixture.
-    assert {"new", "partial_fill", "fill", "canceled", "rejected"}.issubset(
+    assert {"pending_new", "new", "partial_fill", "fill", "canceled", "rejected"}.issubset(
         {e.event_type for e in mapped}
     )
     # Every instant is a positive int64 ms.
@@ -110,9 +110,7 @@ def test_unrecognized_event_is_surfaced_by_name() -> None:
     # A vendor event the adapter does not know must raise by name — a new
     # lifecycle event is a schema signal, never silently coerced.
     with pytest.raises(ValueError, match="brand_new_event"):
-        from_alpaca_trade_update(
-            {"event": "brand_new_event", "timestamp": "2021-03-16T18:38:02Z", "order": {}}
-        )
+        from_alpaca_trade_update({"event": "brand_new_event", "timestamp": "2021-03-16T18:38:02Z", "order": {}})
 
 
 def test_missing_timestamp_fails_fast() -> None:

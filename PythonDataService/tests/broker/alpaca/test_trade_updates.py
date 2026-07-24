@@ -40,6 +40,7 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerOrderRequest,
 )
+from tests.broker.alpaca.conftest import load_alpaca_fixture_file
 
 _FIXED_MS = 1_700_000_000_000
 _BASE = "https://paper-api.alpaca.markets"
@@ -264,20 +265,13 @@ def _load_frames() -> list[dict[str, Any]]:
     normalised to _OWNED_COID so the clerk's namespace allowlist (seeded by
     _warm()) treats every frame as OWNED.
     """
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "fixtures"
-        / "alpaca"
-        / "trade_updates"
-        / "trade_updates.json"
-    )
-    all_frames = json.loads(path.read_text())
+    all_frames = load_alpaca_fixture_file("trade_updates", "trade_updates.json")
     _ORDER = {"new": 0, "partial_fill": 1, "fill": 2, "canceled": 3, "rejected": 4}
-    trade = [
-        f
-        for f in all_frames
-        if f["stream"] == "trade_updates" and f["data"].get("event") in _ORDER
-    ]
+    trade = [f for f in all_frames if f["stream"] == "trade_updates" and f["data"].get("event") in _ORDER]
+    present_events = {str(frame["data"]["event"]) for frame in trade}
+    missing_events = set(_ORDER) - present_events
+    assert not missing_events, f"trade_updates fixture missing documented events: {missing_events}"
+    assert len(trade) == len(_ORDER), "trade_updates fixture contains duplicate documented events"
     trade = sorted(copy.deepcopy(trade), key=lambda f: _ORDER[f["data"]["event"]])
     for f in trade:
         if "order" in f["data"]:
@@ -934,9 +928,7 @@ async def test_socket_authorizes_before_listening(monkeypatch: pytest.MonkeyPatc
             sent.append(json.loads(message))
 
         async def recv(self) -> str:
-            return json.dumps(
-                {"stream": "authorization", "data": {"status": "authorized"}}
-            )
+            return json.dumps({"stream": "authorization", "data": {"status": "authorized"}})
 
         def __aiter__(self) -> AsyncIterator[str]:
             async def _empty() -> AsyncIterator[str]:
@@ -955,12 +947,8 @@ async def test_socket_authorizes_before_listening(monkeypatch: pytest.MonkeyPatc
             return None
 
     connection = _Connection()
-    monkeypatch.setitem(
-        sys.modules, "websockets", SimpleNamespace(connect=lambda _: connection)
-    )
-    source = alpaca_socket_frames(
-        AlpacaSettings(api_key_id="key", api_secret_key="secret", mode="paper")
-    )
+    monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=lambda _: connection))
+    source = alpaca_socket_frames(AlpacaSettings(api_key_id="key", api_secret_key="secret", mode="paper"))
 
     authorization = await anext(source)
 
