@@ -1,12 +1,16 @@
-# Alpaca assets fixture — attribution
+# Fixture attribution — assets
 
-- **Endpoint:** `GET /v2/assets`
-- **reference_kind:** `synthetic_representative`
-- **Status:** `pending-real-capture`
-- **Source:** hand-built from the alpaca-py `Asset` model field set (alpaca-py
-  0.42.0) and Alpaca's public Trading API assets documentation. The payload
-  uses Alpaca's raw `class` key (the SDK aliases it to `asset_class`). Two rows
-  cover the `status` filter: an active tradable asset and an inactive one.
-- **Sanitization:** `id` values are synthetic.
-- **Regeneration:** replace with a real sanitized capture in HITL slice #1178,
-  then remove the `pending-real-capture` marker.
+- **broker:** alpaca (paper)
+- **endpoint_family:** assets
+- **captured_at_ms:** 1784904168376
+- **captured_at:** 2026-07-24T14:42:48.376000+00:00
+- **source:** live Alpaca paper account (HITL gate — script `scripts/hitl_alpaca_capture.py`)
+- **reference_kind:** `real_sanitized_capture`
+- **sanitization:** UUIDs replaced with deterministic sentinel values (00000000-0000-0000-0000-{N:012d}); account numbers replaced with PA0SANITIZED00001.
+
+
+
+## Status: `real-capture`
+
+Replaced `pending-real-capture` synthetic fixtures on 2026-07-24 via HITL
+gate #1178 / #1198. Adapter + schema-drift tests run against this payload.

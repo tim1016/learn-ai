@@ -1,27 +1,27 @@
 [
   {
-    "id": "20220923000000000::045b3b8d-c566-4bef-b741-2bf598dd7d97",
+    "id": "20260724143000000::00000000-0000-0000-0000-000000000099",
     "activity_type": "FILL",
-    "transaction_time": "2022-09-23T13:30:00.123456Z",
-    "type": "fill",
-    "price": "135.80",
-    "qty": "10",
+    "transaction_time": "2026-07-24T14:30:00.123456Z",
+    "type": "buy",
+    "qty": "1",
+    "price": "737.91",
+    "amount": "737.91",
+    "symbol": "SPY",
     "side": "buy",
-    "symbol": "AAPL",
     "leaves_qty": "0",
-    "order_id": "61e69015-8549-4bfd-b9c3-01e75843f47d",
-    "cum_qty": "10",
+    "order_id": "00000000-0000-0000-0000-000000000099",
+    "cum_qty": "1",
     "order_status": "filled"
   },
   {
-    "id": "20220819000000000::0000c0ff-eeee-4bef-b741-2bf598dd7d97",
-    "activity_type": "DIV",
-    "date": "2022-08-19",
-    "net_amount": "12.34",
-    "symbol": "AAPL",
-    "qty": "10",
-    "per_share_amount": "1.234",
-    "description": "Cash DIV @ 1.234, Pos QTY: 10.0",
-    "status": "executed"
+    "id": "20260721000000000::00000000-0000-0000-0000-000000000001",
+    "activity_type": "JNLC",
+    "date": "2026-07-21",
+    "created_at": "2026-07-22T00:44:58.928215Z",
+    "net_amount": "100000",
+    "description": "",
+    "status": "executed",
+    "currency": "USD"
   }
 ]

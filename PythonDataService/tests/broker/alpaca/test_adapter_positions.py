@@ -1,7 +1,10 @@
 """Golden-fixture test: Alpaca position payloads → BrokerPosition.
 
 Every contract field is asserted, including the short-position sign case.
-Runs against the representative `pending-real-capture` fixture.
+
+Fixture layout (positions.json):
+  [0] — real SPY long position (1 share, HITL #1178)
+  [1] — synthetic TSLA short position (-3 shares)
 """
 
 from __future__ import annotations
@@ -18,17 +21,19 @@ def test_from_alpaca_position_maps_long(load_alpaca_fixture: AlpacaFixtureLoader
     position = from_alpaca_position(long_position, observed_at_ms=_OBSERVED)
 
     assert position.broker == "alpaca"
-    assert position.symbol == "AAPL"
-    assert position.asset_id == "b0b6dd9d-8b9b-48a9-ba46-b9d54906e415"
+    assert position.symbol == "SPY"
+    assert position.asset_id == "00000000-0000-0000-0000-000000000001"
     assert position.asset_class == "us_equity"
-    assert position.quantity == 10.0
+    assert position.quantity == 1.0
     assert position.side == "long"
-    assert position.average_entry_price == 135.80
-    assert position.market_value == 1358.02
-    assert position.cost_basis == 1358.00
-    assert position.current_price == 135.802
-    assert position.unrealized_pl == 0.02
-    assert position.unrealized_plpc == 0.0000147
+    assert position.average_entry_price == 737.91
+    # market_value, current_price and unrealized_* reflect a real-time snapshot;
+    # assert type/sign rather than exact value to remain stable across recaptures.
+    assert isinstance(position.market_value, float) and position.market_value > 0
+    assert position.cost_basis == 737.91
+    assert isinstance(position.current_price, float) and position.current_price > 0
+    assert isinstance(position.unrealized_pl, float)
+    assert isinstance(position.unrealized_plpc, float)
     assert position.observed_at_ms == _OBSERVED
 
 

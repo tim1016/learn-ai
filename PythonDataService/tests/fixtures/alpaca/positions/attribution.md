@@ -1,12 +1,15 @@
-# Alpaca positions fixture — attribution
+# Fixture attribution — positions
 
-- **Endpoint:** `GET /v2/positions`
-- **reference_kind:** `synthetic_representative`
-- **Status:** `pending-real-capture`
-- **Source:** hand-built from the alpaca-py `Position` model field set
-  (alpaca-py 0.42.0) and Alpaca's public Trading API positions documentation.
-  Two positions cover the sign cases: a long (`AAPL`, `qty "10"`) and a short
-  (`TSLA`, `qty "-3"`, `side "short"`, negative `market_value`).
-- **Sanitization:** `asset_id` values are synthetic placeholders.
-- **Regeneration:** replace with a real sanitized capture in HITL slice #1178,
-  then remove the `pending-real-capture` marker.
+- **broker:** alpaca (paper)
+- **endpoint_family:** positions
+- **captured_at_ms:** (see orders attribution — same session)
+- **captured_at:** 2026-07-24 (after HITL test order filled)
+- **source:** live Alpaca paper account (HITL gate — script `scripts/hitl_alpaca_capture.py`)
+- **reference_kind:** `real_sanitized_capture`
+- **sanitization:** UUIDs replaced with sentinel values (00000000-0000-0000-0000-{N:012d}). All numeric values, timestamps, status strings, and symbols are verbatim from the wire.
+
+## Status: `real-capture`
+
+Replaced `pending-real-capture` synthetic fixtures on 2026-07-24 via HITL
+gate #1178. Contains 1 real position (SPY long, 1 share) created by the HITL
+order-gate test. Adapter + schema-drift tests run against this payload.
