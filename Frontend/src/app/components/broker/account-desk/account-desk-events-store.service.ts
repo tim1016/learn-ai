@@ -275,12 +275,29 @@ function isAccountEventRow(value: unknown): value is AccountEventRow {
   if (typeof value['event_id'] !== 'string' || typeof value['operator_detail'] !== 'string') return false;
   if (value['trader_narration'] !== null && typeof value['trader_narration'] !== 'string') return false;
   if (!isAccountEventKind(value['kind']) || !Array.isArray(value['evidence_refs'])) return false;
-  return value['evidence_refs'].every(isEvidenceRef);
+  return value['evidence_refs'].every(isEvidenceRef) && isNullableOperatorOrderReceipt(value['operator_order_receipt']);
 }
 
 function isEvidenceRef(value: unknown): boolean {
   return isRecord(value) && typeof value['source'] === 'string' && typeof value['ref'] === 'string' &&
     (value['detail'] === null || typeof value['detail'] === 'string');
+}
+
+function isNullableOperatorOrderReceipt(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (!isRecord(value) || value['broker'] !== 'ibkr') return false;
+  return (
+    isNonnegativeSequence(value['order_id']) &&
+    (value['perm_id'] === null || isNonnegativeSequence(value['perm_id'])) &&
+    typeof value['order_ref'] === 'string' &&
+    typeof value['symbol'] === 'string' &&
+    (value['action'] === 'BUY' || value['action'] === 'SELL') &&
+    typeof value['quantity'] === 'number' && Number.isFinite(value['quantity']) && value['quantity'] > 0 &&
+    (value['order_type'] === 'MKT' || value['order_type'] === 'LMT') &&
+    (value['limit_price'] === null || (typeof value['limit_price'] === 'number' && Number.isFinite(value['limit_price']) && value['limit_price'] > 0)) &&
+    typeof value['status'] === 'string' &&
+    isInt64Ms(value['acknowledged_at_ms'])
+  );
 }
 
 function isAccountEventKind(value: unknown): value is AccountEventKind {
@@ -294,6 +311,10 @@ function isNullableSequence(value: unknown): value is number | null {
 
 function isSequence(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+function isNonnegativeSequence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isInt64Ms(value: unknown): value is number {

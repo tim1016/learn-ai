@@ -92,6 +92,7 @@ class FakeBrokerHealthService {
   readonly bannerState = signal<string | null>(null);
   readonly health = signal({
     connected: true,
+    connection_state: 'connected' as 'connected' | 'disconnected',
     is_paper: true,
     account_id: 'DU1234567',
     mode: 'paper' as const,
@@ -99,6 +100,7 @@ class FakeBrokerHealthService {
     port: 4002,
     client_id: 1,
     server_version: 178,
+    fetched_at_ms: 1_780_000_000_000,
   });
 }
 
@@ -555,6 +557,33 @@ describe('BrokerOrdersComponent — broker provenance', () => {
     expect(broker.openOrders).not.toHaveBeenCalled();
   });
 
+  it('coalesces a burst of order events into one Account Truth refresh', async () => {
+    const { broker } = setup([openOrderWithRef]);
+    await flushAsyncWork();
+    broker.accountTruth.mockClear();
+    vi.useFakeTimers();
+    try {
+      const source = StubEventSource.instances[0];
+      const event = JSON.stringify({
+        account_id: 'DU1234567',
+        order_id: 42,
+        event_type: 'status',
+        status: 'Submitted',
+        ts_ms: 1_780_000_000_000,
+      });
+
+      source?.emit('order', event);
+      source?.emit('order', event.replace('000', '001'));
+      source?.emit('order', event.replace('000', '002'));
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(broker.accountTruth).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps completed history stable when the completed-order sweep degrades', async () => {
     const openOrder = accountTruthOrder({
       fact_kind: 'open_order',
@@ -613,6 +642,41 @@ describe('BrokerOrdersComponent — broker provenance', () => {
     expect(text).toContain('Live order stream unavailable');
     expect(text).toContain('not using live stream rows');
     expect(text).toContain('learn-ai/test-bot/v1:intent-42');
+  });
+
+  it('separates broker connection truth from the live order-update handshake', async () => {
+    const { fixture } = setup([openOrderWithRef]);
+    const source = StubEventSource.instances[0];
+
+    expect(source?.url).toBe(
+      '/api/broker/orders/stream?poll_ms=500&control_intent=learn-ai-browser-control',
+    );
+
+    source?.emit('open');
+    source?.emit('ready', JSON.stringify({ ts_ms: 1_780_000_000_000 }));
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Broker session');
+    expect(text).toContain('Online');
+    expect(text).toContain('Live order updates');
+    expect(text).toContain('Live');
+    expect(text).toContain('Last receipt');
+  });
+
+  it('shows saved-ledger mode when IBKR is offline instead of a permanent connecting state', () => {
+    const { fixture, health } = setup([openOrderWithRef]);
+    health.health.update((current) => ({
+      ...current,
+      connected: false,
+      connection_state: 'disconnected',
+    }));
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Offline');
+    expect(text).toContain('Paused');
+    expect(text).toContain('showing the last available ledger');
   });
 
   it('shows COI guidance and pre-fills the flatten cure for one stock position', async () => {

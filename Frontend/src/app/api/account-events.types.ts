@@ -13,6 +13,21 @@ export interface AccountEventEvidenceRef {
   detail: string | null;
 }
 
+/** Bounded receipt facts intentionally shown only in the operator lens. */
+export interface AccountEventOperatorOrderReceipt {
+  broker: 'ibkr';
+  order_id: number;
+  perm_id: number | null;
+  order_ref: string;
+  symbol: string;
+  action: 'BUY' | 'SELL';
+  quantity: number;
+  order_type: 'MKT' | 'LMT';
+  limit_price: number | null;
+  status: string;
+  acknowledged_at_ms: number;
+}
+
 /** Versioned server-owned narration and classification for one journal event. */
 export interface AccountEventRow {
   schema_version: 1;
@@ -23,6 +38,7 @@ export interface AccountEventRow {
   trader_narration: string | null;
   operator_detail: string;
   evidence_refs: AccountEventEvidenceRef[];
+  operator_order_receipt?: AccountEventOperatorOrderReceipt | null;
 }
 
 export interface AccountEventsResponse {

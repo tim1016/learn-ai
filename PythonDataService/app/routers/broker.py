@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.broker.ibkr import account as ibkr_account
@@ -89,6 +89,21 @@ from app.broker.ibkr.surface import (
     stream_option_surface,
 )
 from app.broker.ibkr.symbol_search import search_symbols
+from app.engine.live.account_artifacts import (
+    AccountClerkLeaseUnavailableError,
+    read_active_accepting_account_clerk_generation,
+)
+from app.engine.live.account_clerk_rpc import (
+    AccountClerkRpcClient,
+    AccountClerkRpcError,
+    clerk_rejection_reason,
+)
+from app.engine.live.account_owner import (
+    MANUAL_OPERATOR_RUN_ID,
+    MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
+    MANUAL_ORDER_INTENT_KIND,
+    AccountOwnerSubmitIntent,
+)
 from app.engine.live.account_owner_fence import (
     AccountOwnerWriteFenceError,
     require_account_owner_write_grant,
@@ -97,12 +112,17 @@ from app.engine.live.order_identity import (
     build_manual_order_namespace,
     build_order_ref,
     mint_intent_id,
+    parse_order_ref,
 )
 from app.routers.broker_dependencies import is_broker_disabled, require_connected_client
 from app.schemas.broker_search import OptionContractMatch, SymbolMatch
+from app.security.data_plane_control import require_data_plane_control_secret_always
+from app.services.account_truth_refresh import account_truth_artifacts_root
 from app.services.data_plane_health import data_plane_health
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+from app.services.sse_keepalive import stream_sse_with_keepalive
 from app.utils.throttle import TokenBucket, TtlCache
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
@@ -955,6 +975,8 @@ async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
     client = require_connected_client()
     try:
         spec = _stamp_manual_order_ref_if_requested(spec)
+        if spec.manual_order:
+            return await _place_manual_order_through_clerk(client, spec)
         return await place_paper_order(client, spec)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
@@ -1017,6 +1039,7 @@ def _order_event_to_sse(event: IbkrOrderEvent) -> str:
 @router.get("/orders/stream")
 async def order_events_stream_endpoint(
     poll_ms: Annotated[int, Query(ge=100, le=5000)] = 500,
+    _: None = Depends(require_data_plane_control_secret_always),
 ) -> StreamingResponse:
     """SSE stream of order lifecycle events: status, fill, cancel, error."""
     client = require_connected_client()
@@ -1024,8 +1047,12 @@ async def order_events_stream_endpoint(
 
     async def event_source():
         try:
-            async for event in stream_order_events(client, poll_seconds=poll_seconds):
-                yield _order_event_to_sse(event)
+            async def order_frames():
+                async for event in stream_order_events(client, poll_seconds=poll_seconds):
+                    yield _order_event_to_sse(event)
+
+            async for frame in stream_sse_with_keepalive(order_frames()):
+                yield frame
         except asyncio.CancelledError:
             raise
         except BrokerError as exc:
@@ -1106,6 +1133,125 @@ def _stamp_manual_order_ref_if_requested(spec: IbkrOrderSpec) -> IbkrOrderSpec:
     return spec.model_copy(
         update={"order_ref": build_order_ref(namespace, mint_intent_id())}
     )
+
+
+def _build_manual_order_intent(
+    spec: IbkrOrderSpec,
+    *,
+    account_id: str,
+    clerk_generation: int,
+    created_at_ms: int,
+) -> AccountOwnerSubmitIntent:
+    """Map the server-stamped manual ticket to the account Clerk's WAL shape."""
+
+    if not spec.manual_order or spec.order_ref is None:
+        raise ValueError("manual Clerk submit requires a server-stamped manual order_ref")
+    namespace, intent_id = parse_order_ref(spec.order_ref)
+    if namespace != build_manual_order_namespace("operator"):
+        raise ValueError("manual Clerk submit requires the operator manual namespace")
+    return AccountOwnerSubmitIntent(
+        trace_id=f"manual-order:{intent_id}",
+        account_id=account_id,
+        strategy_instance_id=MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
+        run_id=MANUAL_OPERATOR_RUN_ID,
+        bot_order_namespace=namespace,
+        intent_id=intent_id,
+        order_ref=spec.order_ref,
+        intent_kind=MANUAL_ORDER_INTENT_KIND,
+        order_spec=spec.model_dump(mode="json"),
+        owner_generation=clerk_generation,
+        created_at_ms=created_at_ms,
+    )
+
+
+async def _place_manual_order_through_clerk(
+    client: IbkrClient,
+    spec: IbkrOrderSpec,
+) -> IbkrOrderAck:
+    """Submit a manual ticket through the single durable account write lane."""
+
+    account_id = client.connected_account
+    if account_id is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "reason_code": "ACCOUNT_ID_UNAVAILABLE",
+                "message": "The paper account is not available for a manual order.",
+            },
+        )
+
+    artifacts_root = account_truth_artifacts_root()
+    now_ms = now_ms_utc()
+    try:
+        clerk_generation = read_active_accepting_account_clerk_generation(
+            artifacts_root,
+            account_id,
+            now_ms=now_ms,
+        )
+    except AccountClerkLeaseUnavailableError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "reason_code": exc.reason,
+                "message": "The account Clerk is not ready to accept a manual order.",
+            },
+        ) from exc
+    if clerk_generation is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "reason_code": "CLERK_NOT_ACCEPTING",
+                "message": "The account Clerk is not accepting new manual orders.",
+            },
+        )
+
+    intent = _build_manual_order_intent(
+        spec,
+        account_id=account_id,
+        clerk_generation=clerk_generation.generation,
+        created_at_ms=now_ms,
+    )
+    try:
+        receipt = await AccountClerkRpcClient(
+            artifacts_root=artifacts_root,
+            account_id=account_id,
+        ).submit(intent)
+    except AccountClerkRpcError as exc:
+        retry_safe, reason_code = clerk_rejection_reason(exc)
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": reason_code,
+                "message": "The account Clerk rejected or could not complete the manual order.",
+            },
+        ) from exc
+
+    ack = receipt.broker_ack
+    if ack is None:
+        logger.error(
+            "manual order Clerk acknowledgement omitted the broker receipt",
+            extra={"account_id": account_id, "order_ref": spec.order_ref},
+        )
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "reason_code": "CLERK_BROKER_RECEIPT_MISSING",
+                "message": "The Clerk accepted the manual order but did not return its broker receipt.",
+            },
+        )
+    if ack.account_id != account_id or ack.order_ref != spec.order_ref:
+        logger.error(
+            "manual order Clerk acknowledgement identity mismatch",
+            extra={"account_id": account_id, "order_ref": spec.order_ref},
+        )
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "reason_code": "CLERK_BROKER_RECEIPT_MISMATCH",
+                "message": "The Clerk returned a broker receipt for a different manual order.",
+            },
+        )
+    return ack
 
 
 def _snapshot_to_json(snapshot: IbkrChainSnapshot) -> str:

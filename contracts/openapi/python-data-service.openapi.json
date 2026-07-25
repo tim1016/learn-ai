@@ -250,6 +250,16 @@
             "title": "Bot Order Namespace",
             "type": "string"
           },
+          "broker_ack": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IbkrOrderAck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "exec_id": {
             "anyOf": [
               {
@@ -975,6 +985,102 @@
         "title": "AccountEventEvidenceRef",
         "type": "object"
       },
+      "AccountEventOperatorOrderReceipt": {
+        "description": "The receipt fields an operator needs to audit one manual paper order.",
+        "properties": {
+          "acknowledged_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Acknowledged At Ms",
+            "type": "integer"
+          },
+          "action": {
+            "enum": [
+              "BUY",
+              "SELL"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "broker": {
+            "const": "ibkr",
+            "title": "Broker"
+          },
+          "limit_price": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Price"
+          },
+          "order_id": {
+            "minimum": 0.0,
+            "title": "Order Id",
+            "type": "integer"
+          },
+          "order_ref": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "order_type": {
+            "enum": [
+              "MKT",
+              "LMT"
+            ],
+            "title": "Order Type",
+            "type": "string"
+          },
+          "perm_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perm Id"
+          },
+          "quantity": {
+            "exclusiveMinimum": 0.0,
+            "title": "Quantity",
+            "type": "number"
+          },
+          "status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker",
+          "order_id",
+          "order_ref",
+          "symbol",
+          "action",
+          "quantity",
+          "order_type",
+          "status",
+          "acknowledged_at_ms"
+        ],
+        "title": "AccountEventOperatorOrderReceipt",
+        "type": "object"
+      },
       "AccountEventRow": {
         "description": "One backend-classified journal event for a desk view.",
         "properties": {
@@ -1014,6 +1120,16 @@
             "minLength": 1,
             "title": "Operator Detail",
             "type": "string"
+          },
+          "operator_order_receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEventOperatorOrderReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "schema_version": {
             "const": 1,

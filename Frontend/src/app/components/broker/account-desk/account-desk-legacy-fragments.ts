@@ -18,6 +18,10 @@ const ACCOUNT_SERVICE: AccountDeskFragmentTarget = {
   lens: 'operator',
   anchor: 'account-desk-account-service',
 };
+const TRANSACTION_HISTORY: AccountDeskFragmentTarget = {
+  lens: 'operator',
+  anchor: 'account-desk-transaction-history',
+};
 const VERDICT: AccountDeskFragmentTarget = {
   lens: 'trader',
   anchor: 'account-desk-verdict',
@@ -36,6 +40,7 @@ const ACCOUNT_DESK_FRAGMENT_TARGETS: Readonly<Record<string, AccountDeskFragment
   [RECOVERY_CONTROLS.anchor]: RECOVERY_CONTROLS,
   [OPERATIONS_PROOF.anchor]: OPERATIONS_PROOF,
   [ACCOUNT_SERVICE.anchor]: ACCOUNT_SERVICE,
+  [TRANSACTION_HISTORY.anchor]: TRANSACTION_HISTORY,
   [VERDICT.anchor]: VERDICT,
 };
 

@@ -8,6 +8,7 @@
     "/api/strategy-validation"
   ],
   "protected_read_prefixes": [
+    "/api/broker/orders/stream",
     "/api/broker/session-mirror",
     "/api/brokers",
     "/api/live-instances"

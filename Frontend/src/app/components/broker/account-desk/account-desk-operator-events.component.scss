@@ -109,9 +109,48 @@ p {
   margin-top: 0.35rem;
   padding-left: 1.1rem;
 }
+.order-receipt {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem 0.75rem;
+  margin: 0.15rem 0 0;
+  padding: 0.65rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, var(--accent) 16%);
+}
+.order-receipt div {
+  display: grid;
+  min-width: 0;
+  gap: 0.1rem;
+}
+.order-receipt dt {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.order-receipt dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.order-receipt__reference {
+  grid-column: span 2;
+}
 .state-error {
   color: var(--bear);
 }
 .state-stale {
   color: var(--warn);
+}
+@media (max-width: 42rem) {
+  .order-receipt {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .order-receipt__reference {
+    grid-column: span 2;
+  }
 }

@@ -14,6 +14,7 @@ from app.engine.live.account_identity import normalize_account_id
 from app.schemas.account_events import (
     AccountEventEvidenceRef,
     AccountEventKind,
+    AccountEventOperatorOrderReceipt,
     AccountEventRow,
     AccountEventsResponse,
     AccountEventView,
@@ -87,6 +88,11 @@ _EVENT_PRESENTATION: dict[str, tuple[AccountEventKind, str | None, str]] = {
         "activity",
         "Unattributed broker activity needs review.",
         "Account service recorded unattributed broker activity.",
+    ),
+    "account_clerk_manual_order_acked": (
+        "activity",
+        "Your paper order was received by the broker.",
+        "Account Clerk recorded a durable IBKR acknowledgement for a manual paper order.",
     ),
     "account_owner_generation_recorded": (
         "clerk",
@@ -228,6 +234,7 @@ class AccountEventJournalService:
                     trader_narration=trader_narration,
                     operator_detail=operator_detail,
                     evidence_refs=_evidence_refs(account_id, record.seq, raw_event),
+                    operator_order_receipt=_operator_order_receipt(record.event_type, raw_event, index),
                 )
             )
         return rows
@@ -254,6 +261,8 @@ class AccountEventJournalService:
                 row.trader_narration is None or _ny_day(row.occurred_at_ms) != today_ny
             ):
                 continue
+            if view == "trader_today" and row.operator_order_receipt is not None:
+                row = row.model_copy(update={"operator_order_receipt": None})
             filtered.append(row)
         return filtered
 
@@ -310,6 +319,37 @@ def _evidence_refs(
         for ref in _string_values(value):
             refs.append(AccountEventEvidenceRef(source=source, ref=ref))
     return refs
+
+
+def _operator_order_receipt(
+    event_type: str,
+    raw_event: Mapping[str, object],
+    index: int,
+) -> AccountEventOperatorOrderReceipt | None:
+    """Read the bounded operator receipt carried by a manual-order event."""
+
+    if event_type != "account_clerk_manual_order_acked":
+        return None
+    try:
+        return AccountEventOperatorOrderReceipt.model_validate(
+            {
+                "broker": raw_event.get("broker"),
+                "order_id": raw_event.get("order_id"),
+                "perm_id": raw_event.get("perm_id"),
+                "order_ref": raw_event.get("order_ref"),
+                "symbol": raw_event.get("symbol"),
+                "action": raw_event.get("action"),
+                "quantity": raw_event.get("quantity"),
+                "order_type": raw_event.get("order_type"),
+                "limit_price": raw_event.get("limit_price"),
+                "status": raw_event.get("status"),
+                "acknowledged_at_ms": raw_event.get("acknowledged_at_ms"),
+            }
+        )
+    except ValidationError as exc:
+        raise AccountEventJournalError(
+            f"manual order receipt in account event row {index} is invalid: {exc}"
+        ) from exc
 
 
 def _string_values(value: object) -> Iterable[str]:

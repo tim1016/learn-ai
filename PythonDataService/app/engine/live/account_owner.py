@@ -31,6 +31,14 @@ from app.schemas.live_runs import GateResult
 
 AccountOwnerRuntimePhase = Literal["accepting", "reconnecting", "draining", "frozen"]
 
+# A manual ticket belongs to the account Clerk rather than to a deployed bot.
+# These values remain inside its durable intent shape so manual broker events
+# can use the same acknowledgement and callback journal without fabricating a
+# bot binding.
+MANUAL_ORDER_INTENT_KIND = "MANUAL_ORDER"
+MANUAL_OPERATOR_STRATEGY_INSTANCE_ID = "manual-operator"
+MANUAL_OPERATOR_RUN_ID = "manual-ticket"
+
 
 class AccountOwnerSubmitIntent(BaseModel):
     """Durable runner intent accepted by AccountOwner intake."""

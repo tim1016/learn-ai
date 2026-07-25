@@ -5515,6 +5515,7 @@ export interface components {
             account_id: string;
             /** Bot Order Namespace */
             bot_order_namespace: string;
+            broker_ack?: components["schemas"]["IbkrOrderAck"] | null;
             /** Exec Id */
             exec_id?: string | null;
             /** Intent Id */
@@ -5804,6 +5805,43 @@ export interface components {
             source: string;
         };
         /**
+         * AccountEventOperatorOrderReceipt
+         * @description The receipt fields an operator needs to audit one manual paper order.
+         */
+        AccountEventOperatorOrderReceipt: {
+            /** Acknowledged At Ms */
+            acknowledged_at_ms: number;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "BUY" | "SELL";
+            /**
+             * Broker
+             * @constant
+             */
+            broker: "ibkr";
+            /** Limit Price */
+            limit_price?: number | null;
+            /** Order Id */
+            order_id: number;
+            /** Order Ref */
+            order_ref: string;
+            /**
+             * Order Type
+             * @enum {string}
+             */
+            order_type: "MKT" | "LMT";
+            /** Perm Id */
+            perm_id?: number | null;
+            /** Quantity */
+            quantity: number;
+            /** Status */
+            status: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * AccountEventRow
          * @description One backend-classified journal event for a desk view.
          */
@@ -5821,6 +5859,7 @@ export interface components {
             occurred_at_ms: number;
             /** Operator Detail */
             operator_detail: string;
+            operator_order_receipt?: components["schemas"]["AccountEventOperatorOrderReceipt"] | null;
             /**
              * Schema Version
              * @default 1

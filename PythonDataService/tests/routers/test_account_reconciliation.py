@@ -1232,9 +1232,10 @@ async def test_account_events_endpoint_pages_filters_and_preserves_stable_event_
                 "seq": 3,
                 "kind": "reconciliation",
                 "occurred_at_ms": 1_710_000_002_000,
-                "trader_narration": "Account reconciliation was recorded.",
-                "operator_detail": "Account reconciliation receipt recorded in the journal.",
-                "evidence_refs": [{"source": "account_event_journal", "ref": "DU1234567:3", "detail": None}],
+                    "trader_narration": "Account reconciliation was recorded.",
+                    "operator_detail": "Account reconciliation receipt recorded in the journal.",
+                    "evidence_refs": [{"source": "account_event_journal", "ref": "DU1234567:3", "detail": None}],
+                    "operator_order_receipt": None,
             },
             {
                 "schema_version": 1,
@@ -1244,10 +1245,11 @@ async def test_account_events_endpoint_pages_filters_and_preserves_stable_event_
                 "occurred_at_ms": 1_710_000_001_000,
                 "trader_narration": "An account safety freeze was recorded.",
                 "operator_detail": "Account safety freeze recorded in the journal.",
-                "evidence_refs": [
-                    {"source": "account_event_journal", "ref": "DU1234567:2", "detail": None},
-                    {"source": "receipt", "ref": "freeze-receipt", "detail": None},
-                ],
+                    "evidence_refs": [
+                        {"source": "account_event_journal", "ref": "DU1234567:2", "detail": None},
+                        {"source": "receipt", "ref": "freeze-receipt", "detail": None},
+                    ],
+                    "operator_order_receipt": None,
             },
         ],
         "latest_seq": 3,
@@ -1292,6 +1294,62 @@ async def test_account_events_endpoint_projects_singular_opaque_evidence_refs(tm
         ("order_ref", "learn-ai/bot-a/v1:intent-17"),
         ("intent", "intent-17"),
     }
+
+
+async def test_account_events_exposes_manual_order_receipts_only_to_operations(tmp_path: Path) -> None:
+    from app.main import app
+
+    timestamp = 1_710_000_000_000
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_clerk_manual_order_acked",
+            "ts_ms": timestamp,
+            "receipt_id": "account-clerk-manual-order-ack:manual/operator/v1:opaque-1",
+            "broker": "ibkr",
+            "intent_id": "opaque-1",
+            "order_ref": "manual/operator/v1:opaque-1",
+            "order_id": 42,
+            "perm_id": 9001,
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 3,
+            "order_type": "LMT",
+            "limit_price": 593.25,
+            "status": "Submitted",
+            "acknowledged_at_ms": timestamp,
+        },
+    )
+    service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: timestamp)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            operations = await client.get("/api/accounts/DU1234567/events?view=operations")
+            trader = await client.get("/api/accounts/DU1234567/events?view=trader_today")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert operations.status_code == 200
+    [operations_row] = operations.json()["rows"]
+    assert operations_row["trader_narration"] == "Your paper order was received by the broker."
+    assert operations_row["operator_order_receipt"] == {
+        "broker": "ibkr",
+        "order_id": 42,
+        "perm_id": 9001,
+        "order_ref": "manual/operator/v1:opaque-1",
+        "symbol": "SPY",
+        "action": "BUY",
+        "quantity": 3.0,
+        "order_type": "LMT",
+        "limit_price": 593.25,
+        "status": "Submitted",
+        "acknowledged_at_ms": timestamp,
+    }
+    assert trader.status_code == 200
+    [trader_row] = trader.json()["rows"]
+    assert trader_row["trader_narration"] == "Your paper order was received by the broker."
+    assert trader_row["operator_order_receipt"] is None
 
 
 async def test_account_events_hide_healthy_comparison_heartbeats_but_advance_cursor(

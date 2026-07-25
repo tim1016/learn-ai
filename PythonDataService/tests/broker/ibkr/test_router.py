@@ -16,10 +16,13 @@ from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.client import set_client
 from app.broker.ibkr.config import IbkrSettings
-from app.broker.ibkr.models import IbkrOrderSpec
+from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
 from app.main import app
 from app.routers import broker as broker_router
-from app.routers.broker import _stamp_manual_order_ref_if_requested
+from app.routers.broker import (
+    _build_manual_order_intent,
+    _stamp_manual_order_ref_if_requested,
+)
 
 # ── Phase 1 endpoints ──────────────────────────────────────────────────
 
@@ -266,6 +269,33 @@ def test_manual_order_request_is_server_stamped_with_manual_namespace() -> None:
     assert stamped.order_ref.startswith("manual/operator/v1:")
 
 
+def test_manual_order_intent_keeps_the_server_stamped_receipt_identity() -> None:
+    spec = _stamp_manual_order_ref_if_requested(
+        IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action="BUY",
+            quantity=1,
+            order_type="MKT",
+            confirm_paper=True,
+            manual_order=True,
+        )
+    )
+
+    intent = _build_manual_order_intent(
+        spec,
+        account_id="DU1234567",
+        clerk_generation=7,
+        created_at_ms=1_800_000_000_000,
+    )
+
+    assert intent.intent_kind == "MANUAL_ORDER"
+    assert intent.order_ref == spec.order_ref
+    assert intent.bot_order_namespace == "manual/operator/v1"
+    assert intent.order_spec["order_ref"] == spec.order_ref
+    assert intent.order_spec["manual_order"] is True
+
+
 def test_non_manual_order_request_does_not_silently_repair_missing_order_ref() -> None:
     spec = IbkrOrderSpec(
         symbol="SPY",
@@ -277,6 +307,41 @@ def test_non_manual_order_request_does_not_silently_repair_missing_order_ref() -
     )
 
     assert _stamp_manual_order_ref_if_requested(spec).order_ref is None
+
+
+@pytest.mark.asyncio
+async def test_order_event_stream_sends_ready_before_the_first_order_event(monkeypatch) -> None:
+    """A quiet stream is healthy once its server-side subscription is ready."""
+
+    event = IbkrOrderEvent(
+        account_id="DU1234567",
+        order_id=42,
+        event_type="status",
+        status="Submitted",
+        order_ref="manual/operator/v1:intent-1",
+        symbol="SPY",
+        side="BUY",
+        order_type="MKT",
+        cumulative_filled=0,
+        remaining=1,
+        ts_ms=1_800_000_000_000,
+    )
+
+    async def fake_order_events(_client, *, poll_seconds: float):
+        assert poll_seconds == 0.5
+        yield event
+
+    monkeypatch.setattr(broker_router, "require_connected_client", lambda: object())
+    monkeypatch.setattr(broker_router, "stream_order_events", fake_order_events)
+
+    response = await broker_router.order_events_stream_endpoint()
+    stream = response.body_iterator
+    ready = await anext(stream)
+    order = await anext(stream)
+    await stream.aclose()
+
+    assert ready.startswith("event: ready\n")
+    assert order == f"event: order\ndata: {event.model_dump_json()}\n\n"
 
 
 def _connected_order_client() -> SimpleNamespace:
@@ -298,9 +363,73 @@ def _connected_order_client() -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_post_orders_refuses_raw_submit_without_account_owner_grant() -> None:
+async def test_manual_order_submission_uses_the_durable_account_clerk(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    client = _connected_order_client()
+    spec = _stamp_manual_order_ref_if_requested(
+        IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action="BUY",
+            quantity=1,
+            order_type="MKT",
+            confirm_paper=True,
+            manual_order=True,
+        )
+    )
+    assert spec.order_ref is not None
+    broker_ack = IbkrOrderAck(
+        account_id="DU1234567",
+        is_paper=True,
+        order_id=42,
+        perm_id=9001,
+        client_id=51,
+        con_id=756733,
+        symbol="SPY",
+        action="BUY",
+        quantity=1,
+        order_type="MKT",
+        status="Submitted",
+        order_ref=spec.order_ref,
+        placed_at_ms=1_800_000_000_001,
+    )
+    submitted = []
+
+    class _FakeClerkClient:
+        def __init__(self, *, artifacts_root, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def submit(self, intent):
+            submitted.append(intent)
+            return SimpleNamespace(broker_ack=broker_ack)
+
+    monkeypatch.setattr(broker_router, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        broker_router,
+        "read_active_accepting_account_clerk_generation",
+        lambda *_args, **_kwargs: SimpleNamespace(generation=7),
+    )
+    monkeypatch.setattr(broker_router, "AccountClerkRpcClient", _FakeClerkClient)
+
+    result = await broker_router._place_manual_order_through_clerk(client, spec)
+
+    assert result == broker_ack
+    assert submitted[0].order_ref == spec.order_ref
+    assert submitted[0].intent_kind == "MANUAL_ORDER"
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_orders_refuses_manual_submit_when_the_clerk_generation_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
     client = _connected_order_client()
     set_client(client)
+    monkeypatch.setattr(broker_router, "account_truth_artifacts_root", lambda: tmp_path)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post(
@@ -316,8 +445,8 @@ async def test_post_orders_refuses_raw_submit_without_account_owner_grant() -> N
             },
         )
 
-    assert resp.status_code == 403
-    assert "ACCOUNT_OWNER_WRITE_GRANT_MISSING" in resp.text
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["reason_code"] == "CLERK_GENERATION_MISSING"
     client.ib.placeOrder.assert_not_called()
 
 

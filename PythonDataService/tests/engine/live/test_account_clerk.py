@@ -17,7 +17,7 @@ import app.engine.live.account_clerk as account_clerk_module
 import app.engine.live.account_clerk_journal as account_clerk_journal_module
 import app.engine.live.account_clerk_operations as account_clerk_operations_module
 import app.engine.live.account_clerk_reconciler as account_clerk_reconciler_module
-from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
+from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountAuditedOverride,
     advance_account_clerk_generation,
@@ -58,14 +58,19 @@ from app.engine.live.account_clerk_reconciler import (
     namespace_expected_exposure,
 )
 from app.engine.live.account_clerk_rpc import AccountClerkCallbackPersistenceError
-from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.engine.live.account_owner import (
+    MANUAL_OPERATOR_RUN_ID,
+    MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
+    MANUAL_ORDER_INTENT_KIND,
+    AccountOwnerSubmitIntent,
+)
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
     read_account_instance_registry,
     write_account_instance_binding,
 )
-from app.engine.live.order_identity import build_order_ref
+from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref
 from app.services.bot_deletion import (
     BotRetirementBindingTarget,
     BotRetirementTransitionRecord,
@@ -312,6 +317,34 @@ def _intent(instance_id: str, run_id: str, intent_id: str) -> AccountOwnerSubmit
             confirm_paper=True,
             client_order_id=f"client-{intent_id}",
             order_ref=build_order_ref(namespace, intent_id),
+        ).model_dump(),
+        owner_generation=99,
+        created_at_ms=START_MS,
+    )
+
+
+def _manual_intent(intent_id: str) -> AccountOwnerSubmitIntent:
+    namespace = build_manual_order_namespace("operator")
+    order_ref = build_order_ref(namespace, intent_id)
+    return AccountOwnerSubmitIntent(
+        trace_id=f"manual-order:{intent_id}",
+        account_id=ACCOUNT,
+        strategy_instance_id=MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
+        run_id=MANUAL_OPERATOR_RUN_ID,
+        bot_order_namespace=namespace,
+        intent_id=intent_id,
+        order_ref=order_ref,
+        intent_kind=MANUAL_ORDER_INTENT_KIND,
+        order_spec=IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action="BUY",
+            quantity=1,
+            order_type="MKT",
+            time_in_force="DAY",
+            confirm_paper=True,
+            order_ref=order_ref,
+            manual_order=True,
         ).model_dump(),
         owner_generation=99,
         created_at_ms=START_MS,
@@ -1254,6 +1287,80 @@ async def test_clerk_records_before_paper_broker_submit_and_deduplicates_ack(tmp
         "broker_acked",
     ]
     assert clerk.replay_recorded_receipts() == [recorded]
+
+
+@pytest.mark.asyncio
+async def test_clerk_records_manual_ticket_without_requiring_a_bot_binding(tmp_path: Path) -> None:
+    class _ReceiptBroker(_FakeBroker):
+        async def place_order(self, order: object) -> IbkrOrderAck:
+            self.calls.append(order)
+            spec = IbkrOrderSpec.model_validate(order)
+            return IbkrOrderAck(
+                account_id=ACCOUNT,
+                is_paper=True,
+                order_id=101,
+                perm_id=201,
+                client_id=51,
+                con_id=756733,
+                symbol=spec.symbol,
+                action=spec.action,
+                quantity=spec.quantity,
+                order_type=spec.order_type,
+                limit_price=spec.limit_price,
+                status="Submitted",
+                order_ref=spec.order_ref,
+                placed_at_ms=START_MS + 1,
+            )
+
+    broker = _ReceiptBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        now_ms=lambda: START_MS + 1,
+    )
+    intent = _manual_intent("manual-intent-a")
+
+    recorded, acked = await clerk.submit_intent(intent)
+
+    assert recorded.strategy_instance_id == MANUAL_OPERATOR_STRATEGY_INSTANCE_ID
+    assert acked.order_ref == intent.order_ref
+    assert acked.broker_ack is not None
+    assert acked.broker_ack.order_ref == intent.order_ref
+    assert acked.broker_ack.order_id == acked.order_id
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        "recorded",
+        "broker_submitting",
+        "broker_acked",
+    ]
+    repeated_recorded, repeated_acked = await clerk.submit_intent(intent)
+    assert repeated_recorded == recorded
+    assert repeated_acked == acked
+    [history_event] = [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_manual_order_acked"
+    ]
+    assert history_event == {
+        "account_id": ACCOUNT,
+        "seq": 1,
+        "event_type": "account_clerk_manual_order_acked",
+        "ts_ms": START_MS + 1,
+        "receipt_id": f"account-clerk-manual-order-ack:{intent.order_ref}",
+        "broker": "ibkr",
+        "intent_id": intent.intent_id,
+        "order_ref": intent.order_ref,
+        "order_id": 101,
+        "perm_id": 201,
+        "exec_id": None,
+        "symbol": "SPY",
+        "action": "BUY",
+        "quantity": 1.0,
+        "order_type": "MKT",
+        "limit_price": None,
+        "status": "Submitted",
+        "acknowledged_at_ms": START_MS + 1,
+    }
 
 
 @pytest.mark.asyncio

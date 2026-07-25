@@ -6,6 +6,7 @@ import { Timeline } from "primeng/timeline";
 import type {
   AccountEventEvidenceRef,
   AccountEventKind,
+  AccountEventOperatorOrderReceipt,
   AccountEventRow,
 } from "../../../api/account-events.types";
 import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
@@ -25,9 +26,10 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
 interface AccountTimelineRow {
   readonly event: AccountEventRow;
   readonly evidence: AccountEventEvidenceRef[];
+  readonly receipt: AccountEventOperatorOrderReceipt | null;
 }
 
-/** Operations timeline for the full backend-classified account journal. */
+/** Operator transaction history for backend-authored account journal events. */
 @Component({
   selector: "app-account-desk-operator-events",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -47,7 +49,7 @@ export class AccountDeskOperatorEventsComponent {
   readonly eventKinds = EVENT_KINDS;
   private readonly timelineRowsByEventId = new Map<string, AccountTimelineRow>();
   readonly timelineAccessibility = {
-    host: { role: "list", "aria-label": "Journal timeline events" },
+    host: { role: "list", "aria-label": "Transaction history events" },
     event: { role: "listitem" },
   };
   readonly timelineRows = computed(() =>
@@ -79,7 +81,7 @@ export class AccountDeskOperatorEventsComponent {
     const cached = this.timelineRowsByEventId.get(event.event_id);
     if (cached !== undefined) return cached;
 
-    const row = { event, evidence: event.evidence_refs };
+    const row = { event, evidence: event.evidence_refs, receipt: event.operator_order_receipt ?? null };
     this.timelineRowsByEventId.set(event.event_id, row);
     return row;
   }
