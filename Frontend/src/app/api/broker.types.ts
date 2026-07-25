@@ -8695,6 +8695,8 @@ export interface components {
             category: string | null;
             /** Net Amount */
             net_amount: number | null;
+            /** Native Order Id */
+            native_order_id?: string | null;
             /** Observed At Ms */
             observed_at_ms: number;
             /** Occurred At Ms */

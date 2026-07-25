@@ -46,6 +46,7 @@ from app.broker.contract.errors import (
     BrokerUnavailable,
 )
 from app.broker.contract.models import (
+    BrokerActivity,
     BrokerOrder,
     BrokerOrderEvent,
     BrokerOrderLeg,
@@ -332,6 +333,8 @@ class AlpacaClerk:
         event: BrokerOrderEvent,
         event_key: str,
         order: BrokerOrder | None = None,
+        recovery_source: str | None = None,
+        recovery_window_limit: int | None = None,
     ) -> ClerkEntryKind:
         """Journal one parsed ``trade_updates`` lifecycle event, with attribution.
 
@@ -382,6 +385,8 @@ class AlpacaClerk:
                     order=order,
                     event=event,
                     event_key=event_key,
+                    recovery_source=recovery_source,
+                    recovery_window_limit=recovery_window_limit,
                 )
             )
             if not owned:
@@ -416,6 +421,57 @@ class AlpacaClerk:
     def unexplained_order_count(self) -> int:
         """Observable counter: lifecycle events on orders this Clerk did not own."""
         return self._unexplained_order_count
+
+    async def activity_recovery_cursor_ms(self) -> int | None:
+        """Read the durable activity watermark; it is never an in-memory cursor."""
+        async with self._intake_lock:
+            _, journal = await self._ensure_journal()
+            return max(
+                (
+                    entry.activity.occurred_at_ms
+                    for entry in journal.read_entries()
+                    if entry.kind is ClerkEntryKind.ACTIVITY_RECOVERY
+                    and entry.activity is not None
+                    and entry.activity.occurred_at_ms is not None
+                ),
+                default=None,
+            )
+
+    async def record_activity_recovery(
+        self, *, activity: BrokerActivity, recovery_window_limit: int
+    ) -> bool:
+        """Append one bounded account-activity recovery receipt exactly once."""
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            entries = journal.read_entries()
+            if any(
+                entry.kind is ClerkEntryKind.ACTIVITY_RECOVERY
+                and entry.activity is not None
+                and entry.activity.activity_id == activity.activity_id
+                for entry in entries
+            ):
+                return False
+            owner = self._resolve_owning_entry_by_order_id(activity.native_order_id, entries)
+            if owner is None:
+                return False
+            await journal.append_async(
+                OrderJournalEntry(
+                    kind=ClerkEntryKind.ACTIVITY_RECOVERY,
+                    account_id=account_id,
+                    operator=owner.operator,
+                    intent_id=owner.intent_id,
+                    order_ref=owner.order_ref,
+                    client_order_id=owner.client_order_id,
+                    leg=owner.leg,
+                    broker_order_id=activity.native_order_id,
+                    owned=True,
+                    recorded_at_ms=self._clock(),
+                    activity=activity,
+                    recovery_source="account_activities_cursor_window",
+                    recovery_window_limit=recovery_window_limit,
+                )
+            )
+            return True
 
     def _known_namespaces(self, journal: OrderJournal) -> frozenset[str]:
         """The manual-order namespaces this Clerk has minted, from the journal.
@@ -455,6 +511,17 @@ class AlpacaClerk:
             ):
                 owning = entry
         return owning
+
+    @staticmethod
+    def _resolve_owning_entry_by_order_id(
+        broker_order_id: str | None, entries: list[OrderJournalEntry]
+    ) -> OrderJournalEntry | None:
+        if not broker_order_id:
+            return None
+        for entry in reversed(entries):
+            if entry.order is not None and entry.order.order_id == broker_order_id and entry.order_ref:
+                return entry
+        return None
 
     # ── S6 exposure hold (account-level, journal-derived) ────────────────────
 

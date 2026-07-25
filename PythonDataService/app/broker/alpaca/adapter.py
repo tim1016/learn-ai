@@ -361,6 +361,7 @@ def from_alpaca_activity(
     return BrokerActivity(
         broker=BROKER_ID,
         activity_id=str(payload["id"]),
+        native_order_id=opt_str(payload.get("order_id")),
         activity_type=str(payload["activity_type"]),
         category="trade_activity" if is_trade else "non_trade_activity",
         symbol=opt_str(payload.get("symbol")),

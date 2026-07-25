@@ -20,6 +20,8 @@ from typing import Any, Protocol, cast
 import asyncpg
 
 from app.config import settings
+from app.broker.alpaca.clerk.journal import JOURNAL_FILENAME
+from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.engine.live.account_artifacts import account_artifact_file_path
 from app.engine.live.account_clerk_journal import ACCOUNT_CLERK_JOURNAL_FILENAME
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
@@ -126,6 +128,12 @@ def clerk_journal_path(artifacts_root: Path, account_id: str) -> Path:
     return account_artifact_file_path(artifacts_root, account_id, ACCOUNT_CLERK_JOURNAL_FILENAME)
 
 
+def alpaca_clerk_journal_path(artifacts_root: Path, account_id: str) -> Path:
+    """Return the canonical Alpaca Clerk ledger, never an IBKR artifact path."""
+
+    return artifacts_root / "accounts" / "alpaca" / account_id / JOURNAL_FILENAME
+
+
 def _opaque_id(prefix: str, *parts: object) -> str:
     raw = "\x1f".join(str(part) for part in parts).encode("utf-8")
     return f"{prefix}_{hashlib.sha256(raw).hexdigest()[:32]}"
@@ -191,6 +199,7 @@ def _row_from_ack(account_id: str, entry: AccountClerkJournalEntry) -> tuple[Cle
     return (
         ClerkTransactionRow(
             transaction_id=transaction_id,
+            broker="ibkr",
             account_id=account_id,
             journal_seq=entry.seq,
             recorded_at_ms=entry.recorded_at_ms,
@@ -207,6 +216,104 @@ def _row_from_ack(account_id: str, entry: AccountClerkJournalEntry) -> tuple[Cle
             events=[event],
         ),
         event,
+    )
+
+
+def _alpaca_lifecycle_state(kind: ClerkEntryKind, entry: OrderJournalEntry) -> str:
+    """Map only Alpaca's documented journal vocabulary; never reuse IBKR callbacks."""
+
+    if kind is ClerkEntryKind.SUBMIT_ACKED:
+        return "submitted"
+    event = entry.event.event_type if entry.event is not None else ""
+    return {
+        "fill": "filled",
+        "partial_fill": "partially_filled",
+        "canceled": "cancelled",
+        "expired": "cancelled",
+        "rejected": "rejected",
+    }.get(event, "submitted")
+
+
+def _alpaca_transaction_id(account_id: str, order_ref: str) -> str:
+    return _opaque_id("ctxn", "alpaca", account_id, order_ref)
+
+
+def _row_from_alpaca_ack(
+    account_id: str, journal_seq: int, entry: OrderJournalEntry
+) -> tuple[ClerkTransactionRow, ClerkTransactionEventRow]:
+    """Project an Alpaca acknowledgement without assigning IBKR callback meaning."""
+
+    if entry.order is None or not entry.order_ref:
+        raise ValueError("Alpaca submit acknowledgement is missing durable identity or order")
+    receipt = entry.model_dump(mode="json", exclude_none=True)
+    transaction_id = _alpaca_transaction_id(account_id, entry.order_ref)
+    event = ClerkTransactionEventRow(
+        event_id=_opaque_id("ctxnev", "alpaca", account_id, journal_seq, "submit_acked"),
+        broker="alpaca",
+        event_kind="submitted",
+        callback_identity=f"alpaca-journal:{journal_seq}:submit_acked",
+        lifecycle_state=_alpaca_lifecycle_state(entry.kind, entry),
+        native_order_id=entry.order.order_id,
+        journal_seq=journal_seq,
+        recorded_at_ms=entry.recorded_at_ms,
+        receipt=receipt,
+    )
+    return (
+        ClerkTransactionRow(
+            transaction_id=transaction_id,
+            broker="alpaca",
+            account_id=account_id,
+            journal_seq=journal_seq,
+            recorded_at_ms=entry.recorded_at_ms,
+            transaction_kind="manual_alpaca_acknowledgement",
+            strategy_instance_id=f"manual/{entry.operator}",
+            run_id="manual_operator",
+            intent_id=entry.intent_id,
+            order_ref=entry.order_ref,
+            native_order_id=entry.order.order_id,
+            lifecycle_state=_alpaca_lifecycle_state(entry.kind, entry),
+            receipt=receipt,
+            events=[event],
+        ),
+        event,
+    )
+
+
+def _event_from_alpaca_journal(
+    account_id: str, journal_seq: int, entry: OrderJournalEntry
+) -> ClerkTransactionEventRow | None:
+    if not entry.order_ref:
+        return None
+    if entry.kind is ClerkEntryKind.ACTIVITY_RECOVERY:
+        if entry.activity is None:
+            return None
+        receipt = entry.model_dump(mode="json", exclude_none=True)
+        return ClerkTransactionEventRow(
+            event_id=_opaque_id("ctxnev", "alpaca", account_id, journal_seq, entry.activity.activity_id),
+            broker="alpaca",
+            event_kind=f"activity_{entry.activity.activity_type.lower()}",
+            callback_identity=f"alpaca-activity:{entry.activity.activity_id}",
+            lifecycle_state="recovered_activity",
+            native_order_id=entry.activity.native_order_id,
+            journal_seq=journal_seq,
+            recorded_at_ms=entry.recorded_at_ms,
+            receipt=receipt,
+        )
+    if entry.kind is not ClerkEntryKind.ORDER_EVENT or entry.event is None:
+        return None
+    receipt = entry.model_dump(mode="json", exclude_none=True)
+    identity = entry.event_key or f"alpaca-journal:{journal_seq}:order_event"
+    return ClerkTransactionEventRow(
+        event_id=_opaque_id("ctxnev", "alpaca", account_id, journal_seq, identity),
+        broker="alpaca",
+        event_kind=entry.event.event_type,
+        callback_identity=identity,
+        lifecycle_state=_alpaca_lifecycle_state(entry.kind, entry),
+        native_order_id=entry.broker_order_id,
+        native_execution_id=(identity[5:] if identity.startswith("exec:") else None),
+        journal_seq=journal_seq,
+        recorded_at_ms=entry.recorded_at_ms,
+        receipt=receipt,
     )
 
 
@@ -290,6 +397,58 @@ def read_appended_clerk_journal(
     )
 
 
+def read_appended_alpaca_journal(
+    *, account_id: str, journal_path: Path, cursor: ClerkJournalCursor | None
+) -> ClerkTransactionBatch | None:
+    """Tail complete Alpaca Clerk records from their own durable JSONL ledger.
+
+    Alpaca journal lines deliberately have no IBKR-style callback sequence.  The
+    projection uses their append ordinal only for keyset ordering and cursor
+    progress; the broker's opaque order/event identities stay in the receipt.
+    """
+
+    offset = cursor.last_byte_offset if cursor is not None else 0
+    last_seq = cursor.last_journal_seq if cursor is not None else 0
+    if not journal_path.exists():
+        return None
+    with journal_path.open("rb") as journal_file:
+        journal_file.seek(0, 2)
+        journal_size = journal_file.tell()
+        if offset > journal_size:
+            raise ValueError("Alpaca Clerk journal was replaced or truncated behind its projection cursor")
+        journal_file.seek(offset)
+        tail = journal_file.read()
+    complete_size = tail.rfind(b"\n") + 1
+    if complete_size == 0:
+        return None
+    transactions: list[ClerkTransactionRow] = []
+    events: list[ClerkTransactionEventRow] = []
+    for line in tail[:complete_size].splitlines():
+        try:
+            entry = OrderJournalEntry.model_validate_json(line)
+        except Exception as exc:
+            raise ValueError("malformed complete Alpaca Clerk journal record") from exc
+        if entry.account_id != account_id:
+            raise ValueError("Alpaca Clerk journal account does not match projection account")
+        last_seq += 1
+        if entry.kind is ClerkEntryKind.SUBMIT_ACKED:
+            transaction, event = _row_from_alpaca_ack(account_id, last_seq, entry)
+            transactions.append(transaction)
+            events.append(event)
+        else:
+            event = _event_from_alpaca_journal(account_id, last_seq, entry)
+            if event is not None:
+                events.append(event)
+    return ClerkTransactionBatch(
+        account_id=account_id,
+        journal_path=str(journal_path),
+        next_byte_offset=offset + complete_size,
+        next_journal_seq=last_seq,
+        transactions=transactions,
+        events=events,
+    )
+
+
 async def tail_account_journal(
     *, artifacts_root: Path, account_id: str, store: ClerkTransactionProjectionStore | None = None,
     updated_at_ms: int | None = None,
@@ -307,6 +466,25 @@ async def tail_account_journal(
     # Publishing is deliberately outside the committed transaction. A crash
     # before this point redelivers from the cursor; a crash after it can only
     # redeliver an already-idempotent semantic event.
+    if publish is not None and (batch.transactions or batch.events):
+        await publish(batch)
+    return persisted
+
+
+async def tail_alpaca_account_journal(
+    *, artifacts_root: Path, account_id: str, store: ClerkTransactionProjectionStore | None = None,
+    updated_at_ms: int | None = None,
+    publish: Callable[[ClerkTransactionBatch], Awaitable[None]] | None = None,
+) -> int:
+    """Project one bounded Alpaca ledger tail; it performs no broker I/O."""
+
+    resolved_store = store or PostgresClerkTransactionProjectionStore()
+    path = alpaca_clerk_journal_path(artifacts_root, account_id)
+    cursor = await resolved_store.read_cursor(account_id, str(path))
+    batch = read_appended_alpaca_journal(account_id=account_id, journal_path=path, cursor=cursor)
+    if batch is None:
+        return 0
+    persisted = await resolved_store.persist_batch(batch, updated_at_ms=updated_at_ms or _now_ms())
     if publish is not None and (batch.transactions or batch.events):
         await publish(batch)
     return persisted
@@ -378,6 +556,20 @@ async def project_account_journal_best_effort(*, artifacts_root: Path, account_i
         logger.exception(
             "Clerk transaction projection failed after durable acknowledgement",
             extra={"account_id": account_id},
+        )
+
+
+async def project_alpaca_journal_best_effort(*, artifacts_root: Path, account_id: str) -> None:
+    """Refresh the Alpaca projection after durable evidence; never call Alpaca here."""
+
+    if not settings.CLERK_TRANSACTION_PROJECTION_ENABLED:
+        return
+    try:
+        await tail_alpaca_account_journal(artifacts_root=artifacts_root, account_id=account_id)
+    except Exception:
+        logger.exception(
+            "Alpaca transaction projection failed after durable journal append",
+            extra={"account_id": account_id, "broker": "alpaca"},
         )
 
 
@@ -462,28 +654,29 @@ class PostgresClerkTransactionProjectionStore:
             async with conn.transaction():
                 for transaction in batch.transactions:
                     await conn.execute(
-                        "INSERT INTO clerk_transactions (transaction_id, account_id, journal_seq, recorded_at_ms, transaction_kind, strategy_instance_id, run_id, intent_id, order_ref, order_id, perm_id, exec_id, lifecycle_state, commission_status, fee, receipt, inserted_at_ms, updated_at_ms) "
-                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$17) "
+                        "INSERT INTO clerk_transactions (transaction_id, broker, account_id, journal_seq, recorded_at_ms, transaction_kind, strategy_instance_id, run_id, intent_id, order_ref, order_id, perm_id, exec_id, native_order_id, native_execution_id, lifecycle_state, commission_status, fee, receipt, inserted_at_ms, updated_at_ms) "
+                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$20) "
                         "ON CONFLICT (transaction_id) DO NOTHING",
-                        transaction.transaction_id, transaction.account_id, transaction.journal_seq, transaction.recorded_at_ms,
+                        transaction.transaction_id, transaction.broker, transaction.account_id, transaction.journal_seq, transaction.recorded_at_ms,
                         transaction.transaction_kind, transaction.strategy_instance_id, transaction.run_id, transaction.intent_id,
                         transaction.order_ref, transaction.order_id, transaction.perm_id, transaction.exec_id,
-                        transaction.lifecycle_state, transaction.commission_status, transaction.fee,
-                        json.dumps(transaction.receipt, sort_keys=True), updated_at_ms,
+                        transaction.native_order_id, transaction.native_execution_id, transaction.lifecycle_state,
+                        transaction.commission_status, transaction.fee, json.dumps(transaction.receipt, sort_keys=True), updated_at_ms,
                     )
                 for event in batch.events:
                     event_inserted = await conn.execute(
-                        "INSERT INTO clerk_transaction_events (event_id, transaction_id, account_id, journal_seq, event_kind, callback_identity, lifecycle_state, commission_status, fee, recorded_at_ms, receipt, inserted_at_ms) "
-                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) ON CONFLICT (account_id, callback_identity) WHERE callback_identity <> '' DO NOTHING",
-                        event.event_id, _event_transaction_id(batch.account_id, event), batch.account_id,
+                        "INSERT INTO clerk_transaction_events (event_id, transaction_id, broker, account_id, journal_seq, event_kind, callback_identity, lifecycle_state, native_order_id, native_execution_id, commission_status, fee, recorded_at_ms, receipt, inserted_at_ms) "
+                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15) ON CONFLICT (broker, account_id, callback_identity) WHERE callback_identity <> '' DO NOTHING",
+                        event.event_id, _event_transaction_id(batch.account_id, event), event.broker, batch.account_id,
                         event.journal_seq, event.event_kind, event.callback_identity,
-                        event.lifecycle_state, event.commission_status, event.fee,
-                        event.recorded_at_ms, json.dumps(event.receipt, sort_keys=True), updated_at_ms,
+                        event.lifecycle_state, event.native_order_id, event.native_execution_id,
+                        event.commission_status, event.fee, event.recorded_at_ms,
+                        json.dumps(event.receipt, sort_keys=True), updated_at_ms,
                     )
                     if event_inserted == "INSERT 0 1" and event.event_kind != "submitted":
                         await conn.execute(
-                            "UPDATE clerk_transactions SET lifecycle_state=CASE WHEN lifecycle_state IN ('filled','cancelled','rejected','error') THEN lifecycle_state ELSE $3 END, commission_status=CASE WHEN $4='reported' THEN 'reported' ELSE commission_status END, fee=CASE WHEN $4='reported' THEN $5 ELSE fee END, updated_at_ms=$6 WHERE account_id=$1 AND order_ref=$2",
-                            batch.account_id, _event_order_ref(event), event.lifecycle_state, event.commission_status, event.fee, updated_at_ms,
+                            "UPDATE clerk_transactions SET lifecycle_state=CASE WHEN lifecycle_state IN ('filled','cancelled','rejected','error') THEN lifecycle_state ELSE $4 END, commission_status=CASE WHEN $5='reported' THEN 'reported' ELSE commission_status END, fee=CASE WHEN $5='reported' THEN $6 ELSE fee END, updated_at_ms=$7 WHERE broker=$1 AND account_id=$2 AND order_ref=$3",
+                            event.broker, batch.account_id, _event_order_ref(event), event.lifecycle_state, event.commission_status, event.fee, updated_at_ms,
                         )
                 await conn.execute(
                     "INSERT INTO clerk_transaction_projection_cursors (account_id, journal_path, last_byte_offset, last_journal_seq, updated_at_ms) VALUES ($1,$2,$3,$4,$5) "
@@ -503,7 +696,7 @@ class PostgresClerkTransactionProjectionStore:
         conn = await _connection()
         try:
             records = await conn.fetch(
-                "SELECT t.transaction_id, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.lifecycle_state, t.commission_status, t.fee, COUNT(e.event_id)::integer AS event_count "
+                "SELECT t.transaction_id, t.broker, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.native_order_id, t.native_execution_id, t.lifecycle_state, t.commission_status, t.fee, COUNT(e.event_id)::integer AS event_count "
                 "FROM clerk_transactions t LEFT JOIN clerk_transaction_events e ON e.transaction_id=t.transaction_id "
                 "WHERE t.account_id=$1 AND ($2::bigint IS NULL OR (t.recorded_at_ms, t.journal_seq, t.transaction_id) < ($2,$3,$4)) "
                 "GROUP BY t.id ORDER BY t.recorded_at_ms DESC, t.journal_seq DESC, t.transaction_id DESC LIMIT $5",
@@ -527,8 +720,8 @@ class PostgresClerkTransactionProjectionStore:
         conn = await _connection()
         try:
             record = await conn.fetchrow(
-                "SELECT t.transaction_id, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.lifecycle_state, t.commission_status, t.fee, t.receipt, "
-                "COALESCE(jsonb_agg(jsonb_build_object('event_id', e.event_id, 'event_kind', e.event_kind, 'callback_identity', e.callback_identity, 'lifecycle_state', e.lifecycle_state, 'commission_status', e.commission_status, 'fee', e.fee, 'journal_seq', e.journal_seq, 'recorded_at_ms', e.recorded_at_ms, 'receipt', e.receipt) ORDER BY e.journal_seq) FILTER (WHERE e.event_id IS NOT NULL), '[]'::jsonb) AS events "
+                "SELECT t.transaction_id, t.broker, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.native_order_id, t.native_execution_id, t.lifecycle_state, t.commission_status, t.fee, t.receipt, "
+                "COALESCE(jsonb_agg(jsonb_build_object('event_id', e.event_id, 'broker', e.broker, 'event_kind', e.event_kind, 'callback_identity', e.callback_identity, 'lifecycle_state', e.lifecycle_state, 'native_order_id', e.native_order_id, 'native_execution_id', e.native_execution_id, 'commission_status', e.commission_status, 'fee', e.fee, 'journal_seq', e.journal_seq, 'recorded_at_ms', e.recorded_at_ms, 'receipt', e.receipt) ORDER BY e.journal_seq) FILTER (WHERE e.event_id IS NOT NULL), '[]'::jsonb) AS events "
                 "FROM clerk_transactions t LEFT JOIN clerk_transaction_events e ON e.transaction_id=t.transaction_id "
                 "WHERE t.account_id=$1 AND t.transaction_id=$2 GROUP BY t.id",
                 account_id,
@@ -593,6 +786,11 @@ def _json_value(value: Any) -> Any:
 
 
 def _event_order_ref(event: ClerkTransactionEventRow) -> str:
+    if event.broker == "alpaca":
+        value = event.receipt.get("order_ref")
+        if isinstance(value, str) and value:
+            return value
+        raise ValueError("Alpaca event has no opaque order_ref")
     broker_event = event.receipt.get("broker_event")
     if not isinstance(broker_event, dict) or not isinstance(broker_event.get("order_ref"), str):
         raise ValueError("callback event has no opaque order_ref")
@@ -600,6 +798,8 @@ def _event_order_ref(event: ClerkTransactionEventRow) -> str:
 
 
 def _event_transaction_id(account_id: str, event: ClerkTransactionEventRow) -> str:
+    if event.broker == "alpaca":
+        return _alpaca_transaction_id(account_id, _event_order_ref(event))
     if event.event_kind == "submitted":
         intent = event.receipt.get("intent")
         if isinstance(intent, dict) and isinstance(intent.get("order_ref"), str):
@@ -608,6 +808,7 @@ def _event_transaction_id(account_id: str, event: ClerkTransactionEventRow) -> s
 
 
 __all__ = [
+    "alpaca_clerk_journal_path",
     "ClerkJournalCursor",
     "ClerkTransactionBatch",
     "ClerkTransactionProjectionStore",
@@ -616,9 +817,12 @@ __all__ = [
     "clerk_journal_path",
     "fold_lifecycle_state",
     "project_account_journal_best_effort",
+    "project_alpaca_journal_best_effort",
+    "read_appended_alpaca_journal",
     "read_appended_clerk_journal",
     "recover_account_transaction_feed",
     "tail_account_journal",
+    "tail_alpaca_account_journal",
     "transaction_detail",
     "transaction_history",
 ]

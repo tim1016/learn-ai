@@ -2,18 +2,23 @@
 
 export interface ClerkTransactionEvent {
   readonly event_id: string;
+  readonly broker: 'ibkr' | 'alpaca';
   readonly event_kind: string;
   readonly journal_seq: number;
   readonly recorded_at_ms: number;
   readonly receipt: Record<string, unknown>;
   readonly callback_identity: string;
   readonly lifecycle_state: string;
+  readonly native_order_id: string | null;
+  readonly native_execution_id: string | null;
   readonly commission_status: 'unknown' | 'reported';
   readonly fee: number | null;
 }
 
 export interface ClerkTransactionSummary {
   readonly transaction_id: string;
+  /** Broker-owned lifecycle vocabulary; the client only renders this value. */
+  readonly broker: 'ibkr' | 'alpaca';
   readonly account_id: string;
   readonly journal_seq: number;
   readonly recorded_at_ms: number;
@@ -25,6 +30,8 @@ export interface ClerkTransactionSummary {
   readonly order_id: number | null;
   readonly perm_id: number | null;
   readonly exec_id: string | null;
+  readonly native_order_id: string | null;
+  readonly native_execution_id: string | null;
   readonly lifecycle_state: string;
   readonly commission_status: 'unknown' | 'reported';
   readonly fee: number | null;

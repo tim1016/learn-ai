@@ -20,9 +20,15 @@ class ClerkTransactionEventRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_id: str = Field(min_length=1, max_length=96)
+    # The broker is explicit because the shared grid never infers lifecycle
+    # semantics from a receipt shape.  ``ibkr`` remains the compatibility
+    # default for rows projected before the Alpaca parity migration.
+    broker: Literal["ibkr", "alpaca"] = "ibkr"
     event_kind: str = Field(min_length=1, max_length=64)
     callback_identity: str = Field(min_length=1, max_length=256)
     lifecycle_state: str = Field(min_length=1, max_length=64)
+    native_order_id: str | None = Field(default=None, max_length=256)
+    native_execution_id: str | None = Field(default=None, max_length=256)
     commission_status: Literal["unknown", "reported"] = "unknown"
     fee: float | None = None
     journal_seq: int = Field(ge=1)
@@ -36,6 +42,7 @@ class ClerkTransactionRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transaction_id: str = Field(min_length=1, max_length=96)
+    broker: Literal["ibkr", "alpaca"] = "ibkr"
     account_id: str = Field(min_length=1, max_length=64)
     journal_seq: int = Field(ge=1)
     recorded_at_ms: int = Field(ge=0)
@@ -47,6 +54,8 @@ class ClerkTransactionRow(BaseModel):
     order_id: int | None = Field(default=None, ge=0)
     perm_id: int | None = Field(default=None, ge=0)
     exec_id: str | None = Field(default=None, max_length=256)
+    native_order_id: str | None = Field(default=None, max_length=256)
+    native_execution_id: str | None = Field(default=None, max_length=256)
     lifecycle_state: str = Field(min_length=1, max_length=64)
     commission_status: Literal["unknown", "reported"] = "unknown"
     fee: float | None = None
@@ -60,6 +69,7 @@ class ClerkTransactionSummaryRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transaction_id: str = Field(min_length=1, max_length=96)
+    broker: Literal["ibkr", "alpaca"] = "ibkr"
     account_id: str = Field(min_length=1, max_length=64)
     journal_seq: int = Field(ge=1)
     recorded_at_ms: int = Field(ge=0)
@@ -71,6 +81,8 @@ class ClerkTransactionSummaryRow(BaseModel):
     order_id: int | None = Field(default=None, ge=0)
     perm_id: int | None = Field(default=None, ge=0)
     exec_id: str | None = Field(default=None, max_length=256)
+    native_order_id: str | None = Field(default=None, max_length=256)
+    native_execution_id: str | None = Field(default=None, max_length=256)
     lifecycle_state: str = Field(min_length=1, max_length=64)
     commission_status: Literal["unknown", "reported"] = "unknown"
     fee: float | None = None

@@ -7506,6 +7506,17 @@
             ],
             "title": "Net Amount"
           },
+          "native_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Order Id"
+          },
           "observed_at_ms": {
             "title": "Observed At Ms",
             "type": "integer"
@@ -10328,6 +10339,15 @@
         "additionalProperties": false,
         "description": "One immutable event materialized from a Clerk journal receipt.",
         "properties": {
+          "broker": {
+            "default": "ibkr",
+            "enum": [
+              "ibkr",
+              "alpaca"
+            ],
+            "title": "Broker",
+            "type": "string"
+          },
           "callback_identity": {
             "maxLength": 256,
             "minLength": 1,
@@ -10376,6 +10396,30 @@
             "minLength": 1,
             "title": "Lifecycle State",
             "type": "string"
+          },
+          "native_execution_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Execution Id"
+          },
+          "native_order_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Order Id"
           },
           "receipt": {
             "title": "Receipt",
@@ -10497,6 +10541,15 @@
             "title": "Account Id",
             "type": "string"
           },
+          "broker": {
+            "default": "ibkr",
+            "enum": [
+              "ibkr",
+              "alpaca"
+            ],
+            "title": "Broker",
+            "type": "string"
+          },
           "commission_status": {
             "default": "unknown",
             "enum": [
@@ -10552,6 +10605,30 @@
             "minLength": 1,
             "title": "Lifecycle State",
             "type": "string"
+          },
+          "native_execution_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Execution Id"
+          },
+          "native_order_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Order Id"
           },
           "order_id": {
             "anyOf": [
@@ -10642,6 +10719,15 @@
             "title": "Account Id",
             "type": "string"
           },
+          "broker": {
+            "default": "ibkr",
+            "enum": [
+              "ibkr",
+              "alpaca"
+            ],
+            "title": "Broker",
+            "type": "string"
+          },
           "commission_status": {
             "default": "unknown",
             "enum": [
@@ -10695,6 +10781,30 @@
             "minLength": 1,
             "title": "Lifecycle State",
             "type": "string"
+          },
+          "native_execution_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Execution Id"
+          },
+          "native_order_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Order Id"
           },
           "order_id": {
             "anyOf": [
