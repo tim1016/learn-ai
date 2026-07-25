@@ -244,7 +244,7 @@ describe('BotControlPageComponent', () => {
   });
 
   it('opens in the trader lens and preserves the operator cockpit behind the lens switch', async () => {
-    const { fixture, element, liveRuns } = await setupBotControlPage({
+    const { fixture, element } = await setupBotControlPage({
       status: startableReadyStatus(),
     });
     await flush(fixture);
@@ -254,7 +254,6 @@ describe('BotControlPageComponent', () => {
     expect(element.querySelectorAll('app-overview-tab')).toHaveLength(0);
     expect(element.textContent).toContain('This bot is ready');
     expect(element.textContent).toContain('Market hours unavailable');
-    expect(liveRuns.getLifecycleTimeline).not.toHaveBeenCalled();
 
     const operations = Array.from(element.querySelectorAll<HTMLButtonElement>('.bot-lens-switch button'))
       .find((button) => button.textContent?.trim() === 'Operations');

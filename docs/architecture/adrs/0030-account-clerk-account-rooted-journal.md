@@ -377,3 +377,24 @@ not read journals or call brokers.
 | Callback is journal-fsynced before relay and duplicate callbacks have one semantic journal row | `test_clerk_relays_callbacks_only_to_the_originating_namespace`; `test_journal_exposure_survives_bot_crash_and_deduplicates_execution` |
 | Unattributed callbacks persist without a guessed namespace, create a consumed account alarm, and block starts | `test_unattributed_broker_callback_is_persisted_and_blocks_new_account_starts`; `test_account_projection_includes_unattributed_callbacks` |
 | Journal fsync does not block the callback event loop | `test_callback_fsync_is_offloaded_without_allowing_relay_before_record` |
+
+### Legacy lifecycle-projection retirement (2026-07-25, #1224)
+
+The superseded Postgres lifecycle projection runtime is deleted after its active
+consumer inventory reached zero. This removes its two `/api/lifecycle-projection`
+read routes, `LIFECYCLE_PROJECTION_ENABLED`, router/schema/store/replay/tailer,
+schema-drift registration, Angular client wrappers and generated OpenAPI surface,
+and active tests. Forward migration
+`20260725050000_DropLegacyLifecycleProjectionReadModel` drops only its five
+derived tables: `bot_lifecycle_events`, `account_lifecycle_events`,
+`operator_gate_snapshots`, `lifecycle_node_receipts`, and
+`account_owner_status_snapshots`. Applied migrations remain immutable forensic
+history; rollback requires an audited derived-data backup restore rather than
+pretending that EF can recreate lost projection evidence.
+
+The separately owned `bot_lifecycle_projection.py` is retained as Python's
+canonical lifecycle-evidence fold for the live-instance chart. Its historical
+`lifecycle_projection.*` template IDs are opaque audit values, not imports of
+the retired runtime. Manual transaction history remains solely the bounded Clerk
+transaction projector: indexed opaque-keyset reads (maximum 100 rows; initial
+render 25) never scan journals, sweep brokers, or fall back to Account Truth.

@@ -42,7 +42,6 @@ from app.routers import (
     iv_recorder,
     jobs,
     lean_sidecar,
-    lifecycle_projection,
     market_monitor,
     monte_carlo,
     options,
@@ -589,7 +588,6 @@ app.include_router(
     tags=["live-instances"],
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
-app.include_router(lifecycle_projection.router)
 app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # ADR 0014 — broker-activity reconciliation surface (SSE + REST backfill).
 # The router carries its own ``/api/live-instances`` prefix internally

@@ -15,7 +15,7 @@ import type {
 } from './live-runs.types';
 import type { DesiredStateView } from './live-runs-controls.types';
 import type { ActionPlan } from './action-plan.types';
-import type { BotLifecycleChartView } from './lifecycle-projection.types';
+import type { BotLifecycleChartView } from './bot-lifecycle-chart.types';
 import type {
   OperatorSurfaceBlockageLadder,
   OperatorSurfaceNamedCondition,
@@ -46,13 +46,7 @@ export type {
   LifecycleChartNode,
   LifecycleChartReceipt,
   LifecycleChartStatus,
-  LifecycleEventCategory,
-  LifecycleEventSeverity,
-  LifecycleProjectionEventRow,
-  LifecycleSafetySeverity,
-  LifecycleSafetyTriageResponse,
-  LifecycleTimelineResponse,
-} from './lifecycle-projection.types';
+} from './bot-lifecycle-chart.types';
 export type {
   BrokerConnectionConditionCode,
   OperatorSurfaceBlockageLadder,
