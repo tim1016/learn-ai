@@ -27,6 +27,7 @@ export class AccountDeskTransactionHistoryComponent {
   readonly store = inject(AccountDeskTransactionHistoryStore);
   private readonly drawer = viewChild<ElementRef<HTMLDialogElement>>('receiptDrawer');
   private readonly opener = signal<HTMLElement | null>(null);
+  private detailRequestGeneration = 0;
   readonly selected = signal<ClerkTransactionDetail | null>(null);
   readonly detailLoading = signal(false);
   readonly detailError = signal<string | null>(null);
@@ -42,6 +43,7 @@ export class AccountDeskTransactionHistoryComponent {
   }
 
   async openReceipt(row: ClerkTransactionSummary, event: MouseEvent): Promise<void> {
+    const requestGeneration = ++this.detailRequestGeneration;
     const opener = event.currentTarget;
     this.opener.set(opener instanceof HTMLElement ? opener : null);
     this.selected.set(null);
@@ -50,15 +52,21 @@ export class AccountDeskTransactionHistoryComponent {
     this.drawerOpen.set(true);
     this.openNativeDrawer();
     try {
-      this.selected.set(await this.store.transactionDetail(row.transaction_id));
+      const detail = await this.store.transactionDetail(row.transaction_id);
+      if (requestGeneration === this.detailRequestGeneration && this.drawerOpen()) {
+        this.selected.set(detail);
+      }
     } catch {
-      this.detailError.set('The selected receipt is unavailable. Close the drawer and try again.');
+      if (requestGeneration === this.detailRequestGeneration && this.drawerOpen()) {
+        this.detailError.set('The selected receipt is unavailable. Close the drawer and try again.');
+      }
     } finally {
-      this.detailLoading.set(false);
+      if (requestGeneration === this.detailRequestGeneration) this.detailLoading.set(false);
     }
   }
 
   closeReceipt(): void {
+    this.detailRequestGeneration += 1;
     this.drawerOpen.set(false);
     const dialog = this.drawer()?.nativeElement;
     if (dialog?.open && typeof dialog.close === 'function') dialog.close();
