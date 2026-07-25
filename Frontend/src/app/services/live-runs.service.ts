@@ -30,6 +30,7 @@ import type {
   FleetContamination,
   BotLifecycleMutationResponse,
   BotLifecycleRosterRequest,
+  BotCatalogPageResponse,
   BotCatalogResponse,
   BotDeleteRequest,
   BotDeleteResponse,
@@ -227,6 +228,12 @@ export class LiveRunsService {
 
   getBotCatalog(): Promise<BotCatalogResponse> {
     return firstValueFrom(this.http.get<BotCatalogResponse>(`${this.instancesBase}/catalog`));
+  }
+
+  getBotCatalogPage(params: { limit: number; cursor: number }): Promise<BotCatalogPageResponse> {
+    return firstValueFrom(
+      this.http.get<BotCatalogPageResponse>(`${this.instancesBase}/catalog/page`, { params }),
+    );
   }
 
   runRollCall(): Promise<BotRollCallResponse> {

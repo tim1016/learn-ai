@@ -1211,6 +1211,13 @@ export interface BotCatalogResponse {
   evening_report: BotEveningReport | null;
 }
 
+export interface BotCatalogPageResponse {
+  bots: BotCatalogRow[];
+  total_count: number;
+  next_cursor: number | null;
+  observed_at_ms: number;
+}
+
 export interface BotDeleteRequest {
   mode?: 'soft';
   deleted_by?: string;

@@ -4,7 +4,11 @@ import { provideRouter } from '@angular/router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
-import type { BotCatalogResponse, BotCatalogRow, BotRollCallResponse } from '../../../api/live-instances.types';
+import type {
+  BotCatalogPageResponse,
+  BotCatalogRow,
+  BotRollCallResponse,
+} from '../../../api/live-instances.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -70,7 +74,7 @@ const READY_BOT = {
 } as BotCatalogRow;
 
 class FakeLiveRunsService {
-  getBotCatalog = vi.fn<() => Promise<BotCatalogResponse>>();
+  getBotCatalogPage = vi.fn<() => Promise<BotCatalogPageResponse>>();
   runRollCall = vi.fn<() => Promise<BotRollCallResponse>>();
   startHostRunner = vi.fn();
   deleteBot = vi.fn();
@@ -94,21 +98,23 @@ describe('BotsPageComponent', () => {
     const health = new FakeBrokerHealthService();
     const catalog = {
       bots: [READY_BOT],
-      roll_call: {
-        ready: 1,
-        off_roster: 0,
-        sick_bay: 0,
-        on_duty: 0,
-        off_duty: 1,
-        retired: 0,
-        generated_at_ms: 1,
-        session_date: '2026-07-21',
-        effective_stop_ms: null,
-      },
-      evening_report: null,
-    } as BotCatalogResponse;
-    liveRuns.getBotCatalog.mockResolvedValue(catalog);
-    liveRuns.runRollCall.mockResolvedValue({ summary: catalog.roll_call, offers: [] } as BotRollCallResponse);
+      total_count: 1,
+      next_cursor: null,
+      observed_at_ms: 1,
+    } as BotCatalogPageResponse;
+    const rollCall = {
+      ready: 1,
+      off_roster: 0,
+      sick_bay: 0,
+      on_duty: 0,
+      off_duty: 1,
+      retired: 0,
+      generated_at_ms: 1,
+      session_date: '2026-07-21',
+      effective_stop_ms: null,
+    };
+    liveRuns.getBotCatalogPage.mockResolvedValue(catalog);
+    liveRuns.runRollCall.mockResolvedValue({ summary: rollCall, offers: [] } as BotRollCallResponse);
     liveRuns.startHostRunner.mockResolvedValue({ accepted: true, process: { state: 'running' } });
     broker.accountTriage.mockResolvedValue({ freeze_banner: null } as AccountTriageResponse);
 
@@ -125,6 +131,8 @@ describe('BotsPageComponent', () => {
     }).compileComponents();
     const fixture = TestBed.createComponent(BotsPageComponent);
     await settle(fixture);
+    await fixture.componentInstance.refresh();
+    await settle(fixture);
 
     await fixture.componentInstance.startReadyBots();
     await settle(fixture);
@@ -135,6 +143,47 @@ describe('BotsPageComponent', () => {
     });
     expect(fixture.componentInstance.launchProgress().title).toBe('Canary start accepted');
     expect((fixture.nativeElement as HTMLElement).textContent?.toLowerCase()).not.toContain('cohort');
+  });
+
+  it('keeps fleet, catalog, and daemon work out of the first paint', async () => {
+    vi.useFakeTimers();
+    const liveRuns = new FakeLiveRunsService();
+    const broker = new FakeBrokerService();
+    const health = new FakeBrokerHealthService();
+    liveRuns.getBotCatalogPage.mockResolvedValue({
+      bots: [READY_BOT],
+      total_count: 1,
+      next_cursor: null,
+      observed_at_ms: 1,
+    });
+    broker.accountTriage.mockResolvedValue({ freeze_banner: null } as AccountTriageResponse);
+
+    try {
+      TestBed.resetTestingModule();
+      await TestBed.configureTestingModule({
+        imports: [BotsPageComponent],
+        providers: [
+          provideZonelessChangeDetection(),
+          provideRouter([]),
+          { provide: LiveRunsService, useValue: liveRuns },
+          { provide: BrokerService, useValue: broker },
+          { provide: BrokerHealthService, useValue: health },
+        ],
+      }).compileComponents();
+      const fixture = TestBed.createComponent(BotsPageComponent);
+      fixture.detectChanges();
+
+      expect((fixture.nativeElement as HTMLElement).textContent).toContain('Bots');
+      expect(liveRuns.getBotCatalogPage).not.toHaveBeenCalled();
+      expect(broker.accountTriage).not.toHaveBeenCalled();
+
+      await vi.runAllTimersAsync();
+      await settle(fixture);
+
+      expect(liveRuns.getBotCatalogPage).toHaveBeenCalledWith({ limit: 25, cursor: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -3202,6 +3202,20 @@ class BotCatalogResponse(BaseModel):
     evening_report: BotEveningReport | None = None
 
 
+class BotCatalogPageResponse(BaseModel):
+    """A bounded, broker-free page of bot catalog cards.
+
+    The page intentionally carries no fleet roll-call or account-triage
+    summary. Those aggregate views require resolving the entire fleet and are
+    therefore not suitable for the Bots page's initial render.
+    """
+
+    bots: list[BotCatalogRow] = Field(default_factory=list)
+    total_count: int = Field(ge=0)
+    next_cursor: int | None = Field(default=None, ge=0)
+    observed_at_ms: int
+
+
 class BotDeleteRequest(BaseModel):
     """Operator request to remove a bot from active catalog/control surfaces."""
 

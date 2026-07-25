@@ -3040,6 +3040,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/live-instances/catalog/page": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Bot Catalog Page
+         * @description Return a bounded catalog page for post-first-paint loading.
+         *
+         *     This remains broker-free. It reads one daemon fleet snapshot so each
+         *     card's runtime state is current, then composes daemon/account evidence
+         *     only for the requested page.
+         */
+        get: operations["list_bot_catalog_page_api_live_instances_catalog_page_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/live-instances/daemon-diagnose": {
         parameters: {
             query?: never;
@@ -8037,6 +8061,24 @@ export interface components {
             pnl?: components["schemas"]["BotCatalogPnl"];
             /** Trade Count */
             trade_count?: number | null;
+        };
+        /**
+         * BotCatalogPageResponse
+         * @description A bounded, broker-free page of bot catalog cards.
+         *
+         *     The page intentionally carries no fleet roll-call or account-triage
+         *     summary. Those aggregate views require resolving the entire fleet and are
+         *     therefore not suitable for the Bots page's initial render.
+         */
+        BotCatalogPageResponse: {
+            /** Bots */
+            bots?: components["schemas"]["BotCatalogRow"][];
+            /** Next Cursor */
+            next_cursor?: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Total Count */
+            total_count: number;
         };
         /**
          * BotCatalogPnl
@@ -27815,6 +27857,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_bot_catalog_page_api_live_instances_catalog_page_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotCatalogPageResponse"];
                 };
             };
             /** @description Validation Error */

@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
+  afterNextRender,
   computed,
   inject,
   signal,
@@ -16,6 +17,7 @@ import { TagModule } from 'primeng/tag';
 import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import type {
   BotCatalogRow,
+  BotCatalogPageResponse,
   BotCatalogTone,
   BotCatalogTradingMode,
   BotLifecycleCondition,
@@ -59,6 +61,8 @@ const EMPTY_LAUNCH_PROGRESS: BotLaunchProgress = {
   activeBotId: null,
   rows: [],
 };
+
+const INITIAL_CATALOG_PAGE_SIZE = 25;
 
 const BOT_TONE_SEVERITY: Record<BotCatalogTone, TagSeverity> = {
   positive: 'success',
@@ -137,7 +141,11 @@ export class BotsPageComponent {
   readonly rollCall = signal<BotRollCallSummary>(EMPTY_ROLL_CALL_SUMMARY);
   readonly eveningReport = signal<BotEveningReport | null>(null);
   readonly accountTriageError = signal<string | null>(null);
-  readonly isLoading = signal<boolean>(true);
+  readonly isLoading = signal<boolean>(false);
+  readonly isLoadingMore = signal<boolean>(false);
+  readonly catalogLoaded = signal<boolean>(false);
+  readonly catalogTotalCount = signal<number>(0);
+  readonly nextCatalogCursor = signal<number | null>(null);
   readonly isRunningRollCall = signal<boolean>(false);
   readonly isStartingReady = signal<boolean>(false);
   readonly errorMessage = signal<string | null>(null);
@@ -195,6 +203,8 @@ export class BotsPageComponent {
   });
 
   readonly activeTabCount = computed(() => this.activeRows().length);
+  readonly loadedBotCount = computed(() => this.bots().length);
+  readonly hasMoreBots = computed(() => this.nextCatalogCursor() !== null);
   readonly connectedAccountId = computed(() => this.health.health()?.account_id ?? null);
   readonly readyRows = computed<BotTableRow[]>(() =>
     this.visibleBots().filter((row) => {
@@ -207,6 +217,11 @@ export class BotsPageComponent {
     }),
   );
   readonly rollCallSummaryLine = computed(() => {
+    if (!this.rollCallAvailable()) {
+      return this.catalogLoaded()
+        ? 'Not evaluated. Run roll call for a current fleet summary.'
+        : 'Not requested yet.';
+    }
     const summary = this.rollCall();
     return [
       `${summary.ready} ready`,
@@ -221,8 +236,11 @@ export class BotsPageComponent {
   readonly activeTabSummary = computed(() =>
     this.isLoading()
       ? `Loading ${this.activeModeTab()} bots...`
-      : `${this.activeTabCount()} bots in ${this.activeModeTab()} mode`,
+      : this.catalogLoaded()
+        ? `${this.activeTabCount()} loaded bots in ${this.activeModeTab()} mode`
+        : 'Catalog will load after this page is painted.',
   );
+  readonly rollCallAvailable = signal<boolean>(false);
 
   readonly selectedRows = computed<BotTableRow[]>(() => {
     const selected = this.selectedBotIds();
@@ -246,23 +264,44 @@ export class BotsPageComponent {
   });
 
   constructor() {
-    void this.refresh();
+    afterNextRender(() => {
+      // Let the browser paint the page shell before catalog fleet/daemon work.
+      setTimeout(() => void this.refresh(), 0);
+    });
   }
 
   async refresh(): Promise<void> {
     this.isLoading.set(true);
     this.errorMessage.set(null);
     try {
-      const catalog = await this.liveRuns.getBotCatalog();
-      this.bots.set(catalog.bots);
-      this.rollCall.set(catalog.roll_call);
-      this.eveningReport.set(catalog.evening_report);
-      this.retainKnownSelections(catalog.bots);
+      const page = await this.liveRuns.getBotCatalogPage({
+        limit: INITIAL_CATALOG_PAGE_SIZE,
+        cursor: 0,
+      });
+      this.applyCatalogPage(page, { replace: true });
       void this.refreshAccountTriage();
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
     } finally {
       this.isLoading.set(false);
+    }
+  }
+
+  async loadMoreBots(): Promise<void> {
+    const cursor = this.nextCatalogCursor();
+    if (cursor === null || this.isLoadingMore() || this.isLoading()) return;
+    this.isLoadingMore.set(true);
+    this.errorMessage.set(null);
+    try {
+      const page = await this.liveRuns.getBotCatalogPage({
+        limit: INITIAL_CATALOG_PAGE_SIZE,
+        cursor,
+      });
+      this.applyCatalogPage(page, { replace: false });
+    } catch (err) {
+      this.errorMessage.set(this.humanError(err));
+    } finally {
+      this.isLoadingMore.set(false);
     }
   }
 
@@ -292,6 +331,7 @@ export class BotsPageComponent {
     try {
       const response = await this.liveRuns.runRollCall();
       this.rollCall.set(response.summary);
+      this.rollCallAvailable.set(true);
       await this.refresh();
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
@@ -334,6 +374,7 @@ export class BotsPageComponent {
       });
       const rollCall = await this.liveRuns.runRollCall();
       this.rollCall.set(rollCall.summary);
+      this.rollCallAvailable.set(true);
       await this.refresh();
 
       const refreshedRows = this.readyRows().filter((row) => requestedIds.has(row.id));
@@ -558,12 +599,20 @@ export class BotsPageComponent {
     this.deleteErrorMessage.set(null);
   }
 
-  private retainKnownSelections(bots: BotCatalogRow[]): void {
-    const knownIds = new Set(bots.map((bot) => bot.strategy_instance_id));
-    this.selectedBotIds.update((current) => {
-      const next = new Set([...current].filter((id) => knownIds.has(id)));
-      return next.size === current.size ? current : next;
+  private applyCatalogPage(
+    page: BotCatalogPageResponse,
+    options: { replace: boolean },
+  ): void {
+    this.bots.update((current) => {
+      if (options.replace) return page.bots;
+      const byId = new Map(current.map((bot) => [bot.strategy_instance_id, bot]));
+      for (const bot of page.bots) byId.set(bot.strategy_instance_id, bot);
+      return [...byId.values()];
     });
+    this.catalogTotalCount.set(page.total_count);
+    this.nextCatalogCursor.set(page.next_cursor);
+    this.catalogLoaded.set(true);
+    if (options.replace) this.clearSelection();
   }
 
   private humanError(err: unknown): string {
