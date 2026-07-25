@@ -8,7 +8,7 @@ The Portfolio Management System is a full-stack, event-sourced portfolio tracker
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         Angular 21 Frontend                             │
+│                         Angular 22 Frontend                             │
 │  ┌───────────┬────────────┬──────────┬───────────┬──────────────────┐  │
 │  │ Dashboard │ Positions  │ Equity   │ Risk      │ Strategy         │  │
 │  │  - State  │  - FIFO    │ Chart    │ Panel     │ Attribution      │  │

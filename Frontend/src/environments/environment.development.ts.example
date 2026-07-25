@@ -4,6 +4,7 @@
 
 export const environment = {
   production: false,
+  primeUiLicense: 'YOUR_PRIMEUI_LICENSE_KEY_HERE',
 
   // Option 1: Add your Polygon.io API key here for direct API calls (development only)
   // Get your key from: https://polygon.io/dashboard/api-keys

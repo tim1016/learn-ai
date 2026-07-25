@@ -316,7 +316,7 @@
         }
       </div>
 
-      <p-table [value]="costScenarios" styleClass="p-datatable-sm" class="mt-3" [tableStyle]="{ 'min-width': '24rem' }">
+      <p-table [value]="costScenarios" class="mt-3" size="small" [tableStyle]="{ 'min-width': '24rem' }">
         <ng-template #header>
           <tr>
             <th>One-Way Cost</th>
@@ -359,7 +359,7 @@
       <i class="pi pi-table mr-2"></i>Quantile Breakdown
     </h4>
   </div>
-  <p-table [value]="result().quantileBins" [tableStyle]="{ 'min-width': '36rem' }" styleClass="p-datatable-sm">
+  <p-table [value]="result().quantileBins" [tableStyle]="{ 'min-width': '36rem' }" size="small">
     <ng-template #header>
       <tr>
         <th>Quantile</th>

@@ -6,7 +6,7 @@ A full-stack quantitative trading research platform for US equity and options ma
 
 ```
 ┌──────────────┐     GraphQL      ┌──────────────┐     REST/HTTP     ┌──────────────────┐
-│   Angular 21 │ ◄──────────────► │  .NET 10     │ ◄──────────────► │  Python FastAPI   │
+│   Angular 22 │ ◄──────────────► │  .NET 10     │ ◄──────────────► │  Python FastAPI   │
 │   Frontend   │     Apollo       │  Backend     │     Polly        │  Data Service     │
 │              │                  │  Hot Choc v15│                  │  Polygon.io SDK   │
 └──────────────┘                  └──────┬───────┘                  └──────────────────┘
@@ -20,7 +20,7 @@ A full-stack quantitative trading research platform for US equity and options ma
 
 | Layer | Tech | Purpose |
 |-------|------|---------|
-| **Frontend** | Angular 21, Apollo Angular, PrimeNG, Tailwind CSS, TradingView lightweight-charts v5 | SPA with interactive charts, tables, and forms |
+| **Frontend** | Angular 22, Apollo Angular, PrimeNG 22, Tailwind CSS, TradingView lightweight-charts v5 | SPA with interactive charts, tables, and forms |
 | **Backend** | .NET 10, Hot Chocolate v15 (GraphQL), EF Core 10, Polly | GraphQL API, data caching, backtesting engine |
 | **Data Service** | Python FastAPI, Polygon.io REST client v1.12.5, pandas, pandas-ta, scipy, statsmodels | Polygon.io proxy, indicator calculations, data quality pipeline |
 | **Database** | PostgreSQL 16 | Persistent storage for tickers, OHLCV bars, indicators, research experiments |
@@ -331,7 +331,7 @@ Key indexes: composite `(TickerId, Timestamp, Timespan)` on StockAggregate for f
 ### Prerequisites
 
 - [Podman](https://podman.io/) (or Docker) with Compose support
-- [Node.js](https://nodejs.org/) 20+ and npm
+- [Node.js](https://nodejs.org/) 22.22.3+, 24.15+, or 26+ and npm
 - A [Polygon.io](https://polygon.io/) API key (Starter plan or higher)
 - Optional: [FRED](https://fred.stlouisfed.org/) API key for risk-free rate curves
 
@@ -545,7 +545,7 @@ learn-ai/
     Unit/Services/                  Service-level unit tests
     Unit/GraphQL/                   GraphQL resolver integration tests
     Helpers/                        TestDbContextFactory, FakeHttpMessageHandler
-  Frontend/                       Angular 21 SPA
+  Frontend/                       Angular 22 SPA
     src/app/
       components/
         market-data/                Candlestick, volume, line charts + data table

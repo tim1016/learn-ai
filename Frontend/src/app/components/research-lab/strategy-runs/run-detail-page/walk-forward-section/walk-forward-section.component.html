@@ -29,7 +29,7 @@
   </header>
 
   @if (error(); as msg) {
-    <p-message severity="error" [text]="msg" class="wf-error" />
+    <p-message severity="error" class="wf-error">{{ msg }}</p-message>
   }
 
   @if (lastWfId(); as id) {
@@ -49,7 +49,7 @@
     <p-table
       [value]="walkForwards()"
       [rowTrackBy]="trackByWfId"
-      styleClass="wf-table"
+      class="wf-table"
       selectionMode="single"
     >
       <ng-template #header>

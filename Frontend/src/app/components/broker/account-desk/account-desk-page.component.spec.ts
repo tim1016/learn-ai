@@ -424,10 +424,10 @@ describe("AccountDeskPageComponent", () => {
   it("uses the shared viewer-local timestamp display and preserves stale last-good data with retry", async () => {
     const { broker, fixture } = await setup({ response: triage() });
     expect(
-      screen.getByText(
+      screen.queryAllByText(
         formatTimestampDisplay(1_780_000_002_000, { mode: "local" }),
       ),
-    ).toBeTruthy();
+    ).not.toHaveLength(0);
 
     broker.accountTriage.mockRejectedValueOnce(new Error("offline"));
     fixture.componentInstance.retry();

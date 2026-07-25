@@ -560,11 +560,11 @@
   [visible]="historyDrawerOpen()"
   (visibleChange)="onHistoryDrawerVisibleChange($event)"
   position="right"
-  styleClass="history-drawer"
+  class="history-drawer"
   [style]="{ width: '38rem' }"
   [showCloseIcon]="true"
 >
-  <ng-template pTemplate="header">
+  <ng-template #header>
     @let parsed = parsedHistoryTicker();
     @if (parsed) {
       <div class="history-header">
@@ -585,7 +585,7 @@
   @if (historyLoading()) {
     <div class="history-loading">
       <p-skeleton height="280px" width="100%" />
-      <p-skeleton height="120px" width="100%" styleClass="mt-3" />
+      <p-skeleton height="120px" width="100%" class="mt-3" />
     </div>
   } @else if (historyError(); as err) {
     <div class="history-error">

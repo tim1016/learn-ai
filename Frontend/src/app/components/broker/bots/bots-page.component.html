@@ -333,8 +333,8 @@
   <ng-template #botPanel let-rows let-emptyMode="emptyMode">
     <div class="bot-table-shell">
       <p-table
-        class="bot-table-wrap"
-        styleClass="p-datatable-sm bot-table"
+        class="bot-table-wrap bot-table"
+        size="small"
         dataKey="id"
         sortField="lastRunSortMs"
         [sortOrder]="-1"
@@ -361,35 +361,35 @@
             </th>
             <th pSortableColumn="name" class="col-bot">
               Bot
-              <p-sortIcon field="name" />
+              <p-sort-icon field="name" />
             </th>
             <th pSortableColumn="symbolsLabel">
               Symbols
-              <p-sortIcon field="symbolsLabel" />
+              <p-sort-icon field="symbolsLabel" />
             </th>
             <th pSortableColumn="exposure">
               Exposure
-              <p-sortIcon field="exposure" />
+              <p-sort-icon field="exposure" />
             </th>
             <th pSortableColumn="openPositions" class="numeric-cell">
               Open Pos
-              <p-sortIcon field="openPositions" />
+              <p-sort-icon field="openPositions" />
             </th>
             <th pSortableColumn="totalPnl" class="numeric-cell">
               P&amp;L
-              <p-sortIcon field="totalPnl" />
+              <p-sort-icon field="totalPnl" />
             </th>
             <th pSortableColumn="errorCount" class="numeric-cell">
               Errors
-              <p-sortIcon field="errorCount" />
+              <p-sort-icon field="errorCount" />
             </th>
             <th pSortableColumn="displayStatus">
               Status
-              <p-sortIcon field="displayStatus" />
+              <p-sort-icon field="displayStatus" />
             </th>
             <th pSortableColumn="lastRunSortMs">
               Last Run
-              <p-sortIcon field="lastRunSortMs" />
+              <p-sort-icon field="lastRunSortMs" />
             </th>
           </tr>
         </ng-template>

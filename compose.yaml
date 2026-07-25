@@ -321,7 +321,7 @@ services:
       # and tsconfig.spec.json's ``src/testing/**/*.json`` include.
       - ./PythonDataService/tests/fixtures/action_plan:/app/src/testing/action_plan_fixtures:ro,z
     environment:
-      # Angular 21's esbuild compiler runs worker threads; default Node heap
+      # Angular 22's esbuild compiler runs worker threads; default Node heap
       # caps them at ~512MB which is not enough for this project's bundle
       # (primeng + apollo + chart.js + lightweight-charts + katex). Raise the
       # old-space limit so workers don't hit ERR_WORKER_OUT_OF_MEMORY.

@@ -19,13 +19,13 @@ import { MethodologyDrawerService } from './methodology-drawer.service';
       [visible]="svc.visible()"
       (visibleChange)="onVisibleChange($event)"
       position="right"
-      [styleClass]="'methodology-drawer'"
+      class="methodology-drawer"
       [showCloseIcon]="false"
       [modal]="true"
       [dismissible]="true"
       [style]="{ width: 'min(960px, 92vw)' }"
     >
-      <ng-template pTemplate="header">
+      <ng-template #header>
         <div class="drawer-header">
           <span class="drawer-eyebrow mono">Reference</span>
           <h3 class="drawer-title">Indicator Reliability — Methodology</h3>

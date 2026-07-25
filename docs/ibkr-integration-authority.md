@@ -90,7 +90,7 @@ implementation.
                                                 │ REST + SSE
                                    ┌────────────┴───────────┐
                                    │  Frontend /broker/*    │
-                                   │  Angular 21 SPA        │
+                                   │  Angular 22 SPA        │
                                    └────────────────────────┘
 ```
 
@@ -328,7 +328,7 @@ The gate skips on CI when `lean-cache/` is absent (gitignored runtime data — p
 
 ## 7. Frontend pages (`/broker/*`)
 
-Standalone Angular 21 components, signal-driven, OnPush, gated by `BrokerHealthService.bannerState`.
+Standalone Angular 22 components, signal-driven, OnPush, gated by `BrokerHealthService.bannerState`.
 
 | Route | Component | Purpose | Gates |
 |---|---|---|---|

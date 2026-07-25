@@ -38,7 +38,7 @@
   </header>
 
   @if (error(); as msg) {
-    <p-message severity="error" [text]="msg" class="bl-error" />
+    <p-message severity="error" class="bl-error">{{ msg }}</p-message>
   }
 
   @if (lastBaselineId(); as id) {
@@ -58,7 +58,7 @@
     <p-table
       [value]="baselines()"
       [rowTrackBy]="trackByBaselineId"
-      styleClass="bl-table"
+      class="bl-table"
       selectionMode="single"
     >
       <ng-template #header>

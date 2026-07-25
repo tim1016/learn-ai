@@ -46,7 +46,7 @@ It is the source for an upcoming Claude Design handoff (UI/UX). Brief notes flag
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│ Angular 21 — Frontend/src/app/components/edge/                 │
+│ Angular 22 — Frontend/src/app/components/edge/                 │
 │   /edge → 3 nav cards                                          │
 │     /edge/realized-vs-iv                                       │
 │     /edge/cross-asset                                          │

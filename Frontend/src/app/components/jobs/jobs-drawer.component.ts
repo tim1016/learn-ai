@@ -106,7 +106,7 @@ import { JobsService } from '../../services/jobs.service';
       [dismissible]="true"
       [style]="{ width: 'min(480px, 92vw)' }"
     >
-      <ng-template pTemplate="header">
+      <ng-template #header>
         <h4>Background jobs</h4>
       </ng-template>
 

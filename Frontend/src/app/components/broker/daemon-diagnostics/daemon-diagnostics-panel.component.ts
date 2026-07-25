@@ -32,7 +32,12 @@ interface CheckGroup {
   status: DaemonDiagnosticStatus;
 }
 
-type AccordionValue = string | number | string[] | number[] | null | undefined;
+type AccordionValue =
+  | string
+  | number
+  | (string | number)[]
+  | null
+  | undefined;
 
 const CATEGORY_LABELS: Record<DaemonDiagnosticCategory, string> = {
   reachability: 'Reachability',

@@ -13,7 +13,7 @@ A scientific platform for porting and validating trading logic. Reference implem
 
 ## Repo map
 
-- `Frontend/` — Angular 21 SPA (standalone components, signals, zoneless, Vitest)
+- `Frontend/` — Angular 22 SPA (standalone components, signals, zoneless, Vitest)
 - `Backend/` — .NET 10 GraphQL API (Hot Chocolate v15, EF Core, Postgres)
 - `Backend.Tests/` — xUnit test suite for Backend
 - `PythonDataService/` — FastAPI data proxy + backtesting engine (pandas, Polygon.io)
@@ -54,14 +54,14 @@ Agent tooling auto-discovers these from `.claude/skills/`. Invoke directly or le
 - **extract-math-from-paper** — Transcribe equations from a PDF paper into testable Python with paper-section citations
 - **add-fastapi-endpoint** — Add a new FastAPI endpoint exposing engine output to the frontend
 - **write-graphql-resolver** — Write or debug a Hot Chocolate v15 resolver
-- **build-angular-component** — Build or modify an Angular 21 component
+- **build-angular-component** — Build or modify an Angular 22 component
 - **meta-propose-skill** — When the same task shape repeats, propose a new skill instead of just doing the task
 
 ## Stack rules
 
 Full conventions live in `.claude/rules/`. Read the relevant file before significant changes:
 
-- `.claude/rules/angular.md` — Angular 21 conventions (signals, zoneless, Signal Forms, Vitest)
+- `.claude/rules/angular.md` — Angular 22 conventions (signals, zoneless, Signal Forms, Vitest)
 - `.claude/rules/dotnet.md` — .NET 10 + Hot Chocolate v15 conventions
 - `.claude/rules/python.md` — FastAPI, pandas, async conventions
 - `.claude/rules/testing.md` — Per-stack testing standards

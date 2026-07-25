@@ -1,4 +1,4 @@
-# Frontend — Angular 21 SPA
+# Frontend — Angular 22 SPA
 
 ## Commands
 
@@ -66,4 +66,5 @@ src/app/
 
 - `proxy.conf.js` is the only approved dev proxy configuration. It routes host development to loopback ports by default; Compose sets `BACKEND_PROXY_TARGET` and `DATA_PLANE_PROXY_TARGET` to container service names. Do not replace it with a target-only JSON proxy: that bypasses the data-plane control-header hook. It attaches the Python data-plane control header from `DATA_PLANE_CONTROL_SECRET` only for Angular-marked unsafe control mutations and protected broker-session reads with positive same-origin local-dev browser provenance; metadata-absent local clients are intentionally not given the proxy secret.
 - Some components are large (options-strategy-lab, strategy-builder) — consider extracting child components
+- PrimeNG 22 uses PrimeUI licensing. Set `primeUiLicense` in the gitignored environment override before production use; the checked-in examples show the required field.
 - `tsconfig.json` excludes spec files; `tsconfig.spec.json` includes them for test builds

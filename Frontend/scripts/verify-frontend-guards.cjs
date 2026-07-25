@@ -1,7 +1,28 @@
+const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 
 const frontendRoot = path.join(__dirname, "..");
+const canonicalOperatorManual = path.resolve(
+  frontendRoot,
+  "../docs/bot-control-operator-manual.md",
+);
+const bundledOperatorManual = path.join(
+  frontendRoot,
+  "src/assets/docs/bot-control-operator-manual.md",
+);
+
+if (
+  fs.existsSync(canonicalOperatorManual) &&
+  fs.readFileSync(canonicalOperatorManual, "utf8") !==
+    fs.readFileSync(bundledOperatorManual, "utf8")
+) {
+  throw new Error(
+    "Bundled Bot Control manual is stale. Copy docs/bot-control-operator-manual.md " +
+      "to Frontend/src/assets/docs/bot-control-operator-manual.md.",
+  );
+}
+
 const guardCommands = [
   [
     "Bot Control harness guard",

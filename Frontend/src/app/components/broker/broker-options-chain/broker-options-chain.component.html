@@ -211,10 +211,10 @@
         <tbody>
           @for (row of rows(); track trackRow($index, row)) {
             <tr>
-              <td class="num mono">{{ fmtCurrency(row.call?.bid) }}</td>
-              <td class="num mono">{{ fmtCurrency(row.call?.ask) }}</td>
-              <td class="num mono">{{ fmtPercent(row.call?.iv) }}</td>
-              <td class="num mono">{{ fmtNumber(row.call?.delta, 3) }}</td>
+              <td class="num mono">{{ fmtCurrency($safeNavigationMigration(row.call?.bid)) }}</td>
+              <td class="num mono">{{ fmtCurrency($safeNavigationMigration(row.call?.ask)) }}</td>
+              <td class="num mono">{{ fmtPercent($safeNavigationMigration(row.call?.iv)) }}</td>
+              <td class="num mono">{{ fmtNumber($safeNavigationMigration(row.call?.delta), 3) }}</td>
               <td class="num mono">{{ fmtNumber(row.callEngineDelta, 3) }}</td>
               <td
                 class="num mono band"
@@ -225,10 +225,10 @@
                 {{ fmtNumber(row.callDeltaAbsDiff, 4) }}
               </td>
               <td class="strike mono">{{ fmtCurrency(row.strike) }}</td>
-              <td class="num mono">{{ fmtCurrency(row.put?.bid) }}</td>
-              <td class="num mono">{{ fmtCurrency(row.put?.ask) }}</td>
-              <td class="num mono">{{ fmtPercent(row.put?.iv) }}</td>
-              <td class="num mono">{{ fmtNumber(row.put?.delta, 3) }}</td>
+              <td class="num mono">{{ fmtCurrency($safeNavigationMigration(row.put?.bid)) }}</td>
+              <td class="num mono">{{ fmtCurrency($safeNavigationMigration(row.put?.ask)) }}</td>
+              <td class="num mono">{{ fmtPercent($safeNavigationMigration(row.put?.iv)) }}</td>
+              <td class="num mono">{{ fmtNumber($safeNavigationMigration(row.put?.delta), 3) }}</td>
               <td class="num mono">{{ fmtNumber(row.putEngineDelta, 3) }}</td>
               <td
                 class="num mono band"

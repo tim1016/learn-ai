@@ -30,7 +30,7 @@
   </header>
 
   @if (error(); as msg) {
-    <p-message severity="error" [text]="msg" class="mc-error" />
+    <p-message severity="error" class="mc-error">{{ msg }}</p-message>
   }
 
   @if (lastMcId(); as id) {
@@ -50,7 +50,7 @@
     <p-table
       [value]="monteCarlos()"
       [rowTrackBy]="trackByMcId"
-      styleClass="mc-table"
+      class="mc-table"
       selectionMode="single"
     >
       <ng-template #header>

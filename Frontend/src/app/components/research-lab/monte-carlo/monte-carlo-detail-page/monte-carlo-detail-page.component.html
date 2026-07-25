@@ -32,12 +32,12 @@
   }
 
   @if (error(); as msg) {
-    <p-message severity="error" [text]="msg" class="mcd-error" />
+    <p-message severity="error" class="mcd-error">{{ msg }}</p-message>
   }
 
   @if (monteCarlo(); as data) {
     @if (data.result.status === 'failed' && data.result.failure_reason; as reason) {
-      <p-message severity="warn" [text]="reason" class="mcd-warn" />
+      <p-message severity="warn" class="mcd-warn">{{ reason }}</p-message>
     }
 
     @if (data.result.warnings.length > 0) {
@@ -137,7 +137,7 @@
         </p>
         <p-table
           [value]="data.result.breach_probabilities"
-          styleClass="mcd-breach-table"
+          class="mcd-breach-table"
         >
           <ng-template #header>
             <tr>

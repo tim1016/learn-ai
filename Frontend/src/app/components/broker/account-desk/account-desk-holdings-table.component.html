@@ -19,17 +19,24 @@
             severity="secondary"
             [text]="true"
             [rounded]="true"
+            [iconOnly]="true"
             [pRowToggler]="row"
-            [icon]="expanded ? 'pi pi-chevron-down' : 'pi pi-chevron-right'"
             [attr.aria-label]="(expanded ? 'Hide guidance for ' : 'Show guidance for ') + row.position.symbol"
-          ></button>
+          >
+            <i
+              class="pi"
+              [class.pi-chevron-down]="expanded"
+              [class.pi-chevron-right]="!expanded"
+              aria-hidden="true"
+            ></i>
+          </button>
         }
         {{ row.position.symbol }}
       </td>
       <td class="font-mono">{{ row.position.sec_type | receiptLabel }}</td>
       <td class="text-right font-mono">{{ fmtSignedQuantity(row.pnl?.position ?? row.position.quantity) }}</td>
       <td class="text-right font-mono">{{ fmtCurrency(row.pnl?.market_value ?? row.position.market_value) }}</td>
-      <td class="text-right font-mono">{{ fmtSignedCurrency(row.pnl?.unrealized_pnl) }}</td>
+      <td class="text-right font-mono">{{ fmtSignedCurrency($safeNavigationMigration(row.pnl?.unrealized_pnl)) }}</td>
       <td>{{ row.owner.owner_label }}</td>
     </tr>
   </ng-template>

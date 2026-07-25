@@ -13,6 +13,7 @@
 
 export const environment = {
   production: true,
+  primeUiLicense: 'YOUR_PRIMEUI_LICENSE_KEY_HERE',
   polygonApiKey: '', // Leave empty — use backend proxy in production
   useBackendProxy: true, // Always use backend in production
   backendUrl: 'http://localhost:5000/graphql',

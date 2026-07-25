@@ -2,7 +2,6 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { Router } from '@angular/router';
-import { NoopAnimationsModule } from '@angular/platform-browser/animations';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BaselinesService } from '../../../../../services/baselines.service';
@@ -107,7 +106,7 @@ describe('BaselinesSectionComponent', () => {
     routerNavigate = vi.fn().mockResolvedValue(true);
 
     await TestBed.configureTestingModule({
-      imports: [BaselinesSectionComponent, NoopAnimationsModule],
+      imports: [BaselinesSectionComponent],
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),

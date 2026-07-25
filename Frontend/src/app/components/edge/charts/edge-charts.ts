@@ -6,7 +6,7 @@
  * Sized via DPR so output stays crisp on hi-DPI displays.
  *
  * Ports the React/JSX prototypes in
- * `quant-trading-lab-design-system/edge_redesign/charts.jsx` to Angular 21.
+ * `quant-trading-lab-design-system/edge_redesign/charts.jsx` to Angular 22.
  */
 import {
   AfterViewInit,

@@ -58,7 +58,7 @@ canonical Black-Scholes Greek + IV inversion module in Python.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│                          Angular 21 (Frontend/)                           │
+│                          Angular 22 (Frontend/)                           │
 │ ┌──────────────┐ ┌─────────────────────┐ ┌──────────────────────────────┐ │
 │ │  /edge       │ │  /research-lab      │ │  options-chain-v2            │ │
 │ │  ├─ /edge/   │ │   (existing IV      │ │  options-history             │ │
