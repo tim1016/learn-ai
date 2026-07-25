@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 RETIRED_RUNTIME_PATHS = (
     "PythonDataService/app/routers/lifecycle_projection.py",
