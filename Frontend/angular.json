@@ -22,11 +22,6 @@
                 "glob": "**/*",
                 "input": "src/assets",
                 "output": "assets"
-              },
-              {
-                "glob": "bot-control-operator-manual.md",
-                "input": "../docs",
-                "output": "assets/docs"
               }
             ],
             "styles": [
@@ -85,7 +80,7 @@
           }
         },
         "serve": {
-          "builder": "@angular-devkit/build-angular:dev-server",
+          "builder": "@angular/build:dev-server",
           "options": {
             "proxyConfig": "proxy.conf.js"
           },

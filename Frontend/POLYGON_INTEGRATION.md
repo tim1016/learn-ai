@@ -252,7 +252,7 @@ export const environment = {
 
 ### Current Architecture
 ```
-Frontend (Angular 21)
+Frontend (Angular 22)
     ↓ GraphQL
 C# Backend
     ↓ HTTP
@@ -263,14 +263,14 @@ Polygon.io
 
 ### New Direct Access (Development)
 ```
-Frontend (Angular 21)
+Frontend (Angular 22)
     ↓ REST API (direct)
 Polygon.io
 ```
 
 ### Recommended Production Architecture
 ```
-Frontend (Angular 21)
+Frontend (Angular 22)
     ↓ REST API (proxy)
 C# Backend / Python Service
     ↓ REST API

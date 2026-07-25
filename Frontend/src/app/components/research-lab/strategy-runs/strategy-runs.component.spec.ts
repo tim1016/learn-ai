@@ -2,7 +2,6 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { Router } from '@angular/router';
-import { NoopAnimationsModule } from '@angular/platform-browser/animations';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { StrategyRunsComponent } from './strategy-runs.component';
@@ -101,7 +100,7 @@ describe('StrategyRunsComponent', () => {
     routerNavigate = vi.fn().mockResolvedValue(true);
 
     await TestBed.configureTestingModule({
-      imports: [StrategyRunsComponent, NoopAnimationsModule],
+      imports: [StrategyRunsComponent],
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),

@@ -1,6 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { HttpClientTestingModule } from '@angular/common/http/testing';
-import { NoopAnimationsModule } from '@angular/platform-browser/animations';
 import { signal, computed, type Signal } from '@angular/core';
 import { vi } from 'vitest';
 
@@ -51,7 +50,6 @@ describe('FeatureRunnerComponent', () => {
       imports: [
         FeatureRunnerComponent,
         HttpClientTestingModule,
-        NoopAnimationsModule,
       ],
       providers: [
         { provide: JobsService, useValue: jobsServiceMock },

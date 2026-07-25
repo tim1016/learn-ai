@@ -31,12 +31,12 @@
   }
 
   @if (error(); as msg) {
-    <p-message severity="error" [text]="msg" class="bld-error" />
+    <p-message severity="error" class="bld-error">{{ msg }}</p-message>
   }
 
   @if (baseline(); as data) {
     @if (data.result.status === 'failed' && data.result.failure_reason; as reason) {
-      <p-message severity="warn" [text]="reason" class="bld-warn" />
+      <p-message severity="warn" class="bld-warn">{{ reason }}</p-message>
     }
 
     @if (data.result.warnings.length > 0) {
@@ -131,7 +131,7 @@
       <h2>Sample runs <small class="bld-section-count">({{ data.result.baselines.length }})</small></h2>
       <p-table
         [value]="data.result.baselines"
-        styleClass="bld-runs-table"
+        class="bld-runs-table"
         [paginator]="data.result.baselines.length > 25"
         [rows]="25"
         [scrollable]="true"

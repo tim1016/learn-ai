@@ -55,13 +55,13 @@
     }
 
     @if (j.total && j.total > 0) {
-      <p-progressBar
+      <p-progress-bar
         [value]="progressPercent()"
         [showValue]="false"
         class="progress-bar"
       />
     } @else if (running()) {
-      <p-progressBar mode="indeterminate" [showValue]="false" class="progress-bar" />
+      <p-progress-bar mode="indeterminate" [showValue]="false" class="progress-bar" />
     }
 
     <div #logsContainer class="logs-container">

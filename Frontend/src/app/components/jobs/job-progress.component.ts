@@ -70,7 +70,7 @@ import { JobsService, JobState } from '../../services/jobs.service';
       </div>
 
       @if (showBar()) {
-        <p-progressBar
+        <p-progress-bar
           [value]="percent()"
           [showValue]="true"
           [mode]="indeterminate() ? 'indeterminate' : 'determinate'"

@@ -106,7 +106,7 @@
       <!-- Call / Put toggle -->
       <div class="flex flex-col gap-1">
         <label class="text-xs text-slate-400 uppercase tracking-wide font-medium">Type</label>
-        <p-selectButton
+        <p-select-button
           [options]="contractTypeOptions"
           [ngModel]="contractTypeFilter()"
           (ngModelChange)="contractTypeFilter.set($event)"
@@ -201,7 +201,7 @@
       <!-- Metric toggle -->
       <div class="flex flex-col gap-1">
         <span class="text-xs text-slate-400 uppercase tracking-wide font-medium">Metric</span>
-        <p-selectButton
+        <p-select-button
           [options]="metricOptions"
           [ngModel]="selectedMetric()"
           (ngModelChange)="selectedMetric.set($event)"

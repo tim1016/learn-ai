@@ -38,12 +38,12 @@
   }
 
   @if (error(); as msg) {
-    <p-message severity="error" [text]="msg" class="wfd-error" />
+    <p-message severity="error" class="wfd-error">{{ msg }}</p-message>
   }
 
   @if (walkForward(); as data) {
     @if (data.result.status === 'failed' && data.result.failure_reason; as reason) {
-      <p-message severity="warn" [text]="reason" class="wfd-warn" />
+      <p-message severity="warn" class="wfd-warn">{{ reason }}</p-message>
     }
 
     @if (data.result.warnings.length > 0) {
@@ -129,7 +129,7 @@
         [rowTrackBy]="trackByFoldIndex"
         [paginator]="data.result.folds.length > 50"
         [rows]="50"
-        styleClass="wfd-fold-table"
+        class="wfd-fold-table"
       >
         <ng-template #header>
           <tr>

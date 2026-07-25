@@ -53,7 +53,7 @@
             class="w-full"
             [loading]="loadingIndicators()"
           >
-            <ng-template let-option pTemplate="item">
+            <ng-template #item let-option>
               <div>
                 <span class="font-medium">{{ option.label }}</span>
                 <span class="text-xs text-slate-400 ml-2">({{ option.category }})</span>
@@ -75,7 +75,7 @@
                 <label class="text-sm" [attr.for]="'param-' + param.name">
                   {{ param.name }}:
                 </label>
-                <p-inputNumber
+                <p-input-number
                   [id]="'param-' + param.name"
                   [ngModel]="paramValues()[param.name]"
                   (ngModelChange)="updateParam(param.name, $event)"
@@ -161,7 +161,7 @@
   <!-- Loading State -->
   @if (loading()) {
     <div class="flex flex-col items-center justify-center py-12">
-      <p-progressSpinner strokeWidth="4" />
+      <p-progress-spinner strokeWidth="4" />
       <p class="mt-4">Analyzing indicator reliability…</p>
       <p class="text-sm text-slate-400">Computing IC, OOS validation, and random baseline ({{ result()?.random_simulations ?? 100 }} shuffles)</p>
     </div>
@@ -169,7 +169,7 @@
 
   <!-- Error Message -->
   @if (error()) {
-    <p-message severity="error" [text]="error()!" class="mb-4" />
+    <p-message severity="error" class="mb-4">{{ error()! }}</p-message>
   }
 
   <!-- Results (Mission-control) -->
@@ -226,7 +226,7 @@
     @if (res.warnings.length > 0) {
       <div class="warnings-section mb-4">
         @for (warning of res.warnings; track warning) {
-          <p-message severity="warn" [text]="warning" class="mb-2" />
+          <p-message severity="warn" class="mb-2">{{ warning }}</p-message>
         }
       </div>
     }
@@ -577,8 +577,8 @@
       <details class="panel mt-4 slope-panel">
         <summary class="panel-header"><span class="panel-title">Slope variant (indicator's rate of change) <app-info-icon refKey="slopePanel" /></span></summary>
         <div class="panel-body">
-          <p-table [value]="res.slope_results" styleClass="p-datatable-sm p-datatable-striped" [scrollable]="true">
-            <ng-template pTemplate="header">
+          <p-table [value]="res.slope_results" size="small" [stripedRows]="true" [scrollable]="true">
+            <ng-template #header>
               <tr>
                 <th>Horizon</th>
                 <th>IS IC</th>
@@ -590,7 +590,7 @@
                 <th pTooltip="Adds value AND OOS-validated. Dash = no OOS data yet.">Use this variant?</th>
               </tr>
             </ng-template>
-            <ng-template pTemplate="body" let-row>
+            <ng-template #body let-row>
               <tr>
                 <td class="font-medium">{{ row.horizon }}-bar</td>
                 <td>

@@ -270,7 +270,8 @@
 
   <div class="table-shell">
     <p-table
-      styleClass="p-datatable-sm mirror-table"
+      class="mirror-table"
+      size="small"
       dataKey="row_id"
       [value]="rows()"
       [loading]="snapshot() === null && streamStatus() === 'connecting'"
@@ -302,14 +303,21 @@
               severity="secondary"
               [text]="true"
               [rounded]="true"
+              [iconOnly]="true"
               [pRowToggler]="row"
-              [icon]="expanded ? 'pi pi-chevron-down' : 'pi pi-chevron-right'"
               [attr.aria-label]="
                 (expanded ? 'Hide details for ' : 'Show details for ') +
                 rowDisplayName(row)
               "
               [attr.data-testid]="'row-toggle-' + row.row_id"
-            ></button>
+            >
+              <i
+                class="pi"
+                [class.pi-chevron-down]="expanded"
+                [class.pi-chevron-right]="!expanded"
+                aria-hidden="true"
+              ></i>
+            </button>
           </td>
           <td class="client-cell">
             <span class="cell-primary" [title]="clientTooltip(row)">

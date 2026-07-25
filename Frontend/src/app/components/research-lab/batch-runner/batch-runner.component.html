@@ -75,7 +75,7 @@
   }
 
   @if (error(); as err) {
-    <p-message severity="error" [text]="err" class="mb-4" />
+    <p-message severity="error" class="mb-4">{{ err }}</p-message>
   }
 
   <!-- Final aggregate result -->
@@ -186,7 +186,7 @@
     }
 
     <!-- Aggregate metric cards -->
-    <p-card styleClass="mb-4">
+    <p-card class="mb-4">
       <ng-template #header>
         <div class="p-3 flex align-items-center gap-3">
           <span class="text-xl font-bold">Cross-Sectional Results</span>
@@ -277,17 +277,18 @@
       [value]="res.tickerResults"
       [sortField]="'passedValidation'"
       [sortOrder]="-1"
-      styleClass="p-datatable-sm p-datatable-striped"
+      size="small"
+      [stripedRows]="true"
     >
       <ng-template #header>
         <tr>
-          <th pSortableColumn="ticker">Ticker <p-sortIcon field="ticker" /></th>
-          <th pSortableColumn="meanIc">Mean IC <p-sortIcon field="meanIc" /></th>
-          <th pSortableColumn="nwTStat">NW t-Stat <p-sortIcon field="nwTStat" /></th>
-          <th pSortableColumn="nwPValue">NW p-Value <p-sortIcon field="nwPValue" /></th>
-          <th pSortableColumn="effectiveN">N_eff <p-sortIcon field="effectiveN" /></th>
-          <th pSortableColumn="isStationary">Stationary <p-sortIcon field="isStationary" /></th>
-          <th pSortableColumn="passedValidation">Result <p-sortIcon field="passedValidation" /></th>
+          <th pSortableColumn="ticker">Ticker <p-sort-icon field="ticker" /></th>
+          <th pSortableColumn="meanIc">Mean IC <p-sort-icon field="meanIc" /></th>
+          <th pSortableColumn="nwTStat">NW t-Stat <p-sort-icon field="nwTStat" /></th>
+          <th pSortableColumn="nwPValue">NW p-Value <p-sort-icon field="nwPValue" /></th>
+          <th pSortableColumn="effectiveN">N_eff <p-sort-icon field="effectiveN" /></th>
+          <th pSortableColumn="isStationary">Stationary <p-sort-icon field="isStationary" /></th>
+          <th pSortableColumn="passedValidation">Result <p-sort-icon field="passedValidation" /></th>
           <th>Data Points</th>
         </tr>
       </ng-template>

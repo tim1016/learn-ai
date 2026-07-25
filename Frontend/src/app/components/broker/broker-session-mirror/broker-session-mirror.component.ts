@@ -41,7 +41,12 @@ import { operatorTagSeverity, type PrimeTagSeverity } from '../operator-severity
 import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-diagnostics-panel.component';
 import { BrokerSessionEventsPanelComponent } from './broker-session-events-panel.component';
 
-type AccordionValue = string | number | string[] | number[] | null | undefined;
+type AccordionValue =
+  | string
+  | number
+  | (string | number)[]
+  | null
+  | undefined;
 
 const EMPTY_MIRROR_SUMMARY: BrokerSessionMirrorSummary = {
   current: 0,

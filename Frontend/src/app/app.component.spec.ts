@@ -1,7 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { RouterModule } from '@angular/router';
-import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { MessageService } from 'primeng/api';
 import { vi } from 'vitest';
 import { AppComponent } from './app.component';
@@ -24,7 +23,6 @@ describe('AppComponent', () => {
     await TestBed.configureTestingModule({
       imports: [AppComponent, RouterModule.forRoot([])],
       providers: [
-        provideAnimationsAsync(),
         MessageService,
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
       ],

@@ -70,6 +70,9 @@ class BotControlSidePanelStubComponent {
   readonly streamActionInvoked = output<BotEventStreamCommand>();
 }
 
+@Component({ template: '', changeDetection: ChangeDetectionStrategy.OnPush })
+class RouterTargetStubComponent {}
+
 @Component({
   imports: [BotControlPageComponent, BrokerBannerComponent],
   template: `
@@ -471,7 +474,7 @@ export async function setupBotControlPage(
   TestBed.configureTestingModule({
     providers: [
       provideZonelessChangeDetection(),
-      provideRouter([]),
+      provideRouter([{ path: '**', component: RouterTargetStubComponent }]),
       provideHttpClient(),
       provideHttpClientTesting(),
       {
@@ -515,7 +518,7 @@ export async function setupBotControlSidebarHost(
     imports: [BotControlWithSidebarHostComponent],
     providers: [
       provideZonelessChangeDetection(),
-      provideRouter([]),
+      provideRouter([{ path: '**', component: RouterTargetStubComponent }]),
       provideHttpClient(),
       provideHttpClientTesting(),
       { provide: BrokerHealthService, useClass: FakeBrokerHealthService },

@@ -1,6 +1,6 @@
 # Angular rules
 
-Targets Angular 21. Read when writing or editing code under `Frontend/`.
+Targets Angular 22. Read when writing or editing code under `Frontend/`.
 
 **Authoritative reference**: https://angular.dev (current version docs). When this file conflicts with angular.dev, angular.dev wins and this file should be updated.
 
@@ -27,7 +27,7 @@ Targets Angular 21. Read when writing or editing code under `Frontend/`.
 
 ## Forms
 
-- **Signal Forms** for new forms in v21.
+- **Signal Forms** for new forms.
 - **Reactive Forms** still valid for complex existing forms. Don't migrate just to migrate.
 - Never Template-driven forms.
 
@@ -35,7 +35,7 @@ Targets Angular 21. Read when writing or editing code under `Frontend/`.
 
 - Lazy-loaded routes via `loadComponent` / `loadChildren`.
 - Functional guards and resolvers, not class-based.
-- Use the v21 feature that surfaces route data as signals.
+- Use route data as signals.
 - Component input binding: route params flow into `input()` signals directly.
 
 ## Templates
@@ -52,7 +52,7 @@ Targets Angular 21. Read when writing or editing code under `Frontend/`.
 
 ## Testing
 
-- Vitest is the default in v21.
+- Vitest is the default in v22.
 - Angular Testing Library (`@testing-library/angular`): `render()` + `screen`.
 - Mock at the DI level via `providers: [...]`.
 - Assert on rendered output, not private signal values.
@@ -79,10 +79,11 @@ Targets Angular 21. Read when writing or editing code under `Frontend/`.
 - Resolvers: `kebab-case.resolver.ts`
 - Models: co-located or in `models/` folder, `kebab-case.ts`
 
-## Common pitfalls (v21-specific)
+## Common pitfalls (v22-specific)
 
 - Relying on Zone.js patching `setTimeout`/`Promise` to trigger change detection — doesn't happen in zoneless
 - Using `@Input()` decorator — use the `input()` function
 - Setting `standalone: true` explicitly — it's the default
 - Using `mutate()` — removed semantics; use `set()` / `update()`
 - Using `ngClass`/`ngStyle` — the compiler will warn/error in strict templates
+- Safe-navigation expressions that distinguish `null` from `undefined`; preserve the former behavior explicitly when Angular's migration flags them.

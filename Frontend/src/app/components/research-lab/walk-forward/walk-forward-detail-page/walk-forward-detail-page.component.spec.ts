@@ -2,7 +2,6 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
-import { NoopAnimationsModule } from '@angular/platform-browser/animations';
 import { of } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -119,7 +118,7 @@ describe('WalkForwardDetailPageComponent', () => {
     };
 
     await TestBed.configureTestingModule({
-      imports: [WalkForwardDetailPageComponent, NoopAnimationsModule],
+      imports: [WalkForwardDetailPageComponent],
       providers: [
         provideHttpClient(),
         provideHttpClientTesting(),

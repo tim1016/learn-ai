@@ -7,7 +7,7 @@
 > swap and the Research Lab information-architecture reorganisation.
 >
 > **Primary reader:** a future engineer on this repo. Assumes familiarity with
-> time-series statistics and Angular 21 conventions. Cross-references
+> time-series statistics and Angular 22 conventions. Cross-references
 > [Frontend/CLAUDE.md](../Frontend/CLAUDE.md) and
 > [PythonDataService/CLAUDE.md](../PythonDataService/CLAUDE.md) for house style.
 
@@ -72,7 +72,7 @@ The codebase splits across three services:
 |---------|-------|----------------------|
 | PythonDataService | FastAPI + pandas + scipy | IC computation, corrections, baseline, regime split, IR proxy |
 | Backend | .NET + HotChocolate (GraphQL) | Not involved in this feature today |
-| Frontend | Angular 21 + PrimeNG + Chart.js | Mission-control UI, app shell, navigation |
+| Frontend | Angular 22 + PrimeNG 22 + Chart.js | Mission-control UI, app shell, navigation |
 
 The backend statistics were shipped in three Python tranches (P1–P3 — hit-rate
 and verdict labels; decay curve and regime conditioning; IR proxy, next-steps,
@@ -657,7 +657,7 @@ is the gate.
 
 ## 5. UI implementation
 
-The frontend is Angular 21 (standalone components, `OnPush`, signals,
+The frontend is Angular 22 (standalone components, `OnPush`, signals,
 `@if`/`@for`/`@switch` control flow). The codebase does not use class-based
 state or `NgModules` — see [Frontend/CLAUDE.md](../Frontend/CLAUDE.md) for the
 full conventions. This section documents three concurrent refactors:

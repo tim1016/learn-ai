@@ -5,8 +5,7 @@ import {
   withExperimentalAutoCleanupInjectors,
   withInMemoryScrolling,
 } from "@angular/router";
-import { provideHttpClient, withInterceptors } from "@angular/common/http";
-import { provideAnimationsAsync } from "@angular/platform-browser/animations/async";
+import { provideHttpClient, withInterceptors, withXhr } from "@angular/common/http";
 import { providePrimeNG } from "primeng/config";
 import { MessageService } from "primeng/api";
 import { provideApollo } from "apollo-angular";
@@ -26,9 +25,9 @@ export const appConfig: ApplicationConfig = {
       withInMemoryScrolling({ anchorScrolling: 'enabled', scrollPositionRestoration: 'enabled' }),
       withExperimentalAutoCleanupInjectors(),
     ),
-    provideHttpClient(withInterceptors([dataPlaneControlIntentInterceptor])),
-    provideAnimationsAsync(),
+    provideHttpClient(withXhr(), withInterceptors([dataPlaneControlIntentInterceptor])),
     providePrimeNG({
+      license: environment.primeUiLicense,
       theme: {
         preset: Aura,
         options: {

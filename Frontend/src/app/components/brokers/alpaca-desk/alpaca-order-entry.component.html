@@ -45,7 +45,7 @@
   }
 
   @if (submitError(); as error) {
-    <p-message severity="error" [text]="error" />
+    <p-message severity="error">{{ error }}</p-message>
   }
 
   <app-alpaca-order-results [results]="results()" />

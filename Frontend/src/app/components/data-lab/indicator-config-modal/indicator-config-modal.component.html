@@ -6,10 +6,10 @@
   [draggable]="false"
   [resizable]="false"
   [style]="{ width: '640px', maxWidth: '95vw' }"
-  styleClass="icm-dialog"
+  class="icm-dialog"
   (onHide)="close()">
 
-  <ng-template pTemplate="header">
+  <ng-template #header>
     @if (reference(); as r) {
       <div class="icm-header">
         <span class="icm-rail" [style.background]="categoryColor()"></span>

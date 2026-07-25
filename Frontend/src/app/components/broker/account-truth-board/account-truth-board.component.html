@@ -25,11 +25,11 @@
       <dt>Account</dt>
       <dd class="mono">{{ accountTruth.account_id ?? '—' }}</dd>
       <dt>Net liquidation</dt>
-      <dd class="mono num">{{ fmtCurrency(accountTruth.account?.net_liquidation) }}</dd>
+      <dd class="mono num">{{ fmtCurrency($safeNavigationMigration(accountTruth.account?.net_liquidation)) }}</dd>
       <dt>Buying power</dt>
-      <dd class="mono num">{{ fmtCurrency(accountTruth.account?.buying_power) }}</dd>
+      <dd class="mono num">{{ fmtCurrency($safeNavigationMigration(accountTruth.account?.buying_power)) }}</dd>
       <dt>Maint margin</dt>
-      <dd class="mono num">{{ fmtCurrency(accountTruth.account?.maint_margin) }}</dd>
+      <dd class="mono num">{{ fmtCurrency($safeNavigationMigration(accountTruth.account?.maint_margin)) }}</dd>
     </dl>
   }
 

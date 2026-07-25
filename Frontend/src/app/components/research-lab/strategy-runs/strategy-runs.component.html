@@ -30,7 +30,7 @@
   </header>
 
   @if (error(); as msg) {
-    <p-message severity="error" [text]="msg" class="sr-error" />
+    <p-message severity="error" class="sr-error">{{ msg }}</p-message>
   }
 
   @if (lastFixtureRunId(); as rid) {
@@ -52,7 +52,7 @@
     [paginator]="runs().length > 25"
     [rows]="25"
     [rowTrackBy]="trackByRunId"
-    styleClass="sr-table"
+    class="sr-table"
     selectionMode="single"
   >
     <ng-template #header>

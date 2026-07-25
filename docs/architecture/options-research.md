@@ -592,7 +592,7 @@ Backend/Services/Implementation/PolygonService.cs       # HTTP proxy to Python
 Backend.Tests/Unit/GraphQL/QueryTests.cs                # 23 resolver tests (Phase 2 added 9)
 ```
 
-### B.3 Frontend (Angular 21)
+### B.3 Frontend (Angular 22)
 
 ```
 Frontend/src/app/components/strategy-builder/           # §5.1 — survivor (R0b absorbs F1's drill-down)

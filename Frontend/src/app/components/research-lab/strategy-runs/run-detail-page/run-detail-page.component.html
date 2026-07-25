@@ -31,12 +31,12 @@
   }
 
   @if (error(); as msg) {
-    <p-message severity="error" [text]="msg" class="rd-error" />
+    <p-message severity="error" class="rd-error">{{ msg }}</p-message>
   }
 
   @if (run(); as data) {
     @if (data.ledger.status === 'failed' && data.ledger.failure_reason; as reason) {
-      <p-message severity="warn" [text]="reason" class="rd-warn" />
+      <p-message severity="warn" class="rd-warn">{{ reason }}</p-message>
     }
 
     @if (data.result.warnings.length > 0) {
@@ -169,7 +169,7 @@
         [rows]="50"
         [scrollable]="true"
         scrollHeight="500px"
-        styleClass="rd-trade-table"
+        class="rd-trade-table"
       >
         <ng-template #header>
           <tr>

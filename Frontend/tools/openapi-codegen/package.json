@@ -1,0 +1,12 @@
+{
+  "name": "@learn-ai/openapi-codegen",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "generate": "openapi-typescript ../../../contracts/openapi/python-data-service.openapi.json --default-non-nullable=false -o ../../src/app/api/broker.types.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0",
+    "typescript": "~5.9.0"
+  }
+}

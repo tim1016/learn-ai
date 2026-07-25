@@ -47,7 +47,7 @@
   </div>
 
   @if (error(); as err) {
-    <p-message severity="error" [text]="err" />
+    <p-message severity="error">{{ err }}</p-message>
   }
 
   @if (experiments().length > 0) {
@@ -58,7 +58,8 @@
         [rows]="20"
         [tableStyle]="{ 'min-width': '56rem' }"
         [rowHover]="true"
-        styleClass="p-datatable-sm history-table"
+        class="history-table"
+        size="small"
       >
         <ng-template #header>
           <tr>
@@ -67,14 +68,14 @@
                 <i class="pi pi-sliders-h col-icon" aria-hidden="true"></i>
                 Feature
               </button>
-              <p-sortIcon field="featureName" />
+              <p-sort-icon field="featureName" />
             </th>
             <th pSortableColumn="meanIC" class="col-header">
               <button type="button" class="col-header-content" (click)="showHelp('meanIC'); $event.stopPropagation()">
                 <i class="pi pi-chart-line col-icon" aria-hidden="true"></i>
                 Mean IC
               </button>
-              <p-sortIcon field="meanIC" />
+              <p-sort-icon field="meanIC" />
             </th>
             <th class="col-header">
               <button type="button" class="col-header-content" (click)="showHelp('tStat')">
@@ -99,7 +100,7 @@
                 <i class="pi pi-verified col-icon" aria-hidden="true"></i>
                 Result
               </button>
-              <p-sortIcon field="passedValidation" />
+              <p-sort-icon field="passedValidation" />
             </th>
             <th class="col-header">
               <button type="button" class="col-header-content" (click)="showHelp('dateRange')">
@@ -112,7 +113,7 @@
                 <i class="pi pi-clock col-icon" aria-hidden="true"></i>
                 Run Date
               </button>
-              <p-sortIcon field="createdAt" />
+              <p-sort-icon field="createdAt" />
             </th>
           </tr>
         </ng-template>

@@ -17,7 +17,7 @@
     [firstDayOfWeek]="1"
     (onSelect)="onDateSelect($event)"
   >
-    <ng-template pTemplate="date" let-dateMeta>
+    <ng-template #date let-dateMeta>
       @let holiday = getHolidayForDate(dateMeta.day, dateMeta.month, dateMeta.year);
       @if (holiday) {
         <span
@@ -34,7 +34,7 @@
       }
     </ng-template>
 
-    <ng-template pTemplate="footer">
+    <ng-template #footer>
       @if (holidays().length > 0) {
         <div class="holiday-legend">
           <span class="legend-item">

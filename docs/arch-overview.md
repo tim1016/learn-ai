@@ -6,7 +6,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                    Angular 21 Frontend                            │
+│                    Angular 22 Frontend                            │
 │   Apollo GraphQL · TradingView Charts · PrimeNG · Tailwind CSS   │
 │                      Port 4200                                    │
 └─────────────────────────┬────────────────────────────────────────┘
@@ -60,7 +60,7 @@ Two patterns coexist:
 Apollo Client is configured but several services bypass it for raw `HttpClient.post()`, losing cache benefits.
 
 ### Strengths
-- Modern Angular 21 with signals, standalone, OnPush — excellent performance characteristics
+- Modern Angular 22 with signals, standalone, OnPush — excellent performance characteristics
 - Comprehensive TypeScript types (492-line `types.ts`, 296-line `portfolio-types.ts`)
 - Domain-rich components: Black-Scholes calculator, Greeks visualization, FIFO position replay
 - PrimeNG + Tailwind + TradingView lightweight-charts is a strong UI toolkit

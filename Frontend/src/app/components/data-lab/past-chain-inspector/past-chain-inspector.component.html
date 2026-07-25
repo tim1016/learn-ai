@@ -148,9 +148,9 @@
                   >📈</button>
                 }
               </td>
-              <td>{{ formatPrice(call?.prevDayClose) }}</td>
-              <td>{{ formatPrice(call?.dailyBar?.open) }}</td>
-              <td class="price">{{ formatPrice(call?.dailyBar?.close) }}</td>
+              <td>{{ formatPrice($safeNavigationMigration(call?.prevDayClose)) }}</td>
+              <td>{{ formatPrice($safeNavigationMigration(call?.dailyBar?.open)) }}</td>
+              <td class="price">{{ formatPrice($safeNavigationMigration(call?.dailyBar?.close)) }}</td>
               <td
                 [class.text-emerald-400]="(call?.changePercent ?? 0) > 0"
                 [class.text-red-400]="(call?.changePercent ?? 0) < 0"
@@ -165,9 +165,9 @@
                 [class.text-emerald-400]="(put?.changePercent ?? 0) > 0"
                 [class.text-red-400]="(put?.changePercent ?? 0) < 0"
               >{{ formatChangePct(put?.changePercent ?? null) }}</td>
-              <td class="price">{{ formatPrice(put?.dailyBar?.close) }}</td>
-              <td>{{ formatPrice(put?.dailyBar?.open) }}</td>
-              <td>{{ formatPrice(put?.prevDayClose) }}</td>
+              <td class="price">{{ formatPrice($safeNavigationMigration(put?.dailyBar?.close)) }}</td>
+              <td>{{ formatPrice($safeNavigationMigration(put?.dailyBar?.open)) }}</td>
+              <td>{{ formatPrice($safeNavigationMigration(put?.prevDayClose)) }}</td>
               <!-- Put drill icon -->
               <td class="drill">
                 @if (put?.dailyBar) {

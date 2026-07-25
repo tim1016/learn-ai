@@ -3,6 +3,7 @@
 // In production, use backend proxy instead of direct API calls
 export const environment = {
   production: true,
+  primeUiLicense: '', // Supply through a gitignored environment override
   polygonApiKey: '', // Leave empty — use backend proxy in production
   useBackendProxy: true, // Always use backend in production
   backendUrl: 'http://localhost:5000/graphql',
