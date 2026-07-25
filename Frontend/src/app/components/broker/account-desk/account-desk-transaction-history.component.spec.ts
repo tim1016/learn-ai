@@ -27,7 +27,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     });
     const store = {
       loading: signal(false), errorMessage: signal<string | null>(null), hasLastGood: signal(true),
-      feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 5, lag_records: 0, rows: [], next_cursor: null }),
+      feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 5, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null }),
       rows: signal([{ transaction_id: 'ctxn_1', account_id: 'DU1234567', journal_seq: 4, recorded_at_ms: 1_780_000_000_000, transaction_kind: 'manual_ibkr_acknowledgement', strategy_instance_id: 'manual', run_id: 'manual', intent_id: 'intent/opaque', order_ref: 'manual/v1:opaque', order_id: 42, perm_id: null, exec_id: 'exec/opaque', lifecycle_state: 'filled', commission_status: 'reported' as const, fee: 1.25, event_count: 1 }]),
       nextCursor: signal<string | null>(null), retry: vi.fn(), loadOlder: vi.fn(), transactionDetail: detail,
     };
@@ -44,7 +44,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
   });
 
   it('has a compact mobile-readable label for every transaction cell', async () => {
-    const store = { loading: signal(false), errorMessage: signal<string | null>(null), hasLastGood: signal(true), feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 1, lag_records: 0, rows: [], next_cursor: null }), rows: signal([]), nextCursor: signal<string | null>(null), retry: vi.fn(), loadOlder: vi.fn(), transactionDetail: vi.fn() };
+    const store = { loading: signal(false), errorMessage: signal<string | null>(null), hasLastGood: signal(true), feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 1, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null }), rows: signal([]), nextCursor: signal<string | null>(null), retry: vi.fn(), loadOlder: vi.fn(), transactionDetail: vi.fn() };
     await render(AccountDeskTransactionHistoryComponent, { providers: [{ provide: AccountDeskTransactionHistoryStore, useValue: store }] });
     expect(screen.getByText(/No projected manual transactions/)).toBeTruthy();
   });

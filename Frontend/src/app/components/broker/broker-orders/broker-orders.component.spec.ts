@@ -126,6 +126,7 @@ class FakeBrokerService {
     feed_detail: 'Durable Clerk callback projection is current.',
     high_water_journal_seq: 1,
     lag_records: 0,
+    lag_is_lower_bound: false,
     rows: [],
     next_cursor: null,
   });

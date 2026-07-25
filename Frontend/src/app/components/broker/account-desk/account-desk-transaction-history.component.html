@@ -6,11 +6,13 @@
   } @else if (store.errorMessage() && !store.hasLastGood()) {
     <div class="state state-error" role="alert"><p>{{ store.errorMessage() }}</p><button pButton type="button" severity="secondary" (click)="store.retry()">Retry</button></div>
   } @else if (store.feed(); as feed) {
-    @if (!feed.projection_available) {
-      <p class="state state-error" role="status">{{ feed.feed_detail }}</p>
-    } @else if (store.rows().length === 0) {
+    <p class="state" [class.state-error]="!feed.projection_available || feed.feed_state === 'corrupt'" role="status"><strong>{{ feed.feed_headline }}</strong> {{ feed.feed_detail }}</p>
+    @if (feed.high_water_journal_seq !== null || feed.lag_records !== null) {
+      <p class="state">Projection high-water: {{ feed.high_water_journal_seq ?? 'not yet projected' }}. Lag: {{ feed.lag_records ?? 'unknown' }}{{ feed.lag_is_lower_bound ? '+' : '' }} records.</p>
+    }
+    @if (feed.projection_available && store.rows().length === 0) {
       <p class="state">No projected manual transactions are available for this account.</p>
-    } @else {
+    } @else if (feed.projection_available) {
       <div class="transaction-grid" role="group" aria-label="Operator transaction history">
         <div class="transaction-grid__head" aria-hidden="true"><span>Recorded</span><span>Instruction</span><span>Lifecycle</span><span>Evidence</span></div>
         @for (row of store.rows(); track trackRow($index, row)) {

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ from app.services.clerk_transaction_projection import (
     ClerkTransactionBatch,
     fold_lifecycle_state,
     project_account_journal_best_effort,
+    rebuild_account_transaction_projection,
     read_appended_clerk_journal,
     recover_account_transaction_feed,
     tail_account_journal,
@@ -60,8 +63,9 @@ class _Store:
         self.cursor: ClerkJournalCursor | None = None
         self.rows: list[ClerkTransactionRow] = []
         self.persisted: list[ClerkTransactionBatch] = []
+        self.semantic_event_keys: set[tuple[str, str]] = set()
         self.fail = False
-        self.feed = ("stale", "Stale", "No current projection-feed receipt.")
+        self.feed = ("stale", "Stale", "No current projection-feed receipt.", None, None, False)
 
     async def read_cursor(self, account_id: str, journal_path: str) -> ClerkJournalCursor | None:
         assert account_id == ACCOUNT
@@ -71,7 +75,12 @@ class _Store:
         if self.fail:
             raise RuntimeError("projection database unavailable")
         self.persisted.append(batch)
-        self.rows.extend(batch.transactions)
+        existing = {row.transaction_id for row in self.rows}
+        for row in batch.transactions:
+            if row.transaction_id not in existing:
+                self.rows.append(row)
+                existing.add(row.transaction_id)
+        self.semantic_event_keys.update((event.broker, event.callback_identity) for event in batch.events)
         self.cursor = ClerkJournalCursor(batch.account_id, batch.journal_path, batch.next_byte_offset, batch.next_journal_seq, updated_at_ms)
         return len(batch.transactions)
 
@@ -93,15 +102,44 @@ class _Store:
         assert account_id == ACCOUNT
         return next((row for row in self.rows if row.transaction_id == transaction_id), None)
 
-    async def feed_status(self, account_id: str) -> tuple[str, str, str]:
+    async def feed_status(self, account_id: str) -> tuple[str, str, str, int | None, int | None, bool]:
         assert account_id == ACCOUNT
         return self.feed
 
     async def set_feed_status(
-        self, account_id: str, state: str, headline: str, detail: str, *, updated_at_ms: int
+        self, account_id: str, state: str, headline: str, detail: str, *, updated_at_ms: int,
+        high_water_journal_seq: int | None = None, lag_records: int | None = None,
+        lag_is_lower_bound: bool = False,
     ) -> None:
         assert account_id == ACCOUNT
-        self.feed = state, headline, detail
+        self.feed = state, headline, detail, high_water_journal_seq, lag_records, lag_is_lower_bound
+
+    async def reset_projection(
+        self, *, account_id: str, journal_path: str, broker: str, updated_at_ms: int
+    ) -> None:
+        assert account_id == ACCOUNT
+        self.rows = [row for row in self.rows if row.broker != broker]
+        self.cursor = None
+        self.feed = ("rebuilding", "Rebuild in progress", "Projection rebuild is replaying canonical Clerk acknowledgement evidence.", 0, 0, False)
+
+
+class _CountingStore(_Store):
+    """Production-shaped test store: the database retains rows, Python does not."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.projected_transactions = 0
+        self.batch_count = 0
+        self.max_batch_records = 0
+
+    async def persist_batch(self, batch: ClerkTransactionBatch, *, updated_at_ms: int) -> int:
+        self.projected_transactions += len(batch.transactions)
+        self.batch_count += 1
+        self.max_batch_records = max(self.max_batch_records, batch.source_record_count)
+        self.cursor = ClerkJournalCursor(
+            batch.account_id, batch.journal_path, batch.next_byte_offset, batch.next_journal_seq, updated_at_ms
+        )
+        return len(batch.transactions)
 
 
 def _callback(
@@ -201,6 +239,139 @@ async def test_projection_failure_does_not_change_durable_acknowledgement_or_cur
     assert path.read_bytes() == durable_journal
     assert store.cursor is None
     assert store.rows == []
+
+
+def test_read_appended_clerk_journal_is_bounded_by_record_budget(tmp_path: Path) -> None:
+    path = tmp_path / "journal.jsonl"
+    for seq in range(1, 503):
+        _append(path, _manual_ack(seq, 1_700_000_000_000 + seq))
+
+    first = read_appended_clerk_journal(account_id=ACCOUNT, journal_path=path, cursor=None)
+
+    assert first is not None
+    assert first.source_record_count == clerk_transaction_projection.MAX_JOURNAL_TAIL_RECORDS
+    assert first.has_more_complete_records is True
+    assert len(first.transactions) == clerk_transaction_projection.MAX_JOURNAL_TAIL_RECORDS
+    second = read_appended_clerk_journal(
+        account_id=ACCOUNT,
+        journal_path=path,
+        cursor=ClerkJournalCursor(ACCOUNT, str(path), first.next_byte_offset, first.next_journal_seq, 1),
+    )
+    assert second is not None
+    assert second.source_record_count == 2
+    assert second.has_more_complete_records is False
+
+
+@pytest.mark.asyncio
+async def test_corrupt_complete_record_keeps_canonical_ack_and_marks_projection_corrupt(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    path.write_bytes(path.read_bytes() + b'{"seq":not-json}\n')
+    store = _Store()
+
+    with pytest.raises(clerk_transaction_projection.ClerkTransactionProjectionCorrupt):
+        await tail_account_journal(artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=2)
+
+    assert path.read_bytes().endswith(b'{"seq":not-json}\n')
+    assert store.cursor is None
+    assert store.feed[0] == "corrupt"
+
+
+def test_read_appended_clerk_journal_rejects_cursor_beyond_canonical_file(tmp_path: Path) -> None:
+    path = tmp_path / "journal.jsonl"
+    _append(path, _manual_ack(1))
+
+    with pytest.raises(clerk_transaction_projection.ClerkTransactionProjectionCorrupt, match="truncated"):
+        read_appended_clerk_journal(
+            account_id=ACCOUNT,
+            journal_path=path,
+            cursor=ClerkJournalCursor(ACCOUNT, str(path), path.stat().st_size + 1, 1, 1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_callback_identity_is_projected_once_while_cursor_advances(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    first = _callback(2, event_type="fill", status="Filled")
+    duplicate = first.model_copy(update={"seq": 3, "recorded_at_ms": first.recorded_at_ms + 1})
+    _append(path, first)
+    _append(path, duplicate)
+    store = _Store()
+
+    await tail_account_journal(artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=1)
+
+    assert store.cursor is not None and store.cursor.last_journal_seq == 3
+    assert store.semantic_event_keys == {
+        ("ibkr", "journal:1:broker_acked"),
+        ("ibkr", first.broker_callback_idempotency_key or ""),
+    }
+
+
+@pytest.mark.asyncio
+async def test_rebuild_replaces_only_projection_with_canonical_equivalent_receipts(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    _append(path, _callback(2, event_type="fill", status="Filled", fee=1.25))
+    store = _Store()
+    await tail_account_journal(artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=1)
+    before = [(row.transaction_id, row.receipt) for row in store.rows]
+
+    assert await rebuild_account_transaction_projection(
+        artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=2
+    ) == 1
+
+    assert [(row.transaction_id, row.receipt) for row in store.rows] == before
+    assert store.cursor is not None and store.cursor.last_journal_seq == 2
+    assert store.feed[0] == "live"
+
+
+@pytest.mark.asyncio
+async def test_recovery_stops_after_its_bounded_window_budget(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    store = _Store()
+    monkeypatch.setattr(clerk_transaction_projection, "MAX_RECOVERY_BATCHES", 0)
+
+    assert await recover_account_transaction_feed(
+        artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=10
+    ) == 0
+
+    assert store.feed[0] == "reconnecting"
+    assert store.feed[4] == 1
+    assert store.feed[5] is True
+
+
+@pytest.mark.slow
+@pytest.mark.asyncio
+async def test_100k_canonical_journal_replay_stays_within_incremental_budget(tmp_path: Path) -> None:
+    """Repeatable scale fixture; run explicitly with ``pytest -m slow`` in CI/ops."""
+
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    for seq in range(1, 100_001):
+        _append(path, _manual_ack(seq, 1_700_000_000_000 + seq))
+    store = _CountingStore()
+    tracemalloc.start()
+    started = time.perf_counter()
+
+    projected = 0
+    while store.feed[0] != "live":
+        projected += await recover_account_transaction_feed(
+            artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=100
+        )
+
+    _, peak_bytes = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert projected == 100_000
+    assert store.projected_transactions == 100_000
+    assert store.batch_count == 200
+    assert store.max_batch_records == clerk_transaction_projection.MAX_JOURNAL_TAIL_RECORDS
+    assert store.cursor is not None and store.cursor.last_journal_seq == 100_000
+    assert store.feed[0] == "live"
+    assert peak_bytes <= 16 * 1024 * 1024
+    assert time.perf_counter() - started < 60
 
 
 @pytest.mark.asyncio
@@ -327,4 +498,4 @@ async def test_recovery_stops_at_its_byte_bounded_batch_limit(
     )
 
     assert projected == 1
-    assert store.feed[0] == "stale"
+    assert store.feed[0] == "reconnecting"

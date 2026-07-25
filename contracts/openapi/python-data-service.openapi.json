@@ -10466,8 +10466,10 @@
             "enum": [
               "live",
               "reconnecting",
+              "rebuilding",
               "stale",
               "offline_but_saved",
+              "corrupt",
               "projection_unavailable"
             ],
             "title": "Feed State",
@@ -10484,6 +10486,11 @@
               }
             ],
             "title": "High Water Journal Seq"
+          },
+          "lag_is_lower_bound": {
+            "default": false,
+            "title": "Lag Is Lower Bound",
+            "type": "boolean"
           },
           "lag_records": {
             "anyOf": [

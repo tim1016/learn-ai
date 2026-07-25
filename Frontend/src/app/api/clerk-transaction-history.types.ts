@@ -48,11 +48,13 @@ export interface ClerkTransactionHistoryResponse {
   readonly projection_available: boolean;
   readonly canonical_fallback_required: boolean;
   /** Backend-authored state; UI must not infer lifecycle freshness. */
-  readonly feed_state: 'live' | 'reconnecting' | 'stale' | 'offline_but_saved' | 'projection_unavailable';
+  readonly feed_state: 'live' | 'reconnecting' | 'rebuilding' | 'stale' | 'offline_but_saved' | 'corrupt' | 'projection_unavailable';
   readonly feed_headline: string;
   readonly feed_detail: string;
   readonly high_water_journal_seq: number | null;
   readonly lag_records: number | null;
+  /** True only when the bounded replay knows the lag is at least this many rows. */
+  readonly lag_is_lower_bound: boolean;
   readonly rows: readonly ClerkTransactionSummary[];
   readonly next_cursor: string | null;
 }

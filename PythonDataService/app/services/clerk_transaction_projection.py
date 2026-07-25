@@ -15,7 +15,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import asyncpg
 
@@ -39,10 +39,15 @@ logger = logging.getLogger(__name__)
 _pool: asyncpg.Pool | None = None
 MAX_PROJECTION_READ_BYTES = 1_048_576
 MAX_RECOVERY_BATCHES = 64
+MAX_JOURNAL_TAIL_RECORDS = 500
 
 
 class ClerkTransactionProjectionUnavailable(RuntimeError):
     """The dedicated transaction projection cannot currently serve reads."""
+
+
+class ClerkTransactionProjectionCorrupt(ClerkTransactionProjectionUnavailable):
+    """A complete canonical record cannot safely be projected."""
 
 
 @dataclass(frozen=True)
@@ -62,6 +67,8 @@ class ClerkTransactionBatch:
     next_journal_seq: int
     transactions: list[ClerkTransactionRow]
     events: list[ClerkTransactionEventRow]
+    source_record_count: int
+    has_more_complete_records: bool
 
 
 class ClerkTransactionProjectionStore(Protocol):
@@ -77,7 +84,9 @@ class ClerkTransactionProjectionStore(Protocol):
         self, *, account_id: str, transaction_id: str
     ) -> ClerkTransactionRow | None: ...
 
-    async def feed_status(self, account_id: str) -> tuple[TransactionFeedState, str, str]: ...
+    async def feed_status(
+        self, account_id: str
+    ) -> tuple[TransactionFeedState, str, str, int | None, int | None, bool]: ...
 
     async def set_feed_status(
         self,
@@ -87,6 +96,13 @@ class ClerkTransactionProjectionStore(Protocol):
         detail: str,
         *,
         updated_at_ms: int,
+        high_water_journal_seq: int | None = None,
+        lag_records: int | None = None,
+        lag_is_lower_bound: bool = False,
+    ) -> None: ...
+
+    async def reset_projection(
+        self, *, account_id: str, journal_path: str, broker: str, updated_at_ms: int
     ) -> None: ...
 
 
@@ -337,6 +353,38 @@ def _event_from_callback(
     )
 
 
+def _read_bounded_complete_tail(
+    *, journal_path: Path, offset: int, broker: str, max_read_bytes: int
+) -> tuple[bytes, bool] | None:
+    """Return a bounded set of whole JSONL records without repairing input."""
+
+    if max_read_bytes < 1:
+        raise ValueError("max_read_bytes must be positive")
+    if not journal_path.exists():
+        return None
+    with journal_path.open("rb") as journal_file:
+        journal_file.seek(0, 2)
+        journal_size = journal_file.tell()
+        if offset > journal_size:
+            raise ClerkTransactionProjectionCorrupt(
+                f"{broker} Clerk journal was replaced or truncated behind its projection cursor"
+            )
+        journal_file.seek(offset)
+        window = journal_file.read(max_read_bytes + 1)
+    if not window:
+        return None
+    bounded = window[:max_read_bytes]
+    line_ends = [index + 1 for index, value in enumerate(bounded) if value == ord("\n")]
+    if not line_ends:
+        if len(window) > max_read_bytes:
+            raise ClerkTransactionProjectionCorrupt(
+                f"{broker} Clerk journal record exceeds the projection read bound"
+            )
+        return None
+    consumed_end = line_ends[min(len(line_ends), MAX_JOURNAL_TAIL_RECORDS) - 1]
+    return bounded[:consumed_end], consumed_end < len(window)
+
+
 def read_appended_clerk_journal(
     *,
     account_id: str,
@@ -344,31 +392,19 @@ def read_appended_clerk_journal(
     cursor: ClerkJournalCursor | None,
     max_read_bytes: int | None = None,
 ) -> ClerkTransactionBatch | None:
-    """Read one byte-bounded set of complete lines after the durable cursor."""
+    """Read one bounded set of complete Clerk records after the durable cursor."""
 
-    if max_read_bytes is None:
-        max_read_bytes = MAX_PROJECTION_READ_BYTES
-    if max_read_bytes < 1:
-        raise ValueError("max_read_bytes must be positive")
     offset = cursor.last_byte_offset if cursor is not None else 0
     last_seq = cursor.last_journal_seq if cursor is not None else 0
-    if not journal_path.exists():
+    bounded = _read_bounded_complete_tail(
+        journal_path=journal_path,
+        offset=offset,
+        broker="IBKR",
+        max_read_bytes=MAX_PROJECTION_READ_BYTES if max_read_bytes is None else max_read_bytes,
+    )
+    if bounded is None:
         return None
-    with journal_path.open("rb") as journal_file:
-        journal_file.seek(0, 2)
-        journal_size = journal_file.tell()
-        if offset > journal_size:
-            raise ValueError("Clerk journal was replaced or truncated behind its projection cursor")
-        journal_file.seek(offset)
-        tail = journal_file.read(max_read_bytes)
-    if not tail:
-        return None
-    complete_size = tail.rfind(b"\n") + 1
-    if complete_size == 0:
-        if offset + len(tail) < journal_size:
-            raise ValueError("complete Clerk journal record exceeds the projection read bound")
-        return None
-    consumed = tail[:complete_size]
+    consumed, has_more = bounded
     transactions: list[ClerkTransactionRow] = []
     events: list[ClerkTransactionEventRow] = []
     for line in consumed.splitlines():
@@ -390,10 +426,12 @@ def read_appended_clerk_journal(
     return ClerkTransactionBatch(
         account_id=account_id,
         journal_path=str(journal_path),
-        next_byte_offset=offset + complete_size,
+        next_byte_offset=offset + len(consumed),
         next_journal_seq=last_seq,
         transactions=transactions,
         events=events,
+        source_record_count=len(consumed.splitlines()),
+        has_more_complete_records=has_more,
     )
 
 
@@ -409,21 +447,18 @@ def read_appended_alpaca_journal(
 
     offset = cursor.last_byte_offset if cursor is not None else 0
     last_seq = cursor.last_journal_seq if cursor is not None else 0
-    if not journal_path.exists():
+    bounded = _read_bounded_complete_tail(
+        journal_path=journal_path,
+        offset=offset,
+        broker="Alpaca",
+        max_read_bytes=MAX_PROJECTION_READ_BYTES,
+    )
+    if bounded is None:
         return None
-    with journal_path.open("rb") as journal_file:
-        journal_file.seek(0, 2)
-        journal_size = journal_file.tell()
-        if offset > journal_size:
-            raise ValueError("Alpaca Clerk journal was replaced or truncated behind its projection cursor")
-        journal_file.seek(offset)
-        tail = journal_file.read()
-    complete_size = tail.rfind(b"\n") + 1
-    if complete_size == 0:
-        return None
+    consumed, has_more = bounded
     transactions: list[ClerkTransactionRow] = []
     events: list[ClerkTransactionEventRow] = []
-    for line in tail[:complete_size].splitlines():
+    for line in consumed.splitlines():
         try:
             entry = OrderJournalEntry.model_validate_json(line)
         except Exception as exc:
@@ -442,10 +477,12 @@ def read_appended_alpaca_journal(
     return ClerkTransactionBatch(
         account_id=account_id,
         journal_path=str(journal_path),
-        next_byte_offset=offset + complete_size,
+        next_byte_offset=offset + len(consumed),
         next_journal_seq=last_seq,
         transactions=transactions,
         events=events,
+        source_record_count=len(consumed.splitlines()),
+        has_more_complete_records=has_more,
     )
 
 
@@ -459,7 +496,18 @@ async def tail_account_journal(
     resolved_store = store or PostgresClerkTransactionProjectionStore()
     path = clerk_journal_path(artifacts_root, account_id)
     cursor = await resolved_store.read_cursor(account_id, str(path))
-    batch = read_appended_clerk_journal(account_id=account_id, journal_path=path, cursor=cursor)
+    try:
+        batch = read_appended_clerk_journal(account_id=account_id, journal_path=path, cursor=cursor)
+    except (ClerkTransactionProjectionCorrupt, ValueError) as exc:
+        await resolved_store.set_feed_status(
+            account_id,
+            "corrupt",
+            "Projection corrupt",
+            "Projection stopped; canonical Clerk acknowledgement evidence is retained.",
+            updated_at_ms=updated_at_ms or _now_ms(),
+            high_water_journal_seq=cursor.last_journal_seq if cursor else None,
+        )
+        raise ClerkTransactionProjectionCorrupt(str(exc)) from exc
     if batch is None:
         return 0
     persisted = await resolved_store.persist_batch(batch, updated_at_ms=updated_at_ms or _now_ms())
@@ -481,7 +529,18 @@ async def tail_alpaca_account_journal(
     resolved_store = store or PostgresClerkTransactionProjectionStore()
     path = alpaca_clerk_journal_path(artifacts_root, account_id)
     cursor = await resolved_store.read_cursor(account_id, str(path))
-    batch = read_appended_alpaca_journal(account_id=account_id, journal_path=path, cursor=cursor)
+    try:
+        batch = read_appended_alpaca_journal(account_id=account_id, journal_path=path, cursor=cursor)
+    except (ClerkTransactionProjectionCorrupt, ValueError) as exc:
+        await resolved_store.set_feed_status(
+            account_id,
+            "corrupt",
+            "Projection corrupt",
+            "Projection stopped; canonical Clerk acknowledgement evidence is retained.",
+            updated_at_ms=updated_at_ms or _now_ms(),
+            high_water_journal_seq=cursor.last_journal_seq if cursor else None,
+        )
+        raise ClerkTransactionProjectionCorrupt(str(exc)) from exc
     if batch is None:
         return 0
     persisted = await resolved_store.persist_batch(batch, updated_at_ms=updated_at_ms or _now_ms())
@@ -502,6 +561,7 @@ async def recover_account_transaction_feed(
         account_id, "reconnecting", "Reconnecting", "Replaying durable Clerk callbacks.", updated_at_ms=now
     )
     projected = 0
+    path = clerk_journal_path(artifacts_root, account_id)
     try:
         for _ in range(MAX_RECOVERY_BATCHES):
             count = await tail_account_journal(
@@ -512,34 +572,105 @@ async def recover_account_transaction_feed(
                 publish=publish,
             )
             projected += count
-            path = clerk_journal_path(artifacts_root, account_id)
             cursor = await store.read_cursor(account_id, str(path))
             pending = read_appended_clerk_journal(account_id=account_id, journal_path=path, cursor=cursor)
             if pending is None:
-                break
+                await store.set_feed_status(
+                    account_id,
+                    "live",
+                    "Live",
+                    "Durable Clerk callback projection is current.",
+                    updated_at_ms=now,
+                    high_water_journal_seq=cursor.last_journal_seq if cursor else None,
+                    lag_records=0,
+                )
+                return projected
         else:
+            cursor = await store.read_cursor(account_id, str(path))
             await store.set_feed_status(
                 account_id,
-                "stale",
-                "Recovery catch-up pending",
-                "Durable Clerk callbacks remain queued for the next bounded replay.",
+                "reconnecting",
+                "Catch-up in progress",
+                "Replay remains bounded; canonical Clerk acknowledgement evidence is retained.",
                 updated_at_ms=now,
+                high_water_journal_seq=cursor.last_journal_seq if cursor else None,
+                lag_records=1,
+                lag_is_lower_bound=True,
             )
             return projected
-        await store.set_feed_status(
-            account_id,
-            "live",
-            "Live",
-            "Durable Clerk callback projection is current.",
-            updated_at_ms=now,
-        )
-        return projected
     except Exception:
         await store.set_feed_status(
             account_id,
             "offline_but_saved",
             "Offline but saved",
             "Projection is offline; canonical Clerk evidence is saved.",
+            updated_at_ms=now,
+        )
+        raise
+
+
+async def rebuild_account_transaction_projection(
+    *, artifacts_root: Path, account_id: str, store: ClerkTransactionProjectionStore,
+    updated_at_ms: int | None = None, reset: bool = True, broker: Literal["ibkr", "alpaca"] = "ibkr",
+) -> int:
+    """Reset and replay one broker's read model from canonical Clerk JSONL only."""
+
+    now = updated_at_ms or _now_ms()
+    path = (
+        clerk_journal_path(artifacts_root, account_id)
+        if broker == "ibkr"
+        else alpaca_clerk_journal_path(artifacts_root, account_id)
+    )
+    if reset:
+        await store.reset_projection(
+            account_id=account_id, journal_path=str(path), broker=broker, updated_at_ms=now
+        )
+    projected = 0
+    try:
+        for _ in range(MAX_RECOVERY_BATCHES):
+            if broker == "ibkr":
+                projected += await tail_account_journal(
+                    artifacts_root=artifacts_root, account_id=account_id, store=store, updated_at_ms=now
+                )
+            else:
+                projected += await tail_alpaca_account_journal(
+                    artifacts_root=artifacts_root, account_id=account_id, store=store, updated_at_ms=now
+                )
+            cursor = await store.read_cursor(account_id, str(path))
+            pending = (
+                read_appended_clerk_journal(account_id=account_id, journal_path=path, cursor=cursor)
+                if broker == "ibkr"
+                else read_appended_alpaca_journal(account_id=account_id, journal_path=path, cursor=cursor)
+            )
+            if pending is None:
+                await store.set_feed_status(
+                    account_id,
+                    "live",
+                    "Live",
+                    "Projection rebuilt from canonical Clerk acknowledgement evidence.",
+                    updated_at_ms=now,
+                    high_water_journal_seq=cursor.last_journal_seq if cursor else None,
+                    lag_records=0,
+                )
+                return projected
+        cursor = await store.read_cursor(account_id, str(path))
+        await store.set_feed_status(
+            account_id,
+            "rebuilding",
+            "Rebuild in progress",
+            "Projection rebuild is bounded and can be resumed; canonical Clerk acknowledgement evidence is retained.",
+            updated_at_ms=now,
+            high_water_journal_seq=cursor.last_journal_seq if cursor else None,
+            lag_records=1,
+            lag_is_lower_bound=True,
+        )
+        return projected
+    except Exception:
+        await store.set_feed_status(
+            account_id,
+            "corrupt",
+            "Projection rebuild stopped",
+            "Rebuild stopped safely; canonical Clerk acknowledgement evidence is retained.",
             updated_at_ms=now,
         )
         raise
@@ -600,7 +731,9 @@ async def transaction_history(
     rows, high_water, lag = await resolved_store.history_page(
         account_id=account_id, limit=limit, after=_decode_cursor(cursor)
     )
-    feed_state, feed_headline, feed_detail = await resolved_store.feed_status(account_id)
+    feed_state, feed_headline, feed_detail, status_high_water, status_lag, lag_is_lower_bound = (
+        await resolved_store.feed_status(account_id)
+    )
     next_cursor = (
         _encode_cursor((rows[-1].recorded_at_ms, rows[-1].journal_seq, rows[-1].transaction_id))
         if len(rows) == limit
@@ -612,8 +745,9 @@ async def transaction_history(
         feed_state=feed_state,
         feed_headline=feed_headline,
         feed_detail=feed_detail,
-        high_water_journal_seq=high_water,
-        lag_records=lag,
+        high_water_journal_seq=status_high_water if status_high_water is not None else high_water,
+        lag_records=status_lag if status_lag is not None else lag,
+        lag_is_lower_bound=lag_is_lower_bound,
         rows=rows,
         next_cursor=next_cursor,
     )
@@ -652,6 +786,9 @@ class PostgresClerkTransactionProjectionStore:
         conn = await _connection()
         try:
             async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", batch.journal_path
+                )
                 for transaction in batch.transactions:
                     await conn.execute(
                         "INSERT INTO clerk_transactions (transaction_id, broker, account_id, journal_seq, recorded_at_ms, transaction_kind, strategy_instance_id, run_id, intent_id, order_ref, order_id, perm_id, exec_id, native_order_id, native_execution_id, lifecycle_state, commission_status, fee, receipt, inserted_at_ms, updated_at_ms) "
@@ -696,10 +833,11 @@ class PostgresClerkTransactionProjectionStore:
         conn = await _connection()
         try:
             records = await conn.fetch(
-                "SELECT t.transaction_id, t.broker, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.native_order_id, t.native_execution_id, t.lifecycle_state, t.commission_status, t.fee, COUNT(e.event_id)::integer AS event_count "
-                "FROM clerk_transactions t LEFT JOIN clerk_transaction_events e ON e.transaction_id=t.transaction_id "
+                "SELECT t.transaction_id, t.broker, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.native_order_id, t.native_execution_id, t.lifecycle_state, t.commission_status, t.fee, "
+                "(SELECT COUNT(*)::integer FROM clerk_transaction_events e WHERE e.transaction_id=t.transaction_id) AS event_count "
+                "FROM clerk_transactions t "
                 "WHERE t.account_id=$1 AND ($2::bigint IS NULL OR (t.recorded_at_ms, t.journal_seq, t.transaction_id) < ($2,$3,$4)) "
-                "GROUP BY t.id ORDER BY t.recorded_at_ms DESC, t.journal_seq DESC, t.transaction_id DESC LIMIT $5",
+                "ORDER BY t.recorded_at_ms DESC, t.journal_seq DESC, t.transaction_id DESC LIMIT $5",
                 account_id, after[0] if after else None, after[1] if after else None, after[2] if after else None, limit,
             )
             metadata = await conn.fetchrow(
@@ -736,22 +874,32 @@ class PostgresClerkTransactionProjectionStore:
             {**dict(record), "receipt": _json_value(record["receipt"]), "events": _json_value(record["events"])}
         )
 
-    async def feed_status(self, account_id: str) -> tuple[TransactionFeedState, str, str]:
+    async def feed_status(
+        self, account_id: str
+    ) -> tuple[TransactionFeedState, str, str, int | None, int | None, bool]:
         _ensure_configured()
         conn = await _connection()
         try:
             record = await conn.fetchrow(
-                "SELECT state, headline, detail FROM clerk_transaction_feed_status WHERE account_id=$1", account_id
+                "SELECT state, headline, detail, high_water_journal_seq, lag_records, lag_is_lower_bound "
+                "FROM clerk_transaction_feed_status WHERE account_id=$1", account_id
             )
         finally:
             assert _pool is not None
             await _pool.release(conn)
         if record is None:
-            return "stale", "Stale", "No current projection-feed receipt."
+            return "stale", "Stale", "No current projection-feed receipt.", None, None, False
         state = str(record["state"])
         if state not in TRANSACTION_FEED_STATES:
             raise ClerkTransactionProjectionUnavailable("stored transaction feed state is invalid")
-        return cast(TransactionFeedState, state), str(record["headline"]), str(record["detail"])
+        return (
+            cast(TransactionFeedState, state),
+            str(record["headline"]),
+            str(record["detail"]),
+            record["high_water_journal_seq"],
+            record["lag_records"],
+            bool(record["lag_is_lower_bound"]),
+        )
 
     async def set_feed_status(
         self,
@@ -761,21 +909,60 @@ class PostgresClerkTransactionProjectionStore:
         detail: str,
         *,
         updated_at_ms: int,
+        high_water_journal_seq: int | None = None,
+        lag_records: int | None = None,
+        lag_is_lower_bound: bool = False,
     ) -> None:
         _ensure_configured()
         conn = await _connection()
         try:
             await conn.execute(
-                "INSERT INTO clerk_transaction_feed_status (account_id, state, headline, detail, updated_at_ms) "
-                "VALUES ($1,$2,$3,$4,$5) ON CONFLICT (account_id) DO UPDATE SET "
+                "INSERT INTO clerk_transaction_feed_status (account_id, state, headline, detail, updated_at_ms, high_water_journal_seq, lag_records, lag_is_lower_bound) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (account_id) DO UPDATE SET "
                 "state=EXCLUDED.state, headline=EXCLUDED.headline, detail=EXCLUDED.detail, "
-                "updated_at_ms=EXCLUDED.updated_at_ms",
+                "updated_at_ms=EXCLUDED.updated_at_ms, high_water_journal_seq=EXCLUDED.high_water_journal_seq, "
+                "lag_records=EXCLUDED.lag_records, lag_is_lower_bound=EXCLUDED.lag_is_lower_bound",
                 account_id,
                 state,
                 headline,
                 detail,
                 updated_at_ms,
+                high_water_journal_seq,
+                lag_records,
+                lag_is_lower_bound,
             )
+        finally:
+            assert _pool is not None
+            await _pool.release(conn)
+
+    async def reset_projection(
+        self, *, account_id: str, journal_path: str, broker: str, updated_at_ms: int
+    ) -> None:
+        """Clear only rebuildable rows after taking the journal-specific SQL lock."""
+
+        _ensure_configured()
+        conn = await _connection()
+        try:
+            async with conn.transaction():
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", journal_path)
+                await conn.execute(
+                    "DELETE FROM clerk_transaction_events WHERE account_id=$1 AND broker=$2", account_id, broker
+                )
+                await conn.execute(
+                    "DELETE FROM clerk_transactions WHERE account_id=$1 AND broker=$2", account_id, broker
+                )
+                await conn.execute(
+                    "DELETE FROM clerk_transaction_projection_cursors WHERE account_id=$1 AND journal_path=$2",
+                    account_id,
+                    journal_path,
+                )
+                await conn.execute(
+                    "INSERT INTO clerk_transaction_feed_status (account_id, state, headline, detail, updated_at_ms, high_water_journal_seq, lag_records, lag_is_lower_bound) "
+                    "VALUES ($1,'rebuilding','Rebuild in progress','Projection rebuild is replaying canonical Clerk acknowledgement evidence.',$2,0,0,FALSE) "
+                    "ON CONFLICT (account_id) DO UPDATE SET state=EXCLUDED.state, headline=EXCLUDED.headline, detail=EXCLUDED.detail, updated_at_ms=EXCLUDED.updated_at_ms, high_water_journal_seq=0, lag_records=0, lag_is_lower_bound=FALSE",
+                    account_id,
+                    updated_at_ms,
+                )
         finally:
             assert _pool is not None
             await _pool.release(conn)
@@ -811,6 +998,7 @@ __all__ = [
     "ClerkJournalCursor",
     "ClerkTransactionBatch",
     "ClerkTransactionProjectionStore",
+    "ClerkTransactionProjectionCorrupt",
     "ClerkTransactionProjectionUnavailable",
     "PostgresClerkTransactionProjectionStore",
     "alpaca_clerk_journal_path",
@@ -818,6 +1006,7 @@ __all__ = [
     "fold_lifecycle_state",
     "project_account_journal_best_effort",
     "project_alpaca_journal_best_effort",
+    "rebuild_account_transaction_projection",
     "read_appended_alpaca_journal",
     "read_appended_clerk_journal",
     "recover_account_transaction_feed",

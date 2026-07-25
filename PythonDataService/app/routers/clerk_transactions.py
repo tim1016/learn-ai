@@ -43,6 +43,7 @@ async def get_clerk_transaction_history(
             feed_detail="Clerk transaction projection unavailable; canonical acknowledgement remains durable.",
             high_water_journal_seq=None,
             lag_records=None,
+            lag_is_lower_bound=False,
             rows=[],
             next_cursor=None,
         )

@@ -7,10 +7,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 TransactionFeedState = Literal[
-    "live", "reconnecting", "stale", "offline_but_saved", "projection_unavailable"
+    "live", "reconnecting", "rebuilding", "stale", "offline_but_saved", "corrupt", "projection_unavailable"
 ]
 TRANSACTION_FEED_STATES = frozenset({
-    "live", "reconnecting", "stale", "offline_but_saved", "projection_unavailable"
+    "live", "reconnecting", "rebuilding", "stale", "offline_but_saved", "corrupt", "projection_unavailable"
 })
 
 
@@ -101,5 +101,6 @@ class ClerkTransactionHistoryResponse(BaseModel):
     feed_detail: str = Field(min_length=1, max_length=512)
     high_water_journal_seq: int | None = Field(default=None, ge=0)
     lag_records: int | None = Field(default=None, ge=0)
+    lag_is_lower_bound: bool = False
     rows: list[ClerkTransactionSummaryRow]
     next_cursor: str | None = None

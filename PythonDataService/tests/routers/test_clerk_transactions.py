@@ -18,8 +18,8 @@ class _NoIoStore:
         assert after is None
         return [], 12, 0
 
-    async def feed_status(self, account_id: str) -> tuple[str, str, str]:
-        return "live", "Live", "Durable Clerk callback projection is current."
+    async def feed_status(self, account_id: str) -> tuple[str, str, str, int | None, int | None, bool]:
+        return "live", "Live", "Durable Clerk callback projection is current.", 12, 0, False
 
     async def transaction_detail(self, *, account_id: str, transaction_id: str) -> ClerkTransactionRow | None:
         assert account_id == "DU1219"
@@ -51,7 +51,7 @@ async def test_history_endpoint_is_bounded_projection_read_only() -> None:
     assert response.json() == {
         "projection_available": True, "canonical_fallback_required": False,
         "feed_state": "live", "feed_headline": "Live", "feed_detail": "Durable Clerk callback projection is current.",
-        "high_water_journal_seq": 12, "lag_records": 0, "rows": [], "next_cursor": None,
+        "high_water_journal_seq": 12, "lag_records": 0, "lag_is_lower_bound": False, "rows": [], "next_cursor": None,
     }
 
 

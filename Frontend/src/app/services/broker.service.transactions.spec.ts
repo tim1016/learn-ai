@@ -20,7 +20,7 @@ describe('BrokerService Clerk transaction history', () => {
     const promise = service.accountTransactions('DU1219', 'ctxhp1.opaque', 25);
     const request = http.expectOne('/api/accounts/DU1219/transactions?limit=25&cursor=ctxhp1.opaque');
     expect(request.request.method).toBe('GET');
-    request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, rows: [], next_cursor: null });
+    request.flush({ projection_available: true, canonical_fallback_required: false, high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null });
     await expect(promise).resolves.toMatchObject({ high_water_journal_seq: 4, rows: [] });
   });
 });

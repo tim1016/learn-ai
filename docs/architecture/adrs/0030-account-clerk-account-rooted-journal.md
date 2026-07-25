@@ -354,6 +354,20 @@ Python is the sole lifecycle fold authority, and the frontend receives explicit
 feed/freshness states rather than classifying broker callbacks or transport
 timing itself.
 
+### Replay-scale amendment (2026-07-25, #1223)
+
+Projection replay consumes at most 500 complete records and 1 MiB per tail
+window; recovery runs at most 64 windows before it reports bounded catch-up
+instead of holding an unbounded operation. Complete malformed records,
+cursor-behind-truncation, and oversize records stop the projector with explicit
+`corrupt` evidence while leaving the journal byte-for-byte intact. An explicit
+operator rebuild resets only the derived rows/cursor under a journal-scoped SQL
+lock, then replays the canonical Clerk journal. `rebuilding`, `reconnecting`,
+`corrupt`, high-water, and lag/lower-bound facts are backend-authored API
+evidence; Angular only renders them. Normal history requests remain a maximum
+100-row opaque-keyset query (the initial render requests 25 summaries) and do
+not read journals or call brokers.
+
 | Requirement | Verification |
 | --- | --- |
 | Start after broker connect; always stop in shutdown | `test_clerk_process_acquires_lock_before_broker_connect_and_releases_after_disconnect` |
