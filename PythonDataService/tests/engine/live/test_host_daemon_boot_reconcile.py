@@ -173,8 +173,22 @@ async def test_process_reaper_retires_post_boot_crash_without_status_reads(
 
     log_path = run_dir / "host_daemon.log"
     log_handle = log_path.open("a", encoding="utf-8")
+    exit_signal = run_dir / "allow-post-boot-crash"
     process = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(0.2); raise SystemExit(1)"],
+        [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path\n"
+                "import sys\n"
+                "import time\n"
+                "exit_signal = Path(sys.argv[1])\n"
+                "while not exit_signal.exists():\n"
+                "    time.sleep(0.01)\n"
+                "raise SystemExit(1)\n"
+            ),
+            str(exit_signal),
+        ],
         stdout=log_handle,
         stderr=subprocess.STDOUT,
     )
@@ -204,6 +218,7 @@ async def test_process_reaper_retires_post_boot_crash_without_status_reads(
             )
             assert latest is not None
             assert latest.lifecycle_state == "ACTIVE"
+            exit_signal.touch()
 
             for _ in range(100):
                 await asyncio.sleep(0.01)
