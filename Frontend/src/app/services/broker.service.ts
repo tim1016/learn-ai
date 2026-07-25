@@ -30,8 +30,8 @@ import type {
   JournalRecoveryReceipt,
   JournalRecoveryRequest,
 } from '../api/account-cockpit.types';
-import type { AccountEventsRequest, AccountEventsResponse } from '../api/account-events.types';
-import type { ClerkTransactionHistoryResponse } from '../api/clerk-transaction-history.types';
+import type { AccountEventsRequest, AccountEventsResponse, TraderAccountEventsResponse } from '../api/account-events.types';
+import type { ClerkTransactionDetail, ClerkTransactionHistoryResponse } from '../api/clerk-transaction-history.types';
 import type {
   AccountTruthResponse,
   DataPlaneHealth,
@@ -236,6 +236,17 @@ export class BrokerService {
     );
   }
 
+  accountTransaction(
+    accountId: string,
+    transactionId: string,
+  ): Promise<ClerkTransactionDetail> {
+    return firstValueFrom(
+      this.http.get<ClerkTransactionDetail>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions/${encodeURIComponent(transactionId)}`,
+      ),
+    );
+  }
+
   restoreAccountClerk(
     accountId: string,
     payload: AccountClerkRestoreRequest,
@@ -273,6 +284,15 @@ export class BrokerService {
       this.http.get<AccountEventsResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/events`,
         { params },
+      ),
+    );
+  }
+
+  traderAccountEvents(accountId: string, limit = 100): Promise<TraderAccountEventsResponse> {
+    return firstValueFrom(
+      this.http.get<TraderAccountEventsResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/events/trader`,
+        { params: { limit } },
       ),
     );
   }

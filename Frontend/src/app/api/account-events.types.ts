@@ -1,4 +1,4 @@
-export type AccountEventView = 'trader_today' | 'operations';
+export type AccountEventView = 'operations';
 export type AccountEventKind =
   | 'activity'
   | 'safety'
@@ -46,6 +46,23 @@ export interface AccountEventsResponse {
   account_id: string;
   view: AccountEventView;
   rows: AccountEventRow[];
+  latest_seq: number | null;
+  next_before_seq: number | null;
+}
+
+/** Trader-safe server outcome. This shape intentionally cannot hold a receipt. */
+export interface TraderAccountEventRow {
+  schema_version: 1;
+  event_id: string;
+  seq: number;
+  occurred_at_ms: number;
+  outcome: string;
+}
+
+export interface TraderAccountEventsResponse {
+  schema_version: 1;
+  account_id: string;
+  rows: TraderAccountEventRow[];
   latest_seq: number | null;
   next_before_seq: number | null;
 }

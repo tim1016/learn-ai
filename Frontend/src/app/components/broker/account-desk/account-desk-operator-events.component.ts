@@ -6,7 +6,6 @@ import { Timeline } from "primeng/timeline";
 import type {
   AccountEventEvidenceRef,
   AccountEventKind,
-  AccountEventOperatorOrderReceipt,
   AccountEventRow,
 } from "../../../api/account-events.types";
 import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
@@ -15,7 +14,6 @@ import { AccountDeskGuidanceComponent } from "./account-desk-guidance.component"
 import { AccountDeskEventsStore } from "./account-desk-events-store.service";
 
 const EVENT_KINDS: readonly AccountEventKind[] = [
-  "activity",
   "safety",
   "reconciliation",
   "clerk",
@@ -26,10 +24,9 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
 interface AccountTimelineRow {
   readonly event: AccountEventRow;
   readonly evidence: AccountEventEvidenceRef[];
-  readonly receipt: AccountEventOperatorOrderReceipt | null;
 }
 
-/** Operator transaction history for backend-authored account journal events. */
+/** Safety/configuration evidence kept separate from Clerk transaction receipts. */
 @Component({
   selector: "app-account-desk-operator-events",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -49,7 +46,7 @@ export class AccountDeskOperatorEventsComponent {
   readonly eventKinds = EVENT_KINDS;
   private readonly timelineRowsByEventId = new Map<string, AccountTimelineRow>();
   readonly timelineAccessibility = {
-    host: { role: "list", "aria-label": "Transaction history events" },
+    host: { role: "list", "aria-label": "Safety and configuration events" },
     event: { role: "listitem" },
   };
   readonly timelineRows = computed(() =>
@@ -70,7 +67,7 @@ export class AccountDeskOperatorEventsComponent {
   }
 
   retry(): void {
-    this.store.retry();
+    this.store.retryOperations();
   }
 
   loadOlder(): void {
@@ -81,7 +78,7 @@ export class AccountDeskOperatorEventsComponent {
     const cached = this.timelineRowsByEventId.get(event.event_id);
     if (cached !== undefined) return cached;
 
-    const row = { event, evidence: event.evidence_refs, receipt: event.operator_order_receipt ?? null };
+    const row = { event, evidence: event.evidence_refs };
     this.timelineRowsByEventId.set(event.event_id, row);
     return row;
   }

@@ -1,0 +1,96 @@
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  computed,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
+import { ButtonModule } from 'primeng/button';
+import { PanelModule } from 'primeng/panel';
+
+import type { ClerkTransactionDetail, ClerkTransactionSummary } from '../../../api/clerk-transaction-history.types';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { TimestampDisplayComponent } from '../../../shared/timestamp';
+import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
+
+/** Operator-only Clerk transaction grid with receipt detail fetched on selection. */
+@Component({
+  selector: 'app-account-desk-transaction-history',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ButtonModule, PanelModule, ReceiptLabelPipe, TimestampDisplayComponent],
+  templateUrl: './account-desk-transaction-history.component.html',
+  styleUrl: './account-desk-transaction-history.component.scss',
+})
+export class AccountDeskTransactionHistoryComponent {
+  readonly store = inject(AccountDeskTransactionHistoryStore);
+  private readonly drawer = viewChild<ElementRef<HTMLDialogElement>>('receiptDrawer');
+  private readonly opener = signal<HTMLElement | null>(null);
+  readonly selected = signal<ClerkTransactionDetail | null>(null);
+  readonly detailLoading = signal(false);
+  readonly detailError = signal<string | null>(null);
+  readonly drawerOpen = signal(false);
+  readonly receiptEntries = computed(() => receiptEntries(this.selected()?.receipt ?? {}));
+
+  trackRow = (_: number, row: ClerkTransactionSummary): string => row.transaction_id;
+  trackEvent = (_: number, event: ClerkTransactionDetail['events'][number]): string => event.event_id;
+  trackReceipt = (_: number, entry: ReceiptEntry): string => entry.key;
+
+  eventReceiptJson(event: ClerkTransactionDetail['events'][number]): string {
+    return JSON.stringify(event.receipt, null, 2);
+  }
+
+  async openReceipt(row: ClerkTransactionSummary, event: MouseEvent): Promise<void> {
+    const opener = event.currentTarget;
+    this.opener.set(opener instanceof HTMLElement ? opener : null);
+    this.selected.set(null);
+    this.detailError.set(null);
+    this.detailLoading.set(true);
+    this.drawerOpen.set(true);
+    this.openNativeDrawer();
+    try {
+      this.selected.set(await this.store.transactionDetail(row.transaction_id));
+    } catch {
+      this.detailError.set('The selected receipt is unavailable. Close the drawer and try again.');
+    } finally {
+      this.detailLoading.set(false);
+    }
+  }
+
+  closeReceipt(): void {
+    this.drawerOpen.set(false);
+    const dialog = this.drawer()?.nativeElement;
+    if (dialog?.open && typeof dialog.close === 'function') dialog.close();
+  }
+
+  onDrawerClosed(): void {
+    this.drawerOpen.set(false);
+    const opener = this.opener();
+    this.opener.set(null);
+    opener?.focus();
+  }
+
+  private openNativeDrawer(): void {
+    queueMicrotask(() => {
+      const dialog = this.drawer()?.nativeElement;
+      if (this.drawerOpen() && dialog !== undefined && !dialog.open && typeof dialog.showModal === 'function') {
+        dialog.showModal();
+      }
+    });
+  }
+}
+
+interface ReceiptEntry {
+  readonly key: string;
+  readonly label: string;
+  readonly value: string;
+}
+
+function receiptEntries(receipt: Record<string, unknown>): readonly ReceiptEntry[] {
+  return Object.entries(receipt).map(([key, value]) => ({
+    key,
+    label: key,
+    value: typeof value === 'string' ? value : JSON.stringify(value) ?? '',
+  }));
+}

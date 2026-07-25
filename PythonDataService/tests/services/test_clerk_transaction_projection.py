@@ -12,7 +12,7 @@ from app.engine.live.account_owner import (
     MANUAL_ORDER_INTENT_KIND,
     AccountOwnerSubmitIntent,
 )
-from app.schemas.clerk_transaction_projection import ClerkTransactionRow
+from app.schemas.clerk_transaction_projection import ClerkTransactionRow, ClerkTransactionSummaryRow
 from app.services import clerk_transaction_projection
 from app.services.clerk_transaction_projection import (
     ClerkJournalCursor,
@@ -22,6 +22,7 @@ from app.services.clerk_transaction_projection import (
     read_appended_clerk_journal,
     recover_account_transaction_feed,
     tail_account_journal,
+    transaction_detail,
     transaction_history,
 )
 
@@ -81,7 +82,16 @@ class _Store:
             rows = [row for row in rows if (row.recorded_at_ms, row.journal_seq, row.transaction_id) < after]
         high_water = self.cursor.last_journal_seq if self.cursor else None
         lag = max((high_water or 0) - max((row.journal_seq for row in self.rows), default=0), 0) if high_water else None
-        return rows[:limit], high_water, lag
+        return [
+            ClerkTransactionSummaryRow.model_validate(
+                {**row.model_dump(exclude={"receipt", "events"}), "event_count": len(row.events)}
+            )
+            for row in rows[:limit]
+        ], high_water, lag
+
+    async def transaction_detail(self, *, account_id: str, transaction_id: str) -> ClerkTransactionRow | None:
+        assert account_id == ACCOUNT
+        return next((row for row in self.rows if row.transaction_id == transaction_id), None)
 
     async def feed_status(self, account_id: str) -> tuple[str, str, str]:
         assert account_id == ACCOUNT
@@ -223,9 +233,28 @@ async def test_history_uses_opaque_keyset_cursor_and_bounded_page(tmp_path: Path
 
     first = await transaction_history(account_id=ACCOUNT, limit=2, cursor=None, store=store)
     assert len(first.rows) == 2
+    assert "receipt" not in first.rows[0].model_dump()
     assert first.next_cursor is not None and first.next_cursor.startswith("ctxhp1.")
     second = await transaction_history(account_id=ACCOUNT, limit=2, cursor=first.next_cursor, store=store)
     assert [row.journal_seq for row in second.rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_selected_transaction_receipt_is_read_separately_from_the_grid_page(tmp_path: Path) -> None:
+    store = _Store()
+    path = tmp_path / "journal.jsonl"
+    _append(path, _manual_ack(1))
+    batch = read_appended_clerk_journal(account_id=ACCOUNT, journal_path=path, cursor=None)
+    assert batch is not None
+    await store.persist_batch(batch, updated_at_ms=1)
+
+    page = await transaction_history(account_id=ACCOUNT, limit=25, cursor=None, store=store)
+    detail = await transaction_detail(
+        account_id=ACCOUNT, transaction_id=page.rows[0].transaction_id, store=store
+    )
+
+    assert detail is not None
+    assert detail.receipt["intent"]["order_ref"] == "learn-ai/manual/v1:manual-1"
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,11 @@
 <p-panel
   id="account-desk-transaction-history"
   class="operations-events"
-  aria-label="Transaction history"
+  aria-label="Safety and configuration evidence"
   aria-live="polite"
 >
-  <ng-template #header><h2>Transaction history</h2></ng-template>
-  <p>Chronological operator history with durable manual-order receipts.</p>
+  <ng-template #header><h2>Safety and configuration evidence</h2></ng-template>
+  <p>Account controls, verification, and configuration evidence outside transaction history.</p>
   <div class="kind-filters" aria-label="Event kind filters">
     @for (kind of eventKinds; track trackKind($index, kind)) {
       <button
@@ -47,40 +47,6 @@
             {{ item.event.kind | receiptLabel }}
           </span>
           <p>{{ item.event.operator_detail }}</p>
-          @if (item.receipt; as receipt) {
-            <dl class="order-receipt" aria-label="Manual-order receipt">
-              <div>
-                <dt>Order</dt>
-                <dd>#{{ receipt.order_id }}</dd>
-              </div>
-              <div>
-                <dt>Instruction</dt>
-                <dd>{{ receipt.action | receiptLabel }} {{ receipt.quantity }} {{ receipt.symbol }}</dd>
-              </div>
-              <div>
-                <dt>Type</dt>
-                <dd>{{ receipt.order_type | receiptLabel }}@if (receipt.limit_price !== null) { · {{ receipt.limit_price }} }</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd>{{ receipt.status | receiptLabel }}</dd>
-              </div>
-              @if (receipt.perm_id !== null) {
-                <div>
-                  <dt>Permanent ID</dt>
-                  <dd><code>{{ receipt.perm_id }}</code></dd>
-                </div>
-              }
-              <div class="order-receipt__reference">
-                <dt>Order reference</dt>
-                <dd><code>{{ receipt.order_ref }}</code></dd>
-              </div>
-              <div>
-                <dt>Acknowledged</dt>
-                <dd><app-timestamp-display [value]="receipt.acknowledged_at_ms" mode="local" /></dd>
-              </div>
-            </dl>
-          }
           @if (item.evidence.length > 0) {
             <details class="event-evidence">
               <summary>Show {{ item.evidence.length }} evidence reference{{ item.evidence.length === 1 ? '' : 's' }}</summary>

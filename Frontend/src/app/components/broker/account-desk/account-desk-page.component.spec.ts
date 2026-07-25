@@ -28,6 +28,7 @@ import { AccountDeskFleetStore } from "./account-desk-fleet-store.service";
 import { AccountDeskGuidanceStore } from "./account-desk-guidance-store.service";
 import { AccountDeskRecoveryStore } from "./account-desk-recovery-store.service";
 import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
+import { AccountDeskTransactionHistoryStore } from "./account-desk-transaction-history-store.service";
 import { AccountDeskPageComponent } from "./account-desk-page.component";
 
 class FakeBrokerService {
@@ -61,8 +62,25 @@ function makeEventsStore() {
     nextBeforeSeq: signal<number | null>(null),
     operationKinds: signal<readonly string[]>([]),
     toggleOperationKind: vi.fn(),
+    retryTrader: vi.fn(),
+    retryOperations: vi.fn(),
+    loadOperations: vi.fn(),
+    loadOlder: vi.fn(),
+  };
+}
+
+function makeTransactionHistoryStore() {
+  return {
+    load: vi.fn().mockResolvedValue(undefined),
     retry: vi.fn(),
     loadOlder: vi.fn(),
+    transactionDetail: vi.fn(),
+    loading: signal(false),
+    errorMessage: signal<string | null>(null),
+    hasLastGood: signal(false),
+    feed: signal(null),
+    rows: signal([]),
+    nextCursor: signal<number | null>(null),
   };
 }
 
@@ -198,6 +216,7 @@ async function setup(
   const fleet = makeFleetStore();
   const guidance = makeGuidanceStore();
   const recovery = makeRecoveryStore();
+  const transactions = makeTransactionHistoryStore();
   const directory = makeDirectoryStore([
     accountRow("DU1234567"),
     accountRow("DU7654321"),
@@ -211,6 +230,7 @@ async function setup(
       { provide: AccountDeskFleetStore, useValue: fleet },
       { provide: AccountDeskGuidanceStore, useValue: guidance },
       { provide: AccountDeskRecoveryStore, useValue: recovery },
+      { provide: AccountDeskTransactionHistoryStore, useValue: transactions },
       { provide: BrokerService, useValue: broker },
       {
         provide: ActivatedRoute,
@@ -448,6 +468,7 @@ describe("AccountDeskPageComponent", () => {
     const fleet = makeFleetStore();
     const guidance = makeGuidanceStore();
     const recovery = makeRecoveryStore();
+    const transactions = makeTransactionHistoryStore();
     await render(AccountDeskPageComponent, {
       providers: [
         AccountDeskHoldingsStore,
@@ -457,6 +478,7 @@ describe("AccountDeskPageComponent", () => {
         { provide: AccountDeskFleetStore, useValue: fleet },
         { provide: AccountDeskGuidanceStore, useValue: guidance },
         { provide: AccountDeskRecoveryStore, useValue: recovery },
+        { provide: AccountDeskTransactionHistoryStore, useValue: transactions },
         { provide: BrokerService, useValue: broker },
         {
           provide: ActivatedRoute,

@@ -1249,12 +1249,8 @@
             "title": "Schema Version"
           },
           "view": {
-            "enum": [
-              "trader_today",
-              "operations"
-            ],
-            "title": "View",
-            "type": "string"
+            "const": "operations",
+            "title": "View"
           }
         },
         "required": [
@@ -10474,7 +10470,7 @@
           },
           "rows": {
             "items": {
-              "$ref": "#/components/schemas/ClerkTransactionRow"
+              "$ref": "#/components/schemas/ClerkTransactionSummaryRow"
             },
             "title": "Rows",
             "type": "array"
@@ -10634,6 +10630,146 @@
           "lifecycle_state"
         ],
         "title": "ClerkTransactionRow",
+        "type": "object"
+      },
+      "ClerkTransactionSummaryRow": {
+        "additionalProperties": false,
+        "description": "Compact, receipt-free row for the operator transaction grid.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "commission_status": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "reported"
+            ],
+            "title": "Commission Status",
+            "type": "string"
+          },
+          "event_count": {
+            "minimum": 1.0,
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "exec_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exec Id"
+          },
+          "fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee"
+          },
+          "intent_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Intent Id",
+            "type": "string"
+          },
+          "journal_seq": {
+            "minimum": 1.0,
+            "title": "Journal Seq",
+            "type": "integer"
+          },
+          "lifecycle_state": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Lifecycle State",
+            "type": "string"
+          },
+          "order_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Id"
+          },
+          "order_ref": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "perm_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perm Id"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "transaction_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Transaction Id",
+            "type": "string"
+          },
+          "transaction_kind": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Transaction Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "account_id",
+          "journal_seq",
+          "recorded_at_ms",
+          "transaction_kind",
+          "strategy_instance_id",
+          "run_id",
+          "intent_id",
+          "order_ref",
+          "lifecycle_state",
+          "event_count"
+        ],
+        "title": "ClerkTransactionSummaryRow",
         "type": "object"
       },
       "CloseAllAction": {
@@ -37698,6 +37834,99 @@
         "title": "TradeSimRunBody",
         "type": "object"
       },
+      "TraderAccountEventRow": {
+        "description": "Trader-safe outcome copy; deliberately contains no operator evidence.",
+        "properties": {
+          "event_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Event Id",
+            "type": "string"
+          },
+          "occurred_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Occurred At Ms",
+            "type": "integer"
+          },
+          "outcome": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Outcome",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          },
+          "seq": {
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "seq",
+          "occurred_at_ms",
+          "outcome"
+        ],
+        "title": "TraderAccountEventRow",
+        "type": "object"
+      },
+      "TraderAccountEventsResponse": {
+        "description": "Trader event page with an intentionally disjoint schema from operations.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "latest_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Seq"
+          },
+          "next_before_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before Seq"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/TraderAccountEventRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "TraderAccountEventsResponse",
+        "type": "object"
+      },
       "TradesSummary": {
         "description": "Summary of trade records in a live run.",
         "properties": {
@@ -40229,13 +40458,9 @@
             "name": "view",
             "required": false,
             "schema": {
+              "const": "operations",
               "default": "operations",
-              "enum": [
-                "trader_today",
-                "operations"
-              ],
-              "title": "View",
-              "type": "string"
+              "title": "View"
             }
           },
           {
@@ -40410,6 +40635,77 @@
           }
         },
         "summary": "Repair Account Event Sequence Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/events/trader": {
+      "get": {
+        "description": "Return trader-authored outcomes through a schema with no receipt fields.",
+        "operationId": "trader_account_events_endpoint_api_accounts__account_id__events_trader_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraderAccountEventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trader Account Events Endpoint",
         "tags": [
           "accounts"
         ]
@@ -41502,6 +41798,74 @@
           }
         },
         "summary": "Get Clerk Transaction History",
+        "tags": [
+          "clerk-transactions"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/transactions/{transaction_id}": {
+      "get": {
+        "description": "Read exactly one selected projected receipt; never rescan Clerk or IBKR.",
+        "operationId": "get_clerk_transaction_detail_api_accounts__account_id__transactions__transaction_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkTransactionRow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clerk Transaction Detail",
         "tags": [
           "clerk-transactions"
         ]

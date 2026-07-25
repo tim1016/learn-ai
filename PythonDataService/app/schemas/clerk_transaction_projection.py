@@ -54,6 +54,29 @@ class ClerkTransactionRow(BaseModel):
     events: list[ClerkTransactionEventRow] = Field(default_factory=list)
 
 
+class ClerkTransactionSummaryRow(BaseModel):
+    """Compact, receipt-free row for the operator transaction grid."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_id: str = Field(min_length=1, max_length=96)
+    account_id: str = Field(min_length=1, max_length=64)
+    journal_seq: int = Field(ge=1)
+    recorded_at_ms: int = Field(ge=0)
+    transaction_kind: str = Field(min_length=1, max_length=64)
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    intent_id: str = Field(min_length=1, max_length=256)
+    order_ref: str = Field(min_length=1, max_length=512)
+    order_id: int | None = Field(default=None, ge=0)
+    perm_id: int | None = Field(default=None, ge=0)
+    exec_id: str | None = Field(default=None, max_length=256)
+    lifecycle_state: str = Field(min_length=1, max_length=64)
+    commission_status: Literal["unknown", "reported"] = "unknown"
+    fee: float | None = None
+    event_count: int = Field(ge=1)
+
+
 class ClerkTransactionHistoryResponse(BaseModel):
     """One bounded keyset page, with backend-owned projection status."""
 
@@ -66,5 +89,5 @@ class ClerkTransactionHistoryResponse(BaseModel):
     feed_detail: str = Field(min_length=1, max_length=512)
     high_water_journal_seq: int | None = Field(default=None, ge=0)
     lag_records: int | None = Field(default=None, ge=0)
-    rows: list[ClerkTransactionRow]
+    rows: list[ClerkTransactionSummaryRow]
     next_cursor: str | None = None

@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-AccountEventView = Literal["trader_today", "operations"]
+AccountEventView = Literal["operations"]
 AccountEventKind = Literal[
     "activity",
     "safety",
@@ -72,5 +72,29 @@ class AccountEventsResponse(BaseModel):
     account_id: str = Field(min_length=1, max_length=64)
     view: AccountEventView
     rows: list[AccountEventRow] = Field(default_factory=list)
+    latest_seq: int | None = Field(default=None, ge=1)
+    next_before_seq: int | None = Field(default=None, ge=1)
+
+
+class TraderAccountEventRow(BaseModel):
+    """Trader-safe outcome copy; deliberately contains no operator evidence."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal[1] = 1
+    event_id: str = Field(min_length=1, max_length=256)
+    seq: int = Field(ge=1)
+    occurred_at_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    outcome: str = Field(min_length=1, max_length=512)
+
+
+class TraderAccountEventsResponse(BaseModel):
+    """Trader event page with an intentionally disjoint schema from operations."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal[1] = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    rows: list[TraderAccountEventRow] = Field(default_factory=list)
     latest_seq: int | None = Field(default=None, ge=1)
     next_before_seq: int | None = Field(default=None, ge=1)

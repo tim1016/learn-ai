@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.schemas.clerk_transaction_projection import ClerkTransactionHistoryResponse
+from app.schemas.clerk_transaction_projection import ClerkTransactionHistoryResponse, ClerkTransactionRow
 from app.services.clerk_transaction_projection import (
     ClerkTransactionProjectionStore,
     ClerkTransactionProjectionUnavailable,
     PostgresClerkTransactionProjectionStore,
+    transaction_detail,
     transaction_history,
 )
 
@@ -47,3 +48,31 @@ async def get_clerk_transaction_history(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{account_id}/transactions/{transaction_id}",
+    response_model=ClerkTransactionRow,
+)
+async def get_clerk_transaction_detail(
+    account_id: str,
+    transaction_id: str,
+    store: ClerkTransactionProjectionStore = Depends(get_clerk_transaction_store),
+) -> ClerkTransactionRow:
+    """Read exactly one selected projected receipt; never rescan Clerk or IBKR."""
+
+    try:
+        row = await transaction_detail(
+            account_id=account_id, transaction_id=transaction_id, store=store
+        )
+    except ClerkTransactionProjectionUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Clerk transaction projection unavailable.",
+        ) from exc
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Projected transaction was not found for this account.",
+        )
+    return row

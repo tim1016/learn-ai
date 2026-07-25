@@ -29,6 +29,7 @@ from app.schemas.clerk_transaction_projection import (
     ClerkTransactionEventRow,
     ClerkTransactionHistoryResponse,
     ClerkTransactionRow,
+    ClerkTransactionSummaryRow,
     TransactionFeedState,
 )
 
@@ -68,7 +69,11 @@ class ClerkTransactionProjectionStore(Protocol):
 
     async def history_page(
         self, *, account_id: str, limit: int, after: tuple[int, int, str] | None
-    ) -> tuple[list[ClerkTransactionRow], int | None, int | None]: ...
+    ) -> tuple[list[ClerkTransactionSummaryRow], int | None, int | None]: ...
+
+    async def transaction_detail(
+        self, *, account_id: str, transaction_id: str
+    ) -> ClerkTransactionRow | None: ...
 
     async def feed_status(self, account_id: str) -> tuple[TransactionFeedState, str, str]: ...
 
@@ -422,6 +427,17 @@ async def transaction_history(
     )
 
 
+async def transaction_detail(
+    *, account_id: str, transaction_id: str, store: ClerkTransactionProjectionStore | None = None
+) -> ClerkTransactionRow | None:
+    """Read one operator-selected receipt from the indexed projection only."""
+
+    resolved_store = store or PostgresClerkTransactionProjectionStore()
+    return await resolved_store.transaction_detail(
+        account_id=account_id, transaction_id=transaction_id
+    )
+
+
 class PostgresClerkTransactionProjectionStore:
     """Postgres implementation; all write state is one database transaction."""
 
@@ -482,19 +498,15 @@ class PostgresClerkTransactionProjectionStore:
 
     async def history_page(
         self, *, account_id: str, limit: int, after: tuple[int, int, str] | None
-    ) -> tuple[list[ClerkTransactionRow], int | None, int | None]:
+    ) -> tuple[list[ClerkTransactionSummaryRow], int | None, int | None]:
         _ensure_configured()
         conn = await _connection()
         try:
             records = await conn.fetch(
-                "SELECT t.transaction_id, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.lifecycle_state, t.commission_status, t.fee, t.receipt, "
-                "COALESCE(events.events, '[]'::jsonb) AS events "
-                "FROM (SELECT transaction_id, account_id, journal_seq, recorded_at_ms, transaction_kind, strategy_instance_id, run_id, intent_id, order_ref, order_id, perm_id, exec_id, lifecycle_state, commission_status, fee, receipt "
-                "FROM clerk_transactions WHERE account_id=$1 AND ($2::bigint IS NULL OR (recorded_at_ms, journal_seq, transaction_id) < ($2,$3,$4)) "
-                "ORDER BY recorded_at_ms DESC, journal_seq DESC, transaction_id DESC LIMIT $5) t "
-                "LEFT JOIN LATERAL (SELECT jsonb_agg(jsonb_build_object('event_id', e.event_id, 'event_kind', e.event_kind, 'callback_identity', e.callback_identity, 'lifecycle_state', e.lifecycle_state, 'commission_status', e.commission_status, 'fee', e.fee, 'journal_seq', e.journal_seq, 'recorded_at_ms', e.recorded_at_ms, 'receipt', e.receipt) ORDER BY e.journal_seq) AS events "
-                "FROM clerk_transaction_events e WHERE e.transaction_id=t.transaction_id) events ON TRUE "
-                "ORDER BY t.recorded_at_ms DESC, t.journal_seq DESC, t.transaction_id DESC",
+                "SELECT t.transaction_id, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.lifecycle_state, t.commission_status, t.fee, COUNT(e.event_id)::integer AS event_count "
+                "FROM clerk_transactions t LEFT JOIN clerk_transaction_events e ON e.transaction_id=t.transaction_id "
+                "WHERE t.account_id=$1 AND ($2::bigint IS NULL OR (t.recorded_at_ms, t.journal_seq, t.transaction_id) < ($2,$3,$4)) "
+                "GROUP BY t.id ORDER BY t.recorded_at_ms DESC, t.journal_seq DESC, t.transaction_id DESC LIMIT $5",
                 account_id, after[0] if after else None, after[1] if after else None, after[2] if after else None, limit,
             )
             metadata = await conn.fetchrow(
@@ -505,13 +517,31 @@ class PostgresClerkTransactionProjectionStore:
         finally:
             assert _pool is not None
             await _pool.release(conn)
-        rows = [
-            ClerkTransactionRow.model_validate(
-                {**dict(record), "receipt": _json_value(record["receipt"]), "events": _json_value(record["events"])}
-            )
-            for record in records
-        ]
+        rows = [ClerkTransactionSummaryRow.model_validate(dict(record)) for record in records]
         return rows, (metadata["high_water"] if metadata else None), (metadata["lag"] if metadata else None)
+
+    async def transaction_detail(
+        self, *, account_id: str, transaction_id: str
+    ) -> ClerkTransactionRow | None:
+        _ensure_configured()
+        conn = await _connection()
+        try:
+            record = await conn.fetchrow(
+                "SELECT t.transaction_id, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.lifecycle_state, t.commission_status, t.fee, t.receipt, "
+                "COALESCE(jsonb_agg(jsonb_build_object('event_id', e.event_id, 'event_kind', e.event_kind, 'callback_identity', e.callback_identity, 'lifecycle_state', e.lifecycle_state, 'commission_status', e.commission_status, 'fee', e.fee, 'journal_seq', e.journal_seq, 'recorded_at_ms', e.recorded_at_ms, 'receipt', e.receipt) ORDER BY e.journal_seq) FILTER (WHERE e.event_id IS NOT NULL), '[]'::jsonb) AS events "
+                "FROM clerk_transactions t LEFT JOIN clerk_transaction_events e ON e.transaction_id=t.transaction_id "
+                "WHERE t.account_id=$1 AND t.transaction_id=$2 GROUP BY t.id",
+                account_id,
+                transaction_id,
+            )
+        finally:
+            assert _pool is not None
+            await _pool.release(conn)
+        if record is None:
+            return None
+        return ClerkTransactionRow.model_validate(
+            {**dict(record), "receipt": _json_value(record["receipt"]), "events": _json_value(record["events"])}
+        )
 
     async def feed_status(self, account_id: str) -> tuple[TransactionFeedState, str, str]:
         _ensure_configured()
@@ -578,9 +608,17 @@ def _event_transaction_id(account_id: str, event: ClerkTransactionEventRow) -> s
 
 
 __all__ = [
-    "ClerkJournalCursor", "ClerkTransactionBatch", "ClerkTransactionProjectionStore",
-    "ClerkTransactionProjectionUnavailable", "PostgresClerkTransactionProjectionStore",
-    "clerk_journal_path", "fold_lifecycle_state", "project_account_journal_best_effort",
-    "read_appended_clerk_journal", "recover_account_transaction_feed", "tail_account_journal",
+    "ClerkJournalCursor",
+    "ClerkTransactionBatch",
+    "ClerkTransactionProjectionStore",
+    "ClerkTransactionProjectionUnavailable",
+    "PostgresClerkTransactionProjectionStore",
+    "clerk_journal_path",
+    "fold_lifecycle_state",
+    "project_account_journal_best_effort",
+    "read_appended_clerk_journal",
+    "recover_account_transaction_feed",
+    "tail_account_journal",
+    "transaction_detail",
     "transaction_history",
 ]

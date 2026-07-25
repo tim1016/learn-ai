@@ -31,14 +31,14 @@ function makeStore(overrides: Record<string, unknown> = {}) {
     nextBeforeSeq: signal<number | null>(4),
     operationKinds: signal<readonly string[]>([]),
     toggleOperationKind: vi.fn(),
-    retry: vi.fn(),
+    retryOperations: vi.fn(),
     loadOlder: vi.fn(),
     ...overrides,
   };
 }
 
 describe("AccountDeskOperatorEventsComponent", () => {
-  it("renders a categorized transaction history with local instants, filters, and load older", async () => {
+  it("renders safety/configuration evidence with local instants, filters, and load older", async () => {
     const store = makeStore();
     const view = await render(AccountDeskOperatorEventsComponent, {
       providers: [
@@ -51,7 +51,7 @@ describe("AccountDeskOperatorEventsComponent", () => {
       ],
     });
 
-    expect(await screen.findByText("Transaction history")).toBeTruthy();
+    expect(await screen.findByText("Safety and configuration evidence")).toBeTruthy();
     expect(
       screen.getByText(
         "Account reconciliation receipt recorded in the journal.",
@@ -59,8 +59,8 @@ describe("AccountDeskOperatorEventsComponent", () => {
     ).toBeTruthy();
     expect(document.querySelector('[data-kind="reconciliation"]')).not.toBeNull();
     expect(screen.getByText("DU1234567:5")).toBeTruthy();
-    expect(screen.getByRole("list", { name: "Transaction history events" })).toBeTruthy();
-    expect(document.querySelectorAll('[aria-label="Transaction history events"] > [role="listitem"]')).toHaveLength(1);
+    expect(screen.getByRole("list", { name: "Safety and configuration events" })).toBeTruthy();
+    expect(document.querySelectorAll('[aria-label="Safety and configuration events"] > [role="listitem"]')).toHaveLength(1);
     expect(
       document.querySelector('[data-timestamp-mode="local"]'),
     ).not.toBeNull();
@@ -74,7 +74,7 @@ describe("AccountDeskOperatorEventsComponent", () => {
     expect(view.fixture.componentInstance.timelineRows()[0]).toBe(firstRow);
   });
 
-  it("shows manual-order receipt fields in the operator history", async () => {
+  it("does not render manual-order receipts in the safety/configuration surface", async () => {
     const store = makeStore({
       operationRows: signal([
         {
@@ -111,10 +111,7 @@ describe("AccountDeskOperatorEventsComponent", () => {
       ],
     });
 
-    expect(document.querySelector('[aria-label="Manual-order receipt"]')).not.toBeNull();
-    expect(screen.getByText("#42")).toBeTruthy();
-    expect(screen.getByText("Buy 3 SPY")).toBeTruthy();
-    expect(screen.getByText("manual/operator/v1:opaque-1")).toBeTruthy();
+    expect(document.querySelector('[aria-label="Manual-order receipt"]')).toBeNull();
   });
 
   it("renders an honest operations error rather than empty history", async () => {

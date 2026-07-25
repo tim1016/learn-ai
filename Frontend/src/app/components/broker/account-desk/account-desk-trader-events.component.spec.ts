@@ -12,35 +12,28 @@ function makeStore(overrides: Record<string, unknown> = {}) {
         schema_version: 1 as const,
         event_id: "DU1234567:2",
         seq: 2,
-        kind: "safety" as const,
         occurred_at_ms: 1_780_000_000_000,
-        trader_narration: "The backend wrote this trader narration.",
-        operator_detail: "Operator detail stays out of this feed.",
-        evidence_refs: [],
+        outcome: "The backend wrote this trader narration.",
       },
     ]),
     traderLoading: signal(false),
     traderErrorMessage: signal<string | null>(null),
     traderHasLastGood: signal(true),
     traderShowingStaleLastGood: signal(false),
-    retry: vi.fn(),
+    retryTrader: vi.fn(),
     ...overrides,
   };
 }
 
 describe("AccountDeskTraderEventsComponent", () => {
-  it("renders a categorized timeline with only backend narration and local timestamp display", async () => {
+  it("renders only backend-authored outcome copy and local timestamp display", async () => {
     await render(AccountDeskTraderEventsComponent, {
       providers: [{ provide: AccountDeskEventsStore, useValue: makeStore() }],
     });
 
     expect(await screen.findByText("Today at the desk")).toBeTruthy();
-    expect(screen.getByText("Safety")).toBeTruthy();
     expect(screen.getByText("The backend wrote this trader narration.")).toBeTruthy();
-    expect(document.querySelector('.trader-event-marker[data-kind="safety"]')).not.toBeNull();
-    expect(
-      screen.queryByText("Operator detail stays out of this feed."),
-    ).toBeNull();
+    expect(document.querySelector('.trader-event-marker')).not.toBeNull();
     expect(
       document.querySelector('[data-timestamp-mode="local"]'),
     ).not.toBeNull();
@@ -69,11 +62,8 @@ describe("AccountDeskTraderEventsComponent", () => {
       schema_version: 1 as const,
       event_id: `DU1234567:${index + 1}`,
       seq: index + 1,
-      kind: 'safety' as const,
       occurred_at_ms: 1_780_000_000_000 + index,
-      trader_narration: `Account update ${index + 1}.`,
-      operator_detail: 'Operator-only detail.',
-      evidence_refs: [],
+      outcome: `Account update ${index + 1}.`,
     }));
     await render(AccountDeskTraderEventsComponent, {
       providers: [{ provide: AccountDeskEventsStore, useValue: makeStore({ traderRows: signal(rows) }) }],

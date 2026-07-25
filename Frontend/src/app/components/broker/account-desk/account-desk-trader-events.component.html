@@ -25,14 +25,11 @@
         </span>
       </ng-template>
       <ng-template #marker let-item>
-        <span class="trader-event-marker" [attr.data-kind]="item.kind" aria-hidden="true"></span>
+        <span class="trader-event-marker" aria-hidden="true"></span>
       </ng-template>
       <ng-template #content let-item>
         <article class="trader-event-entry">
-          <span class="trader-event-kind" [attr.data-kind]="item.kind">
-            {{ item.kind | receiptLabel }}
-          </span>
-          <p>{{ item.trader_narration }}</p>
+          <p>{{ item.outcome }}</p>
         </article>
       </ng-template>
     </p-timeline>

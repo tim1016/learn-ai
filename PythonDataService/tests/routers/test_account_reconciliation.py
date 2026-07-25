@@ -1326,7 +1326,7 @@ async def test_account_events_exposes_manual_order_receipts_only_to_operations(t
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             operations = await client.get("/api/accounts/DU1234567/events?view=operations")
-            trader = await client.get("/api/accounts/DU1234567/events?view=trader_today")
+            trader = await client.get("/api/accounts/DU1234567/events/trader")
     finally:
         app.dependency_overrides.clear()
 
@@ -1348,8 +1348,9 @@ async def test_account_events_exposes_manual_order_receipts_only_to_operations(t
     }
     assert trader.status_code == 200
     [trader_row] = trader.json()["rows"]
-    assert trader_row["trader_narration"] == "Your paper order was received by the broker."
-    assert trader_row["operator_order_receipt"] is None
+    assert trader_row["outcome"] == "Your paper order was received by the broker."
+    assert "operator_order_receipt" not in trader_row
+    assert "evidence_refs" not in trader_row
 
 
 async def test_account_events_hide_healthy_comparison_heartbeats_but_advance_cursor(
@@ -1449,7 +1450,7 @@ async def test_account_events_endpoint_returns_empty_for_missing_journal_and_typ
     assert journal.read_text(encoding="utf-8") == "{malformed json\n"
 
 
-async def test_account_events_endpoint_trader_today_uses_new_york_day_across_dst(tmp_path: Path) -> None:
+async def test_trader_account_events_use_new_york_day_across_dst(tmp_path: Path) -> None:
     from app.main import app
 
     ny = ZoneInfo("America/New_York")
@@ -1475,7 +1476,7 @@ async def test_account_events_endpoint_trader_today_uses_new_york_day_across_dst
     app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get("/api/accounts/DU1234567/events?view=trader_today")
+            response = await client.get("/api/accounts/DU1234567/events/trader")
     finally:
         app.dependency_overrides.clear()
 
@@ -1484,7 +1485,7 @@ async def test_account_events_endpoint_trader_today_uses_new_york_day_across_dst
     assert row["seq"] == 2
     assert row["occurred_at_ms"] == today
     assert isinstance(row["occurred_at_ms"], int)
-    assert row["trader_narration"] == "An account safety freeze was cleared."
+    assert row["outcome"] == "An account safety freeze was cleared."
 
 
 async def test_accounts_roster_exposes_the_current_single_account_without_a_service(tmp_path: Path) -> None:

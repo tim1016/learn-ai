@@ -7,6 +7,7 @@ import { AccountDeskOperatorProofComponent } from "./account-desk-operator-proof
 import { AccountDeskOperatorServiceComponent } from "./account-desk-operator-service.component";
 import { AccountDeskBrokerSnapshotComponent } from "./account-desk-broker-snapshot.component";
 import { AccountDeskRecoveryControlsComponent } from "./account-desk-recovery-controls.component";
+import { AccountDeskTransactionHistoryComponent } from "./account-desk-transaction-history.component";
 
 /** Focused operator workspace, ordered around current proof and recovery. */
 @Component({
@@ -19,6 +20,7 @@ import { AccountDeskRecoveryControlsComponent } from "./account-desk-recovery-co
     AccountDeskOperatorServiceComponent,
     AccountDeskBrokerSnapshotComponent,
     AccountDeskRecoveryControlsComponent,
+    AccountDeskTransactionHistoryComponent,
     CardModule,
   ],
   templateUrl: "./account-desk-operator-workspace.component.html",

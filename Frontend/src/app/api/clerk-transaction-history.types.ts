@@ -12,7 +12,7 @@ export interface ClerkTransactionEvent {
   readonly fee: number | null;
 }
 
-export interface ClerkTransaction {
+export interface ClerkTransactionSummary {
   readonly transaction_id: string;
   readonly account_id: string;
   readonly journal_seq: number;
@@ -28,6 +28,11 @@ export interface ClerkTransaction {
   readonly lifecycle_state: string;
   readonly commission_status: 'unknown' | 'reported';
   readonly fee: number | null;
+  readonly event_count: number;
+}
+
+/** Full receipt evidence is fetched only after an operator selects a grid row. */
+export interface ClerkTransactionDetail extends ClerkTransactionSummary {
   readonly receipt: Record<string, unknown>;
   readonly events: readonly ClerkTransactionEvent[];
 }
@@ -41,6 +46,6 @@ export interface ClerkTransactionHistoryResponse {
   readonly feed_detail: string;
   readonly high_water_journal_seq: number | null;
   readonly lag_records: number | null;
-  readonly rows: readonly ClerkTransaction[];
+  readonly rows: readonly ClerkTransactionSummary[];
   readonly next_cursor: string | null;
 }

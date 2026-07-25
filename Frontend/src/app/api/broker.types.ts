@@ -219,6 +219,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/events/trader": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trader Account Events Endpoint
+         * @description Return trader-authored outcomes through a schema with no receipt fields.
+         */
+        get: operations["trader_account_events_endpoint_api_accounts__account_id__events_trader_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/freeze/accept-exposure-override": {
         parameters: {
             query?: never;
@@ -536,6 +556,26 @@ export interface paths {
          * @description Read one indexed keyset page without broker, Account Truth, or journal I/O.
          */
         get: operations["get_clerk_transaction_history_api_accounts__account_id__transactions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/transactions/{transaction_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Clerk Transaction Detail
+         * @description Read exactly one selected projected receipt; never rescan Clerk or IBKR.
+         */
+        get: operations["get_clerk_transaction_detail_api_accounts__account_id__transactions__transaction_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5933,9 +5973,9 @@ export interface components {
             schema_version?: 1;
             /**
              * View
-             * @enum {string}
+             * @constant
              */
-            view: "trader_today" | "operations";
+            view: "operations";
         };
         /**
          * AccountFalseCrashBackfillResponse
@@ -9837,7 +9877,7 @@ export interface components {
             /** Projection Available */
             projection_available: boolean;
             /** Rows */
-            rows: components["schemas"]["ClerkTransactionRow"][];
+            rows: components["schemas"]["ClerkTransactionSummaryRow"][];
         };
         /**
          * ClerkTransactionRow
@@ -9872,6 +9912,48 @@ export interface components {
             perm_id?: number | null;
             /** Receipt */
             receipt?: Record<string, never>;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Transaction Id */
+            transaction_id: string;
+            /** Transaction Kind */
+            transaction_kind: string;
+        };
+        /**
+         * ClerkTransactionSummaryRow
+         * @description Compact, receipt-free row for the operator transaction grid.
+         */
+        ClerkTransactionSummaryRow: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Commission Status
+             * @default unknown
+             * @enum {string}
+             */
+            commission_status?: "unknown" | "reported";
+            /** Event Count */
+            event_count: number;
+            /** Exec Id */
+            exec_id?: string | null;
+            /** Fee */
+            fee?: number | null;
+            /** Intent Id */
+            intent_id: string;
+            /** Journal Seq */
+            journal_seq: number;
+            /** Lifecycle State */
+            lifecycle_state: string;
+            /** Order Id */
+            order_id?: number | null;
+            /** Order Ref */
+            order_ref: string;
+            /** Perm Id */
+            perm_id?: number | null;
             /** Recorded At Ms */
             recorded_at_ms: number;
             /** Run Id */
@@ -22385,6 +22467,46 @@ export interface components {
             time_stop_bars?: number;
         };
         /**
+         * TraderAccountEventRow
+         * @description Trader-safe outcome copy; deliberately contains no operator evidence.
+         */
+        TraderAccountEventRow: {
+            /** Event Id */
+            event_id: string;
+            /** Occurred At Ms */
+            occurred_at_ms: number;
+            /** Outcome */
+            outcome: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+            /** Seq */
+            seq: number;
+        };
+        /**
+         * TraderAccountEventsResponse
+         * @description Trader event page with an intentionally disjoint schema from operations.
+         */
+        TraderAccountEventsResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Latest Seq */
+            latest_seq?: number | null;
+            /** Next Before Seq */
+            next_before_seq?: number | null;
+            /** Rows */
+            rows?: components["schemas"]["TraderAccountEventRow"][];
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+        };
+        /**
          * TradesSummary
          * @description Summary of trade records in a live run.
          */
@@ -23655,7 +23777,7 @@ export interface operations {
     account_events_endpoint_api_accounts__account_id__events_get: {
         parameters: {
             query?: {
-                view?: "trader_today" | "operations";
+                view?: "operations";
                 limit?: number;
                 kinds?: ("activity" | "safety" | "reconciliation" | "clerk" | "configuration" | "other")[] | null;
                 before_seq?: number | null;
@@ -23711,6 +23833,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountEventSequenceRepairReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trader_account_events_endpoint_api_accounts__account_id__events_trader_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraderAccountEventsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24285,6 +24442,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClerkTransactionHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clerk_transaction_detail_api_accounts__account_id__transactions__transaction_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkTransactionRow"];
                 };
             };
             /** @description Validation Error */
