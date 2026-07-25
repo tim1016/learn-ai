@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_right
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -129,7 +130,7 @@ class BrokerFreeFleetReadService:
         root: Path,
         *,
         limit: int,
-        cursor: int,
+        cursor: str | None,
     ) -> BotCatalogPageResponse:
         """Read one bounded catalog page without per-row daemon fan-out.
 
@@ -140,7 +141,8 @@ class BrokerFreeFleetReadService:
 
         snapshot = await self._read_snapshot(settings, root)
         sids = sorted(self._visible_sids(snapshot))
-        page_sids = sids[cursor : cursor + limit]
+        page_start = bisect_right(sids, cursor) if cursor is not None else 0
+        page_sids = sids[page_start : page_start + limit]
         account_contexts = await self._account_contexts_for(snapshot, page_sids)
         trading_mode = trading_mode_from_configured_mode(settings.mode)
         rows = list(
@@ -151,11 +153,11 @@ class BrokerFreeFleetReadService:
                 )
             )
         )
-        next_cursor = cursor + len(page_sids)
+        has_more = page_start + len(page_sids) < len(sids)
         return BotCatalogPageResponse(
             bots=rows,
             total_count=len(sids),
-            next_cursor=next_cursor if next_cursor < len(sids) else None,
+            next_cursor=page_sids[-1] if has_more else None,
             observed_at_ms=snapshot.observed_at_ms,
         )
 

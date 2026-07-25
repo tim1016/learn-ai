@@ -235,7 +235,7 @@ export class LiveRunsService {
     return firstValueFrom(this.http.get<BotCatalogResponse>(`${this.instancesBase}/catalog`));
   }
 
-  getBotCatalogPage(params: { limit: number; cursor: number }): Promise<BotCatalogPageResponse> {
+  getBotCatalogPage(params: { limit: number; cursor?: string }): Promise<BotCatalogPageResponse> {
     return firstValueFrom(
       this.http.get<BotCatalogPageResponse>(`${this.instancesBase}/catalog/page`, { params }),
     );

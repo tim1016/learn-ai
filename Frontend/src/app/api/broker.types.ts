@@ -8015,7 +8015,7 @@ export interface components {
             /** Bots */
             bots?: components["schemas"]["BotCatalogRow"][];
             /** Next Cursor */
-            next_cursor?: number | null;
+            next_cursor?: string | null;
             /** Observed At Ms */
             observed_at_ms: number;
             /** Total Count */
@@ -27724,7 +27724,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                cursor?: number;
+                cursor?: string | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

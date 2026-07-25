@@ -209,7 +209,7 @@
   <div class="result-summary" aria-live="polite">
     <span>{{ activeTabSummary() }}</span>
     @if (catalogLoaded()) {
-      <span>{{ visibleBots().length }} loaded matches · {{ catalogTotalCount() }} known bots</span>
+      <span>{{ visibleBots().length }} loaded matches · {{ catalogTotalCount() }} known bots in the latest page snapshot</span>
     } @else {
       <span>Fleet status unavailable until catalog loading begins.</span>
     }
@@ -336,7 +336,7 @@
 
   @if (hasMoreBots()) {
     <div class="incremental-load">
-      <span>Showing {{ loadedBotCount() }} of {{ catalogTotalCount() }} known bots.</span>
+      <span>{{ loadedBotCount() }} bots loaded from this browsing session.</span>
       <button
         pButton
         type="button"
@@ -345,7 +345,7 @@
         [loading]="isLoadingMore()"
         (click)="loadMoreBots()"
       >
-        <span class="p-button-label">Load next {{ 25 }} bots</span>
+        <span class="p-button-label">Load up to {{ 25 }} more bots</span>
       </button>
     </div>
   }

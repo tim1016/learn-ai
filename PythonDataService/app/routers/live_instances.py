@@ -2098,7 +2098,7 @@ async def list_bot_catalog() -> BotCatalogResponse:
 @router.get("/catalog/page", response_model=BotCatalogPageResponse)
 async def list_bot_catalog_page(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
-    cursor: Annotated[int, Query(ge=0)] = 0,
+    cursor: Annotated[str | None, Query(max_length=256)] = None,
 ) -> BotCatalogPageResponse:
     """Return a bounded catalog page for post-first-paint loading.
 

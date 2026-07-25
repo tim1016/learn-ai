@@ -1220,7 +1220,7 @@ export interface BotCatalogResponse {
 export interface BotCatalogPageResponse {
   bots: BotCatalogRow[];
   total_count: number;
-  next_cursor: number | null;
+  next_cursor: string | null;
   observed_at_ms: number;
 }
 

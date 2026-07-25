@@ -145,7 +145,7 @@ export class BotsPageComponent {
   readonly isLoadingMore = signal<boolean>(false);
   readonly catalogLoaded = signal<boolean>(false);
   readonly catalogTotalCount = signal<number>(0);
-  readonly nextCatalogCursor = signal<number | null>(null);
+  readonly nextCatalogCursor = signal<string | null>(null);
   readonly isRunningRollCall = signal<boolean>(false);
   readonly isStartingReady = signal<boolean>(false);
   readonly errorMessage = signal<string | null>(null);
@@ -276,7 +276,6 @@ export class BotsPageComponent {
     try {
       const page = await this.liveRuns.getBotCatalogPage({
         limit: INITIAL_CATALOG_PAGE_SIZE,
-        cursor: 0,
       });
       this.applyCatalogPage(page, { replace: true });
       void this.refreshAccountTriage();

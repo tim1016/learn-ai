@@ -180,7 +180,7 @@ describe('BotsPageComponent', () => {
       await vi.runAllTimersAsync();
       await settle(fixture);
 
-      expect(liveRuns.getBotCatalogPage).toHaveBeenCalledWith({ limit: 25, cursor: 0 });
+      expect(liveRuns.getBotCatalogPage).toHaveBeenCalledWith({ limit: 25 });
     } finally {
       vi.useRealTimers();
     }
