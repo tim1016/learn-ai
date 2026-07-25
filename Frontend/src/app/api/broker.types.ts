@@ -3049,11 +3049,7 @@ export interface paths {
         };
         /**
          * List Bot Catalog Page
-         * @description Return a bounded catalog page for post-first-paint loading.
-         *
-         *     This remains broker-free. It reads one daemon fleet snapshot so each
-         *     card's runtime state is current, then composes daemon/account evidence
-         *     only for the requested page.
+         * @description Return one broker-free catalog page for post-first-paint loading.
          */
         get: operations["list_bot_catalog_page_api_live_instances_catalog_page_get"];
         put?: never;
@@ -8072,9 +8068,9 @@ export interface components {
          */
         BotCatalogPageResponse: {
             /** Bots */
-            bots?: components["schemas"]["BotCatalogRow"][];
+            bots: components["schemas"]["BotCatalogRow"][];
             /** Next Cursor */
-            next_cursor?: string | null;
+            next_cursor: string | null;
             /** Observed At Ms */
             observed_at_ms: number;
             /** Total Count */
@@ -8623,8 +8619,8 @@ export interface components {
              * @default 0
              */
             retired?: number;
-            /** Session Date */
-            session_date?: string | null;
+            /** Session Date Ms */
+            session_date_ms?: number | null;
             /**
              * Sick Bay
              * @default 0

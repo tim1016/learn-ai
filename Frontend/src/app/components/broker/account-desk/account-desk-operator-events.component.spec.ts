@@ -38,7 +38,7 @@ function makeStore(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AccountDeskOperatorEventsComponent", () => {
-  it("renders safety/configuration evidence with local instants, filters, and load older", async () => {
+  it("renders account operations evidence with local instants, filters, and load older", async () => {
     const store = makeStore();
     const view = await render(AccountDeskOperatorEventsComponent, {
       providers: [
@@ -51,7 +51,7 @@ describe("AccountDeskOperatorEventsComponent", () => {
       ],
     });
 
-    expect(await screen.findByText("Safety and configuration evidence")).toBeTruthy();
+    expect(await screen.findByText("Account operations evidence")).toBeTruthy();
     expect(
       screen.getByText(
         "Account reconciliation receipt recorded in the journal.",
@@ -59,8 +59,8 @@ describe("AccountDeskOperatorEventsComponent", () => {
     ).toBeTruthy();
     expect(document.querySelector('[data-kind="reconciliation"]')).not.toBeNull();
     expect(screen.getByText("DU1234567:5")).toBeTruthy();
-    expect(screen.getByRole("list", { name: "Safety and configuration events" })).toBeTruthy();
-    expect(document.querySelectorAll('[aria-label="Safety and configuration events"] > [role="listitem"]')).toHaveLength(1);
+    expect(screen.getByRole("list", { name: "Account operations events" })).toBeTruthy();
+    expect(document.querySelectorAll('[aria-label="Account operations events"] > [role="listitem"]')).toHaveLength(1);
     expect(
       document.querySelector('[data-timestamp-mode="local"]'),
     ).not.toBeNull();

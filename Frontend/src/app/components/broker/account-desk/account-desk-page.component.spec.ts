@@ -71,6 +71,7 @@ function makeEventsStore() {
 
 function makeTransactionHistoryStore() {
   return {
+    accountId: signal<string | null>(null),
     load: vi.fn().mockResolvedValue(undefined),
     retry: vi.fn(),
     loadOlder: vi.fn(),
