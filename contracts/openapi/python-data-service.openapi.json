@@ -47293,8 +47293,7 @@
                   "type": "null"
                 }
               ],
-              "default": null,
-              "title": "Cursor",
+              "title": "Cursor"
             }
           },
           {
