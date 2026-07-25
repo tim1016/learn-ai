@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator, Callable
 from app.utils.timestamps import now_ms_utc
 
 DEFAULT_SSE_HEARTBEAT_INTERVAL_S = 15.0
+SSE_FORWARD_QUEUE_MAXSIZE = 64
 
 
 def _control_frame(event_name: str, ts_ms: int) -> str:
@@ -41,14 +42,19 @@ async def stream_sse_with_keepalive(
         raise ValueError("heartbeat_interval_s must be positive")
 
     end_of_stream = object()
-    queue: asyncio.Queue[str | object] = asyncio.Queue()
+    queue: asyncio.Queue[str | object] = asyncio.Queue(maxsize=SSE_FORWARD_QUEUE_MAXSIZE)
 
     async def forward_frames() -> None:
+        cancelled = False
         try:
             async for frame in frames:
                 await queue.put(frame)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
-            await queue.put(end_of_stream)
+            if not cancelled:
+                await queue.put(end_of_stream)
 
     producer = asyncio.create_task(forward_frames(), name="sse-keepalive-forwarder")
     try:

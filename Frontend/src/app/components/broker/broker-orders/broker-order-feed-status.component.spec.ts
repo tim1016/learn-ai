@@ -32,15 +32,18 @@ describe('BrokerOrderFeedStatusComponent', () => {
 });
 
 it.each([
-  ['live', 'Live'],
-  ['reconnecting', 'Reconnecting'],
-  ['stale', 'Stale'],
-  ['offline_but_saved', 'Saved offline'],
-  ['projection_unavailable', 'Projection unavailable'],
-] as const)('renders backend-authored transaction feed state %s', async (state, headline) => {
+  ['live', 'Live', 'state-ok'],
+  ['reconnecting', 'Reconnecting', 'state-warn'],
+  ['stale', 'Stale', 'state-warn'],
+  ['offline_but_saved', 'Saved offline', 'state-warn'],
+  ['rebuilding', 'Rebuilding', 'state-warn'],
+  ['projection_unavailable', 'Projection unavailable', 'state-down'],
+  ['corrupt', 'Projection corrupt', 'state-down'],
+] as const)('renders backend-authored transaction feed state %s', async (state, headline, toneClass) => {
   await render(BrokerOrderFeedStatusComponent, {
     inputs: { status: { ...STATUS, updates: { state, headline, detail: 'Backend authored.' } } },
   });
 
   expect(screen.getByText(headline)).toBeTruthy();
+  expect(screen.getByText('Live order updates').closest('.status-item')?.classList.contains(toneClass)).toBe(true);
 });

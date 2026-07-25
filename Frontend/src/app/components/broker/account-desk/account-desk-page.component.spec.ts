@@ -254,6 +254,7 @@ async function setup(
     fleet,
     guidance,
     recovery,
+    transactions,
     route$,
     fragment$,
     router,
@@ -393,11 +394,13 @@ describe("AccountDeskPageComponent", () => {
     const route$ = new BehaviorSubject(
       convertToParamMap({ accountId: "DU1234567" }),
     );
-    const { broker, router } = await setup({ route$ });
+    const { broker, events, router, transactions } = await setup({ route$ });
     broker.accountTriage.mockResolvedValueOnce(
       makeCleanAccountTriage({ accountId: "DU7654321" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Operator" }));
+    events.loadOperations.mockClear();
+    transactions.load.mockClear();
 
     fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
       target: { value: "DU7654321" },
@@ -411,6 +414,8 @@ describe("AccountDeskPageComponent", () => {
     await waitFor(() =>
       expect(broker.accountTriage).toHaveBeenCalledWith("DU7654321"),
     );
+    expect(events.loadOperations).toHaveBeenCalledOnce();
+    expect(transactions.load).toHaveBeenCalledWith("DU7654321");
     expect(
       screen
         .getByRole("button", { name: "Operator" })

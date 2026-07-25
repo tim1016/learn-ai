@@ -111,9 +111,27 @@ interface ReceiptEntry {
 }
 
 function receiptEntries(receipt: Record<string, unknown>): readonly ReceiptEntry[] {
-  return Object.entries(receipt).map(([key, value]) => ({
-    key,
-    label: key,
-    value: typeof value === 'string' ? formatReceiptValue(key, value) : JSON.stringify(value) ?? '',
-  }));
+  return flattenReceiptEntries(receipt, []);
+}
+
+function flattenReceiptEntries(value: unknown, path: readonly string[]): readonly ReceiptEntry[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => flattenReceiptEntries(item, [...path, String(index)]));
+  }
+  if (isReceiptRecord(value)) {
+    return Object.entries(value).flatMap(([key, item]) =>
+      flattenReceiptEntries(item, [...path, key]),
+    );
+  }
+
+  const label = path.join('.');
+  return [{
+    key: label,
+    label,
+    value: typeof value === 'string' ? formatReceiptValue(label, value) : JSON.stringify(value) ?? '',
+  }];
+}
+
+function isReceiptRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

@@ -18,11 +18,18 @@ from httpx import ASGITransport, AsyncClient
 from app.broker.ibkr.client import set_client
 from app.broker.ibkr.config import IbkrSettings
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
+from app.engine.live.account_clerk_rpc import (
+    AccountClerkRpcRequestIdentity,
+    AccountClerkRpcTimeoutError,
+)
 from app.main import app
 from app.routers import broker as broker_router
 from app.routers.broker import _stamp_manual_order_ref_if_requested
 from app.services import manual_order_submission
-from app.services.manual_order_submission import _build_manual_order_intent
+from app.services.manual_order_submission import (
+    ManualOrderClerkRejectedError,
+    _build_manual_order_intent,
+)
 
 # ── Phase 1 endpoints ──────────────────────────────────────────────────
 
@@ -438,6 +445,56 @@ async def test_manual_order_submission_uses_the_durable_account_clerk(
     release_projection.set()
     await asyncio.sleep(0)
     client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_manual_order_submission_marks_post_send_clerk_timeout_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    spec = _stamp_manual_order_ref_if_requested(
+        IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action="BUY",
+            quantity=1,
+            order_type="MKT",
+            confirm_paper=True,
+            manual_order=True,
+        )
+    )
+    assert spec.order_ref is not None
+
+    class _TimeoutClerkClient:
+        def __init__(self, *, artifacts_root, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def submit(self, intent):
+            raise AccountClerkRpcTimeoutError(
+                operation="submit",
+                request_identity=AccountClerkRpcRequestIdentity(
+                    intent_id=intent.intent_id,
+                    order_ref=intent.order_ref,
+                ),
+            )
+
+    monkeypatch.setattr(manual_order_submission, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        manual_order_submission,
+        "read_active_accepting_account_clerk_generation",
+        lambda *_args, **_kwargs: SimpleNamespace(generation=7),
+    )
+    monkeypatch.setattr(manual_order_submission, "AccountClerkRpcClient", _TimeoutClerkClient)
+
+    with pytest.raises(ManualOrderClerkRejectedError) as raised:
+        await manual_order_submission.submit_manual_order_through_clerk(
+            spec,
+            account_id="DU1234567",
+        )
+
+    assert raised.value.reason_code == "MANUAL_ORDER_OUTCOME_AMBIGUOUS"
+    assert raised.value.retry_safe is False
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from app.engine.live.account_artifacts import (
 from app.engine.live.account_clerk_rpc import (
     AccountClerkRpcClient,
     AccountClerkRpcError,
+    AccountClerkRpcUnavailableError,
     clerk_rejection_reason,
 )
 from app.engine.live.account_owner import (
@@ -67,6 +68,16 @@ class ManualOrderBrokerReceiptError(RuntimeError):
         super().__init__(message)
         self.reason_code = reason_code
         self.message = message
+
+
+def _is_ambiguous_manual_submit_failure(exc: AccountClerkRpcError) -> bool:
+    """Return whether the Clerk may have accepted the submitted manual intent."""
+
+    return (
+        isinstance(exc, AccountClerkRpcUnavailableError)
+        and exc.operation == "submit"
+        and exc.reason in {"TIMEOUT", "SOCKET_CONNECTION_LOST", "EMPTY_RESPONSE"}
+    )
 
 
 def _build_manual_order_intent(
@@ -142,6 +153,8 @@ async def submit_manual_order_through_clerk(
             account_id=account_id,
         ).submit(intent)
     except AccountClerkRpcError as exc:
+        if _is_ambiguous_manual_submit_failure(exc):
+            raise ManualOrderClerkRejectedError("MANUAL_ORDER_OUTCOME_AMBIGUOUS", False) from exc
         retry_safe, reason_code = clerk_rejection_reason(exc)
         raise ManualOrderClerkRejectedError(reason_code, retry_safe) from exc
 

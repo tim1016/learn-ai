@@ -16,8 +16,8 @@
   <div
     class="status-item"
     [class.state-ok]="status().updates.state === 'live'"
-    [class.state-warn]="status().updates.state === 'reconnecting' || status().updates.state === 'stale' || status().updates.state === 'offline_but_saved'"
-    [class.state-down]="status().updates.state === 'projection_unavailable'"
+    [class.state-warn]="status().updates.state === 'reconnecting' || status().updates.state === 'stale' || status().updates.state === 'offline_but_saved' || status().updates.state === 'rebuilding'"
+    [class.state-down]="status().updates.state === 'projection_unavailable' || status().updates.state === 'corrupt'"
     [class.state-unknown]="status().updates.state === 'loading'"
   >
     <span class="status-dot" aria-hidden="true"></span>

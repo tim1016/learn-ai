@@ -874,6 +874,9 @@ def _encode_cursor(value: tuple[int, int, str]) -> str:
     return "ctxhp1." + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
+_POSTGRES_BIGINT_MAX = 2**63 - 1
+
+
 def _decode_cursor(value: str | None) -> tuple[int, int, str] | None:
     if value is None:
         return None
@@ -884,7 +887,15 @@ def _decode_cursor(value: str | None) -> tuple[int, int, str] | None:
         timestamp, seq, transaction_id = json.loads(decoded)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid transaction history cursor") from exc
-    if not isinstance(timestamp, int) or not isinstance(seq, int) or not isinstance(transaction_id, str):
+    if (
+        isinstance(timestamp, bool)
+        or not isinstance(timestamp, int)
+        or not 0 <= timestamp <= _POSTGRES_BIGINT_MAX
+        or isinstance(seq, bool)
+        or not isinstance(seq, int)
+        or not 1 <= seq <= _POSTGRES_BIGINT_MAX
+        or not isinstance(transaction_id, str)
+    ):
         raise ValueError("invalid transaction history cursor")
     return timestamp, seq, transaction_id
 

@@ -16,7 +16,11 @@ from app.engine.live.account_owner import (
     AccountOwnerSubmitIntent,
 )
 from app.schemas.clerk_transaction_projection import ClerkTransactionRow, ClerkTransactionSummaryRow
-from app.services import clerk_transaction_projection, clerk_transaction_projection_store
+from app.services import (
+    clerk_transaction_projection,
+    clerk_transaction_projection_schema,
+    clerk_transaction_projection_store,
+)
 from app.services.clerk_transaction_projection import (
     ClerkJournalCursor,
     ClerkTransactionBatch,
@@ -32,6 +36,15 @@ from app.services.clerk_transaction_projection import (
 )
 
 ACCOUNT = "DU1219"
+
+
+def test_projection_schema_expectations_include_journal_generation() -> None:
+    for expectation in (
+        clerk_transaction_projection_schema.CLERK_TRANSACTIONS,
+        clerk_transaction_projection_schema.CLERK_TRANSACTION_EVENTS,
+        clerk_transaction_projection_schema.CLERK_TRANSACTION_PROJECTION_CURSORS,
+    ):
+        assert "journal_generation" in {column.name for column in expectation.columns}
 
 
 def _manual_ack(seq: int, recorded_at_ms: int = 1_700_000_000_000) -> AccountClerkJournalEntry:
@@ -192,6 +205,66 @@ async def test_projection_pool_initialization_is_serialized(monkeypatch: pytest.
     finally:
         clerk_transaction_projection_store._pool = original_pool
         clerk_transaction_projection_store._pool_init_lock = original_lock
+
+
+@pytest.mark.asyncio
+async def test_projection_store_allows_partial_fills_to_advance_to_filled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    _append(path, _callback(2, event_type="fill", status="Submitted"))
+    _append(path, _callback(3, event_type="fill", status="Filled"))
+    batch = read_appended_clerk_journal(account_id=ACCOUNT, journal_path=path, cursor=None)
+    assert batch is not None
+
+    class _Transaction:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class _RecordingConnection:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def transaction(self) -> _Transaction:
+            return _Transaction()
+
+        async def execute(self, query: str, *_args: object) -> str:
+            self.queries.append(query)
+            if query.startswith("INSERT INTO clerk_transaction_events"):
+                return "INSERT 0 1"
+            return "INSERT 0 1"
+
+        async def fetchval(self, *_args: object) -> None:
+            return None
+
+    connection = _RecordingConnection()
+
+    async def _acquire_connection() -> _RecordingConnection:
+        return connection
+
+    async def _release_connection(released: _RecordingConnection) -> None:
+        assert released is connection
+
+    monkeypatch.setattr(clerk_transaction_projection_store.settings, "CLERK_TRANSACTION_PROJECTION_ENABLED", True)
+    monkeypatch.setattr(clerk_transaction_projection_store.settings, "POSTGRES_URL", "postgres://test")
+    monkeypatch.setattr(clerk_transaction_projection_store, "_connection", _acquire_connection)
+    monkeypatch.setattr(clerk_transaction_projection_store, "_release_connection", _release_connection)
+
+    await clerk_transaction_projection_store.PostgresClerkTransactionProjectionStore().persist_batch(
+        batch,
+        updated_at_ms=1_700_000_000_010,
+    )
+
+    lifecycle_updates = [
+        query for query in connection.queries if query.startswith("UPDATE clerk_transactions")
+    ]
+    assert len(lifecycle_updates) == 2
+    assert all("partially_filled" not in query for query in lifecycle_updates)
 
 
 def _callback(

@@ -6,7 +6,10 @@ from httpx import ASGITransport, AsyncClient
 
 from app.routers.clerk_transactions import get_clerk_transaction_store, router
 from app.schemas.clerk_transaction_projection import ClerkTransactionRow
-from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
+from app.services.clerk_transaction_projection import (
+    ClerkTransactionProjectionUnavailable,
+    _encode_cursor,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -64,6 +67,26 @@ async def test_history_endpoint_reports_unavailable_without_fallback_scan() -> N
     assert response.status_code == 200
     assert response.json()["feed_state"] == "projection_unavailable"
     assert response.json()["canonical_fallback_required"] is True
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        _encode_cursor((True, 1, "ctxn_opaque")),
+        _encode_cursor((-1, 1, "ctxn_opaque")),
+        _encode_cursor((1, 0, "ctxn_opaque")),
+        _encode_cursor((1, 2**63, "ctxn_opaque")),
+    ],
+)
+async def test_history_endpoint_rejects_non_postgres_cursor_coordinates(cursor: str) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_clerk_transaction_store] = lambda: _NoIoStore()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/accounts/DU1219/transactions", params={"cursor": cursor})
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "invalid transaction history cursor"
 
 
 async def test_selected_transaction_endpoint_reads_only_the_requested_projection_row() -> None:

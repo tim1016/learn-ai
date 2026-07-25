@@ -22,7 +22,15 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     const detail = vi.fn().mockResolvedValue({
       transaction_id: 'ctxn_1', account_id: 'DU1234567', journal_seq: 4, recorded_at_ms: 1_780_000_000_000,
       transaction_kind: 'manual_ibkr_acknowledgement', strategy_instance_id: 'manual', run_id: 'manual', intent_id: 'intent/opaque', order_ref: 'manual/v1:opaque', order_id: 42, perm_id: null, exec_id: 'exec/opaque', lifecycle_state: 'filled', commission_status: 'reported', fee: 1.25,
-      receipt: { order_ref: 'manual/v1:opaque', receipt_hash: 'sha256:opaque' },
+      receipt: {
+        order_ref: 'manual/v1:opaque',
+        receipt_hash: 'sha256:opaque',
+        broker_event: {
+          reason_code: 'ACCOUNT_CLERK_UNAVAILABLE',
+          lifecycle_state: 'partially_filled',
+          evidence_ref: 'nested/opaque',
+        },
+      },
       events: [{ event_id: 'event_1', event_kind: 'execution', callback_identity: 'callback/opaque', lifecycle_state: 'filled', commission_status: 'reported', fee: 1.25, journal_seq: 5, recorded_at_ms: 1_780_000_000_001, receipt: { execution_ref: 'exec/opaque' }}],
     });
     const store = {
@@ -40,6 +48,9 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     expect(await screen.findByText('Projected transaction evidence')).toBeTruthy();
     expect(screen.getAllByText('manual/v1:opaque').length).toBeGreaterThan(0);
     expect(screen.getAllByText('sha256:opaque').length).toBeGreaterThan(0);
+    expect(screen.getByText('Account Clerk Unavailable')).toBeTruthy();
+    expect(screen.getByText('Partially Filled')).toBeTruthy();
+    expect(screen.getByText('nested/opaque')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Close receipt drawer', hidden: true }));
     expect(document.activeElement).toBe(row);
   });

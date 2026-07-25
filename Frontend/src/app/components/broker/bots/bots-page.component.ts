@@ -279,6 +279,7 @@ export class BotsPageComponent {
 
   async refresh(selectionToRetain?: ReadonlySet<string>): Promise<void> {
     const requestGeneration = ++this.catalogRequestGeneration;
+    let loadedFirstPage = false;
     this.isLoading.set(true);
     this.errorMessage.set(null);
     try {
@@ -287,12 +288,18 @@ export class BotsPageComponent {
       });
       if (requestGeneration !== this.catalogRequestGeneration) return;
       this.applyCatalogPage(page, { replace: true });
+      loadedFirstPage = true;
       this.selectedBotIds.set(new Set(selectionToRetain ?? []));
       void this.refreshAccountTriage();
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
     } finally {
-      if (requestGeneration === this.catalogRequestGeneration) this.isLoading.set(false);
+      if (requestGeneration === this.catalogRequestGeneration) {
+        this.isLoading.set(false);
+        if (loadedFirstPage && this.hasActiveFilters()) {
+          void this.loadRemainingBotsForActiveFilter();
+        }
+      }
     }
   }
 
