@@ -56,3 +56,15 @@ Until at least one of these fires, the substrate remains JSON + Parquet + hash s
 - `PythonDataService/app/engine/live/reconcile.py` — three-way daily reconciler (Phase 9).
 - `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16 — historical design-lock round (this ADR is Resolution 1).
 - `docs/ibkr-integration-authority.md` — authoritative live-runtime status as of `master`.
+
+## Amendment 2026-07-25 — Clerk-native transaction projection (#1219)
+
+The Operator Transaction History trigger has fired: an operator needs a
+bounded, indexed account-wide acknowledgement history without asking a broker,
+Account Truth, or a full journal scan on page render. `clerk_transactions`,
+`clerk_transaction_events`, and `clerk_transaction_projection_cursors` are
+therefore downstream Postgres projection tables over canonical
+`clerk_journal.jsonl`, separate from all lifecycle projection tables/runtimes.
+The cursor and rows commit atomically. Projection failure leaves the Clerk's
+already fsynced acknowledgement unchanged; reads use opaque keyset pages and
+backend-owned availability, high-water, and lag facts only.

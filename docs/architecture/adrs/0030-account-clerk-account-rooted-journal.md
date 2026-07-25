@@ -335,6 +335,17 @@ the account as flat.
 
 ## Issue #1044 callback-stream hardening traceability
 
+## Transaction-history projection amendment (2026-07-25, #1219)
+
+Manual IBKR `broker_acked` receipts are first materialized into a dedicated,
+rebuildable transaction projection. The Clerk retains ownership of the durable
+acknowledgement and journal. The projector tails complete appended journal bytes
+after a durable byte/sequence cursor and atomically stores transaction/event
+rows with that cursor. A projection failure may replay but never retracts,
+delays, or invalidates the Clerk acknowledgement. This is not a lifecycle
+projection: Python owns the receipt/pagination meaning, .NET owns only the
+migration shape, and Angular renders the supplied opaque IDs/status fields.
+
 | Requirement | Verification |
 | --- | --- |
 | Start after broker connect; always stop in shutdown | `test_clerk_process_acquires_lock_before_broker_connect_and_releases_after_disconnect` |

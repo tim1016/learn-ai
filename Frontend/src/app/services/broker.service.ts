@@ -31,6 +31,7 @@ import type {
   JournalRecoveryRequest,
 } from '../api/account-cockpit.types';
 import type { AccountEventsRequest, AccountEventsResponse } from '../api/account-events.types';
+import type { ClerkTransactionHistoryResponse } from '../api/clerk-transaction-history.types';
 import type {
   AccountTruthResponse,
   DataPlaneHealth,
@@ -216,6 +217,21 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<AccountCockpitResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/cockpit`,
+      ),
+    );
+  }
+
+  accountTransactions(
+    accountId: string,
+    cursor: string | null = null,
+    limit = 50,
+  ): Promise<ClerkTransactionHistoryResponse> {
+    const params: Record<string, string | number> = { limit };
+    if (cursor !== null) params.cursor = cursor;
+    return firstValueFrom(
+      this.http.get<ClerkTransactionHistoryResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions`,
+        { params },
       ),
     );
   }

@@ -10328,6 +10328,227 @@
         "title": "ClerkStatus",
         "type": "object"
       },
+      "ClerkTransactionEventRow": {
+        "additionalProperties": false,
+        "description": "One immutable event materialized from a Clerk journal receipt.",
+        "properties": {
+          "event_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Event Id",
+            "type": "string"
+          },
+          "event_kind": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Event Kind",
+            "type": "string"
+          },
+          "journal_seq": {
+            "minimum": 1.0,
+            "title": "Journal Seq",
+            "type": "integer"
+          },
+          "receipt": {
+            "title": "Receipt",
+            "type": "object"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "event_kind",
+          "journal_seq",
+          "recorded_at_ms"
+        ],
+        "title": "ClerkTransactionEventRow",
+        "type": "object"
+      },
+      "ClerkTransactionHistoryResponse": {
+        "additionalProperties": false,
+        "description": "One bounded keyset page, with backend-owned projection status.",
+        "properties": {
+          "canonical_fallback_required": {
+            "title": "Canonical Fallback Required",
+            "type": "boolean"
+          },
+          "high_water_journal_seq": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "High Water Journal Seq"
+          },
+          "lag_records": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Records"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "projection_available": {
+            "title": "Projection Available",
+            "type": "boolean"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ClerkTransactionRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "projection_available",
+          "canonical_fallback_required",
+          "rows"
+        ],
+        "title": "ClerkTransactionHistoryResponse",
+        "type": "object"
+      },
+      "ClerkTransactionRow": {
+        "additionalProperties": false,
+        "description": "One operator transaction, projected from a durable Clerk receipt.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ClerkTransactionEventRow"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "exec_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exec Id"
+          },
+          "intent_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Intent Id",
+            "type": "string"
+          },
+          "journal_seq": {
+            "minimum": 1.0,
+            "title": "Journal Seq",
+            "type": "integer"
+          },
+          "order_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Id"
+          },
+          "order_ref": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "perm_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perm Id"
+          },
+          "receipt": {
+            "title": "Receipt",
+            "type": "object"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "transaction_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Transaction Id",
+            "type": "string"
+          },
+          "transaction_kind": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Transaction Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "account_id",
+          "journal_seq",
+          "recorded_at_ms",
+          "transaction_kind",
+          "strategy_instance_id",
+          "run_id",
+          "intent_id",
+          "order_ref"
+        ],
+        "title": "ClerkTransactionRow",
+        "type": "object"
+      },
       "CloseAllAction": {
         "additionalProperties": false,
         "properties": {
@@ -41107,6 +41328,95 @@
         "summary": "Update Account Session Policy Endpoint",
         "tags": [
           "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/transactions": {
+      "get": {
+        "description": "Read one indexed keyset page without broker, Account Truth, or journal I/O.",
+        "operationId": "get_clerk_transaction_history_api_accounts__account_id__transactions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkTransactionHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clerk Transaction History",
+        "tags": [
+          "clerk-transactions"
         ]
       }
     },

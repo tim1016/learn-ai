@@ -524,6 +524,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Clerk Transaction History
+         * @description Read one indexed keyset page without broker, Account Truth, or journal I/O.
+         */
+        get: operations["get_clerk_transaction_history_api_accounts__account_id__transactions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/triage": {
         parameters: {
             query?: never;
@@ -9763,6 +9783,74 @@ export interface components {
             observed_at_ms: number;
             /** Outstanding Intents */
             outstanding_intents: number;
+        };
+        /**
+         * ClerkTransactionEventRow
+         * @description One immutable event materialized from a Clerk journal receipt.
+         */
+        ClerkTransactionEventRow: {
+            /** Event Id */
+            event_id: string;
+            /** Event Kind */
+            event_kind: string;
+            /** Journal Seq */
+            journal_seq: number;
+            /** Receipt */
+            receipt?: Record<string, never>;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /**
+         * ClerkTransactionHistoryResponse
+         * @description One bounded keyset page, with backend-owned projection status.
+         */
+        ClerkTransactionHistoryResponse: {
+            /** Canonical Fallback Required */
+            canonical_fallback_required: boolean;
+            /** High Water Journal Seq */
+            high_water_journal_seq?: number | null;
+            /** Lag Records */
+            lag_records?: number | null;
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Projection Available */
+            projection_available: boolean;
+            /** Rows */
+            rows: components["schemas"]["ClerkTransactionRow"][];
+        };
+        /**
+         * ClerkTransactionRow
+         * @description One operator transaction, projected from a durable Clerk receipt.
+         */
+        ClerkTransactionRow: {
+            /** Account Id */
+            account_id: string;
+            /** Events */
+            events?: components["schemas"]["ClerkTransactionEventRow"][];
+            /** Exec Id */
+            exec_id?: string | null;
+            /** Intent Id */
+            intent_id: string;
+            /** Journal Seq */
+            journal_seq: number;
+            /** Order Id */
+            order_id?: number | null;
+            /** Order Ref */
+            order_ref: string;
+            /** Perm Id */
+            perm_id?: number | null;
+            /** Receipt */
+            receipt?: Record<string, never>;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Transaction Id */
+            transaction_id: string;
+            /** Transaction Kind */
+            transaction_kind: string;
         };
         /** CloseAllAction */
         CloseAllAction: {
@@ -24130,6 +24218,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountSessionPolicyUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clerk_transaction_history_api_accounts__account_id__transactions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkTransactionHistoryResponse"];
                 };
             };
             /** @description Validation Error */
