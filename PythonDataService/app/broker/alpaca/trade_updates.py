@@ -601,13 +601,13 @@ class TradeUpdatesConsumer:
         """
 
         try:
-            cursor = await self._clerk.activity_recovery_cursor_ms()
+            cursor = await self._clerk.activity_recovery.cursor_ms()
             activities = await self._read.list_activities(
                 after_ms=cursor, limit=_ACTIVITY_RECOVERY_LIMIT
             )
             for activity in activities:
-                if await self._clerk.record_activity_recovery(
-                    activity=activity, recovery_window_limit=_ACTIVITY_RECOVERY_LIMIT
+                if await self._clerk.activity_recovery.record(
+                    activity=activity, window_limit=_ACTIVITY_RECOVERY_LIMIT
                 ):
                     self._counters.gap_reconciled += 1
         except Exception:

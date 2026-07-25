@@ -19,9 +19,9 @@ from typing import Any, Protocol, cast
 
 import asyncpg
 
-from app.config import settings
 from app.broker.alpaca.clerk.journal import JOURNAL_FILENAME
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
+from app.config import settings
 from app.engine.live.account_artifacts import account_artifact_file_path
 from app.engine.live.account_clerk_journal import ACCOUNT_CLERK_JOURNAL_FILENAME
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
@@ -808,12 +808,12 @@ def _event_transaction_id(account_id: str, event: ClerkTransactionEventRow) -> s
 
 
 __all__ = [
-    "alpaca_clerk_journal_path",
     "ClerkJournalCursor",
     "ClerkTransactionBatch",
     "ClerkTransactionProjectionStore",
     "ClerkTransactionProjectionUnavailable",
     "PostgresClerkTransactionProjectionStore",
+    "alpaca_clerk_journal_path",
     "clerk_journal_path",
     "fold_lifecycle_state",
     "project_account_journal_best_effort",

@@ -8693,10 +8693,10 @@ export interface components {
             broker: string;
             /** Category */
             category: string | null;
-            /** Net Amount */
-            net_amount: number | null;
             /** Native Order Id */
             native_order_id?: string | null;
+            /** Net Amount */
+            net_amount: number | null;
             /** Observed At Ms */
             observed_at_ms: number;
             /** Occurred At Ms */
@@ -9831,6 +9831,12 @@ export interface components {
          * @description One immutable event materialized from a Clerk journal receipt.
          */
         ClerkTransactionEventRow: {
+            /**
+             * Broker
+             * @default ibkr
+             * @enum {string}
+             */
+            broker?: "ibkr" | "alpaca";
             /** Callback Identity */
             callback_identity: string;
             /**
@@ -9849,6 +9855,10 @@ export interface components {
             journal_seq: number;
             /** Lifecycle State */
             lifecycle_state: string;
+            /** Native Execution Id */
+            native_execution_id?: string | null;
+            /** Native Order Id */
+            native_order_id?: string | null;
             /** Receipt */
             receipt?: Record<string, never>;
             /** Recorded At Ms */
@@ -9889,6 +9899,12 @@ export interface components {
             /** Account Id */
             account_id: string;
             /**
+             * Broker
+             * @default ibkr
+             * @enum {string}
+             */
+            broker?: "ibkr" | "alpaca";
+            /**
              * Commission Status
              * @default unknown
              * @enum {string}
@@ -9906,6 +9922,10 @@ export interface components {
             journal_seq: number;
             /** Lifecycle State */
             lifecycle_state: string;
+            /** Native Execution Id */
+            native_execution_id?: string | null;
+            /** Native Order Id */
+            native_order_id?: string | null;
             /** Order Id */
             order_id?: number | null;
             /** Order Ref */
@@ -9933,6 +9953,12 @@ export interface components {
             /** Account Id */
             account_id: string;
             /**
+             * Broker
+             * @default ibkr
+             * @enum {string}
+             */
+            broker?: "ibkr" | "alpaca";
+            /**
              * Commission Status
              * @default unknown
              * @enum {string}
@@ -9950,6 +9976,10 @@ export interface components {
             journal_seq: number;
             /** Lifecycle State */
             lifecycle_state: string;
+            /** Native Execution Id */
+            native_execution_id?: string | null;
+            /** Native Order Id */
+            native_order_id?: string | null;
             /** Order Id */
             order_id?: number | null;
             /** Order Ref */

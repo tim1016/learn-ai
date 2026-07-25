@@ -44,6 +44,7 @@ namespace Backend.Migrations
                 DROP INDEX IF EXISTS uq_clerk_transactions_broker_account_journal_seq;
                 DROP INDEX IF EXISTS uq_clerk_transaction_events_broker_account_journal_seq;
                 DROP INDEX IF EXISTS uq_clerk_transaction_events_callback_identity;
+                DROP INDEX IF EXISTS ix_clerk_transactions_history;
                 ALTER TABLE clerk_transaction_events DROP COLUMN IF EXISTS native_execution_id, DROP COLUMN IF EXISTS native_order_id, DROP COLUMN IF EXISTS broker;
                 ALTER TABLE clerk_transactions DROP COLUMN IF EXISTS native_execution_id, DROP COLUMN IF EXISTS native_order_id, DROP COLUMN IF EXISTS broker;
                 CREATE UNIQUE INDEX uq_clerk_transactions_account_journal_seq ON clerk_transactions (account_id, journal_seq);
@@ -51,6 +52,8 @@ namespace Backend.Migrations
                 CREATE UNIQUE INDEX uq_clerk_transaction_events_callback_identity
                     ON clerk_transaction_events (account_id, callback_identity)
                     WHERE callback_identity <> '';
+                CREATE INDEX ix_clerk_transactions_history
+                    ON clerk_transactions (account_id, recorded_at_ms DESC, journal_seq DESC, transaction_id DESC);
             ");
         }
     }

@@ -85,6 +85,7 @@ class OrderJournal:
         self._dir = self._account_dir()
         self._lock = threading.Lock()
         self._appended = 0
+        self._projection_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def account_dir(self) -> Path:
@@ -137,12 +138,14 @@ class OrderJournal:
         # delay or alter a Clerk outcome when Postgres is unavailable.
         from app.services.clerk_transaction_projection import project_alpaca_journal_best_effort
 
-        asyncio.create_task(
+        projection_task = asyncio.create_task(
             project_alpaca_journal_best_effort(
                 artifacts_root=self._root, account_id=self._account_id
             ),
             name="alpaca-transaction-projection",
         )
+        self._projection_tasks.add(projection_task)
+        projection_task.add_done_callback(self._projection_tasks.discard)
 
     @staticmethod
     def _append_fsynced(path: Path, line: str) -> None:

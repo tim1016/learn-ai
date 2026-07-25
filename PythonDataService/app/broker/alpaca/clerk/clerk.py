@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.broker.alpaca.clerk import derive, reconcile
+from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.models import (
     UNEXPLAINED_ORDER_HOLD_CODE,
@@ -46,7 +47,6 @@ from app.broker.contract.errors import (
     BrokerUnavailable,
 )
 from app.broker.contract.models import (
-    BrokerActivity,
     BrokerOrder,
     BrokerOrderEvent,
     BrokerOrderLeg,
@@ -80,16 +80,13 @@ _RECONCILIATION_TERMINAL_ORDER_STATUSES = frozenset(
 # ``TradeUpdatesConsumer`` seam) so journaled timestamps are deterministic.
 type Clock = Callable[[], int]
 
-
 def _now_ms() -> int:
     """Current instant as ``int64`` ms UTC (ingestion boundary)."""
     return int(datetime.now(UTC).timestamp() * 1000)
 
-
 def _leg_error(exc: BrokerError) -> OrderLegError:
     """Adapt a broker exception to the clerk's typed *what/why* leg error."""
     return OrderLegError(message=exc.message, why=exc.detail)
-
 
 @dataclass(frozen=True, slots=True)
 class _LegIdentity:
@@ -155,7 +152,6 @@ class _LegIdentity:
             clock=clock,
         )
 
-
 class AlpacaClerk:
     """Single-writer order-submission facade for one Alpaca account.
 
@@ -177,6 +173,9 @@ class AlpacaClerk:
         self._trade = trade
         self._clock = clock
         self._intake_lock = asyncio.Lock()
+        self.activity_recovery = AlpacaActivityRecovery(
+            intake_lock=self._intake_lock, ensure_journal=self._ensure_journal, clock=clock
+        )
         # Recovery owns historical, already-minted refs. Keep concurrent sweep
         # replays serial without making a slow by-client-id lookup block cancel.
         self._recovery_lock = asyncio.Lock()
@@ -422,57 +421,6 @@ class AlpacaClerk:
         """Observable counter: lifecycle events on orders this Clerk did not own."""
         return self._unexplained_order_count
 
-    async def activity_recovery_cursor_ms(self) -> int | None:
-        """Read the durable activity watermark; it is never an in-memory cursor."""
-        async with self._intake_lock:
-            _, journal = await self._ensure_journal()
-            return max(
-                (
-                    entry.activity.occurred_at_ms
-                    for entry in journal.read_entries()
-                    if entry.kind is ClerkEntryKind.ACTIVITY_RECOVERY
-                    and entry.activity is not None
-                    and entry.activity.occurred_at_ms is not None
-                ),
-                default=None,
-            )
-
-    async def record_activity_recovery(
-        self, *, activity: BrokerActivity, recovery_window_limit: int
-    ) -> bool:
-        """Append one bounded account-activity recovery receipt exactly once."""
-        async with self._intake_lock:
-            account_id, journal = await self._ensure_journal()
-            entries = journal.read_entries()
-            if any(
-                entry.kind is ClerkEntryKind.ACTIVITY_RECOVERY
-                and entry.activity is not None
-                and entry.activity.activity_id == activity.activity_id
-                for entry in entries
-            ):
-                return False
-            owner = self._resolve_owning_entry_by_order_id(activity.native_order_id, entries)
-            if owner is None:
-                return False
-            await journal.append_async(
-                OrderJournalEntry(
-                    kind=ClerkEntryKind.ACTIVITY_RECOVERY,
-                    account_id=account_id,
-                    operator=owner.operator,
-                    intent_id=owner.intent_id,
-                    order_ref=owner.order_ref,
-                    client_order_id=owner.client_order_id,
-                    leg=owner.leg,
-                    broker_order_id=activity.native_order_id,
-                    owned=True,
-                    recorded_at_ms=self._clock(),
-                    activity=activity,
-                    recovery_source="account_activities_cursor_window",
-                    recovery_window_limit=recovery_window_limit,
-                )
-            )
-            return True
-
     def _known_namespaces(self, journal: OrderJournal) -> frozenset[str]:
         """The manual-order namespaces this Clerk has minted, from the journal.
 
@@ -511,17 +459,6 @@ class AlpacaClerk:
             ):
                 owning = entry
         return owning
-
-    @staticmethod
-    def _resolve_owning_entry_by_order_id(
-        broker_order_id: str | None, entries: list[OrderJournalEntry]
-    ) -> OrderJournalEntry | None:
-        if not broker_order_id:
-            return None
-        for entry in reversed(entries):
-            if entry.order is not None and entry.order.order_id == broker_order_id and entry.order_ref:
-                return entry
-        return None
 
     # ── S6 exposure hold (account-level, journal-derived) ────────────────────
 
@@ -1039,9 +976,7 @@ class AlpacaClerk:
             )
         return plan.verdict
 
-
 _clerk: AlpacaClerk | None = None
-
 
 def get_alpaca_clerk() -> AlpacaClerk | None:
     """Return the process-wide Alpaca clerk, or ``None`` when unconfigured.
@@ -1050,7 +985,6 @@ def get_alpaca_clerk() -> AlpacaClerk | None:
     present; a ``None`` return means the router surfaces "not configured".
     """
     return _clerk
-
 
 def set_alpaca_clerk(clerk: AlpacaClerk | None) -> None:
     """Install (or clear) the process-wide Alpaca clerk — lifespan wiring."""

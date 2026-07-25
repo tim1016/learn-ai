@@ -7495,17 +7495,6 @@
             ],
             "title": "Category"
           },
-          "net_amount": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Net Amount"
-          },
           "native_order_id": {
             "anyOf": [
               {
@@ -7516,6 +7505,17 @@
               }
             ],
             "title": "Native Order Id"
+          },
+          "net_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Amount"
           },
           "observed_at_ms": {
             "title": "Observed At Ms",
