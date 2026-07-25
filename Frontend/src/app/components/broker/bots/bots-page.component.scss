@@ -16,6 +16,7 @@
 .filters,
 .card-topline,
 .result-summary,
+.incremental-load,
 .roll-call-strip,
 .launch-progress-header,
 .selection-bar,
@@ -257,6 +258,14 @@ h1 {
   gap: 12px;
   min-height: 24px;
   margin-bottom: 10px;
+  color: var(--text-subtle);
+  font-size: 13px;
+}
+
+.incremental-load {
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 14px;
   color: var(--text-subtle);
   font-size: 13px;
 }

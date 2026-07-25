@@ -208,7 +208,11 @@
 
   <div class="result-summary" aria-live="polite">
     <span>{{ activeTabSummary() }}</span>
-    <span>{{ visibleBots().length }} total after filters</span>
+    @if (catalogLoaded()) {
+      <span>{{ visibleBots().length }} loaded matches · {{ catalogTotalCount() }} known bots</span>
+    } @else {
+      <span>Fleet status unavailable until catalog loading begins.</span>
+    }
   </div>
 
   @if (selectedCount() > 0) {
@@ -330,6 +334,22 @@
     </p-tabpanels>
   </p-tabs>
 
+  @if (hasMoreBots()) {
+    <div class="incremental-load">
+      <span>Showing {{ loadedBotCount() }} of {{ catalogTotalCount() }} known bots.</span>
+      <button
+        pButton
+        type="button"
+        severity="secondary"
+        [outlined]="true"
+        [loading]="isLoadingMore()"
+        (click)="loadMoreBots()"
+      >
+        <span class="p-button-label">Load next {{ 25 }} bots</span>
+      </button>
+    </div>
+  }
+
   <ng-template #botPanel let-rows let-emptyMode="emptyMode">
     <div class="bot-table-shell">
       <p-table
@@ -341,8 +361,7 @@
         [value]="rows"
         [loading]="isLoading()"
         [showInitialSortBadge]="false"
-        [paginator]="rows.length > 25"
-        [rows]="25"
+        [paginator]="false"
         [rowHover]="true"
         [rowTrackBy]="trackByBotId"
         [tableStyle]="{ 'min-width': '68rem' }"

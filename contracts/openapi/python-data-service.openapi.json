@@ -5915,6 +5915,45 @@
         "title": "BotCatalogMetrics",
         "type": "object"
       },
+      "BotCatalogPageResponse": {
+        "description": "A bounded, broker-free page of bot catalog cards.\n\nThe page intentionally carries no fleet roll-call or account-triage\nsummary. Those aggregate views require resolving the entire fleet and are\ntherefore not suitable for the Bots page's initial render.",
+        "properties": {
+          "bots": {
+            "items": {
+              "$ref": "#/components/schemas/BotCatalogRow"
+            },
+            "title": "Bots",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "total_count": {
+            "minimum": 0.0,
+            "title": "Total Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_count",
+          "observed_at_ms"
+        ],
+        "title": "BotCatalogPageResponse",
+        "type": "object"
+      },
       "BotCatalogPnl": {
         "description": "Backend-authored P&L fields for the bot catalog card.\n\n``None`` is the honest value when the current data sources cannot provide\na component; the frontend renders absence rather than recomputing money.",
         "properties": {
@@ -47123,6 +47162,80 @@
           }
         },
         "summary": "List Bot Catalog",
+        "tags": [
+          "live-instances",
+          "live-instances"
+        ]
+      }
+    },
+    "/api/live-instances/catalog/page": {
+      "get": {
+        "description": "Return a bounded catalog page for post-first-paint loading.\n\nThis remains broker-free. It reads one daemon fleet snapshot so each\ncard's runtime state is current, then composes daemon/account evidence\nonly for the requested page.",
+        "operationId": "list_bot_catalog_page_api_live_instances_catalog_page_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cursor",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotCatalogPageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Bot Catalog Page",
         "tags": [
           "live-instances",
           "live-instances"

@@ -123,6 +123,7 @@ from app.schemas.live_runs import (
     ActivityPositionSnapshot,
     ActivityReconciliationWarning,
     AuditCopySizingLookup,
+    BotCatalogPageResponse,
     BotCatalogResponse,
     BotDeleteRequest,
     BotDeleteResponse,
@@ -2092,6 +2093,28 @@ async def list_bot_catalog() -> BotCatalogResponse:
     settings = get_settings()
     root = Path(settings.live_runs_root)
     return await _broker_free_fleet_read_service().catalog(settings, root)
+
+
+@router.get("/catalog/page", response_model=BotCatalogPageResponse)
+async def list_bot_catalog_page(
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    cursor: Annotated[int, Query(ge=0)] = 0,
+) -> BotCatalogPageResponse:
+    """Return a bounded catalog page for post-first-paint loading.
+
+    This remains broker-free. It reads one daemon fleet snapshot so each
+    card's runtime state is current, then composes daemon/account evidence
+    only for the requested page.
+    """
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    return await _broker_free_fleet_read_service().catalog_page(
+        settings,
+        root,
+        limit=limit,
+        cursor=cursor,
+    )
 
 
 @router.post("/roll-call", response_model=BotRollCallResponse)
