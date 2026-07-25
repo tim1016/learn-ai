@@ -202,6 +202,20 @@ async def tail_account_journal(
     return await resolved_store.persist_batch(batch, updated_at_ms=updated_at_ms or _now_ms())
 
 
+async def project_account_journal_best_effort(*, artifacts_root: Path, account_id: str) -> None:
+    """Refresh the rebuildable projection without delaying a Clerk acknowledgement."""
+
+    if not settings.CLERK_TRANSACTION_PROJECTION_ENABLED:
+        return
+    try:
+        await tail_account_journal(artifacts_root=artifacts_root, account_id=account_id)
+    except Exception:
+        logger.exception(
+            "Clerk transaction projection failed after durable acknowledgement",
+            extra={"account_id": account_id},
+        )
+
+
 def _encode_cursor(value: tuple[int, int, str]) -> str:
     payload = json.dumps(value, separators=(",", ":")).encode("utf-8")
     return "ctxhp1." + base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
@@ -281,7 +295,8 @@ class PostgresClerkTransactionProjectionStore:
                     )
                 await conn.execute(
                     "INSERT INTO clerk_transaction_projection_cursors (account_id, journal_path, last_byte_offset, last_journal_seq, updated_at_ms) VALUES ($1,$2,$3,$4,$5) "
-                    "ON CONFLICT (account_id, journal_path) DO UPDATE SET last_byte_offset=EXCLUDED.last_byte_offset, last_journal_seq=EXCLUDED.last_journal_seq, updated_at_ms=EXCLUDED.updated_at_ms",
+                    "ON CONFLICT (account_id, journal_path) DO UPDATE SET last_byte_offset=EXCLUDED.last_byte_offset, last_journal_seq=EXCLUDED.last_journal_seq, updated_at_ms=EXCLUDED.updated_at_ms "
+                    "WHERE (clerk_transaction_projection_cursors.last_byte_offset, clerk_transaction_projection_cursors.last_journal_seq) < (EXCLUDED.last_byte_offset, EXCLUDED.last_journal_seq)",
                     batch.account_id, batch.journal_path, batch.next_byte_offset, batch.next_journal_seq, updated_at_ms,
                 )
         finally:
@@ -295,10 +310,13 @@ class PostgresClerkTransactionProjectionStore:
         try:
             records = await conn.fetch(
                 "SELECT t.transaction_id, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.receipt, "
-                "COALESCE(jsonb_agg(jsonb_build_object('event_id', e.event_id, 'event_kind', e.event_kind, 'journal_seq', e.journal_seq, 'recorded_at_ms', e.recorded_at_ms, 'receipt', e.receipt) ORDER BY e.journal_seq) FILTER (WHERE e.event_id IS NOT NULL), '[]'::jsonb) AS events "
-                "FROM clerk_transactions t LEFT JOIN clerk_transaction_events e ON e.transaction_id=t.transaction_id "
-                "WHERE t.account_id=$1 AND ($2::bigint IS NULL OR (t.recorded_at_ms, t.journal_seq, t.transaction_id) < ($2,$3,$4)) "
-                "GROUP BY t.id ORDER BY t.recorded_at_ms DESC, t.journal_seq DESC, t.transaction_id DESC LIMIT $5",
+                "COALESCE(events.events, '[]'::jsonb) AS events "
+                "FROM (SELECT transaction_id, account_id, journal_seq, recorded_at_ms, transaction_kind, strategy_instance_id, run_id, intent_id, order_ref, order_id, perm_id, exec_id, receipt "
+                "FROM clerk_transactions WHERE account_id=$1 AND ($2::bigint IS NULL OR (recorded_at_ms, journal_seq, transaction_id) < ($2,$3,$4)) "
+                "ORDER BY recorded_at_ms DESC, journal_seq DESC, transaction_id DESC LIMIT $5) t "
+                "LEFT JOIN LATERAL (SELECT jsonb_agg(jsonb_build_object('event_id', e.event_id, 'event_kind', e.event_kind, 'journal_seq', e.journal_seq, 'recorded_at_ms', e.recorded_at_ms, 'receipt', e.receipt) ORDER BY e.journal_seq) AS events "
+                "FROM clerk_transaction_events e WHERE e.transaction_id=t.transaction_id) events ON TRUE "
+                "ORDER BY t.recorded_at_ms DESC, t.journal_seq DESC, t.transaction_id DESC",
                 account_id, after[0] if after else None, after[1] if after else None, after[2] if after else None, limit,
             )
             metadata = await conn.fetchrow(
@@ -325,5 +343,6 @@ def _json_value(value: Any) -> Any:
 __all__ = [
     "ClerkJournalCursor", "ClerkTransactionBatch", "ClerkTransactionProjectionStore",
     "ClerkTransactionProjectionUnavailable", "PostgresClerkTransactionProjectionStore",
-    "clerk_journal_path", "read_appended_clerk_journal", "tail_account_journal", "transaction_history",
+    "clerk_journal_path", "project_account_journal_best_effort", "read_appended_clerk_journal",
+    "tail_account_journal", "transaction_history",
 ]

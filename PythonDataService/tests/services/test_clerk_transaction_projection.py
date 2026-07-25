@@ -12,9 +12,11 @@ from app.engine.live.account_owner import (
     AccountOwnerSubmitIntent,
 )
 from app.schemas.clerk_transaction_projection import ClerkTransactionRow
+from app.services import clerk_transaction_projection
 from app.services.clerk_transaction_projection import (
     ClerkJournalCursor,
     ClerkTransactionBatch,
+    project_account_journal_best_effort,
     read_appended_clerk_journal,
     tail_account_journal,
     transaction_history,
@@ -129,6 +131,23 @@ async def test_projection_failure_does_not_change_durable_acknowledgement_or_cur
     assert path.read_bytes() == durable_journal
     assert store.cursor is None
     assert store.rows == []
+
+
+@pytest.mark.asyncio
+async def test_best_effort_projection_failure_cannot_block_durable_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _fail(**kwargs) -> int:
+        raise RuntimeError("projection database unavailable")
+
+    monkeypatch.setattr(clerk_transaction_projection.settings, "CLERK_TRANSACTION_PROJECTION_ENABLED", True)
+    monkeypatch.setattr(clerk_transaction_projection, "tail_account_journal", _fail)
+
+    await project_account_journal_best_effort(artifacts_root=tmp_path, account_id=ACCOUNT)
+
+    assert "Clerk transaction projection failed after durable acknowledgement" in caplog.text
 
 
 @pytest.mark.asyncio

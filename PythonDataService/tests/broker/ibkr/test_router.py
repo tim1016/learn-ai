@@ -412,6 +412,13 @@ async def test_manual_order_submission_uses_the_durable_account_clerk(
         lambda *_args, **_kwargs: SimpleNamespace(generation=7),
     )
     monkeypatch.setattr(manual_order_submission, "AccountClerkRpcClient", _FakeClerkClient)
+    projected_accounts: list[str] = []
+
+    async def _project(*, artifacts_root, account_id: str) -> None:
+        assert artifacts_root == tmp_path
+        projected_accounts.append(account_id)
+
+    monkeypatch.setattr(manual_order_submission, "project_account_journal_best_effort", _project)
 
     result = await manual_order_submission.submit_manual_order_through_clerk(
         spec,
@@ -421,6 +428,7 @@ async def test_manual_order_submission_uses_the_durable_account_clerk(
     assert result == broker_ack
     assert submitted[0].order_ref == spec.order_ref
     assert submitted[0].intent_kind == "MANUAL_ORDER"
+    assert projected_accounts == ["DU1234567"]
     client.ib.placeOrder.assert_not_called()
 
 

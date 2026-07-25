@@ -345,6 +345,8 @@ rows with that cursor. A projection failure may replay but never retracts,
 delays, or invalidates the Clerk acknowledgement. This is not a lifecycle
 projection: Python owns the receipt/pagination meaning, .NET owns only the
 migration shape, and Angular renders the supplied opaque IDs/status fields.
+Successful manual Clerk RPCs trigger that best-effort tail only after the
+acknowledgement is durable.
 
 | Requirement | Verification |
 | --- | --- |

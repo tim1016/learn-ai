@@ -227,7 +227,7 @@ export class BrokerService {
     limit = 50,
   ): Promise<ClerkTransactionHistoryResponse> {
     const params: Record<string, string | number> = { limit };
-    if (cursor !== null) params.cursor = cursor;
+    if (cursor !== null) params['cursor'] = cursor;
     return firstValueFrom(
       this.http.get<ClerkTransactionHistoryResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions`,

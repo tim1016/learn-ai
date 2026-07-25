@@ -61,6 +61,7 @@ namespace Backend.Migrations
                 CREATE UNIQUE INDEX uq_clerk_transactions_account_journal_seq ON clerk_transactions (account_id, journal_seq);
                 CREATE UNIQUE INDEX uq_clerk_transaction_events_event_id ON clerk_transaction_events (event_id);
                 CREATE UNIQUE INDEX uq_clerk_transaction_events_account_journal_seq ON clerk_transaction_events (account_id, journal_seq);
+                CREATE INDEX ix_clerk_transaction_events_transaction_id ON clerk_transaction_events (transaction_id);
                 CREATE INDEX ix_clerk_transactions_history ON clerk_transactions (account_id, recorded_at_ms DESC, journal_seq DESC, transaction_id DESC);
             ");
         }

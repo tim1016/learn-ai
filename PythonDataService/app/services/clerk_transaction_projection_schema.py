@@ -29,7 +29,7 @@ CLERK_TRANSACTION_EVENTS = TableExpectation(
         ColumnExpectation("inserted_at_ms", "bigint", False),
     ), primary_key=("id",), partial_unique_indexes=(),
     check_constraints=("ck_clerk_transaction_events_recorded_at_ms", "ck_clerk_transaction_events_journal_seq"),
-    indexes=("uq_clerk_transaction_events_event_id", "uq_clerk_transaction_events_account_journal_seq"),
+    indexes=("uq_clerk_transaction_events_event_id", "uq_clerk_transaction_events_account_journal_seq", "ix_clerk_transaction_events_transaction_id"),
 )
 CLERK_TRANSACTION_PROJECTION_CURSORS = TableExpectation(
     name="clerk_transaction_projection_cursors",

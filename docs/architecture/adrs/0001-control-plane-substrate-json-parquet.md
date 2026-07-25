@@ -65,6 +65,7 @@ Account Truth, or a full journal scan on page render. `clerk_transactions`,
 `clerk_transaction_events`, and `clerk_transaction_projection_cursors` are
 therefore downstream Postgres projection tables over canonical
 `clerk_journal.jsonl`, separate from all lifecycle projection tables/runtimes.
-The cursor and rows commit atomically. Projection failure leaves the Clerk's
-already fsynced acknowledgement unchanged; reads use opaque keyset pages and
-backend-owned availability, high-water, and lag facts only.
+The cursor and rows commit atomically. A successful manual Clerk RPC triggers
+the tailer only after its acknowledgement has been fsynced; projection failure
+is logged and leaves that acknowledgement unchanged. Reads use opaque keyset
+pages and backend-owned availability, high-water, and lag facts only.

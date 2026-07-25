@@ -22,6 +22,7 @@ from app.engine.live.account_owner import (
 )
 from app.engine.live.order_identity import build_manual_order_namespace, parse_order_ref
 from app.services.account_truth_refresh import account_truth_artifacts_root
+from app.services.clerk_transaction_projection import project_account_journal_best_effort
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,11 @@ async def submit_manual_order_through_clerk(
     except AccountClerkRpcError as exc:
         retry_safe, reason_code = clerk_rejection_reason(exc)
         raise ManualOrderClerkRejectedError(reason_code, retry_safe) from exc
+
+    await project_account_journal_best_effort(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+    )
 
     ack = receipt.broker_ack
     if ack is None:
