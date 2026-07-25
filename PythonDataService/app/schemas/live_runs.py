@@ -3212,7 +3212,7 @@ class BotCatalogPageResponse(BaseModel):
 
     bots: list[BotCatalogRow] = Field(default_factory=list)
     total_count: int = Field(ge=0)
-    next_cursor: int | None = Field(default=None, ge=0)
+    next_cursor: str | None = None
     observed_at_ms: int
 
 

@@ -33,6 +33,9 @@ call, that summary is shown as not evaluated. If the daemon is unavailable,
 the existing status projection reports its unavailable/degraded evidence for
 the requested cards rather than reusing stale data.
 
-The offset cursor is an incremental rendering cursor, not a consistency
-snapshot. A fleet mutation between page requests can change a later page; the
-next fresh page remains authoritative for its own `observed_at_ms`.
+The cursor is the last strategy-instance ID from a lexicographically ordered
+page, not a consistency snapshot. A fleet mutation between page requests can
+change the current total and the next fresh page remains authoritative for its
+own `observed_at_ms`; keyset pagination does not replay already loaded IDs.
+New IDs that sort before the cursor appear on the next full refresh rather than
+being inserted into an in-progress browse.
