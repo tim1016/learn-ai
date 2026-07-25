@@ -10332,6 +10332,21 @@
         "additionalProperties": false,
         "description": "One immutable event materialized from a Clerk journal receipt.",
         "properties": {
+          "callback_identity": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Callback Identity",
+            "type": "string"
+          },
+          "commission_status": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "reported"
+            ],
+            "title": "Commission Status",
+            "type": "string"
+          },
           "event_id": {
             "maxLength": 96,
             "minLength": 1,
@@ -10344,20 +10359,15 @@
             "title": "Event Kind",
             "type": "string"
           },
-          "callback_identity": {
-            "maxLength": 256,
-            "minLength": 1,
-            "title": "Callback Identity",
-            "type": "string"
-          },
-          "commission_status": {
-            "default": "unknown",
-            "enum": ["unknown", "reported"],
-            "title": "Commission Status",
-            "type": "string"
-          },
           "fee": {
-            "anyOf": [{"type": "number"}, {"type": "null"}],
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Fee"
           },
           "journal_seq": {
@@ -10413,7 +10423,13 @@
             "type": "string"
           },
           "feed_state": {
-            "enum": ["live", "reconnecting", "stale", "offline_but_saved", "projection_unavailable"],
+            "enum": [
+              "live",
+              "reconnecting",
+              "stale",
+              "offline_but_saved",
+              "projection_unavailable"
+            ],
             "title": "Feed State",
             "type": "string"
           },
@@ -10485,6 +10501,15 @@
             "title": "Account Id",
             "type": "string"
           },
+          "commission_status": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "reported"
+            ],
+            "title": "Commission Status",
+            "type": "string"
+          },
           "events": {
             "items": {
               "$ref": "#/components/schemas/ClerkTransactionEventRow"
@@ -10504,14 +10529,15 @@
             ],
             "title": "Exec Id"
           },
-          "commission_status": {
-            "default": "unknown",
-            "enum": ["unknown", "reported"],
-            "title": "Commission Status",
-            "type": "string"
-          },
           "fee": {
-            "anyOf": [{"type": "number"}, {"type": "null"}],
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Fee"
           },
           "intent_id": {

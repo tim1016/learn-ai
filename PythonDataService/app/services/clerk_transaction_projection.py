@@ -12,10 +12,10 @@ import hashlib
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Awaitable, Callable
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import asyncpg
 
@@ -25,13 +25,17 @@ from app.engine.live.account_clerk_journal import ACCOUNT_CLERK_JOURNAL_FILENAME
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_owner import MANUAL_ORDER_INTENT_KIND
 from app.schemas.clerk_transaction_projection import (
+    TRANSACTION_FEED_STATES,
     ClerkTransactionEventRow,
     ClerkTransactionHistoryResponse,
     ClerkTransactionRow,
+    TransactionFeedState,
 )
 
 logger = logging.getLogger(__name__)
 _pool: asyncpg.Pool | None = None
+MAX_PROJECTION_READ_BYTES = 1_048_576
+MAX_RECOVERY_BATCHES = 64
 
 
 class ClerkTransactionProjectionUnavailable(RuntimeError):
@@ -66,10 +70,16 @@ class ClerkTransactionProjectionStore(Protocol):
         self, *, account_id: str, limit: int, after: tuple[int, int, str] | None
     ) -> tuple[list[ClerkTransactionRow], int | None, int | None]: ...
 
-    async def feed_status(self, account_id: str) -> tuple[str, str, str]: ...
+    async def feed_status(self, account_id: str) -> tuple[TransactionFeedState, str, str]: ...
 
     async def set_feed_status(
-        self, account_id: str, state: str, headline: str, detail: str, *, updated_at_ms: int
+        self,
+        account_id: str,
+        state: TransactionFeedState,
+        headline: str,
+        detail: str,
+        *,
+        updated_at_ms: int,
     ) -> None: ...
 
 
@@ -203,7 +213,7 @@ def _event_from_callback(
     event_kind, lifecycle_state, identity, fee = _callback_state(entry)
     receipt = entry.model_dump(mode="json", exclude_none=True)
     return ClerkTransactionEventRow(
-        event_id=_opaque_id("ctxnev", account_id, entry.seq, identity),
+        event_id=_opaque_id("ctxnev", account_id, identity),
         event_kind=event_kind,
         callback_identity=identity,
         lifecycle_state=lifecycle_state,
@@ -216,10 +226,18 @@ def _event_from_callback(
 
 
 def read_appended_clerk_journal(
-    *, account_id: str, journal_path: Path, cursor: ClerkJournalCursor | None
+    *,
+    account_id: str,
+    journal_path: Path,
+    cursor: ClerkJournalCursor | None,
+    max_read_bytes: int | None = None,
 ) -> ClerkTransactionBatch | None:
-    """Read only complete journal lines appended after the durable byte cursor."""
+    """Read one byte-bounded set of complete lines after the durable cursor."""
 
+    if max_read_bytes is None:
+        max_read_bytes = MAX_PROJECTION_READ_BYTES
+    if max_read_bytes < 1:
+        raise ValueError("max_read_bytes must be positive")
     offset = cursor.last_byte_offset if cursor is not None else 0
     last_seq = cursor.last_journal_seq if cursor is not None else 0
     if not journal_path.exists():
@@ -230,9 +248,13 @@ def read_appended_clerk_journal(
         if offset > journal_size:
             raise ValueError("Clerk journal was replaced or truncated behind its projection cursor")
         journal_file.seek(offset)
-        tail = journal_file.read()
+        tail = journal_file.read(max_read_bytes)
+    if not tail:
+        return None
     complete_size = tail.rfind(b"\n") + 1
     if complete_size == 0:
+        if offset + len(tail) < journal_size:
+            raise ValueError("complete Clerk journal record exceeds the projection read bound")
         return None
     consumed = tail[:complete_size]
     transactions: list[ClerkTransactionRow] = []
@@ -298,7 +320,7 @@ async def recover_account_transaction_feed(
     )
     projected = 0
     try:
-        while True:
+        for _ in range(MAX_RECOVERY_BATCHES):
             count = await tail_account_journal(
                 artifacts_root=artifacts_root,
                 account_id=account_id,
@@ -312,6 +334,15 @@ async def recover_account_transaction_feed(
             pending = read_appended_clerk_journal(account_id=account_id, journal_path=path, cursor=cursor)
             if pending is None:
                 break
+        else:
+            await store.set_feed_status(
+                account_id,
+                "stale",
+                "Recovery catch-up pending",
+                "Durable Clerk callbacks remain queued for the next bounded replay.",
+                updated_at_ms=now,
+            )
+            return projected
         await store.set_feed_status(
             account_id,
             "live",
@@ -381,7 +412,7 @@ async def transaction_history(
     return ClerkTransactionHistoryResponse(
         projection_available=True,
         canonical_fallback_required=False,
-        feed_state=feed_state,  # type: ignore[arg-type]
+        feed_state=feed_state,
         feed_headline=feed_headline,
         feed_detail=feed_detail,
         high_water_journal_seq=high_water,
@@ -425,15 +456,15 @@ class PostgresClerkTransactionProjectionStore:
                         json.dumps(transaction.receipt, sort_keys=True), updated_at_ms,
                     )
                 for event in batch.events:
-                    await conn.execute(
+                    event_inserted = await conn.execute(
                         "INSERT INTO clerk_transaction_events (event_id, transaction_id, account_id, journal_seq, event_kind, callback_identity, lifecycle_state, commission_status, fee, recorded_at_ms, receipt, inserted_at_ms) "
-                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) ON CONFLICT (account_id, journal_seq, callback_identity) DO NOTHING",
+                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) ON CONFLICT (account_id, callback_identity) WHERE callback_identity <> '' DO NOTHING",
                         event.event_id, _event_transaction_id(batch.account_id, event), batch.account_id,
                         event.journal_seq, event.event_kind, event.callback_identity,
                         event.lifecycle_state, event.commission_status, event.fee,
                         event.recorded_at_ms, json.dumps(event.receipt, sort_keys=True), updated_at_ms,
                     )
-                    if event.event_kind != "submitted":
+                    if event_inserted == "INSERT 0 1" and event.event_kind != "submitted":
                         await conn.execute(
                             "UPDATE clerk_transactions SET lifecycle_state=CASE WHEN lifecycle_state IN ('filled','cancelled','rejected','error') THEN lifecycle_state ELSE $3 END, commission_status=CASE WHEN $4='reported' THEN 'reported' ELSE commission_status END, fee=CASE WHEN $4='reported' THEN $5 ELSE fee END, updated_at_ms=$6 WHERE account_id=$1 AND order_ref=$2",
                             batch.account_id, _event_order_ref(event), event.lifecycle_state, event.commission_status, event.fee, updated_at_ms,
@@ -482,7 +513,7 @@ class PostgresClerkTransactionProjectionStore:
         ]
         return rows, (metadata["high_water"] if metadata else None), (metadata["lag"] if metadata else None)
 
-    async def feed_status(self, account_id: str) -> tuple[str, str, str]:
+    async def feed_status(self, account_id: str) -> tuple[TransactionFeedState, str, str]:
         _ensure_configured()
         conn = await _connection()
         try:
@@ -492,14 +523,21 @@ class PostgresClerkTransactionProjectionStore:
         finally:
             assert _pool is not None
             await _pool.release(conn)
-        return (
-            (str(record["state"]), str(record["headline"]), str(record["detail"]))
-            if record
-            else ("stale", "Stale", "No current projection-feed receipt.")
-        )
+        if record is None:
+            return "stale", "Stale", "No current projection-feed receipt."
+        state = str(record["state"])
+        if state not in TRANSACTION_FEED_STATES:
+            raise ClerkTransactionProjectionUnavailable("stored transaction feed state is invalid")
+        return cast(TransactionFeedState, state), str(record["headline"]), str(record["detail"])
 
     async def set_feed_status(
-        self, account_id: str, state: str, headline: str, detail: str, *, updated_at_ms: int
+        self,
+        account_id: str,
+        state: TransactionFeedState,
+        headline: str,
+        detail: str,
+        *,
+        updated_at_ms: int,
     ) -> None:
         _ensure_configured()
         conn = await _connection()

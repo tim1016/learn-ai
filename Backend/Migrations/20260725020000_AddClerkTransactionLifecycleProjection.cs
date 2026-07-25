@@ -24,7 +24,8 @@ namespace Backend.Migrations
                     ADD COLUMN commission_status character varying(16) NOT NULL DEFAULT 'unknown',
                     ADD COLUMN fee double precision NULL;
                 CREATE UNIQUE INDEX uq_clerk_transaction_events_callback_identity
-                    ON clerk_transaction_events (account_id, journal_seq, callback_identity);
+                    ON clerk_transaction_events (account_id, callback_identity)
+                    WHERE callback_identity <> '';
                 CREATE INDEX ix_clerk_transactions_order_ref
                     ON clerk_transactions (account_id, order_ref);
                 CREATE TABLE clerk_transaction_feed_status (

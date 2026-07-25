@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.broker.ibkr.models import IbkrOrderEvent
+from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_owner import (
     MANUAL_OPERATOR_RUN_ID,
     MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
@@ -94,7 +94,14 @@ class _Store:
         self.feed = state, headline, detail
 
 
-def _callback(seq: int, *, event_type: str, status: str | None, fee: float | None = None) -> AccountClerkJournalEntry:
+def _callback(
+    seq: int,
+    *,
+    event_type: str,
+    status: str | None,
+    fee: float | None = None,
+    callback_identity: str | None = None,
+) -> AccountClerkJournalEntry:
     ack = _manual_ack(1)
     event = IbkrOrderEvent(
         account_id=ACCOUNT, order_id=ack.order_id or 0, perm_id=ack.perm_id,
@@ -105,7 +112,7 @@ def _callback(seq: int, *, event_type: str, status: str | None, fee: float | Non
     return AccountClerkJournalEntry(
         seq=seq, entry_kind="broker_event", recorded_at_ms=event.ts_ms, intent=ack.intent,
         broker_event=event.model_dump(mode="json"), event_account_id=ACCOUNT,
-        broker_callback_idempotency_key=f"callback-{seq}-{event_type}-{status}",
+        broker_callback_idempotency_key=callback_identity or f"callback-{seq}-{event_type}-{status}",
     )
 
 
@@ -136,6 +143,30 @@ def test_read_appended_clerk_journal_leaves_torn_record_for_later(tmp_path: Path
     assert batch is not None
     assert batch.next_journal_seq == 1
     assert len(batch.transactions) == 1
+
+
+def test_read_appended_clerk_journal_respects_byte_bound_and_resumes_from_cursor(tmp_path: Path) -> None:
+    path = tmp_path / "journal.jsonl"
+    _append(path, _manual_ack(1))
+    _append(path, _manual_ack(2))
+    first_record_size = path.read_bytes().index(b"\n") + 1
+
+    first = read_appended_clerk_journal(
+        account_id=ACCOUNT,
+        journal_path=path,
+        cursor=None,
+        max_read_bytes=first_record_size,
+    )
+    assert first is not None
+    assert first.next_journal_seq == 1
+    second = read_appended_clerk_journal(
+        account_id=ACCOUNT,
+        journal_path=path,
+        cursor=ClerkJournalCursor(ACCOUNT, str(path), first.next_byte_offset, first.next_journal_seq, 1),
+        max_read_bytes=first_record_size,
+    )
+    assert second is not None
+    assert second.next_journal_seq == 2
 
 
 def test_read_appended_clerk_journal_rejects_malformed_complete_record(tmp_path: Path) -> None:
@@ -201,7 +232,7 @@ async def test_history_uses_opaque_keyset_cursor_and_bounded_page(tmp_path: Path
 async def test_lifecycle_callbacks_fold_terminal_state_without_fabricating_commission(tmp_path: Path) -> None:
     path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
     _append(path, _manual_ack(1))
-    _append(path, _callback(2, event_type="fill", status="PartiallyFilled"))
+    _append(path, _callback(2, event_type="fill", status="Submitted"))
     _append(path, _callback(3, event_type="cancel", status="Cancelled"))
     _append(path, _callback(4, event_type="fill", status="Filled", fee=1.25))
     store = _Store()
@@ -215,6 +246,19 @@ async def test_lifecycle_callbacks_fold_terminal_state_without_fabricating_commi
     for event in events[1:]:
         state = fold_lifecycle_state(state, event.lifecycle_state)
     assert state == "cancelled"
+
+
+def test_duplicate_callback_identity_produces_the_same_projection_event_id(tmp_path: Path) -> None:
+    path = tmp_path / "journal.jsonl"
+    _append(path, _manual_ack(1))
+    _append(path, _callback(2, event_type="fill", status="Filled", callback_identity="ibkr-exec-1"))
+    _append(path, _callback(3, event_type="fill", status="Filled", callback_identity="ibkr-exec-1"))
+
+    batch = read_appended_clerk_journal(account_id=ACCOUNT, journal_path=path, cursor=None)
+
+    assert batch is not None
+    assert [event.callback_identity for event in batch.events[1:]] == ["ibkr-exec-1", "ibkr-exec-1"]
+    assert batch.events[1].event_id == batch.events[2].event_id
 
 
 @pytest.mark.asyncio
@@ -232,3 +276,26 @@ async def test_recovery_publishes_only_after_commit_and_marks_live(tmp_path: Pat
     assert count == 1
     assert published == [1]
     assert store.feed[0] == "live"
+
+
+@pytest.mark.asyncio
+async def test_recovery_stops_at_its_byte_bounded_batch_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    first_record_size = path.read_bytes().index(b"\n") + 1
+    _append(path, _manual_ack(2))
+    monkeypatch.setattr(clerk_transaction_projection, "MAX_PROJECTION_READ_BYTES", first_record_size)
+    monkeypatch.setattr(clerk_transaction_projection, "MAX_RECOVERY_BATCHES", 1)
+    store = _Store()
+
+    projected = await recover_account_transaction_feed(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        store=store,
+        updated_at_ms=100,
+    )
+
+    assert projected == 1
+    assert store.feed[0] == "stale"

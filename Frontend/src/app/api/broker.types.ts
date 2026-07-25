@@ -9789,14 +9789,18 @@ export interface components {
          * @description One immutable event materialized from a Clerk journal receipt.
          */
         ClerkTransactionEventRow: {
+            /** Callback Identity */
+            callback_identity: string;
+            /**
+             * Commission Status
+             * @default unknown
+             * @enum {string}
+             */
+            commission_status?: "unknown" | "reported";
             /** Event Id */
             event_id: string;
             /** Event Kind */
             event_kind: string;
-            /** Callback Identity */
-            callback_identity: string;
-            /** Commission Status */
-            commission_status?: "unknown" | "reported";
             /** Fee */
             fee?: number | null;
             /** Journal Seq */
@@ -9819,7 +9823,10 @@ export interface components {
             feed_detail: string;
             /** Feed Headline */
             feed_headline: string;
-            /** Feed State */
+            /**
+             * Feed State
+             * @enum {string}
+             */
             feed_state: "live" | "reconnecting" | "stale" | "offline_but_saved" | "projection_unavailable";
             /** High Water Journal Seq */
             high_water_journal_seq?: number | null;
@@ -9839,12 +9846,16 @@ export interface components {
         ClerkTransactionRow: {
             /** Account Id */
             account_id: string;
+            /**
+             * Commission Status
+             * @default unknown
+             * @enum {string}
+             */
+            commission_status?: "unknown" | "reported";
             /** Events */
             events?: components["schemas"]["ClerkTransactionEventRow"][];
             /** Exec Id */
             exec_id?: string | null;
-            /** Commission Status */
-            commission_status?: "unknown" | "reported";
             /** Fee */
             fee?: number | null;
             /** Intent Id */

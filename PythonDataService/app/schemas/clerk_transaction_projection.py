@@ -6,6 +6,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+TransactionFeedState = Literal[
+    "live", "reconnecting", "stale", "offline_but_saved", "projection_unavailable"
+]
+TRANSACTION_FEED_STATES = frozenset({
+    "live", "reconnecting", "stale", "offline_but_saved", "projection_unavailable"
+})
+
 
 class ClerkTransactionEventRow(BaseModel):
     """One immutable event materialized from a Clerk journal receipt."""
@@ -54,9 +61,7 @@ class ClerkTransactionHistoryResponse(BaseModel):
 
     projection_available: bool
     canonical_fallback_required: bool
-    feed_state: Literal[
-        "live", "reconnecting", "stale", "offline_but_saved", "projection_unavailable"
-    ]
+    feed_state: TransactionFeedState
     feed_headline: str = Field(min_length=1, max_length=128)
     feed_detail: str = Field(min_length=1, max_length=512)
     high_water_journal_seq: int | None = Field(default=None, ge=0)

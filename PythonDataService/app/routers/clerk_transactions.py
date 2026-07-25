@@ -30,7 +30,7 @@ async def get_clerk_transaction_history(
 
     try:
         return await transaction_history(account_id=account_id, limit=limit, cursor=cursor, store=store)
-    except ClerkTransactionProjectionUnavailable as exc:
+    except ClerkTransactionProjectionUnavailable:
         # Availability is a backend-authored UI state, not a browser-side
         # inference from an HTTP failure. The canonical Clerk evidence remains
         # durable even while this downstream read model is unavailable.

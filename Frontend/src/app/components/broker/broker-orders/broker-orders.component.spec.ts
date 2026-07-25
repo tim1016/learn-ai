@@ -655,7 +655,7 @@ describe('BrokerOrdersComponent — broker provenance', () => {
     expect(text).toContain('learn-ai/test-bot/v1:intent-42');
   });
 
-  it('separates broker connection truth from the live order-update handshake', async () => {
+  it('separates broker connection truth from backend-authored transaction-feed state', async () => {
     const { fixture } = setup([openOrderWithRef]);
     const source = StubEventSource.instances[0];
 
@@ -665,6 +665,7 @@ describe('BrokerOrdersComponent — broker provenance', () => {
 
     source?.emit('open');
     source?.emit('ready', JSON.stringify({ ts_ms: 1_780_000_000_000 }));
+    await flushAsyncWork();
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
@@ -672,22 +673,23 @@ describe('BrokerOrdersComponent — broker provenance', () => {
     expect(text).toContain('Online');
     expect(text).toContain('Live order updates');
     expect(text).toContain('Live');
-    expect(text).toContain('Last receipt');
+    expect(text).toContain('Durable Clerk callback projection is current.');
   });
 
-  it('shows saved-ledger mode when IBKR is offline instead of a permanent connecting state', () => {
+  it('does not infer transaction-feed state from the broker connection', async () => {
     const { fixture, health } = setup([openOrderWithRef]);
     health.health.update((current) => ({
       ...current,
       connected: false,
       connection_state: 'disconnected',
     }));
+    await flushAsyncWork();
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('Offline');
-    expect(text).toContain('Paused');
-    expect(text).toContain('showing the last available ledger');
+    expect(text).toContain('Live');
+    expect(text).toContain('Durable Clerk callback projection is current.');
   });
 
   it('shows COI guidance and pre-fills the flatten cure for one stock position', async () => {
