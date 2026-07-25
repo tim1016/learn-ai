@@ -19,10 +19,9 @@ from app.broker.ibkr.config import IbkrSettings
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
 from app.main import app
 from app.routers import broker as broker_router
-from app.routers.broker import (
-    _build_manual_order_intent,
-    _stamp_manual_order_ref_if_requested,
-)
+from app.routers.broker import _stamp_manual_order_ref_if_requested
+from app.services import manual_order_submission
+from app.services.manual_order_submission import _build_manual_order_intent
 
 # ── Phase 1 endpoints ──────────────────────────────────────────────────
 
@@ -406,15 +405,18 @@ async def test_manual_order_submission_uses_the_durable_account_clerk(
             submitted.append(intent)
             return SimpleNamespace(broker_ack=broker_ack)
 
-    monkeypatch.setattr(broker_router, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(manual_order_submission, "account_truth_artifacts_root", lambda: tmp_path)
     monkeypatch.setattr(
-        broker_router,
+        manual_order_submission,
         "read_active_accepting_account_clerk_generation",
         lambda *_args, **_kwargs: SimpleNamespace(generation=7),
     )
-    monkeypatch.setattr(broker_router, "AccountClerkRpcClient", _FakeClerkClient)
+    monkeypatch.setattr(manual_order_submission, "AccountClerkRpcClient", _FakeClerkClient)
 
-    result = await broker_router._place_manual_order_through_clerk(client, spec)
+    result = await manual_order_submission.submit_manual_order_through_clerk(
+        spec,
+        account_id=client.connected_account,
+    )
 
     assert result == broker_ack
     assert submitted[0].order_ref == spec.order_ref
@@ -429,7 +431,7 @@ async def test_post_orders_refuses_manual_submit_when_the_clerk_generation_is_mi
 ) -> None:
     client = _connected_order_client()
     set_client(client)
-    monkeypatch.setattr(broker_router, "account_truth_artifacts_root", lambda: tmp_path)
+    monkeypatch.setattr(manual_order_submission, "account_truth_artifacts_root", lambda: tmp_path)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post(
