@@ -17,6 +17,9 @@ class _NoIoStore:
         assert after is None
         return [], 12, 0
 
+    async def feed_status(self, account_id: str) -> tuple[str, str, str]:
+        return "live", "Live", "Durable Clerk callback projection is current."
+
 
 class _UnavailableStore:
     async def history_page(self, **kwargs):
@@ -32,6 +35,7 @@ async def test_history_endpoint_is_bounded_projection_read_only() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "projection_available": True, "canonical_fallback_required": False,
+        "feed_state": "live", "feed_headline": "Live", "feed_detail": "Durable Clerk callback projection is current.",
         "high_water_journal_seq": 12, "lag_records": 0, "rows": [], "next_cursor": None,
     }
 
@@ -42,5 +46,6 @@ async def test_history_endpoint_reports_unavailable_without_fallback_scan() -> N
     app.dependency_overrides[get_clerk_transaction_store] = lambda: _UnavailableStore()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/accounts/DU1219/transactions")
-    assert response.status_code == 503
-    assert "canonical acknowledgement remains durable" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["feed_state"] == "projection_unavailable"
+    assert response.json()["canonical_fallback_required"] is True

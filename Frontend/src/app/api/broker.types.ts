@@ -9793,8 +9793,16 @@ export interface components {
             event_id: string;
             /** Event Kind */
             event_kind: string;
+            /** Callback Identity */
+            callback_identity: string;
+            /** Commission Status */
+            commission_status?: "unknown" | "reported";
+            /** Fee */
+            fee?: number | null;
             /** Journal Seq */
             journal_seq: number;
+            /** Lifecycle State */
+            lifecycle_state: string;
             /** Receipt */
             receipt?: Record<string, never>;
             /** Recorded At Ms */
@@ -9807,6 +9815,12 @@ export interface components {
         ClerkTransactionHistoryResponse: {
             /** Canonical Fallback Required */
             canonical_fallback_required: boolean;
+            /** Feed Detail */
+            feed_detail: string;
+            /** Feed Headline */
+            feed_headline: string;
+            /** Feed State */
+            feed_state: "live" | "reconnecting" | "stale" | "offline_but_saved" | "projection_unavailable";
             /** High Water Journal Seq */
             high_water_journal_seq?: number | null;
             /** Lag Records */
@@ -9829,10 +9843,16 @@ export interface components {
             events?: components["schemas"]["ClerkTransactionEventRow"][];
             /** Exec Id */
             exec_id?: string | null;
+            /** Commission Status */
+            commission_status?: "unknown" | "reported";
+            /** Fee */
+            fee?: number | null;
             /** Intent Id */
             intent_id: string;
             /** Journal Seq */
             journal_seq: number;
+            /** Lifecycle State */
+            lifecycle_state: string;
             /** Order Id */
             order_id?: number | null;
             /** Order Ref */

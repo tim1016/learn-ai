@@ -15,10 +15,10 @@
   </div>
   <div
     class="status-item"
-    [class.state-ok]="status().updates.state === 'ok'"
-    [class.state-warn]="status().updates.state === 'warn'"
-    [class.state-down]="status().updates.state === 'down'"
-    [class.state-unknown]="status().updates.state === 'unknown'"
+    [class.state-ok]="status().updates.state === 'live'"
+    [class.state-warn]="status().updates.state === 'reconnecting' || status().updates.state === 'stale' || status().updates.state === 'offline_but_saved'"
+    [class.state-down]="status().updates.state === 'projection_unavailable'"
+    [class.state-unknown]="status().updates.state === 'loading'"
   >
     <span class="status-dot" aria-hidden="true"></span>
     <div>

@@ -348,6 +348,12 @@ migration shape, and Angular renders the supplied opaque IDs/status fields.
 Successful manual Clerk RPCs trigger that best-effort tail only after the
 acknowledgement is durable.
 
+The #1220 lifecycle extension remains in that dedicated runtime. It never
+extends `lifecycle_projection_*`: the account Clerk JSONL remains canonical,
+Python is the sole lifecycle fold authority, and the frontend receives explicit
+feed/freshness states rather than classifying broker callbacks or transport
+timing itself.
+
 | Requirement | Verification |
 | --- | --- |
 | Start after broker connect; always stop in shutdown | `test_clerk_process_acquires_lock_before_broker_connect_and_releases_after_disconnect` |

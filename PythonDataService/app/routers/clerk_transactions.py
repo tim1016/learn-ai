@@ -31,9 +31,19 @@ async def get_clerk_transaction_history(
     try:
         return await transaction_history(account_id=account_id, limit=limit, cursor=cursor, store=store)
     except ClerkTransactionProjectionUnavailable as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Clerk transaction projection unavailable; canonical acknowledgement remains durable",
-        ) from exc
+        # Availability is a backend-authored UI state, not a browser-side
+        # inference from an HTTP failure. The canonical Clerk evidence remains
+        # durable even while this downstream read model is unavailable.
+        return ClerkTransactionHistoryResponse(
+            projection_available=False,
+            canonical_fallback_required=True,
+            feed_state="projection_unavailable",
+            feed_headline="Projection unavailable",
+            feed_detail="Clerk transaction projection unavailable; canonical acknowledgement remains durable.",
+            high_water_journal_seq=None,
+            lag_records=None,
+            rows=[],
+            next_cursor=None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

@@ -20,10 +20,7 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
-import {
-  describeBrokerConnection,
-  type LinkState,
-} from '../../../services/broker-connectivity.service';
+import { describeBrokerConnection } from '../../../services/broker-connectivity.service';
 import type {
   AccountTruthEvidenceGap,
   AccountTruthExecutionRow,
@@ -40,6 +37,7 @@ import type {
   OrderType,
   SecType,
 } from '../../../api/broker-models';
+import type { ClerkTransactionHistoryResponse } from '../../../api/clerk-transaction-history.types';
 import { fmtCurrency, fmtNumber, fmtSignedNumber, fmtTimestampNy } from '../format';
 import {
   BrokerOrderFeedStatusComponent,
@@ -47,7 +45,6 @@ import {
 } from './broker-order-feed-status.component';
 
 const ORDER_EVENT_BUFFER = 50;
-const ORDER_STREAM_STALE_AFTER_MS = 35_000;
 const ORDER_LEDGER_REFRESH_DEBOUNCE_MS = 1_000;
 const CONFIRM_DIALOG_COOLDOWN_MS = 3000;
 const CONFIRM_DIALOG_TICK_MS = 100;
@@ -197,6 +194,8 @@ export class BrokerOrdersComponent {
   readonly ledgerLoading = signal(false);
   readonly ledgerError = signal<unknown>(null);
   readonly accountTruth = signal<AccountTruthResponse | null>(null);
+  /** The Python-owned Clerk projection says whether lifecycle history is fresh. */
+  readonly transactionFeed = signal<ClerkTransactionHistoryResponse | null>(null);
   readonly retainedCompletedHistory = signal(false);
   readonly ledgerOrders = computed<AccountTruthOrderRow[]>(
     () => this.accountTruth()?.orders ?? [],
@@ -237,7 +236,7 @@ export class BrokerOrdersComponent {
         headline: broker.headline,
         detail: broker.detail,
       },
-      updates: this.buildOrderStreamStatus(broker.state),
+      updates: this.buildOrderStreamStatus(),
     };
   });
 
@@ -284,6 +283,15 @@ export class BrokerOrdersComponent {
         this.lastLedgerRefreshEventKey = key;
         this.scheduleLedgerRefresh();
       }
+    });
+
+    effect(() => {
+      const accountId = this.accountId();
+      if (accountId === null) {
+        this.transactionFeed.set(null);
+        return;
+      }
+      void this.refreshTransactionFeed(accountId);
     });
 
     this.destroyRef.onDestroy(() => {
@@ -609,65 +617,20 @@ export class BrokerOrdersComponent {
     this.ledgerRefreshPending = false;
   }
 
-  private buildOrderStreamStatus(brokerState: LinkState): OrderFeedStatus['updates'] {
-    const stream = this.eventStream();
-    if (brokerState === 'down') {
-      return {
-        state: 'down',
-        headline: 'Paused',
-        detail: 'Broker offline; showing the last available ledger.',
-      };
-    }
-    if (brokerState === 'unknown') {
-      return {
-        state: 'unknown',
-        headline: 'Waiting',
-        detail: 'Waiting for broker health before opening live updates.',
-      };
-    }
-    if (stream === null || stream.status() === 'connecting') {
-      return {
-        state: 'unknown',
-        headline: 'Connecting',
-        detail: 'Opening the live order-update channel.',
-      };
-    }
+  private buildOrderStreamStatus(): OrderFeedStatus['updates'] {
+    const feed = this.transactionFeed();
+    if (feed === null) return { state: 'loading', headline: 'Loading', detail: 'Loading Clerk transaction-feed status.' };
+    return { state: feed.feed_state, headline: feed.feed_headline, detail: feed.feed_detail };
+  }
 
-    const lastActivityAtMs = stream.lastActivityAtMs();
-    const lastReceipt = lastActivityAtMs === null ? 'No server receipt yet.' : `Last receipt ${formatAge(lastActivityAtMs)}.`;
-    if (stream.status() === 'error') {
-      return {
-        state: 'warn',
-        headline: 'Reconnecting',
-        detail: `${lastReceipt} The browser will retry automatically.`,
-      };
+  private async refreshTransactionFeed(accountId: string): Promise<void> {
+    try {
+      this.transactionFeed.set(await this.broker.accountTransactions(accountId, null, 1));
+    } catch {
+      // Transport failure does not invent a lifecycle state; the next refresh
+      // will render only a backend-authored feed state once it is available.
+      this.transactionFeed.set(null);
     }
-    if (stream.status() === 'closed') {
-      return {
-        state: 'down',
-        headline: 'Closed',
-        detail: `${lastReceipt} Reopen the Orders page to resume live updates.`,
-      };
-    }
-    if (lastActivityAtMs === null) {
-      return {
-        state: 'warn',
-        headline: 'Waiting for handshake',
-        detail: 'The transport opened, but the server has not confirmed a live stream.',
-      };
-    }
-    if (Date.now() - lastActivityAtMs > ORDER_STREAM_STALE_AFTER_MS) {
-      return {
-        state: 'warn',
-        headline: 'Stale',
-        detail: `${lastReceipt} Waiting for the server heartbeat.`,
-      };
-    }
-    return {
-      state: 'ok',
-      headline: 'Live',
-      detail: lastReceipt,
-    };
   }
 
   private applyAccountTruth(truth: AccountTruthResponse): void {
@@ -851,11 +814,4 @@ function cryptoUuid(): string {
   // Fallback for non-secure contexts. Not cryptographically secure;
   // sufficient as an idempotency token for paper orders only.
   return Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 10);
-}
-
-function formatAge(occurredAtMs: number): string {
-  const elapsedMs = Math.max(0, Date.now() - occurredAtMs);
-  if (elapsedMs < 1_000) return 'just now';
-  if (elapsedMs < 60_000) return `${Math.floor(elapsedMs / 1_000)}s ago`;
-  return `${Math.floor(elapsedMs / 60_000)}m ago`;
 }

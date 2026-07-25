@@ -1,6 +1,9 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import type { LinkState } from '../../../services/broker-connectivity.service';
+import type { ClerkTransactionHistoryResponse } from '../../../api/clerk-transaction-history.types';
+
+export type TransactionFeedState = ClerkTransactionHistoryResponse['feed_state'] | 'loading';
 
 export interface OrderFeedStatus {
   broker: {
@@ -9,7 +12,7 @@ export interface OrderFeedStatus {
     detail: string;
   };
   updates: {
-    state: LinkState;
+    state: TransactionFeedState;
     headline: string;
     detail: string;
   };

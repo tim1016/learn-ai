@@ -13,7 +13,7 @@ const STATUS: OrderFeedStatus = {
     detail: 'Connected',
   },
   updates: {
-    state: 'warn',
+    state: 'reconnecting',
     headline: 'Reconnecting',
     detail: 'Last receipt 12s ago',
   },
@@ -29,4 +29,18 @@ describe('BrokerOrderFeedStatusComponent', () => {
     expect(screen.getByText('Reconnecting')).toBeTruthy();
     expect(screen.getByText('Last receipt 12s ago')).toBeTruthy();
   });
+});
+
+it.each([
+  ['live', 'Live'],
+  ['reconnecting', 'Reconnecting'],
+  ['stale', 'Stale'],
+  ['offline_but_saved', 'Saved offline'],
+  ['projection_unavailable', 'Projection unavailable'],
+] as const)('renders backend-authored transaction feed state %s', async (state, headline) => {
+  await render(BrokerOrderFeedStatusComponent, {
+    inputs: { status: { ...STATUS, updates: { state, headline, detail: 'Backend authored.' } } },
+  });
+
+  expect(screen.getByText(headline)).toBeTruthy();
 });

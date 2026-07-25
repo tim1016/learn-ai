@@ -10344,10 +10344,32 @@
             "title": "Event Kind",
             "type": "string"
           },
+          "callback_identity": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Callback Identity",
+            "type": "string"
+          },
+          "commission_status": {
+            "default": "unknown",
+            "enum": ["unknown", "reported"],
+            "title": "Commission Status",
+            "type": "string"
+          },
+          "fee": {
+            "anyOf": [{"type": "number"}, {"type": "null"}],
+            "title": "Fee"
+          },
           "journal_seq": {
             "minimum": 1.0,
             "title": "Journal Seq",
             "type": "integer"
+          },
+          "lifecycle_state": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Lifecycle State",
+            "type": "string"
           },
           "receipt": {
             "title": "Receipt",
@@ -10362,6 +10384,8 @@
         "required": [
           "event_id",
           "event_kind",
+          "callback_identity",
+          "lifecycle_state",
           "journal_seq",
           "recorded_at_ms"
         ],
@@ -10375,6 +10399,23 @@
           "canonical_fallback_required": {
             "title": "Canonical Fallback Required",
             "type": "boolean"
+          },
+          "feed_detail": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Feed Detail",
+            "type": "string"
+          },
+          "feed_headline": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Feed Headline",
+            "type": "string"
+          },
+          "feed_state": {
+            "enum": ["live", "reconnecting", "stale", "offline_but_saved", "projection_unavailable"],
+            "title": "Feed State",
+            "type": "string"
           },
           "high_water_journal_seq": {
             "anyOf": [
@@ -10426,6 +10467,9 @@
         "required": [
           "projection_available",
           "canonical_fallback_required",
+          "feed_state",
+          "feed_headline",
+          "feed_detail",
           "rows"
         ],
         "title": "ClerkTransactionHistoryResponse",
@@ -10460,6 +10504,16 @@
             ],
             "title": "Exec Id"
           },
+          "commission_status": {
+            "default": "unknown",
+            "enum": ["unknown", "reported"],
+            "title": "Commission Status",
+            "type": "string"
+          },
+          "fee": {
+            "anyOf": [{"type": "number"}, {"type": "null"}],
+            "title": "Fee"
+          },
           "intent_id": {
             "maxLength": 256,
             "minLength": 1,
@@ -10470,6 +10524,12 @@
             "minimum": 1.0,
             "title": "Journal Seq",
             "type": "integer"
+          },
+          "lifecycle_state": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Lifecycle State",
+            "type": "string"
           },
           "order_id": {
             "anyOf": [
@@ -10544,7 +10604,8 @@
           "strategy_instance_id",
           "run_id",
           "intent_id",
-          "order_ref"
+          "order_ref",
+          "lifecycle_state"
         ],
         "title": "ClerkTransactionRow",
         "type": "object"

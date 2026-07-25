@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
+from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.account_owner import (
     MANUAL_OPERATOR_RUN_ID,
     MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
@@ -16,8 +17,10 @@ from app.services import clerk_transaction_projection
 from app.services.clerk_transaction_projection import (
     ClerkJournalCursor,
     ClerkTransactionBatch,
+    fold_lifecycle_state,
     project_account_journal_best_effort,
     read_appended_clerk_journal,
+    recover_account_transaction_feed,
     tail_account_journal,
     transaction_history,
 )
@@ -57,6 +60,7 @@ class _Store:
         self.rows: list[ClerkTransactionRow] = []
         self.persisted: list[ClerkTransactionBatch] = []
         self.fail = False
+        self.feed = ("stale", "Stale", "No current projection-feed receipt.")
 
     async def read_cursor(self, account_id: str, journal_path: str) -> ClerkJournalCursor | None:
         assert account_id == ACCOUNT
@@ -78,6 +82,31 @@ class _Store:
         high_water = self.cursor.last_journal_seq if self.cursor else None
         lag = max((high_water or 0) - max((row.journal_seq for row in self.rows), default=0), 0) if high_water else None
         return rows[:limit], high_water, lag
+
+    async def feed_status(self, account_id: str) -> tuple[str, str, str]:
+        assert account_id == ACCOUNT
+        return self.feed
+
+    async def set_feed_status(
+        self, account_id: str, state: str, headline: str, detail: str, *, updated_at_ms: int
+    ) -> None:
+        assert account_id == ACCOUNT
+        self.feed = state, headline, detail
+
+
+def _callback(seq: int, *, event_type: str, status: str | None, fee: float | None = None) -> AccountClerkJournalEntry:
+    ack = _manual_ack(1)
+    event = IbkrOrderEvent(
+        account_id=ACCOUNT, order_id=ack.order_id or 0, perm_id=ack.perm_id,
+        event_type=event_type, status=status, order_ref=ack.intent.order_ref if ack.intent else None,
+        fill_quantity=1.0 if event_type == "fill" else None, remaining=0.0 if status == "Filled" else 1.0,
+        fee=fee, ts_ms=1_700_000_000_000 + seq,
+    )
+    return AccountClerkJournalEntry(
+        seq=seq, entry_kind="broker_event", recorded_at_ms=event.ts_ms, intent=ack.intent,
+        broker_event=event.model_dump(mode="json"), event_account_id=ACCOUNT,
+        broker_callback_idempotency_key=f"callback-{seq}-{event_type}-{status}",
+    )
 
 
 @pytest.mark.asyncio
@@ -166,3 +195,40 @@ async def test_history_uses_opaque_keyset_cursor_and_bounded_page(tmp_path: Path
     assert first.next_cursor is not None and first.next_cursor.startswith("ctxhp1.")
     second = await transaction_history(account_id=ACCOUNT, limit=2, cursor=first.next_cursor, store=store)
     assert [row.journal_seq for row in second.rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_callbacks_fold_terminal_state_without_fabricating_commission(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    _append(path, _callback(2, event_type="fill", status="PartiallyFilled"))
+    _append(path, _callback(3, event_type="cancel", status="Cancelled"))
+    _append(path, _callback(4, event_type="fill", status="Filled", fee=1.25))
+    store = _Store()
+
+    await tail_account_journal(artifacts_root=tmp_path, account_id=ACCOUNT, store=store)
+    events = store.persisted[0].events
+    assert [event.lifecycle_state for event in events] == ["submitted", "partially_filled", "cancelled", "filled"]
+    assert events[1].commission_status == "unknown"
+    assert events[-1].fee == 1.25
+    state = "submitted"
+    for event in events[1:]:
+        state = fold_lifecycle_state(state, event.lifecycle_state)
+    assert state == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_recovery_publishes_only_after_commit_and_marks_live(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    store = _Store()
+    published: list[int] = []
+
+    async def publish(batch: ClerkTransactionBatch) -> None:
+        assert store.cursor is not None
+        published.append(batch.next_journal_seq)
+
+    count = await recover_account_transaction_feed(artifacts_root=tmp_path, account_id=ACCOUNT, store=store, publish=publish, updated_at_ms=100)
+    assert count == 1
+    assert published == [1]
+    assert store.feed[0] == "live"

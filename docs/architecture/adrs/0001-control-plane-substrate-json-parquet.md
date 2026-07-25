@@ -69,3 +69,15 @@ The cursor and rows commit atomically. A successful manual Clerk RPC triggers
 the tailer only after its acknowledgement has been fsynced; projection failure
 is logged and leaves that acknowledgement unchanged. Reads use opaque keyset
 pages and backend-owned availability, high-water, and lag facts only.
+
+## Amendment 2026-07-25 — IBKR lifecycle projection and recovery (#1220)
+
+The same dedicated transaction projector now folds raw Clerk-journal IBKR
+callbacks into submitted, partial-fill, filled, cancelled, rejected, error,
+execution, and commission evidence. Callback effects are idempotent on the
+durable Clerk journal sequence plus callback identity, terminal transaction
+states never regress, and absent commission is represented as `unknown`, never
+as zero. A projection transaction commits rows and its cursor before it may
+publish a live delta. Reconnect recovery drains only cursor lag before Python
+publishes the backend-authored `live` feed state; its other explicit states are
+`reconnecting`, `stale`, `offline_but_saved`, and `projection_unavailable`.

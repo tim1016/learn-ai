@@ -6,6 +6,10 @@ export interface ClerkTransactionEvent {
   readonly journal_seq: number;
   readonly recorded_at_ms: number;
   readonly receipt: Record<string, unknown>;
+  readonly callback_identity: string;
+  readonly lifecycle_state: string;
+  readonly commission_status: 'unknown' | 'reported';
+  readonly fee: number | null;
 }
 
 export interface ClerkTransaction {
@@ -21,6 +25,9 @@ export interface ClerkTransaction {
   readonly order_id: number | null;
   readonly perm_id: number | null;
   readonly exec_id: string | null;
+  readonly lifecycle_state: string;
+  readonly commission_status: 'unknown' | 'reported';
+  readonly fee: number | null;
   readonly receipt: Record<string, unknown>;
   readonly events: readonly ClerkTransactionEvent[];
 }
@@ -28,6 +35,10 @@ export interface ClerkTransaction {
 export interface ClerkTransactionHistoryResponse {
   readonly projection_available: boolean;
   readonly canonical_fallback_required: boolean;
+  /** Backend-authored state; UI must not infer lifecycle freshness. */
+  readonly feed_state: 'live' | 'reconnecting' | 'stale' | 'offline_but_saved' | 'projection_unavailable';
+  readonly feed_headline: string;
+  readonly feed_detail: string;
   readonly high_water_journal_seq: number | null;
   readonly lag_records: number | null;
   readonly rows: readonly ClerkTransaction[];

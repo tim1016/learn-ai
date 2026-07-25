@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,6 +14,10 @@ class ClerkTransactionEventRow(BaseModel):
 
     event_id: str = Field(min_length=1, max_length=96)
     event_kind: str = Field(min_length=1, max_length=64)
+    callback_identity: str = Field(min_length=1, max_length=256)
+    lifecycle_state: str = Field(min_length=1, max_length=64)
+    commission_status: Literal["unknown", "reported"] = "unknown"
+    fee: float | None = None
     journal_seq: int = Field(ge=1)
     recorded_at_ms: int = Field(ge=0)
     receipt: dict[str, Any] = Field(default_factory=dict)
@@ -36,6 +40,9 @@ class ClerkTransactionRow(BaseModel):
     order_id: int | None = Field(default=None, ge=0)
     perm_id: int | None = Field(default=None, ge=0)
     exec_id: str | None = Field(default=None, max_length=256)
+    lifecycle_state: str = Field(min_length=1, max_length=64)
+    commission_status: Literal["unknown", "reported"] = "unknown"
+    fee: float | None = None
     receipt: dict[str, Any] = Field(default_factory=dict)
     events: list[ClerkTransactionEventRow] = Field(default_factory=list)
 
@@ -47,6 +54,11 @@ class ClerkTransactionHistoryResponse(BaseModel):
 
     projection_available: bool
     canonical_fallback_required: bool
+    feed_state: Literal[
+        "live", "reconnecting", "stale", "offline_but_saved", "projection_unavailable"
+    ]
+    feed_headline: str = Field(min_length=1, max_length=128)
+    feed_detail: str = Field(min_length=1, max_length=512)
     high_water_journal_seq: int | None = Field(default=None, ge=0)
     lag_records: int | None = Field(default=None, ge=0)
     rows: list[ClerkTransactionRow]

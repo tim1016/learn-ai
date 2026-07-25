@@ -118,6 +118,17 @@ class FakeBrokerService {
   cancelOrder = vi.fn().mockResolvedValue(undefined);
   account = vi.fn();
   positions = vi.fn();
+  accountTransactions = vi.fn().mockResolvedValue({
+    projection_available: true,
+    canonical_fallback_required: false,
+    feed_state: 'live',
+    feed_headline: 'Live',
+    feed_detail: 'Durable Clerk callback projection is current.',
+    high_water_journal_seq: 1,
+    lag_records: 0,
+    rows: [],
+    next_cursor: null,
+  });
 }
 
 function whatIfPreview(overrides: Partial<IbkrOrderWhatIfPreview> = {}): IbkrOrderWhatIfPreview {
