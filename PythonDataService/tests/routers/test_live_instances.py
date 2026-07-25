@@ -3413,6 +3413,8 @@ async def test_roll_call_tick_persists_start_offer(
     assert roll_call.status_code == 200
     body = roll_call.json()
     assert body["summary"]["ready"] == 1
+    assert isinstance(body["summary"]["session_date_ms"], int)
+    assert "session_date" not in body["summary"]
     assert body["offers"][0]["strategy_instance_id"] == "spy_ema_paper"
     offers = BotRollCallOfferRepo(
         stable_bot_roll_call_offers_path(root.parent, "spy_ema_paper")

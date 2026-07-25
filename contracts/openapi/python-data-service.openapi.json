@@ -6049,6 +6049,8 @@
             "title": "Next Cursor"
           },
           "observed_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
             "title": "Observed At Ms",
             "type": "integer"
           },
@@ -6059,7 +6061,9 @@
           }
         },
         "required": [
+          "bots",
           "total_count",
+          "next_cursor",
           "observed_at_ms"
         ],
         "title": "BotCatalogPageResponse",
@@ -7363,16 +7367,18 @@
             "title": "Retired",
             "type": "integer"
           },
-          "session_date": {
+          "session_date_ms": {
             "anyOf": [
               {
-                "type": "string"
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Session Date"
+            "title": "Session Date Ms"
           },
           "sick_bay": {
             "default": 0,
@@ -47264,7 +47270,7 @@
     },
     "/api/live-instances/catalog/page": {
       "get": {
-        "description": "Return a bounded catalog page for post-first-paint loading.\n\nThis remains broker-free. It reads one daemon fleet snapshot so each\ncard's runtime state is current, then composes daemon/account evidence\nonly for the requested page.",
+        "description": "Return one broker-free catalog page for post-first-paint loading.",
         "operationId": "list_bot_catalog_page_api_live_instances_catalog_page_get",
         "parameters": [
           {

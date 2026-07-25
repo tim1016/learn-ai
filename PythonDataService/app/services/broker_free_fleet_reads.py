@@ -6,10 +6,12 @@ import asyncio
 from bisect import bisect_right
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Protocol
 
 from app.engine.live.bot_lifecycle_state import BotLifecyclePhase, BotLifecycleStateRecord
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.schemas.live_runs import (
     BotCatalogPageResponse,
     BotCatalogResponse,
@@ -48,6 +50,7 @@ class FleetReadSettings(Protocol):
     """The settings required to project a fleet read."""
 
     live_runner_daemon_url: str
+    live_runs_root: str
     mode: object
 
 
@@ -132,11 +135,14 @@ class BrokerFreeFleetReadService:
         limit: int,
         cursor: str | None,
     ) -> BotCatalogPageResponse:
-        """Read one bounded catalog page without per-row daemon fan-out.
+        """Read one bounded catalog page without unbounded daemon fan-out.
 
         A single daemon fleet snapshot remains necessary to avoid presenting a
         disk-only process state as current.  Unlike the legacy full catalog,
-        only this page's rows get status and account-truth composition.
+        only this page's rows get status and account-truth composition. When
+        the fleet snapshot has no entry for a requested SID, the fallback is
+        capped at one process probe per page row (and the API caps a page at
+        100 rows); it never probes the rest of the fleet.
         """
 
         snapshot = await self._read_snapshot(settings, root)
@@ -231,7 +237,11 @@ class BrokerFreeFleetReadService:
                 update={
                     "ready": len(offers),
                     "retired": retired_count,
-                    "session_date": summary_session_date,
+                    "session_date_ms": (
+                        session_open_ms_utc(date.fromisoformat(summary_session_date))
+                        if summary_session_date is not None
+                        else None
+                    ),
                     "effective_stop_ms": summary_effective_stop_ms,
                 }
             ),
@@ -356,3 +366,20 @@ class BrokerFreeFleetReadService:
                 self._account_id_for_sid(snapshot.by_instance, sid)
             ),
         )
+
+
+async def catalog_page_response(
+    service: BrokerFreeFleetReadService,
+    settings: FleetReadSettings,
+    *,
+    limit: int,
+    cursor: str | None,
+) -> BotCatalogPageResponse:
+    """HTTP-neutral catalog facade kept outside the frozen live router."""
+
+    return await service.catalog_page(
+        settings,
+        Path(settings.live_runs_root),
+        limit=limit,
+        cursor=cursor,
+    )

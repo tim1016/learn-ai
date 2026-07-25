@@ -26,6 +26,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
       events: [{ event_id: 'event_1', event_kind: 'execution', callback_identity: 'callback/opaque', lifecycle_state: 'filled', commission_status: 'reported', fee: 1.25, journal_seq: 5, recorded_at_ms: 1_780_000_000_001, receipt: { execution_ref: 'exec/opaque' }}],
     });
     const store = {
+      accountId: signal('DU1234567'),
       loading: signal(false), errorMessage: signal<string | null>(null), hasLastGood: signal(true),
       feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 5, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null }),
       rows: signal([{ transaction_id: 'ctxn_1', account_id: 'DU1234567', journal_seq: 4, recorded_at_ms: 1_780_000_000_000, transaction_kind: 'manual_ibkr_acknowledgement', strategy_instance_id: 'manual', run_id: 'manual', intent_id: 'intent/opaque', order_ref: 'manual/v1:opaque', order_id: 42, perm_id: null, exec_id: 'exec/opaque', lifecycle_state: 'filled', commission_status: 'reported' as const, fee: 1.25, event_count: 1 }]),
@@ -44,7 +45,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
   });
 
   it('has a compact mobile-readable label for every transaction cell', async () => {
-    const store = { loading: signal(false), errorMessage: signal<string | null>(null), hasLastGood: signal(true), feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 1, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null }), rows: signal([]), nextCursor: signal<string | null>(null), retry: vi.fn(), loadOlder: vi.fn(), transactionDetail: vi.fn() };
+    const store = { accountId: signal('DU1234567'), loading: signal(false), errorMessage: signal<string | null>(null), hasLastGood: signal(true), feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 1, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null }), rows: signal([]), nextCursor: signal<string | null>(null), retry: vi.fn(), loadOlder: vi.fn(), transactionDetail: vi.fn() };
     await render(AccountDeskTransactionHistoryComponent, { providers: [{ provide: AccountDeskTransactionHistoryStore, useValue: store }] });
     expect(screen.getByText(/No projected manual transactions/)).toBeTruthy();
   });
@@ -59,6 +60,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
         transaction_kind: 'manual_ibkr_acknowledgement', strategy_instance_id: 'manual', run_id: 'manual', intent_id: 'intent/new', order_ref: 'manual/v1:new', order_id: 43, perm_id: null, exec_id: null, lifecycle_state: 'filled', commission_status: 'unknown', fee: null, receipt: { receipt_hash: 'latest' }, events: [],
       });
     const store = {
+      accountId: signal('DU1234567'),
       loading: signal(false), errorMessage: signal<string | null>(null), hasLastGood: signal(true),
       feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 5, lag_records: 0, rows: [], next_cursor: null }),
       rows: signal([
@@ -81,5 +83,30 @@ describe('AccountDeskTransactionHistoryComponent', () => {
 
     expect(screen.getByText('latest')).toBeTruthy();
     expect(screen.queryByText('stale')).toBeNull();
+  });
+
+  it('invalidates an open receipt request when the selected account changes', async () => {
+    let resolveDetail: ((value: object) => void) | undefined;
+    const detail = new Promise<object>((resolve) => { resolveDetail = resolve; });
+    const accountId = signal('DU1234567');
+    const store = {
+      accountId,
+      loading: signal(false), errorMessage: signal<string | null>(null), hasLastGood: signal(true),
+      feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 4, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null }),
+      rows: signal([{ transaction_id: 'ctxn_1', account_id: 'DU1234567', journal_seq: 4, recorded_at_ms: 1_780_000_000_000, transaction_kind: 'manual_ibkr_acknowledgement', strategy_instance_id: 'manual', run_id: 'manual', intent_id: 'intent/old', order_ref: 'manual/v1:old', order_id: 42, perm_id: null, exec_id: null, lifecycle_state: 'submitted' as const, commission_status: 'unknown' as const, fee: null, event_count: 1 }]),
+      nextCursor: signal<string | null>(null), retry: vi.fn(), loadOlder: vi.fn(), transactionDetail: vi.fn().mockReturnValue(detail),
+    };
+    await render(AccountDeskTransactionHistoryComponent, { providers: [{ provide: AccountDeskTransactionHistoryStore, useValue: store }] });
+
+    fireEvent.click(screen.getByRole('button', { name: /open receipt manual\/v1:old/i }));
+    accountId.set('DU7654321');
+    await Promise.resolve();
+    resolveDetail?.({
+      transaction_id: 'ctxn_1', account_id: 'DU1234567', journal_seq: 4, recorded_at_ms: 1_780_000_000_000,
+      transaction_kind: 'manual_ibkr_acknowledgement', strategy_instance_id: 'manual', run_id: 'manual', intent_id: 'intent/old', order_ref: 'manual/v1:old', order_id: 42, perm_id: null, exec_id: null, lifecycle_state: 'submitted', commission_status: 'unknown', fee: null, receipt: { receipt_hash: 'stale-account-detail' }, events: [],
+    });
+    await Promise.resolve();
+
+    expect(screen.queryByText('stale-account-detail')).toBeNull();
   });
 });

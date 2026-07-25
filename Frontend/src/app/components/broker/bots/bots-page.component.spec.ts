@@ -110,7 +110,7 @@ describe('BotsPageComponent', () => {
       off_duty: 1,
       retired: 0,
       generated_at_ms: 1,
-      session_date: '2026-07-21',
+      session_date_ms: 1_784_650_200_000,
       effective_stop_ms: null,
     };
     liveRuns.getBotCatalogPage.mockResolvedValue(catalog);

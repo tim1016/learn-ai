@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import cast
 
@@ -24,6 +25,7 @@ from app.services.clerk_transaction_projection import (
 )
 
 _pool: asyncpg.Pool | None = None
+_pool_init_lock: asyncio.Lock | None = None
 
 
 def _ensure_configured() -> None:
@@ -36,11 +38,21 @@ def _ensure_configured() -> None:
 async def init_pool() -> None:
     """Create the Clerk projection pool once for projection reads and writes."""
 
-    global _pool
+    global _pool, _pool_init_lock
     if _pool is not None:
         return
-    _ensure_configured()
-    _pool = await asyncpg.create_pool(settings.POSTGRES_URL, min_size=1, max_size=10, command_timeout=30)
+    if _pool_init_lock is None:
+        _pool_init_lock = asyncio.Lock()
+    async with _pool_init_lock:
+        if _pool is not None:
+            return
+        _ensure_configured()
+        _pool = await asyncpg.create_pool(
+            settings.POSTGRES_URL,
+            min_size=1,
+            max_size=10,
+            command_timeout=30,
+        )
 
 
 async def close_pool() -> None:
@@ -74,7 +86,7 @@ class PostgresClerkTransactionProjectionStore:
         conn = await _connection()
         try:
             record = await conn.fetchrow(
-                "SELECT account_id, journal_path, last_byte_offset, last_journal_seq, updated_at_ms "
+                "SELECT account_id, journal_path, last_byte_offset, last_journal_seq, updated_at_ms, journal_generation "
                 "FROM clerk_transaction_projection_cursors WHERE account_id=$1 AND journal_path=$2",
                 account_id,
                 journal_path,
@@ -99,10 +111,10 @@ class PostgresClerkTransactionProjectionStore:
                     raise ClerkTransactionProjectionUnavailable("transaction projection rebuild is in progress")
                 for transaction in batch.transactions:
                     await conn.execute(
-                        "INSERT INTO clerk_transactions (transaction_id, broker, account_id, journal_seq, recorded_at_ms, transaction_kind, strategy_instance_id, run_id, intent_id, order_ref, order_id, perm_id, exec_id, native_order_id, native_execution_id, lifecycle_state, commission_status, fee, receipt, inserted_at_ms, updated_at_ms) "
-                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$20) "
+                        "INSERT INTO clerk_transactions (transaction_id, broker, account_id, journal_generation, journal_seq, recorded_at_ms, transaction_kind, strategy_instance_id, run_id, intent_id, order_ref, order_id, perm_id, exec_id, native_order_id, native_execution_id, lifecycle_state, commission_status, fee, receipt, inserted_at_ms, updated_at_ms) "
+                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb,$21,$21) "
                         "ON CONFLICT (transaction_id) DO NOTHING",
-                        transaction.transaction_id, transaction.broker, transaction.account_id, transaction.journal_seq, transaction.recorded_at_ms,
+                        transaction.transaction_id, transaction.broker, transaction.account_id, batch.journal_generation, transaction.journal_seq, transaction.recorded_at_ms,
                         transaction.transaction_kind, transaction.strategy_instance_id, transaction.run_id, transaction.intent_id,
                         transaction.order_ref, transaction.order_id, transaction.perm_id, transaction.exec_id,
                         transaction.native_order_id, transaction.native_execution_id, transaction.lifecycle_state,
@@ -110,24 +122,28 @@ class PostgresClerkTransactionProjectionStore:
                     )
                 for event in batch.events:
                     event_inserted = await conn.execute(
-                        "INSERT INTO clerk_transaction_events (event_id, transaction_id, broker, account_id, journal_seq, event_kind, callback_identity, lifecycle_state, native_order_id, native_execution_id, commission_status, fee, recorded_at_ms, receipt, inserted_at_ms) "
-                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15) ON CONFLICT (broker, account_id, callback_identity) WHERE callback_identity <> '' DO NOTHING",
-                        event.event_id, _event_transaction_id(batch.account_id, event), event.broker, batch.account_id,
+                        "INSERT INTO clerk_transaction_events (event_id, transaction_id, broker, account_id, journal_generation, journal_seq, event_kind, callback_identity, lifecycle_state, native_order_id, native_execution_id, commission_status, fee, recorded_at_ms, receipt, inserted_at_ms) "
+                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16) ON CONFLICT (broker, account_id, callback_identity) WHERE callback_identity <> '' DO NOTHING",
+                        event.event_id, _event_transaction_id(batch.account_id, event), event.broker, batch.account_id, batch.journal_generation,
                         event.journal_seq, event.event_kind, event.callback_identity, event.lifecycle_state,
                         event.native_order_id, event.native_execution_id, event.commission_status, event.fee,
                         event.recorded_at_ms, json.dumps(event.receipt, sort_keys=True), updated_at_ms,
                     )
-                    if event_inserted == "INSERT 0 1" and event.event_kind != "submitted":
+                    if (
+                        event_inserted == "INSERT 0 1"
+                        and event.event_kind != "submitted"
+                        and not event.event_kind.startswith("activity_")
+                    ):
                         await conn.execute(
-                            "UPDATE clerk_transactions SET lifecycle_state=CASE WHEN lifecycle_state IN ('filled','cancelled','rejected','error') THEN lifecycle_state ELSE $4 END, commission_status=CASE WHEN $5='reported' THEN 'reported' ELSE commission_status END, fee=CASE WHEN $5='reported' THEN $6 ELSE fee END, updated_at_ms=$7 WHERE broker=$1 AND account_id=$2 AND order_ref=$3",
+                            "UPDATE clerk_transactions SET lifecycle_state=CASE WHEN lifecycle_state IN ('filled','cancelled','rejected','error','partially_filled') THEN lifecycle_state ELSE $4 END, commission_status=CASE WHEN $5='reported' THEN 'reported' ELSE commission_status END, fee=CASE WHEN $5='reported' THEN $6 ELSE fee END, updated_at_ms=$7 WHERE broker=$1 AND account_id=$2 AND order_ref=$3",
                             event.broker, batch.account_id, _event_order_ref(event), event.lifecycle_state,
                             event.commission_status, event.fee, updated_at_ms,
                         )
                 await conn.execute(
-                    "INSERT INTO clerk_transaction_projection_cursors (account_id, journal_path, last_byte_offset, last_journal_seq, updated_at_ms) VALUES ($1,$2,$3,$4,$5) "
-                    "ON CONFLICT (account_id, journal_path) DO UPDATE SET last_byte_offset=EXCLUDED.last_byte_offset, last_journal_seq=EXCLUDED.last_journal_seq, updated_at_ms=EXCLUDED.updated_at_ms "
-                    "WHERE (clerk_transaction_projection_cursors.last_byte_offset, clerk_transaction_projection_cursors.last_journal_seq) < (EXCLUDED.last_byte_offset, EXCLUDED.last_journal_seq)",
-                    batch.account_id, batch.journal_path, batch.next_byte_offset, batch.next_journal_seq, updated_at_ms,
+                    "INSERT INTO clerk_transaction_projection_cursors (account_id, journal_path, last_byte_offset, last_journal_seq, updated_at_ms, journal_generation) VALUES ($1,$2,$3,$4,$5,$6) "
+                    "ON CONFLICT (account_id, journal_path) DO UPDATE SET last_byte_offset=EXCLUDED.last_byte_offset, last_journal_seq=EXCLUDED.last_journal_seq, updated_at_ms=EXCLUDED.updated_at_ms, journal_generation=EXCLUDED.journal_generation "
+                    "WHERE clerk_transaction_projection_cursors.journal_generation <> EXCLUDED.journal_generation OR (clerk_transaction_projection_cursors.last_byte_offset, clerk_transaction_projection_cursors.last_journal_seq) < (EXCLUDED.last_byte_offset, EXCLUDED.last_journal_seq)",
+                    batch.account_id, batch.journal_path, batch.next_byte_offset, batch.next_journal_seq, updated_at_ms, batch.journal_generation,
                 )
         finally:
             await _release_connection(conn)
@@ -147,7 +163,7 @@ class PostgresClerkTransactionProjectionStore:
                 account_id, after[0] if after else None, after[1] if after else None, after[2] if after else None, limit,
             )
             metadata = await conn.fetchrow(
-                "SELECT last_journal_seq AS high_water, 0::bigint AS lag FROM clerk_transaction_projection_cursors WHERE account_id=$1 ORDER BY updated_at_ms DESC LIMIT 1",
+                "SELECT last_journal_seq AS high_water, NULL::bigint AS lag FROM clerk_transaction_projection_cursors WHERE account_id=$1 ORDER BY updated_at_ms DESC LIMIT 1",
                 account_id,
             )
         finally:

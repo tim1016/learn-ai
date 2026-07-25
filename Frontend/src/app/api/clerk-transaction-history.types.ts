@@ -39,7 +39,7 @@ export interface ClerkTransactionSummary {
 }
 
 /** Full receipt evidence is fetched only after an operator selects a grid row. */
-export interface ClerkTransactionDetail extends ClerkTransactionSummary {
+export interface ClerkTransactionDetail extends Omit<ClerkTransactionSummary, 'event_count'> {
   readonly receipt: Record<string, unknown>;
   readonly events: readonly ClerkTransactionEvent[];
 }

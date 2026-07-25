@@ -20,6 +20,7 @@ export class AccountDeskTransactionHistoryStore {
   private readonly feedState = signal<ClerkTransactionHistoryResponse | null>(null);
   private readonly loadingState = signal(false);
   private readonly errorState = signal<string | null>(null);
+  private requestGeneration = 0;
 
   readonly accountId = this.accountKey.asReadonly();
   readonly rows = this.rowsState.asReadonly();
@@ -31,10 +32,13 @@ export class AccountDeskTransactionHistoryStore {
 
   async load(accountId: string): Promise<void> {
     if (this.accountKey() !== accountId) {
+      this.requestGeneration += 1;
       this.accountKey.set(accountId);
       this.rowsState.set([]);
       this.nextCursorState.set(null);
       this.feedState.set(null);
+      this.loadingState.set(false);
+      this.errorState.set(null);
     }
     await this.fetchPage(null, true);
   }
@@ -57,21 +61,26 @@ export class AccountDeskTransactionHistoryStore {
   private async fetchPage(cursor: string | null, replace: boolean): Promise<void> {
     const accountId = this.accountKey();
     if (accountId === null || this.loadingState()) return;
+    const requestGeneration = this.requestGeneration;
     this.loadingState.set(true);
     this.errorState.set(null);
     try {
       const page = await this.broker.accountTransactions(accountId, cursor, FIRST_PAGE_SIZE);
-      if (this.accountKey() !== accountId) return;
+      if (!this.isCurrentRequest(accountId, requestGeneration)) return;
       this.feedState.set(page);
       this.rowsState.set(replace ? page.rows : mergeRows(this.rowsState(), page.rows));
       this.nextCursorState.set(page.next_cursor);
     } catch (error) {
-      if (this.accountKey() === accountId) {
+      if (this.isCurrentRequest(accountId, requestGeneration)) {
         this.errorState.set(extractServerMessage(error, 'Transaction history is unavailable. Retry to request it again.'));
       }
     } finally {
-      if (this.accountKey() === accountId) this.loadingState.set(false);
+      if (this.isCurrentRequest(accountId, requestGeneration)) this.loadingState.set(false);
     }
+  }
+
+  private isCurrentRequest(accountId: string, requestGeneration: number): boolean {
+    return this.accountKey() === accountId && this.requestGeneration === requestGeneration;
   }
 }
 

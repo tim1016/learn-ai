@@ -265,6 +265,7 @@ export class BrokerOrdersComponent {
   private ledgerRefreshPending = false;
   private ledgerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private lastLedgerRefreshEventKey: string | null = null;
+  private transactionFeedRequestGeneration = 0;
 
   constructor() {
     void this.refreshLedger();
@@ -393,6 +394,9 @@ export class BrokerOrdersComponent {
       try {
         const truth = await this.broker.accountTruth();
         this.applyAccountTruth(truth);
+        if (truth.account_id !== null) {
+          void this.refreshTransactionFeed(truth.account_id);
+        }
         this.prefillOpenExposureFromDeepLink();
       } catch (err) {
         this.ledgerError.set(err);
@@ -624,12 +628,18 @@ export class BrokerOrdersComponent {
   }
 
   private async refreshTransactionFeed(accountId: string): Promise<void> {
+    const requestGeneration = ++this.transactionFeedRequestGeneration;
     try {
-      this.transactionFeed.set(await this.broker.accountTransactions(accountId, null, 1));
+      const feed = await this.broker.accountTransactions(accountId, null, 1);
+      if (this.accountId() === accountId && requestGeneration === this.transactionFeedRequestGeneration) {
+        this.transactionFeed.set(feed);
+      }
     } catch {
       // Transport failure does not invent a lifecycle state; the next refresh
       // will render only a backend-authored feed state once it is available.
-      this.transactionFeed.set(null);
+      if (this.accountId() === accountId && requestGeneration === this.transactionFeedRequestGeneration) {
+        this.transactionFeed.set(null);
+      }
     }
   }
 

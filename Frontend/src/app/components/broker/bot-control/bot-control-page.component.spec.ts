@@ -119,7 +119,7 @@ function rollCallResponse(): BotRollCallResponse {
       off_duty: 0,
       retired: 0,
       generated_at_ms: 1_700_000_000_000,
-      session_date: '2026-07-13',
+      session_date_ms: 1_784_572_200_000,
       effective_stop_ms: 1_700_050_000_000,
     },
     offers: [

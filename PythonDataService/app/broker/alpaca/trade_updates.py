@@ -605,7 +605,13 @@ class TradeUpdatesConsumer:
             activities = await self._read.list_activities(
                 after_ms=cursor, limit=_ACTIVITY_RECOVERY_LIMIT
             )
-            for activity in activities:
+            # Alpaca returns this bounded page newest-first. Commit the oldest
+            # observable activity first so a crash cannot advance the durable
+            # high-water past an unrecorded earlier item in the same window.
+            for activity in sorted(
+                activities,
+                key=lambda item: item.occurred_at_ms if item.occurred_at_ms is not None else -1,
+            ):
                 if await self._clerk.activity_recovery.record(
                     activity=activity, window_limit=_ACTIVITY_RECOVERY_LIMIT
                 ):

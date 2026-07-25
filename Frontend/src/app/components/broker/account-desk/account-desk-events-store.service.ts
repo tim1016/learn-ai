@@ -14,7 +14,7 @@ import { extractServerMessage } from '../operation-error';
 
 const POLL_INTERVAL_MS = 15_000;
 const NON_TRANSACTION_EVIDENCE_KINDS: readonly AccountEventKind[] = [
-  'safety', 'reconciliation', 'clerk', 'configuration', 'other',
+  'activity', 'safety', 'reconciliation', 'clerk', 'configuration', 'other',
 ];
 
 interface EventViewState<T extends { readonly seq: number }> {

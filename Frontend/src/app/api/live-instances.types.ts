@@ -193,7 +193,7 @@ export interface BotRollCallSummary {
   off_duty: number;
   retired: number;
   generated_at_ms: number | null;
-  session_date: string | null;
+  session_date_ms: number | null;
   effective_stop_ms: number | null;
 }
 

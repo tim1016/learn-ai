@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
@@ -26,6 +28,18 @@ from app.services.clerk_transaction_projection import project_account_journal_be
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+_projection_tasks: set[asyncio.Task[None]] = set()
+
+
+def _schedule_projection(*, artifacts_root: Path, account_id: str) -> None:
+    """Start rebuildable projection work after the durable acknowledgement path."""
+
+    task = asyncio.create_task(
+        project_account_journal_best_effort(artifacts_root=artifacts_root, account_id=account_id),
+        name="ibkr-transaction-projection",
+    )
+    _projection_tasks.add(task)
+    task.add_done_callback(_projection_tasks.discard)
 
 
 class ManualOrderClerkUnavailableError(RuntimeError):
@@ -131,10 +145,10 @@ async def submit_manual_order_through_clerk(
         retry_safe, reason_code = clerk_rejection_reason(exc)
         raise ManualOrderClerkRejectedError(reason_code, retry_safe) from exc
 
-    await project_account_journal_best_effort(
-        artifacts_root=artifacts_root,
-        account_id=account_id,
-    )
+    # The Clerk acknowledgement is already journal-fsynced. Postgres is a
+    # rebuildable read model, so it may not extend the HTTP acknowledgement
+    # latency or turn a safe retry into a duplicate broker write.
+    _schedule_projection(artifacts_root=artifacts_root, account_id=account_id)
 
     ack = receipt.broker_ack
     if ack is None:

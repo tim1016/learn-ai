@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import tracemalloc
 from pathlib import Path
@@ -15,7 +16,7 @@ from app.engine.live.account_owner import (
     AccountOwnerSubmitIntent,
 )
 from app.schemas.clerk_transaction_projection import ClerkTransactionRow, ClerkTransactionSummaryRow
-from app.services import clerk_transaction_projection
+from app.services import clerk_transaction_projection, clerk_transaction_projection_store
 from app.services.clerk_transaction_projection import (
     ClerkJournalCursor,
     ClerkTransactionBatch,
@@ -66,6 +67,7 @@ class _Store:
         self.persisted: list[ClerkTransactionBatch] = []
         self.semantic_event_keys: set[tuple[str, str]] = set()
         self.fail = False
+        self.reset_calls = 0
         self.feed = ("stale", "Stale", "No current projection-feed receipt.", None, None, False)
 
     async def read_cursor(self, account_id: str, journal_path: str) -> ClerkJournalCursor | None:
@@ -86,7 +88,14 @@ class _Store:
                 self.rows.append(row)
                 existing.add(row.transaction_id)
         self.semantic_event_keys.update((event.broker, event.callback_identity) for event in batch.events)
-        self.cursor = ClerkJournalCursor(batch.account_id, batch.journal_path, batch.next_byte_offset, batch.next_journal_seq, updated_at_ms)
+        self.cursor = ClerkJournalCursor(
+            batch.account_id,
+            batch.journal_path,
+            batch.next_byte_offset,
+            batch.next_journal_seq,
+            updated_at_ms,
+            batch.journal_generation,
+        )
         return len(batch.transactions)
 
     async def history_page(self, *, account_id: str, limit: int, after: tuple[int, int, str] | None):
@@ -123,6 +132,7 @@ class _Store:
         self, *, account_id: str, journal_path: str, broker: str, updated_at_ms: int
     ) -> None:
         assert account_id == ACCOUNT
+        self.reset_calls += 1
         self.rows = [row for row in self.rows if row.broker != broker]
         self.cursor = None
         self.feed = ("rebuilding", "Rebuild in progress", "Projection rebuild is replaying canonical Clerk acknowledgement evidence.", None, None, False)
@@ -144,9 +154,44 @@ class _CountingStore(_Store):
         self.batch_count += 1
         self.max_batch_records = max(self.max_batch_records, batch.source_record_count)
         self.cursor = ClerkJournalCursor(
-            batch.account_id, batch.journal_path, batch.next_byte_offset, batch.next_journal_seq, updated_at_ms
+            batch.account_id,
+            batch.journal_path,
+            batch.next_byte_offset,
+            batch.next_journal_seq,
+            updated_at_ms,
+            batch.journal_generation,
         )
         return len(batch.transactions)
+
+
+@pytest.mark.asyncio
+async def test_projection_pool_initialization_is_serialized(monkeypatch: pytest.MonkeyPatch) -> None:
+    original_pool = clerk_transaction_projection_store._pool
+    original_lock = clerk_transaction_projection_store._pool_init_lock
+    clerk_transaction_projection_store._pool = None
+    clerk_transaction_projection_store._pool_init_lock = None
+    create_calls = 0
+    created_pool = object()
+
+    async def create_pool(*_args, **_kwargs) -> object:
+        nonlocal create_calls
+        create_calls += 1
+        await asyncio.sleep(0)
+        return created_pool
+
+    monkeypatch.setattr(clerk_transaction_projection_store.settings, "CLERK_TRANSACTION_PROJECTION_ENABLED", True)
+    monkeypatch.setattr(clerk_transaction_projection_store.settings, "POSTGRES_URL", "postgres://test")
+    monkeypatch.setattr(clerk_transaction_projection_store.asyncpg, "create_pool", create_pool)
+    try:
+        await asyncio.gather(
+            clerk_transaction_projection_store.init_pool(),
+            clerk_transaction_projection_store.init_pool(),
+        )
+        assert create_calls == 1
+        assert clerk_transaction_projection_store._pool is created_pool
+    finally:
+        clerk_transaction_projection_store._pool = original_pool
+        clerk_transaction_projection_store._pool_init_lock = original_lock
 
 
 def _callback(
@@ -155,6 +200,7 @@ def _callback(
     event_type: str,
     status: str | None,
     fee: float | None = None,
+    error_code: int | None = None,
     callback_identity: str | None = None,
 ) -> AccountClerkJournalEntry:
     ack = _manual_ack(1)
@@ -163,6 +209,7 @@ def _callback(
         event_type=event_type, status=status, order_ref=ack.intent.order_ref if ack.intent else None,
         fill_quantity=1.0 if event_type == "fill" else None, remaining=0.0 if status == "Filled" else 1.0,
         fee=fee, ts_ms=1_700_000_000_000 + seq,
+        error_code=error_code,
     )
     return AccountClerkJournalEntry(
         seq=seq, entry_kind="broker_event", recorded_at_ms=event.ts_ms, intent=ack.intent,
@@ -185,6 +232,29 @@ async def test_tail_projects_manual_ack_and_resumes_only_appended_bytes(tmp_path
     assert await tail_account_journal(artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=11) == 1
     assert store.persisted[-1].next_byte_offset > first_offset
     assert [row.journal_seq for row in store.rows] == [1, 2]
+    assert store.feed[0] == "live"
+    assert store.feed[3:] == (2, 0, False)
+
+
+@pytest.mark.asyncio
+async def test_repaired_journal_with_reused_sequence_gets_a_fresh_cursor_generation(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    store = _Store()
+    await tail_account_journal(artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=1)
+    first_generation = store.cursor.journal_generation if store.cursor else ""
+
+    repaired = path.with_suffix(".repaired")
+    _append(repaired, _manual_ack(99).model_copy(update={"seq": 1}))
+    repaired.replace(path)
+
+    assert await tail_account_journal(
+        artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=2
+    ) == 1
+    assert store.cursor is not None
+    assert store.cursor.journal_generation != first_generation
+    assert store.cursor.last_journal_seq == 1
+    assert [row.intent_id for row in store.rows] == ["manual-1", "manual-99"]
 
 
 def test_read_appended_clerk_journal_leaves_torn_record_for_later(tmp_path: Path) -> None:
@@ -348,6 +418,40 @@ async def test_normal_tail_cannot_restore_rows_during_a_rebuild(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_rebuild_refuses_missing_journal_before_it_resets_the_projection(tmp_path: Path) -> None:
+    store = _Store()
+
+    with pytest.raises(ClerkTransactionProjectionUnavailable, match="reset was not started"):
+        await rebuild_account_transaction_projection(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            store=store,
+            updated_at_ms=2,
+        )
+
+    assert store.reset_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_recovery_does_not_replace_a_corruption_receipt_with_offline_status(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    store = _Store()
+    store.feed = ("corrupt", "Projection corrupt", "Canonical evidence retained.", 1, None, False)
+    store.fail = True
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await recover_account_transaction_feed(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            store=store,
+            updated_at_ms=2,
+        )
+
+    assert store.feed[0] == "corrupt"
+
+
+@pytest.mark.asyncio
 async def test_recovery_stops_after_its_bounded_window_budget(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -405,7 +509,7 @@ async def test_best_effort_projection_failure_cannot_block_durable_acknowledgeme
         raise RuntimeError("projection database unavailable")
 
     monkeypatch.setattr(clerk_transaction_projection.settings, "CLERK_TRANSACTION_PROJECTION_ENABLED", True)
-    monkeypatch.setattr(clerk_transaction_projection, "tail_account_journal", _fail)
+    monkeypatch.setattr(clerk_transaction_projection, "recover_account_transaction_feed", _fail)
 
     await project_account_journal_best_effort(artifacts_root=tmp_path, account_id=ACCOUNT)
 
@@ -469,6 +573,25 @@ async def test_lifecycle_callbacks_fold_terminal_state_without_fabricating_commi
     assert state == "cancelled"
 
 
+@pytest.mark.asyncio
+async def test_callback_projection_distinguishes_ibkr_rejection_and_late_commission(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    _append(path, _callback(2, event_type="error", status="Inactive", error_code=201))
+    _append(path, _callback(3, event_type="status", status="Submitted", fee=1.25))
+    store = _Store()
+
+    await tail_account_journal(artifacts_root=tmp_path, account_id=ACCOUNT, store=store)
+
+    events = store.persisted[0].events
+    assert [(event.event_kind, event.lifecycle_state) for event in events[1:]] == [
+        ("rejected", "rejected"),
+        ("commission", "submitted"),
+    ]
+    assert events[-1].commission_status == "reported"
+    assert events[-1].fee == 1.25
+
+
 def test_duplicate_callback_identity_produces_the_same_projection_event_id(tmp_path: Path) -> None:
     path = tmp_path / "journal.jsonl"
     _append(path, _manual_ack(1))
@@ -483,19 +606,17 @@ def test_duplicate_callback_identity_produces_the_same_projection_event_id(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_recovery_publishes_only_after_commit_and_marks_live(tmp_path: Path) -> None:
+async def test_recovery_commits_projection_and_marks_live(tmp_path: Path) -> None:
     path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
     _append(path, _manual_ack(1))
     store = _Store()
-    published: list[int] = []
 
-    async def publish(batch: ClerkTransactionBatch) -> None:
-        assert store.cursor is not None
-        published.append(batch.next_journal_seq)
-
-    count = await recover_account_transaction_feed(artifacts_root=tmp_path, account_id=ACCOUNT, store=store, publish=publish, updated_at_ms=100)
+    count = await recover_account_transaction_feed(
+        artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=100
+    )
     assert count == 1
-    assert published == [1]
+    assert store.cursor is not None
+    assert store.cursor.last_journal_seq == 1
     assert store.feed[0] == "live"
 
 

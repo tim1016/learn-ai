@@ -109,6 +109,7 @@ from app.services.bot_deletion import (
     bot_lifecycle_operation_fence,
     bot_retirement_is_pending,
 )
+from app.services.clerk_transaction_projection import project_account_journal_best_effort
 from app.utils.advisory_lock import advisory_file_lock
 
 if TYPE_CHECKING:
@@ -211,6 +212,8 @@ class AccountClerk:
         )
         self._rpc_write_intake_closed = False
         self._event_stream_down_recorded = False
+        self._projection_task: asyncio.Task[None] | None = None
+        self._projection_requested = False
 
     @property
     def recovery_flatten_in_progress(self) -> bool:
@@ -499,6 +502,9 @@ class AccountClerk:
             await asyncio.to_thread(write_account_freeze, self._artifacts_root, freeze)
         elif self._normal_submit_intake_reason == "CLERK_EMERGENCY_RECOVERY_REQUIRED":
             self._normal_submit_intake_reason = None
+        # Existing canonical journals must become discoverable at startup even
+        # if no new manual order or callback arrives after a database outage.
+        self._schedule_transaction_projection()
 
     async def record_broker_event(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
         """Persist one callback off-loop before any downstream relay.
@@ -516,7 +522,28 @@ class AccountClerk:
                     event,
                     broker_callback_idempotency_key(event),
                 )
+        # The callback receipt is durable before this best-effort rebuildable
+        # projection starts; never stall the callback relay on Postgres.
+        self._schedule_transaction_projection()
         return receipt
+
+    def _schedule_transaction_projection(self) -> None:
+        """Coalesce best-effort transaction projection after durable journal work."""
+
+        self._projection_requested = True
+        if self._projection_task is None or self._projection_task.done():
+            self._projection_task = asyncio.create_task(
+                self._drain_transaction_projection_requests(),
+                name="ibkr-transaction-projection",
+            )
+
+    async def _drain_transaction_projection_requests(self) -> None:
+        while self._projection_requested:
+            self._projection_requested = False
+            await project_account_journal_best_effort(
+                artifacts_root=self._artifacts_root,
+                account_id=self._account_id,
+            )
 
     async def mark_event_stream_down(self, failure: BaseException | None = None) -> None:
         """Close normal submit intake and durably alarm a dead broker stream."""

@@ -2573,7 +2573,7 @@ class BotRollCallSummary(BaseModel):
     off_duty: int = 0
     retired: int = 0
     generated_at_ms: int | None = None
-    session_date: str | None = None
+    session_date_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
     effective_stop_ms: int | None = None
 
 
@@ -3210,10 +3210,10 @@ class BotCatalogPageResponse(BaseModel):
     therefore not suitable for the Bots page's initial render.
     """
 
-    bots: list[BotCatalogRow] = Field(default_factory=list)
+    bots: list[BotCatalogRow]
     total_count: int = Field(ge=0)
-    next_cursor: str | None = None
-    observed_at_ms: int
+    next_cursor: str | None
+    observed_at_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
 
 
 class BotDeleteRequest(BaseModel):

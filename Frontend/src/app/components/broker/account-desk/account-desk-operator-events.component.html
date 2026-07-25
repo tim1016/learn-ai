@@ -1,11 +1,11 @@
 <p-panel
   id="account-desk-operator-events"
   class="operations-events"
-  aria-label="Safety and configuration evidence"
+  aria-label="Account operations evidence"
   aria-live="polite"
 >
-  <ng-template #header><h2>Safety and configuration evidence</h2></ng-template>
-  <p>Account controls, verification, and configuration evidence outside transaction history.</p>
+  <ng-template #header><h2>Account operations evidence</h2></ng-template>
+  <p>Account activity, controls, verification, and configuration evidence outside transaction history.</p>
   <div class="kind-filters" aria-label="Event kind filters">
     @for (kind of eventKinds; track trackKind($index, kind)) {
       <button

@@ -165,7 +165,7 @@ async def lifespan(app: FastAPI):
     # the IBKR gateway lifecycle). No keys → no clerk → the write endpoint
     # honestly reports "not configured".
     from app.broker.alpaca.broker import AlpacaBroker
-    from app.broker.alpaca.clerk import AlpacaClerk, set_alpaca_clerk
+    from app.broker.alpaca.clerk import AlpacaClerk, get_clerk_settings, set_alpaca_clerk
 
     if _alpaca_clerk_configuration_is_valid():
         alpaca_broker = AlpacaBroker()
@@ -182,6 +182,16 @@ async def lifespan(app: FastAPI):
         if await _recover_alpaca_clerk_or_fail_closed(alpaca_clerk):
             set_alpaca_clerk(alpaca_clerk)
             logger.info("Alpaca Clerk ready (order submission enabled).")
+
+            # Drain existing canonical evidence on boot; the rebuildable SQL
+            # history may not wait for an unrelated later order append.
+            from app.services.clerk_transaction_projection import project_alpaca_journal_best_effort
+
+            account_id, _journal = await alpaca_clerk._ensure_journal()
+            await project_alpaca_journal_best_effort(
+                artifacts_root=get_clerk_settings().dir,
+                account_id=account_id,
+            )
 
             # Alpaca live-lifecycle consumer (phase 2, S4) — the owned
             # trade_updates websocket. Started alongside the Clerk (Alpaca is a peer

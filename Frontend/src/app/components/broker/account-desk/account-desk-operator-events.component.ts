@@ -14,6 +14,7 @@ import { AccountDeskGuidanceComponent } from "./account-desk-guidance.component"
 import { AccountDeskEventsStore } from "./account-desk-events-store.service";
 
 const EVENT_KINDS: readonly AccountEventKind[] = [
+  "activity",
   "safety",
   "reconciliation",
   "clerk",
@@ -26,7 +27,7 @@ interface AccountTimelineRow {
   readonly evidence: AccountEventEvidenceRef[];
 }
 
-/** Safety/configuration evidence kept separate from Clerk transaction receipts. */
+/** Non-transaction account evidence, including unattributed broker activity. */
 @Component({
   selector: "app-account-desk-operator-events",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -46,7 +47,7 @@ export class AccountDeskOperatorEventsComponent {
   readonly eventKinds = EVENT_KINDS;
   private readonly timelineRowsByEventId = new Map<string, AccountTimelineRow>();
   readonly timelineAccessibility = {
-    host: { role: "list", "aria-label": "Safety and configuration events" },
+    host: { role: "list", "aria-label": "Account operations events" },
     event: { role: "listitem" },
   };
   readonly timelineRows = computed(() =>

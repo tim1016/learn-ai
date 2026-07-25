@@ -8,6 +8,7 @@ with no Gateway present.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -413,10 +414,14 @@ async def test_manual_order_submission_uses_the_durable_account_clerk(
     )
     monkeypatch.setattr(manual_order_submission, "AccountClerkRpcClient", _FakeClerkClient)
     projected_accounts: list[str] = []
+    projection_started = asyncio.Event()
+    release_projection = asyncio.Event()
 
     async def _project(*, artifacts_root, account_id: str) -> None:
         assert artifacts_root == tmp_path
         projected_accounts.append(account_id)
+        projection_started.set()
+        await release_projection.wait()
 
     monkeypatch.setattr(manual_order_submission, "project_account_journal_best_effort", _project)
 
@@ -428,7 +433,10 @@ async def test_manual_order_submission_uses_the_durable_account_clerk(
     assert result == broker_ack
     assert submitted[0].order_ref == spec.order_ref
     assert submitted[0].intent_kind == "MANUAL_ORDER"
+    await asyncio.wait_for(projection_started.wait(), timeout=1)
     assert projected_accounts == ["DU1234567"]
+    release_projection.set()
+    await asyncio.sleep(0)
     client.ib.placeOrder.assert_not_called()
 
 

@@ -131,7 +131,6 @@ export class AccountDeskPageComponent {
           void this.store.load(accountId);
           void this.holdings.load(accountId);
           void this.events.load(accountId);
-          void this.transactions.load(accountId);
           void this.fleet.load(accountId);
           this.recovery.load(accountId);
           void this.directory.loadRoster();
@@ -161,7 +160,11 @@ export class AccountDeskPageComponent {
 
   selectLens(lens: AccountDeskLens): void {
     this.lens.set(lens);
-    if (lens === "operator") this.events.loadOperations();
+    if (lens === "operator") {
+      this.events.loadOperations();
+      const accountId = this.store.accountId();
+      if (accountId !== null) void this.transactions.load(accountId);
+    }
   }
 
   retry(): void {

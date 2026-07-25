@@ -3,6 +3,7 @@ import {
   Component,
   ElementRef,
   computed,
+  effect,
   inject,
   signal,
   viewChild,
@@ -11,7 +12,7 @@ import { ButtonModule } from 'primeng/button';
 import { PanelModule } from 'primeng/panel';
 
 import type { ClerkTransactionDetail, ClerkTransactionSummary } from '../../../api/clerk-transaction-history.types';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { formatReceiptValue, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
 
@@ -25,6 +26,7 @@ import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-h
 })
 export class AccountDeskTransactionHistoryComponent {
   readonly store = inject(AccountDeskTransactionHistoryStore);
+  private activeAccountId = this.store.accountId();
   private readonly drawer = viewChild<ElementRef<HTMLDialogElement>>('receiptDrawer');
   private readonly opener = signal<HTMLElement | null>(null);
   private detailRequestGeneration = 0;
@@ -33,6 +35,19 @@ export class AccountDeskTransactionHistoryComponent {
   readonly detailError = signal<string | null>(null);
   readonly drawerOpen = signal(false);
   readonly receiptEntries = computed(() => receiptEntries(this.selected()?.receipt ?? {}));
+
+  constructor() {
+    effect(() => {
+      const accountId = this.store.accountId();
+      if (accountId === this.activeAccountId) return;
+      this.activeAccountId = accountId;
+      this.detailRequestGeneration += 1;
+      this.selected.set(null);
+      this.detailError.set(null);
+      this.detailLoading.set(false);
+      if (this.drawerOpen()) this.closeReceipt();
+    });
+  }
 
   trackRow = (_: number, row: ClerkTransactionSummary): string => row.transaction_id;
   trackEvent = (_: number, event: ClerkTransactionDetail['events'][number]): string => event.event_id;
@@ -99,6 +114,6 @@ function receiptEntries(receipt: Record<string, unknown>): readonly ReceiptEntry
   return Object.entries(receipt).map(([key, value]) => ({
     key,
     label: key,
-    value: typeof value === 'string' ? value : JSON.stringify(value) ?? '',
+    value: typeof value === 'string' ? formatReceiptValue(key, value) : JSON.stringify(value) ?? '',
   }));
 }

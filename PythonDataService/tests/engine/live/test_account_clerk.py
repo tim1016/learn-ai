@@ -487,6 +487,36 @@ async def test_startup_recovery_holds_uniquely_attributable_exposure_without_fre
 
 
 @pytest.mark.asyncio
+async def test_clerk_coalesces_transaction_projection_requests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    projection_started = asyncio.Event()
+    release_projection = asyncio.Event()
+    calls = 0
+
+    async def project(*, artifacts_root: Path, account_id: str) -> None:
+        nonlocal calls
+        assert artifacts_root == tmp_path
+        assert account_id == ACCOUNT
+        calls += 1
+        projection_started.set()
+        await release_projection.wait()
+
+    monkeypatch.setattr(account_clerk_module, "project_account_journal_best_effort", project)
+    clerk._schedule_transaction_projection()
+    clerk._schedule_transaction_projection()
+    await asyncio.wait_for(projection_started.wait(), timeout=1)
+
+    assert calls == 1
+    release_projection.set()
+    task = clerk._projection_task
+    assert task is not None
+    await task
+
+
+@pytest.mark.asyncio
 async def test_startup_recovery_freezes_same_symbol_foreign_exposure_despite_recorded_intent(
     tmp_path: Path,
 ) -> None:
