@@ -18,6 +18,7 @@ forensic references, not active consumers.
 | Python tests and schema checks | Router, store, replay, tailer, integration-store suites; lifecycle schema-drift registration | Deleted; replaced by retirement-contract and Clerk transaction-projection checks. | 0 |
 | Angular client and UI | `lifecycle-projection.types.ts`; two `LiveRunsService` methods and specs; unused bot-control unit/E2E fixtures | Deleted. The active bot lifecycle chart types moved to `bot-lifecycle-chart.types.ts`; this is evaluator-owned UI evidence, not the retired Postgres projection. | 0 |
 | Generated contract | OpenAPI paths/schemas and `broker.types.ts` operations/types | Removed mechanically from the checked-in contract and generated client. | 0 |
+| Migrations and schema history | Applied `20260630023000_AddLifecycleProjectionReadModel`, `20260720010000_RepairLegacySchemaDrift`, and `20260720020000_ReconcileLegacySchemaRepairContract`; their raw-SQL schema-drift test seams | Retained unchanged as applied forensic history. New forward-only `20260725050000_DropLegacyLifecycleProjectionReadModel` retires the derived tables; no active application consumer remains. | 0 |
 | Database | Five derived tables: `bot_lifecycle_events`, `account_lifecycle_events`, `operator_gate_snapshots`, `lifecycle_node_receipts`, `account_owner_status_snapshots` | Dropped by forward migration `20260725050000_DropLegacyLifecycleProjectionReadModel`. | 0 |
 
 ### Exact active-import and caller inventory before deletion
