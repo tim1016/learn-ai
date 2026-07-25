@@ -48,8 +48,10 @@ states. The Account Desk must render them; it must not infer health itself.
    broker='ibkr' | 'alpaca', store=PostgresClerkTransactionProjectionStore())`.
    It takes a journal-scoped PostgreSQL advisory lock, deletes only that
    broker's derived rows and matching cursor, marks the feed `rebuilding`, then
-   replays the selected canonical Clerk journal. It has no broker client and
-   never writes the journal.
+   replays the selected canonical Clerk journal. While that durable state is
+   present, ordinary tails cannot write stale pre-reset batches and a second
+   reset is rejected; resume the existing job instead. It has no broker client
+   and never writes the journal.
 2. If it returns `rebuilding`, resume it through the approved job runner with
    `reset=False` until the API reports `live`. A completion reports zero lag
    and a high-water journal sequence. Do not substitute direct SQL deletion;

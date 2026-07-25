@@ -9879,9 +9879,14 @@ export interface components {
              * Feed State
              * @enum {string}
              */
-            feed_state: "live" | "reconnecting" | "stale" | "offline_but_saved" | "projection_unavailable";
+            feed_state: "live" | "reconnecting" | "rebuilding" | "stale" | "offline_but_saved" | "corrupt" | "projection_unavailable";
             /** High Water Journal Seq */
             high_water_journal_seq?: number | null;
+            /**
+             * Lag Is Lower Bound
+             * @default false
+             */
+            lag_is_lower_bound?: boolean;
             /** Lag Records */
             lag_records?: number | null;
             /** Next Cursor */

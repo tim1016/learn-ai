@@ -8,10 +8,10 @@ from app.schemas.clerk_transaction_projection import ClerkTransactionHistoryResp
 from app.services.clerk_transaction_projection import (
     ClerkTransactionProjectionStore,
     ClerkTransactionProjectionUnavailable,
-    PostgresClerkTransactionProjectionStore,
     transaction_detail,
     transaction_history,
 )
+from app.services.clerk_transaction_projection_store import PostgresClerkTransactionProjectionStore
 
 router = APIRouter(prefix="/api/accounts", tags=["clerk-transactions"])
 

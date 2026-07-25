@@ -19,10 +19,11 @@ from app.services import clerk_transaction_projection
 from app.services.clerk_transaction_projection import (
     ClerkJournalCursor,
     ClerkTransactionBatch,
+    ClerkTransactionProjectionUnavailable,
     fold_lifecycle_state,
     project_account_journal_best_effort,
-    rebuild_account_transaction_projection,
     read_appended_clerk_journal,
+    rebuild_account_transaction_projection,
     recover_account_transaction_feed,
     tail_account_journal,
     transaction_detail,
@@ -71,9 +72,13 @@ class _Store:
         assert account_id == ACCOUNT
         return self.cursor
 
-    async def persist_batch(self, batch: ClerkTransactionBatch, *, updated_at_ms: int) -> int:
+    async def persist_batch(
+        self, batch: ClerkTransactionBatch, *, updated_at_ms: int, allow_rebuilding: bool = False
+    ) -> int:
         if self.fail:
             raise RuntimeError("projection database unavailable")
+        if self.feed[0] == "rebuilding" and not allow_rebuilding:
+            raise ClerkTransactionProjectionUnavailable("transaction projection rebuild is in progress")
         self.persisted.append(batch)
         existing = {row.transaction_id for row in self.rows}
         for row in batch.transactions:
@@ -120,7 +125,7 @@ class _Store:
         assert account_id == ACCOUNT
         self.rows = [row for row in self.rows if row.broker != broker]
         self.cursor = None
-        self.feed = ("rebuilding", "Rebuild in progress", "Projection rebuild is replaying canonical Clerk acknowledgement evidence.", 0, 0, False)
+        self.feed = ("rebuilding", "Rebuild in progress", "Projection rebuild is replaying canonical Clerk acknowledgement evidence.", None, None, False)
 
 
 class _CountingStore(_Store):
@@ -132,7 +137,9 @@ class _CountingStore(_Store):
         self.batch_count = 0
         self.max_batch_records = 0
 
-    async def persist_batch(self, batch: ClerkTransactionBatch, *, updated_at_ms: int) -> int:
+    async def persist_batch(
+        self, batch: ClerkTransactionBatch, *, updated_at_ms: int, allow_rebuilding: bool = False
+    ) -> int:
         self.projected_transactions += len(batch.transactions)
         self.batch_count += 1
         self.max_batch_records = max(self.max_batch_records, batch.source_record_count)
@@ -324,6 +331,20 @@ async def test_rebuild_replaces_only_projection_with_canonical_equivalent_receip
     assert [(row.transaction_id, row.receipt) for row in store.rows] == before
     assert store.cursor is not None and store.cursor.last_journal_seq == 2
     assert store.feed[0] == "live"
+
+
+@pytest.mark.asyncio
+async def test_normal_tail_cannot_restore_rows_during_a_rebuild(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    store = _Store()
+    await store.reset_projection(account_id=ACCOUNT, journal_path=str(path), broker="ibkr", updated_at_ms=1)
+
+    with pytest.raises(ClerkTransactionProjectionUnavailable, match="rebuild is in progress"):
+        await tail_account_journal(artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=2)
+
+    assert store.cursor is None
+    assert store.rows == []
 
 
 @pytest.mark.asyncio

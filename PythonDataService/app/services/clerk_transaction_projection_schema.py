@@ -51,7 +51,12 @@ CLERK_TRANSACTION_FEED_STATUS = TableExpectation(
         ColumnExpectation("account_id", "character varying", False), ColumnExpectation("state", "character varying", False),
         ColumnExpectation("headline", "character varying", False),
         ColumnExpectation("detail", "character varying", False), ColumnExpectation("updated_at_ms", "bigint", False),
+        ColumnExpectation("high_water_journal_seq", "bigint", True), ColumnExpectation("lag_records", "bigint", True),
+        ColumnExpectation("lag_is_lower_bound", "boolean", False),
     ), primary_key=("account_id",), partial_unique_indexes=(),
-    check_constraints=("ck_clerk_transaction_feed_status_updated_at_ms",), indexes=(),
+    check_constraints=(
+        "ck_clerk_transaction_feed_status_updated_at_ms", "ck_clerk_transaction_feed_status_high_water",
+        "ck_clerk_transaction_feed_status_lag",
+    ), indexes=(),
 )
 ALL_TABLES = (CLERK_TRANSACTIONS, CLERK_TRANSACTION_EVENTS, CLERK_TRANSACTION_PROJECTION_CURSORS, CLERK_TRANSACTION_FEED_STATUS)

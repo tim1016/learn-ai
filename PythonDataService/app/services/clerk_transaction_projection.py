@@ -15,9 +15,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
-
-import asyncpg
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from app.broker.alpaca.clerk.journal import JOURNAL_FILENAME
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
@@ -27,7 +25,6 @@ from app.engine.live.account_clerk_journal import ACCOUNT_CLERK_JOURNAL_FILENAME
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_owner import MANUAL_ORDER_INTENT_KIND
 from app.schemas.clerk_transaction_projection import (
-    TRANSACTION_FEED_STATES,
     ClerkTransactionEventRow,
     ClerkTransactionHistoryResponse,
     ClerkTransactionRow,
@@ -36,10 +33,12 @@ from app.schemas.clerk_transaction_projection import (
 )
 
 logger = logging.getLogger(__name__)
-_pool: asyncpg.Pool | None = None
 MAX_PROJECTION_READ_BYTES = 1_048_576
 MAX_RECOVERY_BATCHES = 64
 MAX_JOURNAL_TAIL_RECORDS = 500
+
+if TYPE_CHECKING:
+    from app.services.clerk_transaction_projection_store import PostgresClerkTransactionProjectionStore
 
 
 class ClerkTransactionProjectionUnavailable(RuntimeError):
@@ -74,7 +73,9 @@ class ClerkTransactionBatch:
 class ClerkTransactionProjectionStore(Protocol):
     async def read_cursor(self, account_id: str, journal_path: str) -> ClerkJournalCursor | None: ...
 
-    async def persist_batch(self, batch: ClerkTransactionBatch, *, updated_at_ms: int) -> int: ...
+    async def persist_batch(
+        self, batch: ClerkTransactionBatch, *, updated_at_ms: int, allow_rebuilding: bool = False
+    ) -> int: ...
 
     async def history_page(
         self, *, account_id: str, limit: int, after: tuple[int, int, str] | None
@@ -110,34 +111,12 @@ def _now_ms() -> int:
     return time.time_ns() // 1_000_000
 
 
-def _ensure_configured() -> None:
-    if not settings.CLERK_TRANSACTION_PROJECTION_ENABLED:
-        raise ClerkTransactionProjectionUnavailable("CLERK_TRANSACTION_PROJECTION_ENABLED is false")
-    if not settings.POSTGRES_URL:
-        raise ClerkTransactionProjectionUnavailable("POSTGRES_URL is empty")
+def _default_store() -> ClerkTransactionProjectionStore:
+    """Delay the database adapter import so journal parsing stays dependency-light."""
 
+    from app.services.clerk_transaction_projection_store import PostgresClerkTransactionProjectionStore
 
-async def init_pool() -> None:
-    global _pool
-    if _pool is not None:
-        return
-    _ensure_configured()
-    _pool = await asyncpg.create_pool(settings.POSTGRES_URL, min_size=1, max_size=10, command_timeout=30)
-
-
-async def close_pool() -> None:
-    global _pool
-    if _pool is not None:
-        await _pool.close()
-        _pool = None
-
-
-async def _connection() -> asyncpg.Connection:
-    if _pool is None:
-        await init_pool()
-    if _pool is None:
-        raise ClerkTransactionProjectionUnavailable("asyncpg pool was not initialized")
-    return await _pool.acquire()
+    return PostgresClerkTransactionProjectionStore()
 
 
 def clerk_journal_path(artifacts_root: Path, account_id: str) -> Path:
@@ -490,10 +469,11 @@ async def tail_account_journal(
     *, artifacts_root: Path, account_id: str, store: ClerkTransactionProjectionStore | None = None,
     updated_at_ms: int | None = None,
     publish: Callable[[ClerkTransactionBatch], Awaitable[None]] | None = None,
+    allow_rebuilding: bool = False,
 ) -> int:
     """Project one bounded append-only journal tail. No broker or full scan occurs."""
 
-    resolved_store = store or PostgresClerkTransactionProjectionStore()
+    resolved_store = store or _default_store()
     path = clerk_journal_path(artifacts_root, account_id)
     cursor = await resolved_store.read_cursor(account_id, str(path))
     try:
@@ -510,7 +490,9 @@ async def tail_account_journal(
         raise ClerkTransactionProjectionCorrupt(str(exc)) from exc
     if batch is None:
         return 0
-    persisted = await resolved_store.persist_batch(batch, updated_at_ms=updated_at_ms or _now_ms())
+    persisted = await resolved_store.persist_batch(
+        batch, updated_at_ms=updated_at_ms or _now_ms(), allow_rebuilding=allow_rebuilding
+    )
     # Publishing is deliberately outside the committed transaction. A crash
     # before this point redelivers from the cursor; a crash after it can only
     # redeliver an already-idempotent semantic event.
@@ -523,10 +505,11 @@ async def tail_alpaca_account_journal(
     *, artifacts_root: Path, account_id: str, store: ClerkTransactionProjectionStore | None = None,
     updated_at_ms: int | None = None,
     publish: Callable[[ClerkTransactionBatch], Awaitable[None]] | None = None,
+    allow_rebuilding: bool = False,
 ) -> int:
     """Project one bounded Alpaca ledger tail; it performs no broker I/O."""
 
-    resolved_store = store or PostgresClerkTransactionProjectionStore()
+    resolved_store = store or _default_store()
     path = alpaca_clerk_journal_path(artifacts_root, account_id)
     cursor = await resolved_store.read_cursor(account_id, str(path))
     try:
@@ -543,7 +526,9 @@ async def tail_alpaca_account_journal(
         raise ClerkTransactionProjectionCorrupt(str(exc)) from exc
     if batch is None:
         return 0
-    persisted = await resolved_store.persist_batch(batch, updated_at_ms=updated_at_ms or _now_ms())
+    persisted = await resolved_store.persist_batch(
+        batch, updated_at_ms=updated_at_ms or _now_ms(), allow_rebuilding=allow_rebuilding
+    )
     if publish is not None and (batch.transactions or batch.events):
         await publish(batch)
     return persisted
@@ -598,6 +583,15 @@ async def recover_account_transaction_feed(
                 lag_is_lower_bound=True,
             )
             return projected
+    except (ClerkTransactionProjectionCorrupt, ValueError) as exc:
+        await store.set_feed_status(
+            account_id,
+            "corrupt",
+            "Projection corrupt",
+            "Projection stopped; canonical Clerk acknowledgement evidence is retained.",
+            updated_at_ms=now,
+        )
+        raise ClerkTransactionProjectionCorrupt(str(exc)) from exc
     except Exception:
         await store.set_feed_status(
             account_id,
@@ -630,11 +624,19 @@ async def rebuild_account_transaction_projection(
         for _ in range(MAX_RECOVERY_BATCHES):
             if broker == "ibkr":
                 projected += await tail_account_journal(
-                    artifacts_root=artifacts_root, account_id=account_id, store=store, updated_at_ms=now
+                    artifacts_root=artifacts_root,
+                    account_id=account_id,
+                    store=store,
+                    updated_at_ms=now,
+                    allow_rebuilding=True,
                 )
             else:
                 projected += await tail_alpaca_account_journal(
-                    artifacts_root=artifacts_root, account_id=account_id, store=store, updated_at_ms=now
+                    artifacts_root=artifacts_root,
+                    account_id=account_id,
+                    store=store,
+                    updated_at_ms=now,
+                    allow_rebuilding=True,
                 )
             cursor = await store.read_cursor(account_id, str(path))
             pending = (
@@ -665,12 +667,21 @@ async def rebuild_account_transaction_projection(
             lag_is_lower_bound=True,
         )
         return projected
-    except Exception:
+    except (ClerkTransactionProjectionCorrupt, ValueError) as exc:
         await store.set_feed_status(
             account_id,
             "corrupt",
             "Projection rebuild stopped",
             "Rebuild stopped safely; canonical Clerk acknowledgement evidence is retained.",
+            updated_at_ms=now,
+        )
+        raise ClerkTransactionProjectionCorrupt(str(exc)) from exc
+    except Exception:
+        await store.set_feed_status(
+            account_id,
+            "offline_but_saved",
+            "Projection rebuild paused",
+            "Rebuild paused; canonical Clerk acknowledgement evidence is retained.",
             updated_at_ms=now,
         )
         raise
@@ -727,7 +738,7 @@ def _decode_cursor(value: str | None) -> tuple[int, int, str] | None:
 async def transaction_history(
     *, account_id: str, limit: int, cursor: str | None, store: ClerkTransactionProjectionStore | None = None
 ) -> ClerkTransactionHistoryResponse:
-    resolved_store = store or PostgresClerkTransactionProjectionStore()
+    resolved_store = store or _default_store()
     rows, high_water, lag = await resolved_store.history_page(
         account_id=account_id, limit=limit, after=_decode_cursor(cursor)
     )
@@ -745,8 +756,14 @@ async def transaction_history(
         feed_state=feed_state,
         feed_headline=feed_headline,
         feed_detail=feed_detail,
-        high_water_journal_seq=status_high_water if status_high_water is not None else high_water,
-        lag_records=status_lag if status_lag is not None else lag,
+        high_water_journal_seq=(
+            status_high_water
+            if status_high_water is not None or feed_state in {"rebuilding", "reconnecting"}
+            else high_water
+        ),
+        lag_records=(
+            status_lag if status_lag is not None or feed_state in {"rebuilding", "reconnecting"} else lag
+        ),
         lag_is_lower_bound=lag_is_lower_bound,
         rows=rows,
         next_cursor=next_cursor,
@@ -758,214 +775,10 @@ async def transaction_detail(
 ) -> ClerkTransactionRow | None:
     """Read one operator-selected receipt from the indexed projection only."""
 
-    resolved_store = store or PostgresClerkTransactionProjectionStore()
+    resolved_store = store or _default_store()
     return await resolved_store.transaction_detail(
         account_id=account_id, transaction_id=transaction_id
     )
-
-
-class PostgresClerkTransactionProjectionStore:
-    """Postgres implementation; all write state is one database transaction."""
-
-    async def read_cursor(self, account_id: str, journal_path: str) -> ClerkJournalCursor | None:
-        _ensure_configured()
-        conn = await _connection()
-        try:
-            record = await conn.fetchrow(
-                "SELECT account_id, journal_path, last_byte_offset, last_journal_seq, updated_at_ms "
-                "FROM clerk_transaction_projection_cursors WHERE account_id=$1 AND journal_path=$2",
-                account_id, journal_path,
-            )
-        finally:
-            assert _pool is not None
-            await _pool.release(conn)
-        return ClerkJournalCursor(**dict(record)) if record is not None else None
-
-    async def persist_batch(self, batch: ClerkTransactionBatch, *, updated_at_ms: int) -> int:
-        _ensure_configured()
-        conn = await _connection()
-        try:
-            async with conn.transaction():
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", batch.journal_path
-                )
-                for transaction in batch.transactions:
-                    await conn.execute(
-                        "INSERT INTO clerk_transactions (transaction_id, broker, account_id, journal_seq, recorded_at_ms, transaction_kind, strategy_instance_id, run_id, intent_id, order_ref, order_id, perm_id, exec_id, native_order_id, native_execution_id, lifecycle_state, commission_status, fee, receipt, inserted_at_ms, updated_at_ms) "
-                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$20) "
-                        "ON CONFLICT (transaction_id) DO NOTHING",
-                        transaction.transaction_id, transaction.broker, transaction.account_id, transaction.journal_seq, transaction.recorded_at_ms,
-                        transaction.transaction_kind, transaction.strategy_instance_id, transaction.run_id, transaction.intent_id,
-                        transaction.order_ref, transaction.order_id, transaction.perm_id, transaction.exec_id,
-                        transaction.native_order_id, transaction.native_execution_id, transaction.lifecycle_state,
-                        transaction.commission_status, transaction.fee, json.dumps(transaction.receipt, sort_keys=True), updated_at_ms,
-                    )
-                for event in batch.events:
-                    event_inserted = await conn.execute(
-                        "INSERT INTO clerk_transaction_events (event_id, transaction_id, broker, account_id, journal_seq, event_kind, callback_identity, lifecycle_state, native_order_id, native_execution_id, commission_status, fee, recorded_at_ms, receipt, inserted_at_ms) "
-                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15) ON CONFLICT (broker, account_id, callback_identity) WHERE callback_identity <> '' DO NOTHING",
-                        event.event_id, _event_transaction_id(batch.account_id, event), event.broker, batch.account_id,
-                        event.journal_seq, event.event_kind, event.callback_identity,
-                        event.lifecycle_state, event.native_order_id, event.native_execution_id,
-                        event.commission_status, event.fee, event.recorded_at_ms,
-                        json.dumps(event.receipt, sort_keys=True), updated_at_ms,
-                    )
-                    if event_inserted == "INSERT 0 1" and event.event_kind != "submitted":
-                        await conn.execute(
-                            "UPDATE clerk_transactions SET lifecycle_state=CASE WHEN lifecycle_state IN ('filled','cancelled','rejected','error') THEN lifecycle_state ELSE $4 END, commission_status=CASE WHEN $5='reported' THEN 'reported' ELSE commission_status END, fee=CASE WHEN $5='reported' THEN $6 ELSE fee END, updated_at_ms=$7 WHERE broker=$1 AND account_id=$2 AND order_ref=$3",
-                            event.broker, batch.account_id, _event_order_ref(event), event.lifecycle_state, event.commission_status, event.fee, updated_at_ms,
-                        )
-                await conn.execute(
-                    "INSERT INTO clerk_transaction_projection_cursors (account_id, journal_path, last_byte_offset, last_journal_seq, updated_at_ms) VALUES ($1,$2,$3,$4,$5) "
-                    "ON CONFLICT (account_id, journal_path) DO UPDATE SET last_byte_offset=EXCLUDED.last_byte_offset, last_journal_seq=EXCLUDED.last_journal_seq, updated_at_ms=EXCLUDED.updated_at_ms "
-                    "WHERE (clerk_transaction_projection_cursors.last_byte_offset, clerk_transaction_projection_cursors.last_journal_seq) < (EXCLUDED.last_byte_offset, EXCLUDED.last_journal_seq)",
-                    batch.account_id, batch.journal_path, batch.next_byte_offset, batch.next_journal_seq, updated_at_ms,
-                )
-        finally:
-            assert _pool is not None
-            await _pool.release(conn)
-        return len(batch.transactions)
-
-    async def history_page(
-        self, *, account_id: str, limit: int, after: tuple[int, int, str] | None
-    ) -> tuple[list[ClerkTransactionSummaryRow], int | None, int | None]:
-        _ensure_configured()
-        conn = await _connection()
-        try:
-            records = await conn.fetch(
-                "SELECT t.transaction_id, t.broker, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.native_order_id, t.native_execution_id, t.lifecycle_state, t.commission_status, t.fee, "
-                "(SELECT COUNT(*)::integer FROM clerk_transaction_events e WHERE e.transaction_id=t.transaction_id) AS event_count "
-                "FROM clerk_transactions t "
-                "WHERE t.account_id=$1 AND ($2::bigint IS NULL OR (t.recorded_at_ms, t.journal_seq, t.transaction_id) < ($2,$3,$4)) "
-                "ORDER BY t.recorded_at_ms DESC, t.journal_seq DESC, t.transaction_id DESC LIMIT $5",
-                account_id, after[0] if after else None, after[1] if after else None, after[2] if after else None, limit,
-            )
-            metadata = await conn.fetchrow(
-                "SELECT last_journal_seq AS high_water, 0::bigint AS lag "
-                "FROM clerk_transaction_projection_cursors WHERE account_id=$1 "
-                "ORDER BY updated_at_ms DESC LIMIT 1", account_id,
-            )
-        finally:
-            assert _pool is not None
-            await _pool.release(conn)
-        rows = [ClerkTransactionSummaryRow.model_validate(dict(record)) for record in records]
-        return rows, (metadata["high_water"] if metadata else None), (metadata["lag"] if metadata else None)
-
-    async def transaction_detail(
-        self, *, account_id: str, transaction_id: str
-    ) -> ClerkTransactionRow | None:
-        _ensure_configured()
-        conn = await _connection()
-        try:
-            record = await conn.fetchrow(
-                "SELECT t.transaction_id, t.broker, t.account_id, t.journal_seq, t.recorded_at_ms, t.transaction_kind, t.strategy_instance_id, t.run_id, t.intent_id, t.order_ref, t.order_id, t.perm_id, t.exec_id, t.native_order_id, t.native_execution_id, t.lifecycle_state, t.commission_status, t.fee, t.receipt, "
-                "COALESCE(jsonb_agg(jsonb_build_object('event_id', e.event_id, 'broker', e.broker, 'event_kind', e.event_kind, 'callback_identity', e.callback_identity, 'lifecycle_state', e.lifecycle_state, 'native_order_id', e.native_order_id, 'native_execution_id', e.native_execution_id, 'commission_status', e.commission_status, 'fee', e.fee, 'journal_seq', e.journal_seq, 'recorded_at_ms', e.recorded_at_ms, 'receipt', e.receipt) ORDER BY e.journal_seq) FILTER (WHERE e.event_id IS NOT NULL), '[]'::jsonb) AS events "
-                "FROM clerk_transactions t LEFT JOIN clerk_transaction_events e ON e.transaction_id=t.transaction_id "
-                "WHERE t.account_id=$1 AND t.transaction_id=$2 GROUP BY t.id",
-                account_id,
-                transaction_id,
-            )
-        finally:
-            assert _pool is not None
-            await _pool.release(conn)
-        if record is None:
-            return None
-        return ClerkTransactionRow.model_validate(
-            {**dict(record), "receipt": _json_value(record["receipt"]), "events": _json_value(record["events"])}
-        )
-
-    async def feed_status(
-        self, account_id: str
-    ) -> tuple[TransactionFeedState, str, str, int | None, int | None, bool]:
-        _ensure_configured()
-        conn = await _connection()
-        try:
-            record = await conn.fetchrow(
-                "SELECT state, headline, detail, high_water_journal_seq, lag_records, lag_is_lower_bound "
-                "FROM clerk_transaction_feed_status WHERE account_id=$1", account_id
-            )
-        finally:
-            assert _pool is not None
-            await _pool.release(conn)
-        if record is None:
-            return "stale", "Stale", "No current projection-feed receipt.", None, None, False
-        state = str(record["state"])
-        if state not in TRANSACTION_FEED_STATES:
-            raise ClerkTransactionProjectionUnavailable("stored transaction feed state is invalid")
-        return (
-            cast(TransactionFeedState, state),
-            str(record["headline"]),
-            str(record["detail"]),
-            record["high_water_journal_seq"],
-            record["lag_records"],
-            bool(record["lag_is_lower_bound"]),
-        )
-
-    async def set_feed_status(
-        self,
-        account_id: str,
-        state: TransactionFeedState,
-        headline: str,
-        detail: str,
-        *,
-        updated_at_ms: int,
-        high_water_journal_seq: int | None = None,
-        lag_records: int | None = None,
-        lag_is_lower_bound: bool = False,
-    ) -> None:
-        _ensure_configured()
-        conn = await _connection()
-        try:
-            await conn.execute(
-                "INSERT INTO clerk_transaction_feed_status (account_id, state, headline, detail, updated_at_ms, high_water_journal_seq, lag_records, lag_is_lower_bound) "
-                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (account_id) DO UPDATE SET "
-                "state=EXCLUDED.state, headline=EXCLUDED.headline, detail=EXCLUDED.detail, "
-                "updated_at_ms=EXCLUDED.updated_at_ms, high_water_journal_seq=EXCLUDED.high_water_journal_seq, "
-                "lag_records=EXCLUDED.lag_records, lag_is_lower_bound=EXCLUDED.lag_is_lower_bound",
-                account_id,
-                state,
-                headline,
-                detail,
-                updated_at_ms,
-                high_water_journal_seq,
-                lag_records,
-                lag_is_lower_bound,
-            )
-        finally:
-            assert _pool is not None
-            await _pool.release(conn)
-
-    async def reset_projection(
-        self, *, account_id: str, journal_path: str, broker: str, updated_at_ms: int
-    ) -> None:
-        """Clear only rebuildable rows after taking the journal-specific SQL lock."""
-
-        _ensure_configured()
-        conn = await _connection()
-        try:
-            async with conn.transaction():
-                await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", journal_path)
-                await conn.execute(
-                    "DELETE FROM clerk_transaction_events WHERE account_id=$1 AND broker=$2", account_id, broker
-                )
-                await conn.execute(
-                    "DELETE FROM clerk_transactions WHERE account_id=$1 AND broker=$2", account_id, broker
-                )
-                await conn.execute(
-                    "DELETE FROM clerk_transaction_projection_cursors WHERE account_id=$1 AND journal_path=$2",
-                    account_id,
-                    journal_path,
-                )
-                await conn.execute(
-                    "INSERT INTO clerk_transaction_feed_status (account_id, state, headline, detail, updated_at_ms, high_water_journal_seq, lag_records, lag_is_lower_bound) "
-                    "VALUES ($1,'rebuilding','Rebuild in progress','Projection rebuild is replaying canonical Clerk acknowledgement evidence.',$2,0,0,FALSE) "
-                    "ON CONFLICT (account_id) DO UPDATE SET state=EXCLUDED.state, headline=EXCLUDED.headline, detail=EXCLUDED.detail, updated_at_ms=EXCLUDED.updated_at_ms, high_water_journal_seq=0, lag_records=0, lag_is_lower_bound=FALSE",
-                    account_id,
-                    updated_at_ms,
-                )
-        finally:
-            assert _pool is not None
-            await _pool.release(conn)
 
 
 def _json_value(value: Any) -> Any:
@@ -994,11 +807,21 @@ def _event_transaction_id(account_id: str, event: ClerkTransactionEventRow) -> s
     return _opaque_id("ctxn", account_id, _event_order_ref(event))
 
 
+def __getattr__(name: str) -> object:
+    """Retain the original store import path while keeping orchestration focused."""
+
+    if name == "PostgresClerkTransactionProjectionStore":
+        from app.services.clerk_transaction_projection_store import PostgresClerkTransactionProjectionStore
+
+        return PostgresClerkTransactionProjectionStore
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = [
     "ClerkJournalCursor",
     "ClerkTransactionBatch",
-    "ClerkTransactionProjectionStore",
     "ClerkTransactionProjectionCorrupt",
+    "ClerkTransactionProjectionStore",
     "ClerkTransactionProjectionUnavailable",
     "PostgresClerkTransactionProjectionStore",
     "alpaca_clerk_journal_path",
@@ -1006,9 +829,9 @@ __all__ = [
     "fold_lifecycle_state",
     "project_account_journal_best_effort",
     "project_alpaca_journal_best_effort",
-    "rebuild_account_transaction_projection",
     "read_appended_alpaca_journal",
     "read_appended_clerk_journal",
+    "rebuild_account_transaction_projection",
     "recover_account_transaction_feed",
     "tail_account_journal",
     "tail_alpaca_account_journal",
