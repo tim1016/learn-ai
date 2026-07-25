@@ -119,7 +119,7 @@ function rollCallResponse(): BotRollCallResponse {
       off_duty: 0,
       retired: 0,
       generated_at_ms: 1_700_000_000_000,
-      session_date: '2026-07-13',
+      session_date_ms: 1_784_572_200_000,
       effective_stop_ms: 1_700_050_000_000,
     },
     offers: [
@@ -244,7 +244,7 @@ describe('BotControlPageComponent', () => {
   });
 
   it('opens in the trader lens and preserves the operator cockpit behind the lens switch', async () => {
-    const { fixture, element, liveRuns } = await setupBotControlPage({
+    const { fixture, element } = await setupBotControlPage({
       status: startableReadyStatus(),
     });
     await flush(fixture);
@@ -254,7 +254,6 @@ describe('BotControlPageComponent', () => {
     expect(element.querySelectorAll('app-overview-tab')).toHaveLength(0);
     expect(element.textContent).toContain('This bot is ready');
     expect(element.textContent).toContain('Market hours unavailable');
-    expect(liveRuns.getLifecycleTimeline).not.toHaveBeenCalled();
 
     const operations = Array.from(element.querySelectorAll<HTMLButtonElement>('.bot-lens-switch button'))
       .find((button) => button.textContent?.trim() === 'Operations');

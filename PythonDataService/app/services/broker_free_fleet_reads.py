@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_right
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Protocol
 
 from app.engine.live.bot_lifecycle_state import BotLifecyclePhase, BotLifecycleStateRecord
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.schemas.live_runs import (
+    BotCatalogPageResponse,
     BotCatalogResponse,
     BotCatalogRow,
     BotRollCallResponse,
@@ -46,6 +50,7 @@ class FleetReadSettings(Protocol):
     """The settings required to project a fleet read."""
 
     live_runner_daemon_url: str
+    live_runs_root: str
     mode: object
 
 
@@ -94,7 +99,6 @@ class FleetReadSnapshot:
     daemon_by_sid: dict[str, DaemonPayload]
     sids: tuple[str, ...]
     observed_at_ms: int
-    account_contexts: AccountFleetReadContexts
 
 
 class BrokerFreeFleetReadService:
@@ -105,15 +109,15 @@ class BrokerFreeFleetReadService:
 
     async def catalog(self, settings: FleetReadSettings, root: Path) -> BotCatalogResponse:
         snapshot = await self._read_snapshot(settings, root)
-        sids = [
-            sid
-            for sid in snapshot.sids
-            if sid in snapshot.by_instance or not self._d.sid_has_soft_deletion(root.parent, sid)
-        ]
+        sids = self._visible_sids(snapshot)
+        account_contexts = await self._account_contexts_for(snapshot, sids)
         trading_mode = trading_mode_from_configured_mode(settings.mode)
         rows = list(
             await asyncio.gather(
-                *(self._catalog_row(sid, snapshot, trading_mode) for sid in sids)
+                *(
+                    self._catalog_row(sid, snapshot, trading_mode, account_contexts)
+                    for sid in sids
+                )
             )
         )
         rows.sort(key=lambda row: (row.created_at_ms or row.last_run_at_ms or 0, row.name), reverse=True)
@@ -123,8 +127,49 @@ class BrokerFreeFleetReadService:
             evening_report=evening_report_from_rows(rows, now_ms=snapshot.observed_at_ms),
         )
 
+    async def catalog_page(
+        self,
+        settings: FleetReadSettings,
+        root: Path,
+        *,
+        limit: int,
+        cursor: str | None,
+    ) -> BotCatalogPageResponse:
+        """Read one bounded catalog page without unbounded daemon fan-out.
+
+        A single daemon fleet snapshot remains necessary to avoid presenting a
+        disk-only process state as current.  Unlike the legacy full catalog,
+        only this page's rows get status and account-truth composition. When
+        the fleet snapshot has no entry for a requested SID, the fallback is
+        capped at one process probe per page row (and the API caps a page at
+        100 rows); it never probes the rest of the fleet.
+        """
+
+        snapshot = await self._read_snapshot(settings, root)
+        sids = sorted(self._visible_sids(snapshot))
+        page_start = bisect_right(sids, cursor) if cursor is not None else 0
+        page_sids = sids[page_start : page_start + limit]
+        account_contexts = await self._account_contexts_for(snapshot, page_sids)
+        trading_mode = trading_mode_from_configured_mode(settings.mode)
+        rows = list(
+            await asyncio.gather(
+                *(
+                    self._catalog_row(sid, snapshot, trading_mode, account_contexts)
+                    for sid in page_sids
+                )
+            )
+        )
+        has_more = page_start + len(page_sids) < len(sids)
+        return BotCatalogPageResponse(
+            bots=rows,
+            total_count=len(sids),
+            next_cursor=page_sids[-1] if has_more else None,
+            observed_at_ms=snapshot.observed_at_ms,
+        )
+
     async def roll_call(self, settings: FleetReadSettings, root: Path) -> BotRollCallResponse:
         snapshot = await self._read_snapshot(settings, root)
+        account_contexts = await self._account_contexts_for(snapshot, snapshot.sids)
         candidate_sids: list[str] = []
         retired_count = 0
         for sid in snapshot.sids:
@@ -136,7 +181,10 @@ class BrokerFreeFleetReadService:
 
         trading_mode = trading_mode_from_configured_mode(settings.mode)
         status_views = await asyncio.gather(
-            *(self._resolve_status(sid, snapshot) for sid in candidate_sids)
+            *(
+                self._resolve_status(sid, snapshot, account_contexts)
+                for sid in candidate_sids
+            )
         )
         rows: list[BotCatalogRow] = []
         offers = []
@@ -189,7 +237,11 @@ class BrokerFreeFleetReadService:
                 update={
                     "ready": len(offers),
                     "retired": retired_count,
-                    "session_date": summary_session_date,
+                    "session_date_ms": (
+                        session_open_ms_utc(date.fromisoformat(summary_session_date))
+                        if summary_session_date is not None
+                        else None
+                    ),
                     "effective_stop_ms": summary_effective_stop_ms,
                 }
             ),
@@ -236,14 +288,6 @@ class BrokerFreeFleetReadService:
         }
         sids = tuple(sorted(set(by_instance) | set(daemon_by_sid)))
         observed_at_ms = self._d.now_ms()
-        account_ids = [self._account_id_for_sid(by_instance, sid) for sid in sids]
-        account_contexts = await asyncio.to_thread(
-            build_account_fleet_read_contexts,
-            root,
-            account_ids,
-            snapshot_provider=self._d.get_account_truth_snapshot_provider(),
-            observed_at_ms=observed_at_ms,
-        )
         return FleetReadSnapshot(
             root=root,
             settings=settings,
@@ -251,7 +295,28 @@ class BrokerFreeFleetReadService:
             daemon_by_sid=daemon_by_sid,
             sids=sids,
             observed_at_ms=observed_at_ms,
-            account_contexts=account_contexts,
+        )
+
+    def _visible_sids(self, snapshot: FleetReadSnapshot) -> list[str]:
+        return [
+            sid
+            for sid in snapshot.sids
+            if sid in snapshot.by_instance
+            or not self._d.sid_has_soft_deletion(snapshot.root.parent, sid)
+        ]
+
+    async def _account_contexts_for(
+        self,
+        snapshot: FleetReadSnapshot,
+        sids: list[str] | tuple[str, ...],
+    ) -> AccountFleetReadContexts:
+        account_ids = [self._account_id_for_sid(snapshot.by_instance, sid) for sid in sids]
+        return await asyncio.to_thread(
+            build_account_fleet_read_contexts,
+            snapshot.root,
+            account_ids,
+            snapshot_provider=self._d.get_account_truth_snapshot_provider(),
+            observed_at_ms=snapshot.observed_at_ms,
         )
 
     def _account_id_for_sid(self, by_instance: VisibleRuns, sid: str) -> str | None:
@@ -265,8 +330,9 @@ class BrokerFreeFleetReadService:
         sid: str,
         snapshot: FleetReadSnapshot,
         trading_mode: TradingMode,
+        account_contexts: AccountFleetReadContexts,
     ) -> BotCatalogRow:
-        status_view = await self._resolve_status(sid, snapshot)
+        status_view = await self._resolve_status(sid, snapshot, account_contexts)
         row = compose_bot_catalog_row(status_view, trading_mode)
         return row.model_copy(
             update={
@@ -278,7 +344,12 @@ class BrokerFreeFleetReadService:
             }
         )
 
-    async def _resolve_status(self, sid: str, snapshot: FleetReadSnapshot) -> LiveInstanceStatus:
+    async def _resolve_status(
+        self,
+        sid: str,
+        snapshot: FleetReadSnapshot,
+        account_contexts: AccountFleetReadContexts,
+    ) -> LiveInstanceStatus:
         daemon_process = self._d.daemon_process_from_instance(snapshot.daemon_by_sid.get(sid))
         if daemon_process is None:
             _result, daemon_process = await self._d.fetch_instance_process(
@@ -291,7 +362,24 @@ class BrokerFreeFleetReadService:
             snapshot.settings,
             daemon_process,
             runs_by_instance=snapshot.by_instance,
-            account_fleet_read_context=snapshot.account_contexts.get(
+            account_fleet_read_context=account_contexts.get(
                 self._account_id_for_sid(snapshot.by_instance, sid)
             ),
         )
+
+
+async def catalog_page_response(
+    service: BrokerFreeFleetReadService,
+    settings: FleetReadSettings,
+    *,
+    limit: int,
+    cursor: str | None,
+) -> BotCatalogPageResponse:
+    """HTTP-neutral catalog facade kept outside the frozen live router."""
+
+    return await service.catalog_page(
+        settings,
+        Path(settings.live_runs_root),
+        limit=limit,
+        cursor=cursor,
+    )

@@ -18,7 +18,6 @@ import type {
   BotDeleteResponse,
   CrashRecoveryOverrideResponse,
   FleetAccountSummary,
-  LifecycleTimelineResponse,
   LiveInstanceStatus,
   BotRollCallResponse,
   SetInstanceDesiredStateResponse,
@@ -44,7 +43,6 @@ import {
   makeCommandWriteResponse,
   makeDesiredStateResponse,
   makeHostRunnerHealth,
-  makeLifecycleTimeline,
   makeReconcileAckResponse,
   makeStatus,
 } from './bot-control-page.fixtures';
@@ -93,7 +91,6 @@ class FakeBrokerHealthService {
 export class FakeLiveRunsService {
   getInstanceStatus = vi.fn<LiveRunsService['getInstanceStatus']>();
   getAccountSummary = vi.fn<LiveRunsService['getAccountSummary']>();
-  getLifecycleTimeline = vi.fn<LiveRunsService['getLifecycleTimeline']>();
   renewControlPlaneLease = vi.fn<LiveRunsService['renewControlPlaneLease']>();
   runRollCall = vi.fn<LiveRunsService['runRollCall']>();
   startHostRunner = vi.fn<LiveRunsService['startHostRunner']>();
@@ -304,9 +301,6 @@ export interface BotControlLiveRunsOptions {
   statusResolver?: LiveRunsService['getInstanceStatus'];
   accountSummary?: FleetAccountSummary;
   accountSummarySequence?: readonly AsyncMockValue<FleetAccountSummary>[];
-  lifecycleTimeline?: LifecycleTimelineResponse;
-  lifecycleTimelineSequence?: readonly AsyncMockValue<LifecycleTimelineResponse>[];
-  lifecycleTimelineFailure?: unknown;
   mutationResponses?: BotControlMutationResponses;
   mutationFailures?: BotControlMutationFailures;
   configureLiveRuns?: (liveRuns: FakeLiveRunsService) => void;
@@ -428,15 +422,6 @@ export function makeFailClosedLiveRuns(options: BotControlLiveRunsOptions = {}):
     options.accountSummarySequence,
     options.accountSummary ?? makeAccountSummary(),
   );
-  if (options.lifecycleTimelineFailure) {
-    liveRuns.getLifecycleTimeline.mockRejectedValue(options.lifecycleTimelineFailure);
-  } else {
-    applyReadSequence(
-      liveRuns.getLifecycleTimeline,
-      options.lifecycleTimelineSequence,
-      options.lifecycleTimeline ?? makeLifecycleTimeline(),
-    );
-  }
   liveRuns.renewControlPlaneLease.mockRejectedValue(unexpectedMutation('renewControlPlaneLease'));
   liveRuns.runRollCall.mockRejectedValue(unexpectedMutation('runRollCall'));
   liveRuns.startHostRunner.mockRejectedValue(unexpectedMutation('startHostRunner'));

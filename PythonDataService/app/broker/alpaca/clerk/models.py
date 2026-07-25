@@ -18,7 +18,7 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 
 
 class ClerkEntryKind(StrEnum):
@@ -48,6 +48,7 @@ class ClerkEntryKind(StrEnum):
     # the observation and increments a counter (see the consumer).
     ORDER_EVENT = "order_event"
     UNEXPLAINED_ORDER = "unexplained_order"
+    ACTIVITY_RECOVERY = "activity_recovery"
     # S6 reconciliation + flag-and-hold path.
     # ``RECONCILIATION``: one periodic sweep result, carrying a named ``verdict``
     # (``clean`` / ``unexplained_order`` / ``missing_intent`` / ``stale``). It is
@@ -139,6 +140,12 @@ class OrderJournalEntry(BaseModel):
     # as delivered (``None`` when the order carried no client_order_id) — honest
     # attribution, never fabricated. The stable dedup key for the event.
     event_key: str | None = None
+    # A recovery event is broker evidence, not a websocket callback replay.
+    # Keep its source/bound in the durable receipt so operators can distinguish
+    # it without inventing a shared IBKR callback taxonomy.
+    recovery_source: str | None = None
+    recovery_window_limit: int | None = None
+    activity: BrokerActivity | None = None
     # ── S6 reconciliation + flag-and-hold fields ─────────────────────────────
     # Present on RECONCILIATION lines: the named sweep verdict.
     verdict: ReconciliationVerdict | None = None
@@ -186,6 +193,9 @@ class OrderJournalEntry(BaseModel):
         elif self.kind is ClerkEntryKind.RECONCILIATION:
             if self.verdict is None:
                 raise ValueError("reconciliation requires a verdict")
+        elif self.kind is ClerkEntryKind.ACTIVITY_RECOVERY:
+            if self.activity is None:
+                raise ValueError("activity_recovery requires activity")
         elif self.kind in (ClerkEntryKind.HOLD_SET, ClerkEntryKind.HOLD_CLEARED):
             self._require("reason_code", "reason")
         return self

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -12,11 +13,13 @@ from zoneinfo import ZoneInfo
 from app.engine.live.bot_lifecycle_state import (
     BotDisplayStatus,
     BotLifecyclePhase,
+    BotLifecycleStateCorruptError,
     BotLifecycleStateRecord,
     BotRollCallOfferRecord,
     BotRollCallOfferRepo,
     stable_bot_roll_call_offers_path,
 )
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from app.schemas.live_runs import (
     BotAttendanceCell,
     BotEveningReport,
@@ -27,6 +30,7 @@ from app.schemas.live_runs import (
 )
 
 _NY_TZ = ZoneInfo("America/New_York")
+logger = logging.getLogger(__name__)
 
 
 def bot_roll_call_offer_repo(root: Path, sid: str) -> BotRollCallOfferRepo:
@@ -39,6 +43,24 @@ def active_roll_call_offer(
     root: Path, sid: str, *, now_ms: int
 ) -> BotRollCallOfferRecord | None:
     return bot_roll_call_offer_repo(root, sid).active_offer(now_ms=now_ms)
+
+
+def safe_active_roll_call_offer(
+    root: Path,
+    sid: str,
+    *,
+    now_ms: int,
+) -> BotRollCallOfferRecord | None:
+    """Read an offer without letting one corrupt sidecar break fleet status."""
+
+    try:
+        return active_roll_call_offer(root, sid, now_ms=now_ms)
+    except BotLifecycleStateCorruptError as exc:
+        logger.warning(
+            "failed to read bot roll-call offers",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        return None
 
 
 def status_is_roll_call_eligible(status_view: LiveInstanceStatus) -> bool:
@@ -160,7 +182,9 @@ def roll_call_summary_from_rows(rows: list, *, now_ms: int) -> BotRollCallSummar
         counts[status_label] = counts.get(status_label, 0) + 1
         action = row.daily_lifecycle.primary_action
         if action is not None and action.id == "confirm_start":
-            session_date = session_date or today_ny_iso()
+            session_date = session_date or (
+                datetime.fromtimestamp(now_ms / 1000, tz=UTC).astimezone(_NY_TZ).date().isoformat()
+            )
             if action.expires_at_ms is not None:
                 effective_stop_ms = (
                     action.expires_at_ms
@@ -175,7 +199,9 @@ def roll_call_summary_from_rows(rows: list, *, now_ms: int) -> BotRollCallSummar
         off_duty=counts[BotDisplayStatus.OFF_DUTY],
         retired=counts[BotDisplayStatus.RETIRED],
         generated_at_ms=now_ms,
-        session_date=session_date,
+        session_date_ms=(
+            session_open_ms_utc(date.fromisoformat(session_date)) if session_date else None
+        ),
         effective_stop_ms=effective_stop_ms,
     )
 
@@ -239,6 +265,7 @@ __all__ = [
     "evening_report_from_rows",
     "roll_call_offer_schema",
     "roll_call_summary_from_rows",
+    "safe_active_roll_call_offer",
     "status_is_roll_call_eligible",
     "today_ny_iso",
 ]

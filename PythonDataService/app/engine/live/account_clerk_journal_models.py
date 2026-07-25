@@ -15,7 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.broker.ibkr.models import IbkrOrderEvent
+from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 
 _MAX_INT64 = 9_223_372_036_854_775_807
@@ -200,6 +200,10 @@ class AccountClerkJournalEntry(BaseModel):
     order_id: int | None = Field(default=None, ge=0)
     perm_id: int | None = Field(default=None, ge=0)
     exec_id: str | None = None
+    # New acknowledgements retain the full broker response. Older journal
+    # rows predate this receipt field and remain replayable from their compact
+    # order_id / perm_id values.
+    broker_ack: IbkrOrderAck | None = None
     broker_event: dict[str, object] | None = None
     cancelled_order_ids: tuple[int, ...] | None = None
     reconciliation_verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"] | None = None
@@ -240,6 +244,7 @@ class AccountClerkJournalEntry(BaseModel):
                     self.order_id,
                     self.perm_id,
                     self.exec_id,
+                    self.broker_ack,
                     self.broker_event,
                     self.cancelled_order_ids,
                     self.reconciliation_verdict,
@@ -257,6 +262,14 @@ class AccountClerkJournalEntry(BaseModel):
         if self.entry_kind != "broker_event":
             if self.intent is None:
                 raise ValueError("non-broker-event journal rows require an intent")
+            if self.entry_kind != "broker_acked" and self.broker_ack is not None:
+                raise ValueError("broker_ack is only valid on broker_acked rows")
+            if (
+                self.broker_ack is not None
+                and self.order_id is not None
+                and self.broker_ack.order_id != self.order_id
+            ):
+                raise ValueError("broker_ack order_id must match the journal order_id")
             if (
                 self.event_account_id is not None
                 or self.broker_callback_idempotency_key is not None
@@ -269,6 +282,8 @@ class AccountClerkJournalEntry(BaseModel):
 
         if self.broker_event is None:
             raise ValueError("broker_event journal rows require broker_event")
+        if self.broker_ack is not None:
+            raise ValueError("broker_ack is invalid on broker_event rows")
         if (
             self.intent is not None
             and self.event_account_id is not None
@@ -325,6 +340,7 @@ class AccountClerkBrokerAckReceipt(AccountClerkRecordedReceipt):
     order_id: int = Field(ge=0)
     perm_id: int | None = Field(default=None, ge=0)
     exec_id: str | None = None
+    broker_ack: IbkrOrderAck | None = None
 
     @classmethod
     def from_journal_entry(cls, entry: AccountClerkJournalEntry) -> AccountClerkBrokerAckReceipt:
@@ -336,6 +352,7 @@ class AccountClerkBrokerAckReceipt(AccountClerkRecordedReceipt):
             order_id=entry.order_id,
             perm_id=entry.perm_id,
             exec_id=entry.exec_id,
+            broker_ack=entry.broker_ack,
         )
 
 

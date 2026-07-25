@@ -31,7 +31,7 @@ preference for one stack, determines which generated contract applies.
 | --- | --- | --- |
 | `broker.service.ts`, `broker-health.service.ts`, broker control components | `/api/broker/**`, `/api/accounts/**` | OpenAPI source of truth. `DataPlaneHealth` is now a generated alias; broker SSE streams remain the documented non-OpenAPI exception. |
 | `broker-session-mirror.service.ts` | `/api/broker/session-mirror/**` | Direct REST/SSE; REST is OpenAPI-generated, streamed payloads are hand-owned by the Python SSE models. |
-| `live-runs.service.ts`, bot-control/account-desk stores | `/api/live-runs/**`, `/api/live-instances/**`, `/api/lifecycle-projection/**`, `/api/accounts/**` | Direct FastAPI control-plane surface, protected by the proxy intent/secret policy. |
+| `live-runs.service.ts`, bot-control/account-desk stores | `/api/live-runs/**`, `/api/live-instances/**`, `/api/accounts/**` | Direct FastAPI control-plane surface, protected by the proxy intent/secret policy. Legacy lifecycle-projection routes were retired in #1224. |
 | `strategy-validation.service.ts`, `live-runs.service.ts` | `/api/strategy-validation/**`, `/api/engine/strategies`, `/api/spec-strategy/fixtures/**` | Direct FastAPI; generated schema is available for the next typed migration slices. |
 | `strategy-runs.service.ts`, `baselines.service.ts`, `monte-carlo.service.ts`, `walk-forward.service.ts` | `/api/research/strategy-runs/**` | Direct FastAPI research-run contracts. |
 | `lean-sidecar.service.ts` | `/api/lean-sidecar/**` | Direct FastAPI comparison boundary. |

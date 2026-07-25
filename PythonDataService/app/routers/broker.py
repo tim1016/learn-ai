@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.broker.ibkr import account as ibkr_account
@@ -93,15 +93,19 @@ from app.engine.live.account_owner_fence import (
     AccountOwnerWriteFenceError,
     require_account_owner_write_grant,
 )
-from app.engine.live.order_identity import (
-    build_manual_order_namespace,
-    build_order_ref,
-    mint_intent_id,
-)
+from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref, mint_intent_id
 from app.routers.broker_dependencies import is_broker_disabled, require_connected_client
 from app.schemas.broker_search import OptionContractMatch, SymbolMatch
+from app.security.data_plane_control import require_data_plane_control_secret_always
 from app.services.data_plane_health import data_plane_health
 from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+from app.services.manual_order_submission import (
+    ManualOrderBrokerReceiptError,
+    ManualOrderClerkRejectedError,
+    ManualOrderClerkUnavailableError,
+    submit_manual_order_through_clerk,
+)
+from app.services.sse_keepalive import stream_sse_with_keepalive
 from app.utils.throttle import TokenBucket, TtlCache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
@@ -955,7 +959,30 @@ async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
     client = require_connected_client()
     try:
         spec = _stamp_manual_order_ref_if_requested(spec)
+        if spec.manual_order:
+            return await submit_manual_order_through_clerk(
+                spec,
+                account_id=client.connected_account,
+            )
         return await place_paper_order(client, spec)
+    except ManualOrderClerkUnavailableError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"reason_code": exc.reason_code, "message": exc.message},
+        ) from exc
+    except ManualOrderClerkRejectedError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE if exc.retry_safe else status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": exc.reason_code,
+                "message": "The account Clerk rejected or could not complete the manual order.",
+            },
+        ) from exc
+    except ManualOrderBrokerReceiptError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail={"reason_code": exc.reason_code, "message": exc.message},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except AccountOwnerWriteFenceError as exc:
@@ -1017,6 +1044,7 @@ def _order_event_to_sse(event: IbkrOrderEvent) -> str:
 @router.get("/orders/stream")
 async def order_events_stream_endpoint(
     poll_ms: Annotated[int, Query(ge=100, le=5000)] = 500,
+    _: None = Depends(require_data_plane_control_secret_always),
 ) -> StreamingResponse:
     """SSE stream of order lifecycle events: status, fill, cancel, error."""
     client = require_connected_client()
@@ -1024,8 +1052,12 @@ async def order_events_stream_endpoint(
 
     async def event_source():
         try:
-            async for event in stream_order_events(client, poll_seconds=poll_seconds):
-                yield _order_event_to_sse(event)
+            async def order_frames():
+                async for event in stream_order_events(client, poll_seconds=poll_seconds):
+                    yield _order_event_to_sse(event)
+
+            async for frame in stream_sse_with_keepalive(order_frames()):
+                yield frame
         except asyncio.CancelledError:
             raise
         except BrokerError as exc:

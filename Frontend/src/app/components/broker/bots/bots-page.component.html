@@ -208,7 +208,11 @@
 
   <div class="result-summary" aria-live="polite">
     <span>{{ activeTabSummary() }}</span>
-    <span>{{ visibleBots().length }} total after filters</span>
+    @if (catalogLoaded()) {
+      <span>{{ visibleBots().length }} loaded matches · {{ catalogTotalCount() }} known bots in the latest page snapshot</span>
+    } @else {
+      <span>Fleet status unavailable until catalog loading begins.</span>
+    }
   </div>
 
   @if (selectedCount() > 0) {
@@ -330,6 +334,22 @@
     </p-tabpanels>
   </p-tabs>
 
+  @if (hasMoreBots()) {
+    <div class="incremental-load">
+      <span>{{ loadedBotCount() }} bots loaded from this browsing session.</span>
+      <button
+        pButton
+        type="button"
+        severity="secondary"
+        [outlined]="true"
+        [loading]="isLoadingMore()"
+        (click)="loadMoreBots()"
+      >
+        <span class="p-button-label">Load up to {{ pageSize }} more bots</span>
+      </button>
+    </div>
+  }
+
   <ng-template #botPanel let-rows let-emptyMode="emptyMode">
     <div class="bot-table-shell">
       <p-table
@@ -341,8 +361,7 @@
         [value]="rows"
         [loading]="isLoading()"
         [showInitialSortBadge]="false"
-        [paginator]="rows.length > 25"
-        [rows]="25"
+        [paginator]="false"
         [rowHover]="true"
         [rowTrackBy]="trackByBotId"
         [tableStyle]="{ 'min-width': '68rem' }"
@@ -488,6 +507,8 @@
             <td [attr.colspan]="9" class="empty-cell">
               @if (isLoading()) {
                 Loading bots...
+              } @else if (hasActiveFilters() && hasMoreBots()) {
+                Loading remaining bots before applying these filters...
               } @else {
                 No {{ emptyMode }} bots match these filters.
               }
@@ -611,6 +632,8 @@
           <p class="mobile-empty">
             @if (isLoading()) {
               Loading bots...
+            } @else if (hasActiveFilters() && hasMoreBots()) {
+              Loading remaining bots before applying these filters...
             } @else {
               No {{ emptyMode }} bots match these filters.
             }

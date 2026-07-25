@@ -38,6 +38,7 @@ import { AccountDeskGuidanceStore } from "./account-desk-guidance-store.service"
 import { AccountDeskRecoveryStore } from "./account-desk-recovery-store.service";
 import { AccountDeskRecoveryConfirmDialogComponent } from "./account-desk-recovery-confirm-dialog.component";
 import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
+import { AccountDeskTransactionHistoryStore } from "./account-desk-transaction-history-store.service";
 import { AccountDeskTraderEventsComponent } from "./account-desk-trader-events.component";
 import { AccountDeskVerdictComponent } from "./account-desk-verdict.component";
 import { accountDeskFragmentTarget } from "./account-desk-legacy-fragments";
@@ -78,6 +79,7 @@ export class AccountDeskPageComponent {
   readonly guidance = inject(AccountDeskGuidanceStore);
   readonly fleet = inject(AccountDeskFleetStore);
   readonly recovery = inject(AccountDeskRecoveryStore);
+  readonly transactions = inject(AccountDeskTransactionHistoryStore);
   readonly lens = signal<AccountDeskLens>("trader");
   readonly lensOptions: AccountDeskLensOption[] = [
     { label: "Trader", value: "trader" },
@@ -129,6 +131,7 @@ export class AccountDeskPageComponent {
           void this.store.load(accountId);
           void this.holdings.load(accountId);
           void this.events.load(accountId);
+          if (this.lens() === "operator") this.loadOperatorData(accountId);
           void this.fleet.load(accountId);
           this.recovery.load(accountId);
           void this.directory.loadRoster();
@@ -158,6 +161,12 @@ export class AccountDeskPageComponent {
 
   selectLens(lens: AccountDeskLens): void {
     this.lens.set(lens);
+    if (lens === "operator") this.loadOperatorData(this.store.accountId());
+  }
+
+  private loadOperatorData(accountId: string | null): void {
+    this.events.loadOperations();
+    if (accountId !== null) void this.transactions.load(accountId);
   }
 
   retry(): void {

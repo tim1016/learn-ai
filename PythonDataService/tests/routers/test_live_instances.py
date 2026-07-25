@@ -3180,6 +3180,77 @@ async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypa
     assert row["last_run_detail"] == "No completed run has been recorded for this bot."
 
 
+async def test_bot_catalog_page_bounds_initial_status_composition_to_requested_rows(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First-paint page budget: one fleet read and no more than 25 row resolves."""
+
+    app, root = app_with_root
+    for index in range(30):
+        _write_ledger(root, f"run-{index:02d}", f"bot-{index:02d}", index)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+    resolve_calls = 0
+    fleet_snapshot_calls = 0
+    real_resolve = live_instances._resolve_instance_status_from_process
+    real_fetch_instances = host_daemon_client.fetch_instances
+
+    async def counted_fetch_instances(*args, **kwargs):
+        nonlocal fleet_snapshot_calls
+        fleet_snapshot_calls += 1
+        return await real_fetch_instances(*args, **kwargs)
+
+    async def counted_resolve(*args, **kwargs):
+        nonlocal resolve_calls
+        resolve_calls += 1
+        return await real_resolve(*args, **kwargs)
+
+    monkeypatch.setattr(live_instances, "_resolve_instance_status_from_process", counted_resolve)
+    monkeypatch.setattr(host_daemon_client, "fetch_instances", counted_fetch_instances)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog/page?limit=25")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["bots"]) == 25
+    assert body["total_count"] == 30
+    assert body["next_cursor"] == "bot-24"
+    assert fleet_snapshot_calls == 1
+    assert resolve_calls == 25
+
+
+async def test_bot_catalog_page_uses_keyset_cursor_when_fleet_changes(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later page must not replay an ID when the fleet changes between requests."""
+
+    app, root = app_with_root
+    for index, sid in enumerate(("bot-a", "bot-b", "bot-c")):
+        _write_ledger(root, f"run-{sid}", sid, index)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first_page = await client.get("/api/live-instances/catalog/page?limit=2")
+        assert first_page.status_code == 200
+        first_body = first_page.json()
+        assert [row["strategy_instance_id"] for row in first_body["bots"]] == ["bot-a", "bot-b"]
+        assert first_body["next_cursor"] == "bot-b"
+
+        _write_ledger(root, "run-bot-a-new", "bot-a-new", 3)
+        second_page = await client.get(
+            "/api/live-instances/catalog/page",
+            params={"limit": 2, "cursor": first_body["next_cursor"]},
+        )
+
+    assert second_page.status_code == 200
+    second_body = second_page.json()
+    assert [row["strategy_instance_id"] for row in second_body["bots"]] == ["bot-c"]
+    assert second_body["next_cursor"] is None
+    assert second_body["total_count"] == 4
+
+
 async def test_bot_catalog_does_not_fetch_broker_positions(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Catalog cards must project cached account evidence without IBKR I/O."""
 
@@ -3342,6 +3413,8 @@ async def test_roll_call_tick_persists_start_offer(
     assert roll_call.status_code == 200
     body = roll_call.json()
     assert body["summary"]["ready"] == 1
+    assert isinstance(body["summary"]["session_date_ms"], int)
+    assert "session_date" not in body["summary"]
     assert body["offers"][0]["strategy_instance_id"] == "spy_ema_paper"
     offers = BotRollCallOfferRepo(
         stable_bot_roll_call_offers_path(root.parent, "spy_ema_paper")

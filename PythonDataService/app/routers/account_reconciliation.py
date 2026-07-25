@@ -41,7 +41,12 @@ from app.schemas.account_cockpit import (
     AccountCockpitResponse,
 )
 from app.schemas.account_directory import AccountServiceStatusResponse, AccountsRosterResponse
-from app.schemas.account_events import AccountEventKind, AccountEventsResponse, AccountEventView
+from app.schemas.account_events import (
+    AccountEventKind,
+    AccountEventsResponse,
+    AccountEventView,
+    TraderAccountEventsResponse,
+)
 from app.schemas.account_reconciliation import (
     AccountAcceptExposureOverrideRequest,
     AccountAcceptExposureOverrideResponse,
@@ -950,6 +955,26 @@ async def account_events_endpoint(
             detail={
                 "reason_code": "ACCOUNT_EVENTS_JOURNAL_CORRUPT",
                 "message": "Account event history is unavailable because its journal is invalid.",
+            },
+        ) from exc
+
+
+@router.get("/{account_id}/events/trader", response_model=TraderAccountEventsResponse)
+async def trader_account_events_endpoint(
+    account_id: str,
+    service: Annotated[AccountEventJournalService, Depends(get_account_event_journal_service)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> TraderAccountEventsResponse:
+    """Return trader-authored outcomes through a schema with no receipt fields."""
+
+    try:
+        return service.trader_page(account_id=_canonical_account_id(account_id), limit=limit)
+    except AccountEventJournalError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_EVENTS_JOURNAL_CORRUPT",
+                "message": "Trader account activity is unavailable because its journal is invalid.",
             },
         ) from exc
 

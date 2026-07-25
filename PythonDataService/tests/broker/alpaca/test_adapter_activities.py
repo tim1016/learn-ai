@@ -86,7 +86,7 @@ async def test_activity_cursor_filters_the_contract_occurred_at_timestamp(
     assert [activity.activity_id for activity in activities] == [trade["id"]]
 
 
-async def test_activity_cursor_pages_before_filtering_occurred_at(
+async def test_activity_cursor_uses_one_bounded_newest_first_page(
     load_alpaca_fixture: AlpacaFixtureLoader,
 ) -> None:
     trade, non_trade = load_alpaca_fixture("activities", "activities.json")
@@ -107,5 +107,5 @@ async def test_activity_cursor_pages_before_filtering_occurred_at(
 
     activities = await broker.list_activities(after_ms=cursor, limit=page_size)
 
-    assert client.page_tokens == [None, "old-24"]
-    assert [activity.activity_id for activity in activities] == ["qualifying"]
+    assert client.page_tokens == [None]
+    assert activities == []

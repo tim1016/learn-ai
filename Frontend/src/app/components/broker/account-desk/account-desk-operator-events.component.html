@@ -1,10 +1,11 @@
 <p-panel
+  id="account-desk-operator-events"
   class="operations-events"
-  aria-label="Journal timeline"
+  aria-label="Account operations evidence"
   aria-live="polite"
 >
-  <ng-template #header><h2>Journal timeline</h2></ng-template>
-  <p>Chronological, read-only operational history.</p>
+  <ng-template #header><h2>Account operations evidence</h2></ng-template>
+  <p>Account activity, controls, verification, and configuration evidence outside transaction history.</p>
   <div class="kind-filters" aria-label="Event kind filters">
     @for (kind of eventKinds; track trackKind($index, kind)) {
       <button

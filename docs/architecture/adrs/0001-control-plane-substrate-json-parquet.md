@@ -56,3 +56,28 @@ Until at least one of these fires, the substrate remains JSON + Parquet + hash s
 - `PythonDataService/app/engine/live/reconcile.py` — three-way daily reconciler (Phase 9).
 - `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16 — historical design-lock round (this ADR is Resolution 1).
 - `docs/ibkr-integration-authority.md` — authoritative live-runtime status as of `master`.
+
+## Amendment 2026-07-25 — Clerk-native transaction projection (#1219)
+
+The Operator Transaction History trigger has fired: an operator needs a
+bounded, indexed account-wide acknowledgement history without asking a broker,
+Account Truth, or a full journal scan on page render. `clerk_transactions`,
+`clerk_transaction_events`, and `clerk_transaction_projection_cursors` are
+therefore downstream Postgres projection tables over canonical
+`clerk_journal.jsonl`, separate from all lifecycle projection tables/runtimes.
+The cursor and rows commit atomically. A successful manual Clerk RPC triggers
+the tailer only after its acknowledgement has been fsynced; projection failure
+is logged and leaves that acknowledgement unchanged. Reads use opaque keyset
+pages and backend-owned availability, high-water, and lag facts only.
+
+## Amendment 2026-07-25 — IBKR lifecycle projection and recovery (#1220)
+
+The same dedicated transaction projector now folds raw Clerk-journal IBKR
+callbacks into submitted, partial-fill, filled, cancelled, rejected, error,
+execution, and commission evidence. Callback effects are idempotent on the
+durable Clerk journal sequence plus callback identity, terminal transaction
+states never regress, and absent commission is represented as `unknown`, never
+as zero. A projection transaction commits rows and its cursor before it may
+publish a live delta. Reconnect recovery drains only cursor lag before Python
+publishes the backend-authored `live` feed state; its other explicit states are
+`reconnecting`, `stale`, `offline_but_saved`, and `projection_unavailable`.

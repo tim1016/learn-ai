@@ -15,7 +15,7 @@ from typing import Any, Literal, overload
 
 from pydantic import ValidationError
 
-from app.broker.ibkr.models import IbkrOrderEvent
+from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent
 from app.engine.live import durable_append_log
 from app.engine.live.account_artifacts import (
     account_artifact_file_path,
@@ -148,6 +148,7 @@ class AccountClerkJournal:
                 order_id=int(ack.order_id),
                 perm_id=_try_int(getattr(ack, "perm_id", None)),
                 exec_id=getattr(ack, "exec_id", None),
+                broker_ack=ack if isinstance(ack, IbkrOrderAck) else None,
             )
             self._append_entry_locked(journal_path, entries, entry)
             return AccountClerkBrokerAckReceipt.from_journal_entry(entry)

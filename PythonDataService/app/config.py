@@ -83,7 +83,10 @@ class Settings(BaseSettings):
     # Rebuildable read model over canonical lifecycle/account artifacts.
     # Requires POSTGRES_URL when enabled; files remain canonical when disabled
     # or unavailable.
-    LIFECYCLE_PROJECTION_ENABLED: bool = False
+    # Clerk-native operator transaction history. This is deliberately a
+    # separate read model from lifecycle projection tables and can fail
+    # without changing Clerk acknowledgement durability.
+    CLERK_TRANSACTION_PROJECTION_ENABLED: bool = False
     # Data lake writer root (Slice 1b). Container-side path of the RW mount.
     # The writer creates lake/ and staging/ subdirectories under this path.
     # Must be on a single filesystem so POSIX atomic rename(2) is valid.

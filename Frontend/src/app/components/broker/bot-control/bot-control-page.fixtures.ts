@@ -2,7 +2,6 @@ import type {
   BotLifecycleMutationResponse,
   FleetAccountSummary,
   HostProcessState,
-  LifecycleTimelineResponse,
   LiveInstanceStatus,
   MutationRungReceipt,
   OperatorNotice,
@@ -413,45 +412,6 @@ export function makeRuntimeFreshnessWithLeaseAction(): OperatorSurfaceRuntimeFre
     },
     headline,
     additional_reasons: [],
-  };
-}
-
-export function makeLifecycleTimeline(): LifecycleTimelineResponse {
-  return {
-    projection_available: true,
-    canonical_fallback_required: false,
-    rows: [
-      {
-        id: 101,
-        account_id: 'DU1',
-        strategy_instance_id: 'sid-x',
-        run_id: 'run-x',
-        event_id: 'intent_wal:run-x:7:ACK_FAILED_UNCERTAIN',
-        event_type: 'BrokerOrderUncertain',
-        category: 'order',
-        node_id: 'ack_or_reconcile',
-        gate_id: null,
-        status: 'blocked',
-        severity: 'warning',
-        ts_ms: 1_700_000_001_000,
-        ts_ms_resolved: true,
-        source_artifact: 'intent_events.jsonl',
-        source_type: 'broker_ack',
-        source_rank: 30,
-        source_seq: 7,
-        source_offset: null,
-        source_hash: null,
-        summary: 'Broker acknowledgment failed; submit outcome is uncertain.',
-        why: 'Probe broker before retrying this intent.',
-        operator_next_step: 'PROBE_BROKER_BEFORE_RETRY',
-        receipt_payload: { intent_id: 'intent-7', order_ref: 'learn-ai/sid-x/v1:intent-7' },
-        evidence_refs: [],
-        rendered_headline: null,
-        rendered_template_id: null,
-        inserted_at_ms: 1_700_000_001_100,
-        updated_at_ms: 1_700_000_001_100,
-      },
-    ],
   };
 }
 

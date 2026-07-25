@@ -1,5 +1,6 @@
 import { DestroyRef, Injectable, computed, inject, resource, signal } from '@angular/core';
 import type { FleetRosterRow, FleetRosterSnapshot } from '../api/live-instances.types';
+import type { IbkrConnectionHealth } from '../api/broker-models';
 import {
   openFleetRosterStream,
   type FleetRosterStream,
@@ -32,6 +33,12 @@ export interface ConnectivityLink {
   detail: string;
 }
 
+export interface BrokerConnectionPresentation {
+  state: LinkState;
+  headline: string;
+  detail: string;
+}
+
 /** Whether the host daemon is running the latest code. `unknown` while loading
  * or when git is unavailable; `stale` means the working tree is ahead of the
  * running process and it must be restarted to apply merged fixes. */
@@ -39,6 +46,67 @@ export interface DaemonFreshness {
   state: 'fresh' | 'stale' | 'unknown';
   sha: string | null;
   commitsBehind: number | null;
+}
+
+const BROKER_CONNECTION_RENDERING: Readonly<Record<
+  BrokerConnectionState,
+  { state: LinkState; headline: string; baseDetail: string }
+>> = {
+  connected: { state: 'ok', headline: 'Online', baseDetail: 'Connected' },
+  reconnecting: { state: 'warn', headline: 'Reconnecting', baseDetail: 'Reconnecting' },
+  recovering: { state: 'warn', headline: 'Recovering', baseDetail: 'Recovering streams' },
+  soft_lost: { state: 'warn', headline: 'Degraded', baseDetail: 'Connection degraded — feed lost, recovering' },
+  subscriptions_stale: { state: 'warn', headline: 'Degraded', baseDetail: 'Subscriptions stale — resubscribe required' },
+  degraded_data_farm: { state: 'warn', headline: 'Degraded', baseDetail: 'IBKR data farm degraded' },
+  hard_down: { state: 'down', headline: 'Offline', baseDetail: 'Recovery exhausted' },
+  disabled: { state: 'unknown', headline: 'Disabled', baseDetail: 'Disabled' },
+  disconnected: { state: 'down', headline: 'Offline', baseDetail: 'Disconnected' },
+};
+
+/**
+ * Render one backend-authored connection state consistently across broker
+ * surfaces. This deliberately accepts the health snapshot rather than an
+ * EventSource state: transport reachability is not proof that IBKR is live.
+ */
+export function describeBrokerConnection(
+  health: IbkrConnectionHealth | null,
+): BrokerConnectionPresentation {
+  if (health === null) {
+    return { state: 'unknown', headline: 'Checking', detail: 'Waiting for broker health' };
+  }
+
+  const state = health.connection_state as BrokerConnectionState;
+  const rendering = BROKER_CONNECTION_RENDERING[state];
+  const condition = health.condition ?? null;
+  if (state === 'reconnecting' && health.reconnect_attempt) {
+    return {
+      state: rendering.state,
+      headline: rendering.headline,
+      detail: `${condition?.title ?? rendering.baseDetail} (attempt ${health.reconnect_attempt})`,
+    };
+  }
+  if (state === 'recovering') {
+    return {
+      state: rendering.state,
+      headline: rendering.headline,
+      detail: health.recovery_error ? `Recovery failed: ${health.recovery_error}` : rendering.baseDetail,
+    };
+  }
+  if ((state === 'subscriptions_stale' || state === 'degraded_data_farm') && health.last_ibkr_code) {
+    return {
+      state: rendering.state,
+      headline: rendering.headline,
+      detail: `${rendering.baseDetail} (${health.last_ibkr_code})`,
+    };
+  }
+  if (state === 'disabled' && health.reason) {
+    return { state: rendering.state, headline: rendering.headline, detail: health.reason };
+  }
+  return {
+    state: rendering.state,
+    headline: rendering.headline,
+    detail: condition?.title ?? rendering.baseDetail,
+  };
 }
 
 /**
@@ -108,28 +176,12 @@ export class BrokerConnectivityService {
     return (h.connection_state ?? null) as BrokerConnectionState | null;
   });
 
-  /** Single source of truth for the link colour and detail string per
-   * connection state. Co-located so the strip can't drift between the
-   * dot's amber and the label's "Reconnecting". */
-  private static readonly STATE_RENDERING: Record<
-    BrokerConnectionState,
-    { link: LinkState; baseDetail: string }
-  > = {
-    connected: { link: 'ok', baseDetail: 'Connected' },
-    reconnecting: { link: 'warn', baseDetail: 'Reconnecting' },
-    recovering: { link: 'warn', baseDetail: 'Recovering streams' },
-    soft_lost: { link: 'warn', baseDetail: 'Connection degraded — feed lost, recovering' },
-    subscriptions_stale: { link: 'warn', baseDetail: 'Subscriptions stale — resubscribe required' },
-    degraded_data_farm: { link: 'warn', baseDetail: 'IBKR data farm degraded' },
-    hard_down: { link: 'down', baseDetail: 'Recovery exhausted' },
-    disabled: { link: 'unknown', baseDetail: 'Disabled' },
-    disconnected: { link: 'down', baseDetail: 'Disconnected' },
-  };
+  readonly brokerPresentation = computed(() =>
+    describeBrokerConnection(this.brokerHealth.health()),
+  );
 
   readonly brokerState = computed<LinkState>(() => {
-    const state = this.brokerConnectionState();
-    if (state === null) return 'unknown';
-    return BrokerConnectivityService.STATE_RENDERING[state].link;
+    return this.brokerPresentation().state;
   });
 
   /** Operator-facing detail string for the broker link. ``Reconnecting``
@@ -137,27 +189,7 @@ export class BrokerConnectivityService {
    * operator sees progress rather than silence; ``disabled`` surfaces
    * the backend-authored ``reason`` so the operator sees why. */
   readonly brokerDetail = computed<string>(() => {
-    const state = this.brokerConnectionState();
-    if (state === null) return 'Checking…';
-    const { baseDetail } = BrokerConnectivityService.STATE_RENDERING[state];
-    const h = this.brokerHealth.health();
-    const condition = h?.condition ?? null;
-    if (state === 'reconnecting' && h?.reconnect_attempt) {
-      return `${condition?.title ?? baseDetail} (attempt ${h.reconnect_attempt})`;
-    }
-    if (state === 'recovering') {
-      return h?.recovery_error ? `Recovery failed: ${h.recovery_error}` : baseDetail;
-    }
-    if (state === 'subscriptions_stale' && h?.last_ibkr_code) {
-      return `${baseDetail} (${h.last_ibkr_code})`;
-    }
-    if (state === 'degraded_data_farm' && h?.last_ibkr_code) {
-      return `${baseDetail} (${h.last_ibkr_code})`;
-    }
-    if (state === 'disabled' && h?.reason) {
-      return h.reason;
-    }
-    return condition?.title ?? baseDetail;
+    return this.brokerPresentation().detail;
   });
 
   /** Whether the connected session is the paper account. Paper-only UI

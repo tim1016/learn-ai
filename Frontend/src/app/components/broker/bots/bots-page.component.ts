@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
+  afterNextRender,
   computed,
   inject,
   signal,
@@ -16,6 +17,7 @@ import { TagModule } from 'primeng/tag';
 import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import type {
   BotCatalogRow,
+  BotCatalogPageResponse,
   BotCatalogTone,
   BotCatalogTradingMode,
   BotLifecycleCondition,
@@ -48,7 +50,7 @@ const EMPTY_ROLL_CALL_SUMMARY: BotRollCallSummary = {
   off_duty: 0,
   retired: 0,
   generated_at_ms: null,
-  session_date: null,
+  session_date_ms: null,
   effective_stop_ms: null,
 };
 
@@ -59,6 +61,8 @@ const EMPTY_LAUNCH_PROGRESS: BotLaunchProgress = {
   activeBotId: null,
   rows: [],
 };
+
+const INITIAL_CATALOG_PAGE_SIZE = 25;
 
 const BOT_TONE_SEVERITY: Record<BotCatalogTone, TagSeverity> = {
   positive: 'success',
@@ -137,7 +141,11 @@ export class BotsPageComponent {
   readonly rollCall = signal<BotRollCallSummary>(EMPTY_ROLL_CALL_SUMMARY);
   readonly eveningReport = signal<BotEveningReport | null>(null);
   readonly accountTriageError = signal<string | null>(null);
-  readonly isLoading = signal<boolean>(true);
+  readonly isLoading = signal<boolean>(false);
+  readonly isLoadingMore = signal<boolean>(false);
+  readonly catalogLoaded = signal<boolean>(false);
+  readonly catalogTotalCount = signal<number>(0);
+  readonly nextCatalogCursor = signal<string | null>(null);
   readonly isRunningRollCall = signal<boolean>(false);
   readonly isStartingReady = signal<boolean>(false);
   readonly errorMessage = signal<string | null>(null);
@@ -153,6 +161,8 @@ export class BotsPageComponent {
   readonly deleteConfirmationOpen = signal<boolean>(false);
   readonly isDeleting = signal<boolean>(false);
   readonly deleteErrorMessage = signal<string | null>(null);
+  readonly pageSize = INITIAL_CATALOG_PAGE_SIZE;
+  private catalogRequestGeneration = 0;
 
   readonly visibleBots = computed<BotTableRow[]>(() => {
     const query = normalize(this.searchQuery());
@@ -195,6 +205,13 @@ export class BotsPageComponent {
   });
 
   readonly activeTabCount = computed(() => this.activeRows().length);
+  readonly loadedBotCount = computed(() => this.bots().length);
+  readonly hasMoreBots = computed(() => this.nextCatalogCursor() !== null);
+  readonly hasActiveFilters = computed(() =>
+    this.searchQuery().trim().length > 0 ||
+    this.attentionFilter() !== 'all' ||
+    this.lifecycleFilter() !== 'all',
+  );
   readonly connectedAccountId = computed(() => this.health.health()?.account_id ?? null);
   readonly readyRows = computed<BotTableRow[]>(() =>
     this.visibleBots().filter((row) => {
@@ -207,6 +224,11 @@ export class BotsPageComponent {
     }),
   );
   readonly rollCallSummaryLine = computed(() => {
+    if (!this.rollCallAvailable()) {
+      return this.catalogLoaded()
+        ? 'Not evaluated. Run roll call for a current fleet summary.'
+        : 'Not requested yet.';
+    }
     const summary = this.rollCall();
     return [
       `${summary.ready} ready`,
@@ -221,8 +243,11 @@ export class BotsPageComponent {
   readonly activeTabSummary = computed(() =>
     this.isLoading()
       ? `Loading ${this.activeModeTab()} bots...`
-      : `${this.activeTabCount()} bots in ${this.activeModeTab()} mode`,
+      : this.catalogLoaded()
+        ? `${this.activeTabCount()} loaded bots in ${this.activeModeTab()} mode`
+        : 'Catalog will load after this page is painted.',
   );
+  readonly rollCallAvailable = signal<boolean>(false);
 
   readonly selectedRows = computed<BotTableRow[]>(() => {
     const selected = this.selectedBotIds();
@@ -246,23 +271,55 @@ export class BotsPageComponent {
   });
 
   constructor() {
-    void this.refresh();
+    afterNextRender(() => {
+      // Let the browser paint the page shell before catalog fleet/daemon work.
+      setTimeout(() => void this.refresh(), 0);
+    });
   }
 
-  async refresh(): Promise<void> {
+  async refresh(selectionToRetain?: ReadonlySet<string>): Promise<void> {
+    const requestGeneration = ++this.catalogRequestGeneration;
+    let loadedFirstPage = false;
     this.isLoading.set(true);
     this.errorMessage.set(null);
     try {
-      const catalog = await this.liveRuns.getBotCatalog();
-      this.bots.set(catalog.bots);
-      this.rollCall.set(catalog.roll_call);
-      this.eveningReport.set(catalog.evening_report);
-      this.retainKnownSelections(catalog.bots);
+      const page = await this.liveRuns.getBotCatalogPage({
+        limit: this.pageSize,
+      });
+      if (requestGeneration !== this.catalogRequestGeneration) return;
+      this.applyCatalogPage(page, { replace: true });
+      loadedFirstPage = true;
+      this.selectedBotIds.set(new Set(selectionToRetain ?? []));
       void this.refreshAccountTriage();
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
     } finally {
-      this.isLoading.set(false);
+      if (requestGeneration === this.catalogRequestGeneration) {
+        this.isLoading.set(false);
+        if (loadedFirstPage && this.hasActiveFilters()) {
+          void this.loadRemainingBotsForActiveFilter();
+        }
+      }
+    }
+  }
+
+  async loadMoreBots(): Promise<void> {
+    const cursor = this.nextCatalogCursor();
+    if (cursor === null || this.isLoadingMore() || this.isLoading()) return;
+    const requestGeneration = this.catalogRequestGeneration;
+    this.isLoadingMore.set(true);
+    this.errorMessage.set(null);
+    try {
+      const page = await this.liveRuns.getBotCatalogPage({
+        limit: this.pageSize,
+        cursor,
+      });
+      if (requestGeneration !== this.catalogRequestGeneration) return;
+      this.applyCatalogPage(page, { replace: false });
+    } catch (err) {
+      this.errorMessage.set(this.humanError(err));
+    } finally {
+      if (requestGeneration === this.catalogRequestGeneration) this.isLoadingMore.set(false);
     }
   }
 
@@ -292,6 +349,7 @@ export class BotsPageComponent {
     try {
       const response = await this.liveRuns.runRollCall();
       this.rollCall.set(response.summary);
+      this.rollCallAvailable.set(true);
       await this.refresh();
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
@@ -334,6 +392,7 @@ export class BotsPageComponent {
       });
       const rollCall = await this.liveRuns.runRollCall();
       this.rollCall.set(rollCall.summary);
+      this.rollCallAvailable.set(true);
       await this.refresh();
 
       const refreshedRows = this.readyRows().filter((row) => requestedIds.has(row.id));
@@ -384,15 +443,18 @@ export class BotsPageComponent {
     const target = event.target;
     if (target instanceof HTMLInputElement) {
       this.searchQuery.set(target.value);
+      void this.loadRemainingBotsForActiveFilter();
     }
   }
 
   setAttentionFilter(value: AttentionFilter): void {
     this.attentionFilter.set(value);
+    void this.loadRemainingBotsForActiveFilter();
   }
 
   setLifecycleFilter(value: LifecycleFilter): void {
     this.lifecycleFilter.set(value);
+    void this.loadRemainingBotsForActiveFilter();
   }
 
   setActiveModeTab(value: string | number | undefined): void {
@@ -510,8 +572,13 @@ export class BotsPageComponent {
       );
       const firstFailure = results.find((result) => result.status === 'rejected');
       if (firstFailure) {
+        const rejectedIds = new Set(
+          results.flatMap((result, index) =>
+            result.status === 'rejected' && ids[index] !== undefined ? [ids[index]] : [],
+          ),
+        );
         if (results.some((result) => result.status === 'fulfilled')) {
-          await this.refresh();
+          await this.refresh(rejectedIds);
         }
         this.deleteErrorMessage.set(this.humanError(firstFailure.reason));
         return;
@@ -558,12 +625,41 @@ export class BotsPageComponent {
     this.deleteErrorMessage.set(null);
   }
 
-  private retainKnownSelections(bots: BotCatalogRow[]): void {
-    const knownIds = new Set(bots.map((bot) => bot.strategy_instance_id));
-    this.selectedBotIds.update((current) => {
-      const next = new Set([...current].filter((id) => knownIds.has(id)));
-      return next.size === current.size ? current : next;
+  private applyCatalogPage(
+    page: BotCatalogPageResponse,
+    options: { replace: boolean },
+  ): void {
+    this.bots.update((current) => {
+      if (options.replace) return page.bots;
+      const byId = new Map(current.map((bot) => [bot.strategy_instance_id, bot]));
+      for (const bot of page.bots) byId.set(bot.strategy_instance_id, bot);
+      return [...byId.values()];
     });
+    this.catalogTotalCount.set(page.total_count);
+    this.nextCatalogCursor.set(page.next_cursor);
+    this.catalogLoaded.set(true);
+  }
+
+  private async loadRemainingBotsForActiveFilter(): Promise<void> {
+    if (!this.hasActiveFilters() || this.isLoading() || this.isLoadingMore()) return;
+    const requestGeneration = this.catalogRequestGeneration;
+    this.isLoadingMore.set(true);
+    try {
+      while (this.nextCatalogCursor() !== null && requestGeneration === this.catalogRequestGeneration) {
+        const page = await this.liveRuns.getBotCatalogPage({
+          limit: this.pageSize,
+          cursor: this.nextCatalogCursor() ?? undefined,
+        });
+        if (requestGeneration !== this.catalogRequestGeneration) return;
+        this.applyCatalogPage(page, { replace: false });
+      }
+    } catch (err) {
+      if (requestGeneration === this.catalogRequestGeneration) {
+        this.errorMessage.set(this.humanError(err));
+      }
+    } finally {
+      if (requestGeneration === this.catalogRequestGeneration) this.isLoadingMore.set(false);
+    }
   }
 
   private humanError(err: unknown): string {

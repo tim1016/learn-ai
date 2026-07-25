@@ -14,9 +14,12 @@ from app.engine.live.account_identity import normalize_account_id
 from app.schemas.account_events import (
     AccountEventEvidenceRef,
     AccountEventKind,
+    AccountEventOperatorOrderReceipt,
     AccountEventRow,
     AccountEventsResponse,
     AccountEventView,
+    TraderAccountEventRow,
+    TraderAccountEventsResponse,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -87,6 +90,11 @@ _EVENT_PRESENTATION: dict[str, tuple[AccountEventKind, str | None, str]] = {
         "activity",
         "Unattributed broker activity needs review.",
         "Account service recorded unattributed broker activity.",
+    ),
+    "account_clerk_manual_order_acked": (
+        "activity",
+        "Your paper order was received by the broker.",
+        "Account Clerk recorded a durable IBKR acknowledgement for a manual paper order.",
     ),
     "account_owner_generation_recorded": (
         "clerk",
@@ -181,13 +189,7 @@ class AccountEventJournalService:
             raise AccountEventJournalError(str(exc)) from exc
         rows = self._project_rows(canonical_account_id, raw_events)
         latest_seq = len(raw_events) or None
-        filtered = self._filter_rows(
-            rows,
-            view=view,
-            kinds=kinds,
-            before_seq=before_seq,
-            after_seq=after_seq,
-        )
+        filtered = self._filter_rows(rows, kinds=kinds, before_seq=before_seq, after_seq=after_seq)
         newest_first = list(reversed(filtered))
         page_rows = newest_first[:limit]
         next_before_seq = self._next_before_seq(newest_first, page_rows)
@@ -197,6 +199,33 @@ class AccountEventJournalService:
             rows=page_rows,
             latest_seq=latest_seq,
             next_before_seq=next_before_seq,
+        )
+
+    def trader_page(self, *, account_id: str, limit: int) -> TraderAccountEventsResponse:
+        """Return backend-authored trader outcomes without projecting any receipt fields."""
+
+        canonical_account_id = normalize_account_id(account_id)
+        try:
+            raw_events = read_account_events(self._artifacts_root, canonical_account_id)
+        except AccountArtifactError as exc:
+            raise AccountEventJournalError(str(exc)) from exc
+        rows = self._project_rows(canonical_account_id, raw_events)
+        today_ny = _ny_day(self._now_ms())
+        trader_rows = [
+            TraderAccountEventRow(
+                event_id=row.event_id,
+                seq=row.seq,
+                occurred_at_ms=row.occurred_at_ms,
+                outcome=row.trader_narration,
+            )
+            for row in reversed(rows)
+            if row.trader_narration is not None and _ny_day(row.occurred_at_ms) == today_ny
+        ][:limit]
+        return TraderAccountEventsResponse(
+            account_id=canonical_account_id,
+            rows=trader_rows,
+            latest_seq=len(raw_events) or None,
+            next_before_seq=None,
         )
 
     def _project_rows(self, account_id: str, raw_events: list[dict]) -> list[AccountEventRow]:
@@ -228,6 +257,7 @@ class AccountEventJournalService:
                     trader_narration=trader_narration,
                     operator_detail=operator_detail,
                     evidence_refs=_evidence_refs(account_id, record.seq, raw_event),
+                    operator_order_receipt=_operator_order_receipt(record.event_type, raw_event, index),
                 )
             )
         return rows
@@ -236,12 +266,10 @@ class AccountEventJournalService:
         self,
         rows: list[AccountEventRow],
         *,
-        view: AccountEventView,
         kinds: frozenset[AccountEventKind],
         before_seq: int | None,
         after_seq: int | None,
     ) -> list[AccountEventRow]:
-        today_ny = _ny_day(self._now_ms()) if view == "trader_today" else None
         filtered: list[AccountEventRow] = []
         for row in rows:
             if before_seq is not None and row.seq >= before_seq:
@@ -249,10 +277,6 @@ class AccountEventJournalService:
             if after_seq is not None and row.seq <= after_seq:
                 continue
             if kinds and row.kind not in kinds:
-                continue
-            if view == "trader_today" and (
-                row.trader_narration is None or _ny_day(row.occurred_at_ms) != today_ny
-            ):
                 continue
             filtered.append(row)
         return filtered
@@ -310,6 +334,37 @@ def _evidence_refs(
         for ref in _string_values(value):
             refs.append(AccountEventEvidenceRef(source=source, ref=ref))
     return refs
+
+
+def _operator_order_receipt(
+    event_type: str,
+    raw_event: Mapping[str, object],
+    index: int,
+) -> AccountEventOperatorOrderReceipt | None:
+    """Read the bounded operator receipt carried by a manual-order event."""
+
+    if event_type != "account_clerk_manual_order_acked":
+        return None
+    try:
+        return AccountEventOperatorOrderReceipt.model_validate(
+            {
+                "broker": raw_event.get("broker"),
+                "order_id": raw_event.get("order_id"),
+                "perm_id": raw_event.get("perm_id"),
+                "order_ref": raw_event.get("order_ref"),
+                "symbol": raw_event.get("symbol"),
+                "action": raw_event.get("action"),
+                "quantity": raw_event.get("quantity"),
+                "order_type": raw_event.get("order_type"),
+                "limit_price": raw_event.get("limit_price"),
+                "status": raw_event.get("status"),
+                "acknowledged_at_ms": raw_event.get("acknowledged_at_ms"),
+            }
+        )
+    except ValidationError as exc:
+        raise AccountEventJournalError(
+            f"manual order receipt in account event row {index} is invalid: {exc}"
+        ) from exc
 
 
 def _string_values(value: object) -> Iterable[str]:

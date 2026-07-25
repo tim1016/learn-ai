@@ -20,16 +20,18 @@ import asyncio
 import hashlib
 import hmac
 import inspect
+import logging
 import os
 import signal
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager, contextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
+    AccountArtifactError,
     AccountFreezeEvidence,
     account_artifacts_root,
     append_account_event,
@@ -70,7 +72,12 @@ from app.engine.live.account_clerk_operations import (
     AccountClerkOperationDependencies,
     AccountClerkReconciliationOutcome,
 )
-from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.engine.live.account_owner import (
+    MANUAL_OPERATOR_RUN_ID,
+    MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
+    MANUAL_ORDER_INTENT_KIND,
+    AccountOwnerSubmitIntent,
+)
 from app.engine.live.account_owner_fence import (
     AccountClerkWriteFenceError,
     account_clerk_write_grant,
@@ -92,12 +99,17 @@ from app.engine.live.journal_recovery_state import (
     assess_journal_recovery_fence,
     journal_recovery_admission_lock,
 )
-from app.engine.live.order_identity import build_bot_order_namespace, emergency_flatten_strategy_instance_id
+from app.engine.live.order_identity import (
+    build_bot_order_namespace,
+    build_manual_order_namespace,
+    emergency_flatten_strategy_instance_id,
+)
 from app.services.bot_deletion import (
     BotDeletionCorruptError,
     bot_lifecycle_operation_fence,
     bot_retirement_is_pending,
 )
+from app.services.clerk_transaction_projection import project_account_journal_best_effort
 from app.utils.advisory_lock import advisory_file_lock
 
 if TYPE_CHECKING:
@@ -108,6 +120,7 @@ ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME = "clerk_authority"
 # budget expires.  A timed-out broker write is ambiguous, so its durable
 # ``broker_uncertain`` row is deliberately left for reconciliation.
 _BROKER_SUBMIT_TIMEOUT_S = 25.0
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -199,6 +212,8 @@ class AccountClerk:
         )
         self._rpc_write_intake_closed = False
         self._event_stream_down_recorded = False
+        self._projection_task: asyncio.Task[None] | None = None
+        self._projection_requested = False
 
     @property
     def recovery_flatten_in_progress(self) -> bool:
@@ -349,11 +364,19 @@ class AccountClerk:
             # The fence spans identity validation, journal admission, and the
             # broker write. A retirement cannot turn PENDING between those
             # steps and let an already-admitted bot place one more order.
-            with bot_lifecycle_operation_fence(self._artifacts_root, intent.strategy_instance_id):
+            # Manual tickets are account-owned, so the Clerk's account-wide
+            # intake lock is their sole serialization boundary.
+            operation_fence = (
+                nullcontext()
+                if intent.intent_kind == MANUAL_ORDER_INTENT_KIND
+                else bot_lifecycle_operation_fence(self._artifacts_root, intent.strategy_instance_id)
+            )
+            with operation_fence:
                 await self._require_normal_submit_intake(intent)
                 recorded = await asyncio.to_thread(self._record_intent_locked, intent)
                 existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
                 if existing_ack is not None:
+                    await self._publish_manual_order_ack_event(intent, existing_ack)
                     return recorded, existing_ack
                 # A stream can die while the inbox/journal fsync is in flight.
                 # Never start the broker write after that closed the submit lane.
@@ -367,6 +390,7 @@ class AccountClerk:
                     await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
                     raise
                 broker_ack = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+                await self._publish_manual_order_ack_event(intent, broker_ack)
                 return recorded, broker_ack
 
     async def submit_recovery_flatten(
@@ -478,6 +502,9 @@ class AccountClerk:
             await asyncio.to_thread(write_account_freeze, self._artifacts_root, freeze)
         elif self._normal_submit_intake_reason == "CLERK_EMERGENCY_RECOVERY_REQUIRED":
             self._normal_submit_intake_reason = None
+        # Existing canonical journals must become discoverable at startup even
+        # if no new manual order or callback arrives after a database outage.
+        self._schedule_transaction_projection()
 
     async def record_broker_event(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
         """Persist one callback off-loop before any downstream relay.
@@ -495,7 +522,28 @@ class AccountClerk:
                     event,
                     broker_callback_idempotency_key(event),
                 )
+        # The callback receipt is durable before this best-effort rebuildable
+        # projection starts; never stall the callback relay on Postgres.
+        self._schedule_transaction_projection()
         return receipt
+
+    def _schedule_transaction_projection(self) -> None:
+        """Coalesce best-effort transaction projection after durable journal work."""
+
+        self._projection_requested = True
+        if self._projection_task is None or self._projection_task.done():
+            self._projection_task = asyncio.create_task(
+                self._drain_transaction_projection_requests(),
+                name="ibkr-transaction-projection",
+            )
+
+    async def _drain_transaction_projection_requests(self) -> None:
+        while self._projection_requested:
+            self._projection_requested = False
+            await project_account_journal_best_effort(
+                artifacts_root=self._artifacts_root,
+                account_id=self._account_id,
+            )
 
     async def mark_event_stream_down(self, failure: BaseException | None = None) -> None:
         """Close normal submit intake and durably alarm a dead broker stream."""
@@ -723,7 +771,12 @@ class AccountClerk:
         await self._require_normal_submit_intake(intent)
         self._require_paper_broker()
         async with self._intake_lock:
-            with bot_lifecycle_operation_fence(self._artifacts_root, intent.strategy_instance_id):
+            operation_fence = (
+                nullcontext()
+                if intent.intent_kind == MANUAL_ORDER_INTENT_KIND
+                else bot_lifecycle_operation_fence(self._artifacts_root, intent.strategy_instance_id)
+            )
+            with operation_fence:
                 await self._require_normal_submit_intake(intent)
                 await asyncio.to_thread(self._validate_intent_identity, intent)
                 return await self._retry_recorded_intent_locked(intent)
@@ -739,7 +792,71 @@ class AccountClerk:
         except Exception as exc:
             await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
             raise
-        return await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+        receipt = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+        await self._publish_manual_order_ack_event(intent, receipt)
+        return receipt
+
+    async def _publish_manual_order_ack_event(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        receipt: AccountClerkBrokerAckReceipt,
+    ) -> None:
+        """Mirror an already-durable manual acknowledgement into Account Desk history.
+
+        The Clerk journal is canonical. This smaller account event exists solely
+        to feed the cursor-paginated operator view, so its local write failure
+        must not change the already-known broker acknowledgement into a failed
+        order submission. A retry of the same intent attempts the idempotent
+        mirror again.
+        """
+
+        if intent.intent_kind != MANUAL_ORDER_INTENT_KIND:
+            return
+        try:
+            await asyncio.to_thread(self._append_manual_order_ack_event, intent, receipt)
+        except (AccountArtifactError, OSError) as exc:
+            logger.error(
+                "manual order receipt was durable but Account Desk history mirror failed",
+                extra={
+                    "account_id": intent.account_id,
+                    "intent_id": intent.intent_id,
+                    "order_ref": intent.order_ref,
+                    "order_id": receipt.order_id,
+                    "exception": repr(exc),
+                },
+            )
+
+    def _append_manual_order_ack_event(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        receipt: AccountClerkBrokerAckReceipt,
+    ) -> None:
+        spec = IbkrOrderSpec.model_validate(intent.order_spec)
+        ack = receipt.broker_ack
+        acknowledged_at_ms = ack.placed_at_ms if ack is not None else receipt.recorded_at_ms
+        append_account_event(
+            self._artifacts_root,
+            self._account_id,
+            {
+                "event_type": "account_clerk_manual_order_acked",
+                "ts_ms": acknowledged_at_ms,
+                "receipt_id": f"account-clerk-manual-order-ack:{intent.order_ref}",
+                "broker": "ibkr",
+                "intent_id": intent.intent_id,
+                "order_ref": intent.order_ref,
+                "order_id": receipt.order_id,
+                "perm_id": receipt.perm_id,
+                "exec_id": receipt.exec_id,
+                "symbol": ack.symbol if ack is not None else spec.symbol,
+                "action": ack.action if ack is not None else spec.action,
+                "quantity": ack.quantity if ack is not None else spec.quantity,
+                "order_type": ack.order_type if ack is not None else spec.order_type,
+                "limit_price": ack.limit_price if ack is not None else spec.limit_price,
+                "status": ack.status if ack is not None else "Acknowledged",
+                "acknowledged_at_ms": acknowledged_at_ms,
+            },
+            only_if_receipt_absent=True,
+        )
 
     def _require_paper_broker(self) -> None:
         client = getattr(self._broker, "_client", None)
@@ -770,6 +887,9 @@ class AccountClerk:
         self._reject(intent, "CLERK_RPC_CLOSED")
 
     def _validate_intent_identity(self, intent: AccountOwnerSubmitIntent) -> None:
+        if intent.intent_kind == MANUAL_ORDER_INTENT_KIND:
+            self._validate_manual_order_intent(intent)
+            return
         if intent.intent_kind == "EMERGENCY_FLATTEN":
             expected_strategy_instance_id = emergency_flatten_strategy_instance_id(self._account_id)
             if (
@@ -817,6 +937,27 @@ class AccountClerk:
             self._operations.validate_recovery_binding(intent, binding)
             return
         self._validate_binding(intent, binding)
+
+    def _validate_manual_order_intent(self, intent: AccountOwnerSubmitIntent) -> None:
+        """Accept only the server-authored account-owned manual-ticket shape."""
+
+        if (
+            intent.account_id != self._account_id
+            or intent.strategy_instance_id != MANUAL_OPERATOR_STRATEGY_INSTANCE_ID
+            or intent.run_id != MANUAL_OPERATOR_RUN_ID
+            or intent.bot_order_namespace != build_manual_order_namespace("operator")
+        ):
+            self._reject(intent, "CLERK_MANUAL_IDENTITY_MISMATCH")
+        try:
+            spec = IbkrOrderSpec.model_validate(intent.order_spec)
+        except ValueError:
+            self._reject(intent, "CLERK_MANUAL_ORDER_SPEC_INVALID")
+        if (
+            not spec.manual_order
+            or spec.order_ref != intent.order_ref
+            or spec.order_ref is None
+        ):
+            self._reject(intent, "CLERK_MANUAL_ORDER_SPEC_MISMATCH")
 
     def _require_host_capability(self, host_capability: str) -> None:
         if (
