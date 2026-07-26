@@ -8,7 +8,7 @@ the projection; it never edits, truncates, or recreates a canonical journal.
 
 | Operation | Enforced budget |
 | --- | --- |
-| Normal history page | `1..100` opaque-keyset summaries; no receipts in the grid response |
+| Normal history page | `1..100` account-scoped opaque-keyset summaries; optional origin, lifecycle, bot, and run predicates; no receipts in the grid response |
 | Initial Account Desk render | 25 summaries |
 | One replay tail | At most 500 complete records and 1 MiB |
 | One recovery/rebuild invocation | At most 64 replay tails (resume through the approved job runner) |
@@ -24,6 +24,13 @@ state rather than increasing page sizes or adding a fallback scan.
 intentionally has not scanned far enough to count it. `rebuilding`,
 `reconnecting`, `corrupt`, and `projection_unavailable` are backend-authored
 states. The Account Desk must render them; it must not infer health itself.
+
+Every order-producing Clerk intent begins a transaction at its `recorded`
+receipt. The projection retains the receipt-supplied typed origin and order
+instruction, then folds `broker_submitting`, `broker_uncertain`,
+`broker_acked`, and broker callbacks. `CANCEL_NAMESPACE` remains account
+control evidence and must not be rebuilt into a standalone transaction without
+canonical order linkage.
 
 ## Before a rebuild
 

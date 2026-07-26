@@ -10335,6 +10335,107 @@
         "title": "ClearHoldRequest",
         "type": "object"
       },
+      "ClerkOrderInstruction": {
+        "additionalProperties": false,
+        "description": "Typed, receipt-supplied order fields; never a client-side inference.",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "limit_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Price"
+          },
+          "order_type": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Type"
+          },
+          "outside_rth": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outside Rth"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "sec_type": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sec Type"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "time_in_force": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time In Force"
+          }
+        },
+        "title": "ClerkOrderInstruction",
+        "type": "object"
+      },
       "ClerkStatus": {
         "additionalProperties": false,
         "description": "The clerk's observable state for the operator status surface (S6).\n\nComposes the exposure hold, the latest reconciliation verdict, and the count\nof outstanding (unresolved) intents (the S5 unfinished set) \u2014 everything the\ndesk needs to render the hold banner and a health line.",
@@ -10693,6 +10794,9 @@
             ],
             "title": "Order Id"
           },
+          "order_instruction": {
+            "$ref": "#/components/schemas/ClerkOrderInstruction"
+          },
           "order_ref": {
             "maxLength": 512,
             "minLength": 1,
@@ -10742,6 +10846,20 @@
             "maxLength": 64,
             "minLength": 1,
             "title": "Transaction Kind",
+            "type": "string"
+          },
+          "transaction_origin": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "strategy",
+              "recovery",
+              "emergency",
+              "shutdown",
+              "force_flat",
+              "other"
+            ],
+            "title": "Transaction Origin",
             "type": "string"
           }
         },
@@ -10869,6 +10987,9 @@
             ],
             "title": "Order Id"
           },
+          "order_instruction": {
+            "$ref": "#/components/schemas/ClerkOrderInstruction"
+          },
           "order_ref": {
             "maxLength": 512,
             "minLength": 1,
@@ -10914,6 +11035,20 @@
             "maxLength": 64,
             "minLength": 1,
             "title": "Transaction Kind",
+            "type": "string"
+          },
+          "transaction_origin": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "strategy",
+              "recovery",
+              "emergency",
+              "shutdown",
+              "force_flat",
+              "other"
+            ],
+            "title": "Transaction Origin",
             "type": "string"
           }
         },
@@ -41292,6 +41427,85 @@
                 }
               ],
               "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origin",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "manual",
+                    "strategy",
+                    "recovery",
+                    "emergency",
+                    "shutdown",
+                    "force_flat",
+                    "other"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origin"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lifecycle_state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lifecycle State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "strategy_instance_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Instance Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
             }
           },
           {

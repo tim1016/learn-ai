@@ -11,7 +11,12 @@ import {
 import { ButtonModule } from 'primeng/button';
 import { PanelModule } from 'primeng/panel';
 
-import type { ClerkTransactionDetail, ClerkTransactionSummary } from '../../../api/clerk-transaction-history.types';
+import type {
+  ClerkTransactionDetail,
+  ClerkTransactionFilters,
+  ClerkTransactionOrigin,
+  ClerkTransactionSummary,
+} from '../../../api/clerk-transaction-history.types';
 import { formatReceiptValue, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
@@ -34,6 +39,10 @@ export class AccountDeskTransactionHistoryComponent {
   readonly detailLoading = signal(false);
   readonly detailError = signal<string | null>(null);
   readonly drawerOpen = signal(false);
+  readonly filterOrigin = signal<ClerkTransactionOrigin | ''>('');
+  readonly filterLifecycle = signal('');
+  readonly filterStrategy = signal('');
+  readonly filterRun = signal('');
   readonly receiptEntries = computed(() => receiptEntries(this.selected()?.receipt ?? {}));
 
   constructor() {
@@ -52,6 +61,51 @@ export class AccountDeskTransactionHistoryComponent {
   trackRow = (_: number, row: ClerkTransactionSummary): string => row.transaction_id;
   trackEvent = (_: number, event: ClerkTransactionDetail['events'][number]): string => event.event_id;
   trackReceipt = (_: number, entry: ReceiptEntry): string => entry.key;
+
+  inputValue(event: Event): string {
+    return event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement
+      ? event.target.value
+      : '';
+  }
+
+  setOriginFilter(event: Event): void {
+    const value = this.inputValue(event);
+    this.filterOrigin.set(
+      value === 'manual' || value === 'strategy' || value === 'recovery' || value === 'emergency'
+        || value === 'shutdown' || value === 'force_flat' || value === 'other'
+        ? value
+        : '',
+    );
+  }
+
+  applyFilters(): void {
+    const filters: ClerkTransactionFilters = {
+      origin: this.filterOrigin() || null,
+      lifecycleState: this.filterLifecycle(),
+      strategyInstanceId: this.filterStrategy(),
+      runId: this.filterRun(),
+    };
+    this.store.setFilters(filters);
+  }
+
+  clearFilters(): void {
+    this.filterOrigin.set('');
+    this.filterLifecycle.set('');
+    this.filterStrategy.set('');
+    this.filterRun.set('');
+    this.store.setFilters({});
+  }
+
+  origin(row: ClerkTransactionSummary): ClerkTransactionOrigin {
+    return row.transaction_origin ?? 'manual';
+  }
+
+  instruction(row: ClerkTransactionSummary | ClerkTransactionDetail): string {
+    const instruction = row.order_instruction;
+    return [instruction?.symbol, instruction?.quantity]
+      .filter((value) => value !== null && value !== undefined)
+      .join(' ');
+  }
 
   eventReceiptJson(event: ClerkTransactionDetail['events'][number]): string {
     return JSON.stringify(event.receipt, null, 2);

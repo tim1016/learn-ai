@@ -58,7 +58,7 @@ describe('AccountDeskTransactionHistoryComponent', () => {
   it('has a compact mobile-readable label for every transaction cell', async () => {
     const store = { accountId: signal('DU1234567'), loading: signal(false), errorMessage: signal<string | null>(null), hasLastGood: signal(true), feed: signal({ projection_available: true, canonical_fallback_required: false, feed_state: 'live', feed_headline: 'Live', feed_detail: 'Current', high_water_journal_seq: 1, lag_records: 0, lag_is_lower_bound: false, rows: [], next_cursor: null }), rows: signal([]), nextCursor: signal<string | null>(null), retry: vi.fn(), loadOlder: vi.fn(), transactionDetail: vi.fn() };
     await render(AccountDeskTransactionHistoryComponent, { providers: [{ provide: AccountDeskTransactionHistoryStore, useValue: store }] });
-    expect(screen.getByText(/No projected manual transactions/)).toBeTruthy();
+    expect(screen.getByText(/No projected transactions match/)).toBeTruthy();
   });
 
   it('keeps the latest selected receipt when a prior detail request resolves late', async () => {

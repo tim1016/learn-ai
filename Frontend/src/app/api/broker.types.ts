@@ -9805,6 +9805,28 @@ export interface components {
             reason?: string;
         };
         /**
+         * ClerkOrderInstruction
+         * @description Typed, receipt-supplied order fields; never a client-side inference.
+         */
+        ClerkOrderInstruction: {
+            /** Action */
+            action?: string | null;
+            /** Limit Price */
+            limit_price?: number | null;
+            /** Order Type */
+            order_type?: string | null;
+            /** Outside Rth */
+            outside_rth?: boolean | null;
+            /** Quantity */
+            quantity?: number | null;
+            /** Sec Type */
+            sec_type?: string | null;
+            /** Symbol */
+            symbol?: string | null;
+            /** Time In Force */
+            time_in_force?: string | null;
+        };
+        /**
          * ClerkStatus
          * @description The clerk's observable state for the operator status surface (S6).
          *
@@ -9931,6 +9953,7 @@ export interface components {
             native_order_id?: string | null;
             /** Order Id */
             order_id?: number | null;
+            order_instruction?: components["schemas"]["ClerkOrderInstruction"];
             /** Order Ref */
             order_ref: string;
             /** Perm Id */
@@ -9947,6 +9970,12 @@ export interface components {
             transaction_id: string;
             /** Transaction Kind */
             transaction_kind: string;
+            /**
+             * Transaction Origin
+             * @default manual
+             * @enum {string}
+             */
+            transaction_origin?: "manual" | "strategy" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
         };
         /**
          * ClerkTransactionSummaryRow
@@ -9985,6 +10014,7 @@ export interface components {
             native_order_id?: string | null;
             /** Order Id */
             order_id?: number | null;
+            order_instruction?: components["schemas"]["ClerkOrderInstruction"];
             /** Order Ref */
             order_ref: string;
             /** Perm Id */
@@ -9999,6 +10029,12 @@ export interface components {
             transaction_id: string;
             /** Transaction Kind */
             transaction_kind: string;
+            /**
+             * Transaction Origin
+             * @default manual
+             * @enum {string}
+             */
+            transaction_origin?: "manual" | "strategy" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
         };
         /** CloseAllAction */
         CloseAllAction: {
@@ -24299,6 +24335,10 @@ export interface operations {
             query?: {
                 limit?: number;
                 cursor?: string | null;
+                origin?: ("manual" | "strategy" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other") | null;
+                lifecycle_state?: string | null;
+                strategy_instance_id?: string | null;
+                run_id?: string | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

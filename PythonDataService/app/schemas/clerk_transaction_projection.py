@@ -9,9 +9,27 @@ from pydantic import BaseModel, ConfigDict, Field
 TransactionFeedState = Literal[
     "live", "reconnecting", "rebuilding", "stale", "offline_but_saved", "corrupt", "projection_unavailable"
 ]
+TransactionOrigin = Literal[
+    "manual", "strategy", "recovery", "emergency", "shutdown", "force_flat", "other"
+]
 TRANSACTION_FEED_STATES = frozenset({
     "live", "reconnecting", "rebuilding", "stale", "offline_but_saved", "corrupt", "projection_unavailable"
 })
+
+
+class ClerkOrderInstruction(BaseModel):
+    """Typed, receipt-supplied order fields; never a client-side inference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str | None = Field(default=None, max_length=64)
+    sec_type: str | None = Field(default=None, max_length=16)
+    action: str | None = Field(default=None, max_length=16)
+    quantity: float | None = None
+    order_type: str | None = Field(default=None, max_length=16)
+    limit_price: float | None = None
+    time_in_force: str | None = Field(default=None, max_length=16)
+    outside_rth: bool | None = None
 
 
 class ClerkTransactionEventRow(BaseModel):
@@ -47,6 +65,8 @@ class ClerkTransactionRow(BaseModel):
     journal_seq: int = Field(ge=1)
     recorded_at_ms: int = Field(ge=0)
     transaction_kind: str = Field(min_length=1, max_length=64)
+    transaction_origin: TransactionOrigin = "manual"
+    order_instruction: ClerkOrderInstruction = Field(default_factory=ClerkOrderInstruction)
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     run_id: str = Field(min_length=1, max_length=128)
     intent_id: str = Field(min_length=1, max_length=256)
@@ -74,6 +94,8 @@ class ClerkTransactionSummaryRow(BaseModel):
     journal_seq: int = Field(ge=1)
     recorded_at_ms: int = Field(ge=0)
     transaction_kind: str = Field(min_length=1, max_length=64)
+    transaction_origin: TransactionOrigin = "manual"
+    order_instruction: ClerkOrderInstruction = Field(default_factory=ClerkOrderInstruction)
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     run_id: str = Field(min_length=1, max_length=128)
     intent_id: str = Field(min_length=1, max_length=256)

@@ -31,8 +31,26 @@ describe('AccountDeskTransactionHistoryStore', () => {
     await store.transactionDetail('ctxn_1');
 
     expect(broker.accountTransactions).toHaveBeenCalledTimes(1);
-    expect(broker.accountTransactions).toHaveBeenCalledWith('DU1234567', null, 25);
+    expect(broker.accountTransactions).toHaveBeenCalledWith('DU1234567', null, 25, {});
     expect(broker.accountTransaction).toHaveBeenCalledWith('DU1234567', 'ctxn_1');
+  });
+
+  it('replaces an in-flight page with a server-filtered bounded request', async () => {
+    let resolveInitial: ((value: ReturnType<typeof historyPage>) => void) | undefined;
+    broker.accountTransactions
+      .mockReturnValueOnce(new Promise<ReturnType<typeof historyPage>>((resolve) => { resolveInitial = resolve; }))
+      .mockResolvedValueOnce(historyPage());
+    const store = TestBed.inject(AccountDeskTransactionHistoryStore);
+
+    void store.load('DU1234567');
+    store.setFilters({ origin: 'strategy', lifecycleState: 'submitted' });
+
+    expect(broker.accountTransactions).toHaveBeenLastCalledWith('DU1234567', null, 25, {
+      origin: 'strategy', lifecycleState: 'submitted', strategyInstanceId: null, runId: null,
+    });
+    resolveInitial?.(historyPage());
+    await Promise.resolve();
+    expect(store.loading()).toBe(false);
   });
 });
 

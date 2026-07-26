@@ -15,10 +15,21 @@ pytestmark = pytest.mark.asyncio
 
 
 class _NoIoStore:
-    async def history_page(self, *, account_id: str, limit: int, after):
+    async def history_page(
+        self,
+        *,
+        account_id: str,
+        limit: int,
+        after,
+        origin=None,
+        lifecycle_state=None,
+        strategy_instance_id=None,
+        run_id=None,
+    ):
         assert account_id == "DU1219"
         assert limit == 25
         assert after is None
+        assert (origin, lifecycle_state, strategy_instance_id, run_id) == (None, None, None, None)
         return [], 12, 0
 
     async def feed_status(self, account_id: str) -> tuple[str, str, str, int | None, int | None, bool]:
@@ -56,6 +67,47 @@ async def test_history_endpoint_is_bounded_projection_read_only() -> None:
         "feed_state": "live", "feed_headline": "Live", "feed_detail": "Durable Clerk callback projection is current.",
         "high_water_journal_seq": 12, "lag_records": 0, "lag_is_lower_bound": False, "rows": [], "next_cursor": None,
     }
+
+
+async def test_history_endpoint_passes_typed_filters_to_the_projection_only() -> None:
+    class _FilteredStore(_NoIoStore):
+        async def history_page(
+            self,
+            *,
+            account_id: str,
+            limit: int,
+            after,
+            origin=None,
+            lifecycle_state=None,
+            strategy_instance_id=None,
+            run_id=None,
+        ):
+            assert account_id == "DU1219"
+            assert limit == 25
+            assert after is None
+            assert (origin, lifecycle_state, strategy_instance_id, run_id) == (
+                "strategy",
+                "submitted",
+                "bot-1",
+                "run-1",
+            )
+            return [], 12, 0
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_clerk_transaction_store] = lambda: _FilteredStore()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/accounts/DU1219/transactions",
+            params={
+                "limit": 25,
+                "origin": "strategy",
+                "lifecycle_state": "submitted",
+                "strategy_instance_id": "bot-1",
+                "run_id": "run-1",
+            },
+        )
+    assert response.status_code == 200
 
 
 async def test_history_endpoint_reports_unavailable_without_fallback_scan() -> None:
