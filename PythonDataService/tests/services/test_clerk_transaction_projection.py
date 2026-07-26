@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.journal import JOURNAL_FILENAME
+from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
+from app.broker.contract.models import BrokerOrder
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_owner import (
@@ -29,7 +32,9 @@ from app.services.clerk_transaction_projection import (
     project_account_journal_best_effort,
     read_appended_clerk_journal,
     rebuild_account_transaction_projection,
+    recover_alpaca_account_transaction_feed,
     recover_account_transaction_feed,
+    tail_alpaca_account_journal,
     tail_account_journal,
     transaction_detail,
     transaction_history,
@@ -105,6 +110,47 @@ def _append(path: Path, entry: AccountClerkJournalEntry, *, newline: bool = True
         handle.write(entry.model_dump_json(exclude_none=True).encode("utf-8"))
         if newline:
             handle.write(b"\n")
+
+
+def _alpaca_ack() -> OrderJournalEntry:
+    order_ref = "manual/inkant/v1:alpaca-1"
+    return OrderJournalEntry(
+        kind=ClerkEntryKind.SUBMIT_ACKED,
+        account_id=ACCOUNT,
+        operator="inkant",
+        intent_id="alpaca-1",
+        order_ref=order_ref,
+        client_order_id=order_ref,
+        recorded_at_ms=1_700_000_000_000,
+        order=BrokerOrder(
+            broker="alpaca",
+            order_id="alpaca-order-1",
+            client_order_id=order_ref,
+            symbol="SPY",
+            asset_class="us_equity",
+            side="buy",
+            order_type="market",
+            time_in_force="day",
+            quantity=1.0,
+            filled_quantity=0.0,
+            limit_price=None,
+            stop_price=None,
+            filled_avg_price=None,
+            status="accepted",
+            submitted_at_ms=1_700_000_000_000,
+            created_at_ms=1_700_000_000_000,
+            updated_at_ms=1_700_000_000_000,
+            filled_at_ms=None,
+            canceled_at_ms=None,
+            expired_at_ms=None,
+            observed_at_ms=1_700_000_000_000,
+        ),
+    )
+
+
+def _append_alpaca(path: Path, entry: OrderJournalEntry) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(entry.model_dump_json() + "\n", encoding="utf-8")
 
 
 class _Store:
@@ -749,6 +795,56 @@ async def test_recovery_does_not_replace_a_corruption_receipt_with_offline_statu
         )
 
     assert store.feed[0] == "corrupt"
+
+
+@pytest.mark.asyncio
+async def test_recovery_requires_an_explicit_rebuild_to_clear_a_corruption_receipt(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    _append(path, _manual_ack(1))
+    store = _Store()
+    store.feed = ("corrupt", "Projection corrupt", "Canonical evidence retained.", 1, None, False)
+
+    assert await recover_account_transaction_feed(
+        artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=2
+    ) == 0
+
+    assert store.feed[0] == "corrupt"
+    assert store.persisted == []
+
+
+@pytest.mark.asyncio
+async def test_alpaca_recovery_requires_an_explicit_rebuild_to_clear_a_corruption_receipt(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / "alpaca" / ACCOUNT / JOURNAL_FILENAME
+    _append_alpaca(path, _alpaca_ack())
+    store = _Store()
+    store.feed = ("corrupt", "Projection corrupt", "Canonical evidence retained.", 1, None, False)
+
+    assert await recover_alpaca_account_transaction_feed(
+        artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=2
+    ) == 0
+
+    assert store.feed[0] == "corrupt"
+    assert store.persisted == []
+
+
+@pytest.mark.asyncio
+async def test_normal_alpaca_tail_refreshes_feed_high_water_receipt(tmp_path: Path) -> None:
+    path = tmp_path / "accounts" / "alpaca" / ACCOUNT / JOURNAL_FILENAME
+    _append_alpaca(path, _alpaca_ack())
+    store = _Store()
+
+    assert await tail_alpaca_account_journal(
+        artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=2
+    ) == 1
+
+    assert store.feed == (
+        "live",
+        "Live",
+        "Durable Alpaca Clerk projection is current.",
+        1,
+        0,
+        False,
+    )
 
 
 @pytest.mark.asyncio

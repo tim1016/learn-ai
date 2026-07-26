@@ -506,6 +506,28 @@ async def tail_alpaca_account_journal(
     persisted = await resolved_store.persist_batch(
         batch, updated_at_ms=updated_at_ms or _now_ms(), allow_rebuilding=allow_rebuilding
     )
+    if not allow_rebuilding:
+        if batch.has_more_complete_records:
+            await resolved_store.set_feed_status(
+                account_id,
+                "reconnecting",
+                "Catch-up in progress",
+                "Projection remains bounded while durable Alpaca Clerk records are replayed.",
+                updated_at_ms=updated_at_ms or _now_ms(),
+                high_water_journal_seq=batch.next_journal_seq,
+                lag_records=1,
+                lag_is_lower_bound=True,
+            )
+        else:
+            await resolved_store.set_feed_status(
+                account_id,
+                "live",
+                "Live",
+                "Durable Alpaca Clerk projection is current.",
+                updated_at_ms=updated_at_ms or _now_ms(),
+                high_water_journal_seq=batch.next_journal_seq,
+                lag_records=0,
+            )
     return persisted
 
 
@@ -517,14 +539,18 @@ async def recover_account_transaction_feed(
 
     now = updated_at_ms or _now_ms()
     feed_state, *_ = await store.feed_status(account_id)
-    if feed_state != "corrupt":
-        await store.set_feed_status(
-            account_id,
-            "reconnecting",
-            "Reconnecting",
-            "Replaying durable Clerk callbacks.",
-            updated_at_ms=now,
-        )
+    if feed_state == "corrupt":
+        # Corruption is an operator-visible safety receipt. Automatic recovery
+        # must not clear it merely because the next tail happens to parse; an
+        # explicit rebuild is the only transition that can reset that state.
+        return 0
+    await store.set_feed_status(
+        account_id,
+        "reconnecting",
+        "Reconnecting",
+        "Replaying durable Clerk callbacks.",
+        updated_at_ms=now,
+    )
     projected = 0
     path = clerk_journal_path(artifacts_root, account_id)
     try:
@@ -584,14 +610,17 @@ async def recover_alpaca_account_transaction_feed(
 
     now = updated_at_ms or _now_ms()
     feed_state, *_ = await store.feed_status(account_id)
-    if feed_state != "corrupt":
-        await store.set_feed_status(
-            account_id,
-            "reconnecting",
-            "Reconnecting",
-            "Replaying durable Alpaca Clerk records.",
-            updated_at_ms=now,
-        )
+    if feed_state == "corrupt":
+        # Keep the corruption receipt until the operator explicitly rebuilds
+        # the projection from canonical evidence.
+        return 0
+    await store.set_feed_status(
+        account_id,
+        "reconnecting",
+        "Reconnecting",
+        "Replaying durable Alpaca Clerk records.",
+        updated_at_ms=now,
+    )
     projected = 0
     path = alpaca_clerk_journal_path(artifacts_root, account_id)
     try:
