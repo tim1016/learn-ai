@@ -65,6 +65,40 @@ def _manual_ack(seq: int, recorded_at_ms: int = 1_700_000_000_000) -> AccountCle
     )
 
 
+def _ack_for_intent_kind(
+    seq: int,
+    intent_kind: str,
+    recorded_at_ms: int = 1_700_000_000_000,
+) -> AccountClerkJournalEntry:
+    intent_id = f"{intent_kind.lower()}-{seq}"
+    namespace = f"learn-ai/{intent_kind.lower()}/v1"
+    return AccountClerkJournalEntry(
+        seq=seq,
+        entry_kind="broker_acked",
+        recorded_at_ms=recorded_at_ms,
+        intent=AccountOwnerSubmitIntent(
+            trace_id=f"trace-{seq}", account_id=ACCOUNT,
+            strategy_instance_id=f"bot-{intent_kind.lower()}", run_id=f"run-{intent_kind.lower()}",
+            bot_order_namespace=namespace, intent_id=intent_id, order_ref=f"{namespace}:{intent_id}",
+            intent_kind=intent_kind, order_spec={"symbol": "SPY"}, owner_generation=1,
+            created_at_ms=recorded_at_ms,
+        ),
+        order_id=9000 + seq,
+        perm_id=8000 + seq,
+    )
+
+
+def _intent_stage(
+    seq: int,
+    intent_kind: str,
+    entry_kind: str,
+    recorded_at_ms: int = 1_700_000_000_000,
+) -> AccountClerkJournalEntry:
+    return _ack_for_intent_kind(seq, intent_kind, recorded_at_ms).model_copy(
+        update={"entry_kind": entry_kind, "order_id": None, "perm_id": None}
+    )
+
+
 def _append(path: Path, entry: AccountClerkJournalEntry, *, newline: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("ab") as handle:
@@ -109,11 +143,29 @@ class _Store:
             updated_at_ms,
             batch.journal_generation,
         )
-        return len(batch.transactions)
+        return len({row.transaction_id for row in batch.transactions})
 
-    async def history_page(self, *, account_id: str, limit: int, after: tuple[int, int, str] | None):
+    async def history_page(
+        self,
+        *,
+        account_id: str,
+        limit: int,
+        after: tuple[int, int, str] | None,
+        origin=None,
+        lifecycle_state=None,
+        strategy_instance_id=None,
+        run_id=None,
+    ):
         assert account_id == ACCOUNT
         rows = sorted(self.rows, key=lambda row: (row.recorded_at_ms, row.journal_seq, row.transaction_id), reverse=True)
+        rows = [
+            row
+            for row in rows
+            if (origin is None or row.transaction_origin == origin)
+            and (lifecycle_state is None or row.lifecycle_state == lifecycle_state)
+            and (strategy_instance_id is None or row.strategy_instance_id == strategy_instance_id)
+            and (run_id is None or row.run_id == run_id)
+        ]
         if after is not None:
             rows = [row for row in rows if (row.recorded_at_ms, row.journal_seq, row.transaction_id) < after]
         high_water = self.cursor.last_journal_seq if self.cursor else None
@@ -263,7 +315,7 @@ async def test_projection_store_allows_partial_fills_to_advance_to_filled(
     lifecycle_updates = [
         query for query in connection.queries if query.startswith("UPDATE clerk_transactions")
     ]
-    assert len(lifecycle_updates) == 2
+    assert len(lifecycle_updates) == 3
     assert all("partially_filled" not in query for query in lifecycle_updates)
 
 
@@ -307,6 +359,181 @@ async def test_tail_projects_manual_ack_and_resumes_only_appended_bytes(tmp_path
     assert [row.journal_seq for row in store.rows] == [1, 2]
     assert store.feed[0] == "live"
     assert store.feed[3:] == (2, 0, False)
+
+
+def test_read_appended_clerk_journal_projects_all_order_origins_from_recorded_stage(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "journal.jsonl"
+    origins = (
+        (MANUAL_ORDER_INTENT_KIND, "manual"),
+        ("STRATEGY", "strategy"),
+        ("RECOVERY_FLATTEN", "recovery"),
+        ("EMERGENCY_FLATTEN", "emergency"),
+    )
+    for seq, (intent_kind, _) in enumerate(origins, start=1):
+        _append(path, _intent_stage(seq, intent_kind, "recorded"))
+    _append(path, _intent_stage(5, "CANCEL_NAMESPACE", "recorded"))
+
+    batch = read_appended_clerk_journal(account_id=ACCOUNT, journal_path=path, cursor=None)
+
+    assert batch is not None
+    assert [row.transaction_origin for row in batch.transactions] == [origin for _, origin in origins]
+    assert [event.event_kind for event in batch.events] == ["recorded"] * 4
+    assert {row.transaction_kind for row in batch.transactions} == {
+        "manual_ibkr_acknowledgement",
+        "strategy_ibkr_order",
+        "recovery_ibkr_order",
+        "emergency_ibkr_order",
+    }
+    assert all(row.lifecycle_state == "recorded" for row in batch.transactions)
+    assert batch.next_journal_seq == 5
+
+
+def test_strategy_acknowledgement_and_callback_are_not_dropped_as_manual_only(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "journal.jsonl"
+    acknowledgement = _ack_for_intent_kind(1, "STRATEGY")
+    callback = _callback(2, event_type="fill", status="Filled")
+    _append(path, acknowledgement)
+    _append(
+        path,
+        callback.model_copy(
+            update={
+                "intent": acknowledgement.intent,
+                "broker_event": {
+                    **(callback.broker_event or {}),
+                    "order_ref": acknowledgement.intent.order_ref if acknowledgement.intent else None,
+                },
+            }
+        ),
+    )
+
+    batch = read_appended_clerk_journal(account_id=ACCOUNT, journal_path=path, cursor=None)
+
+    assert batch is not None
+    assert {(row.transaction_origin, row.transaction_kind) for row in batch.transactions} == {
+        ("strategy", "strategy_ibkr_order")
+    }
+    assert len({row.transaction_id for row in batch.transactions}) == 1
+    assert [(event.event_kind, event.lifecycle_state) for event in batch.events] == [
+        ("submitted", "submitted"),
+        ("execution", "filled"),
+    ]
+
+
+def test_callback_before_acknowledgement_keeps_one_transaction_across_replay_windows(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "journal.jsonl"
+    acknowledgement = _ack_for_intent_kind(2, "STRATEGY")
+    raw_callback = _callback(1, event_type="fill", status="Filled")
+    callback = raw_callback.model_copy(
+        update={
+            "intent": acknowledgement.intent,
+            "broker_event": {
+                **(raw_callback.broker_event or {}),
+                "order_ref": acknowledgement.intent.order_ref if acknowledgement.intent else None,
+            },
+        }
+    )
+    _append(path, callback)
+    _append(path, acknowledgement)
+    first_record_size = path.read_bytes().index(b"\n") + 1
+
+    first = read_appended_clerk_journal(
+        account_id=ACCOUNT,
+        journal_path=path,
+        cursor=None,
+        max_read_bytes=first_record_size,
+    )
+    assert first is not None
+    second = read_appended_clerk_journal(
+        account_id=ACCOUNT,
+        journal_path=path,
+        cursor=ClerkJournalCursor(
+            ACCOUNT,
+            str(path),
+            first.next_byte_offset,
+            first.next_journal_seq,
+            1,
+        ),
+        max_read_bytes=first_record_size,
+    )
+
+    assert second is not None
+    assert first.transactions[0].transaction_id == second.transactions[0].transaction_id
+    assert first.transactions[0].lifecycle_state == "filled"
+    assert second.transactions[0].lifecycle_state == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_recorded_transaction_advances_through_submission_and_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "journal.jsonl"
+    acknowledgement = _ack_for_intent_kind(3, "STRATEGY")
+    _append(
+        path,
+        acknowledgement.model_copy(
+            update={"seq": 1, "entry_kind": "recorded", "order_id": None, "perm_id": None}
+        ),
+    )
+    _append(
+        path,
+        acknowledgement.model_copy(
+            update={"seq": 2, "entry_kind": "broker_submitting", "order_id": None, "perm_id": None}
+        ),
+    )
+    _append(path, acknowledgement)
+    batch = read_appended_clerk_journal(account_id=ACCOUNT, journal_path=path, cursor=None)
+    assert batch is not None
+
+    class _Transaction:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class _RecordingConnection:
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def transaction(self) -> _Transaction:
+            return _Transaction()
+
+        async def execute(self, query: str, *_args: object) -> str:
+            self.queries.append(query)
+            return "INSERT 0 1"
+
+        async def fetchval(self, *_args: object) -> None:
+            return None
+
+    connection = _RecordingConnection()
+
+    async def _acquire_connection() -> _RecordingConnection:
+        return connection
+
+    async def _release_connection(released: _RecordingConnection) -> None:
+        assert released is connection
+
+    monkeypatch.setattr(clerk_transaction_projection_store.settings, "CLERK_TRANSACTION_PROJECTION_ENABLED", True)
+    monkeypatch.setattr(clerk_transaction_projection_store.settings, "POSTGRES_URL", "postgres://test")
+    monkeypatch.setattr(clerk_transaction_projection_store, "_connection", _acquire_connection)
+    monkeypatch.setattr(clerk_transaction_projection_store, "_release_connection", _release_connection)
+
+    await clerk_transaction_projection_store.PostgresClerkTransactionProjectionStore().persist_batch(
+        batch,
+        updated_at_ms=1_700_000_000_010,
+    )
+
+    lifecycle_updates = [
+        query for query in connection.queries if query.startswith("UPDATE clerk_transactions")
+    ]
+    assert len(lifecycle_updates) == 3
 
 
 @pytest.mark.asyncio
@@ -606,6 +833,30 @@ async def test_history_uses_opaque_keyset_cursor_and_bounded_page(tmp_path: Path
     assert first.next_cursor is not None and first.next_cursor.startswith("ctxhp1.")
     second = await transaction_history(account_id=ACCOUNT, limit=2, cursor=first.next_cursor, store=store)
     assert [row.journal_seq for row in second.rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_history_filters_stay_in_the_account_scoped_projection(tmp_path: Path) -> None:
+    store = _Store()
+    path = tmp_path / "journal.jsonl"
+    _append(path, _manual_ack(1))
+    _append(path, _ack_for_intent_kind(2, "STRATEGY", 1_700_000_000_001))
+    batch = read_appended_clerk_journal(account_id=ACCOUNT, journal_path=path, cursor=None)
+    assert batch is not None
+    await store.persist_batch(batch, updated_at_ms=1)
+
+    page = await transaction_history(
+        account_id=ACCOUNT,
+        limit=25,
+        cursor=None,
+        origin="strategy",
+        strategy_instance_id="bot-strategy",
+        run_id="run-strategy",
+        store=store,
+    )
+
+    assert [row.transaction_origin for row in page.rows] == ["strategy"]
+    assert [row.intent_id for row in page.rows] == ["strategy-2"]
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.schemas.clerk_transaction_projection import ClerkTransactionHistoryResponse, ClerkTransactionRow
+from app.schemas.clerk_transaction_projection import (
+    ClerkTransactionHistoryResponse,
+    ClerkTransactionRow,
+    TransactionOrigin,
+)
 from app.services.clerk_transaction_projection import (
     ClerkTransactionProjectionStore,
     ClerkTransactionProjectionUnavailable,
@@ -25,12 +29,25 @@ async def get_clerk_transaction_history(
     account_id: str,
     limit: int = Query(default=50, ge=1, le=100),
     cursor: str | None = Query(default=None, min_length=1, max_length=512),
+    origin: TransactionOrigin | None = Query(default=None),
+    lifecycle_state: str | None = Query(default=None, min_length=1, max_length=64),
+    strategy_instance_id: str | None = Query(default=None, min_length=1, max_length=128),
+    run_id: str | None = Query(default=None, min_length=1, max_length=128),
     store: ClerkTransactionProjectionStore = Depends(get_clerk_transaction_store),
 ) -> ClerkTransactionHistoryResponse:
     """Read one indexed keyset page without broker, Account Truth, or journal I/O."""
 
     try:
-        return await transaction_history(account_id=account_id, limit=limit, cursor=cursor, store=store)
+        return await transaction_history(
+            account_id=account_id,
+            limit=limit,
+            cursor=cursor,
+            origin=origin,
+            lifecycle_state=lifecycle_state,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            store=store,
+        )
     except ClerkTransactionProjectionUnavailable:
         # Availability is a backend-authored UI state, not a browser-side
         # inference from an HTTP failure. The canonical Clerk evidence remains

@@ -8,7 +8,6 @@ model and durable database cursor; it never writes the journal or invokes IBKR.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import logging
 import time
@@ -22,13 +21,19 @@ from app.config import settings
 from app.engine.live.account_artifacts import account_artifact_file_path
 from app.engine.live.account_clerk_journal import ACCOUNT_CLERK_JOURNAL_FILENAME
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
-from app.engine.live.account_owner import MANUAL_ORDER_INTENT_KIND
 from app.schemas.clerk_transaction_projection import (
+    ClerkOrderInstruction,
     ClerkTransactionEventRow,
     ClerkTransactionHistoryResponse,
     ClerkTransactionRow,
     ClerkTransactionSummaryRow,
     TransactionFeedState,
+    TransactionOrigin,
+)
+from app.services.clerk_transaction_projection_ibkr import (
+    event_from_journal,
+    opaque_projection_id,
+    row_from_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,7 +84,15 @@ class ClerkTransactionProjectionStore(Protocol):
     ) -> int: ...
 
     async def history_page(
-        self, *, account_id: str, limit: int, after: tuple[int, int, str] | None
+        self,
+        *,
+        account_id: str,
+        limit: int,
+        after: tuple[int, int, str] | None,
+        origin: TransactionOrigin | None,
+        lifecycle_state: str | None,
+        strategy_instance_id: str | None,
+        run_id: str | None,
     ) -> tuple[list[ClerkTransactionSummaryRow], int | None, int | None]: ...
 
     async def transaction_detail(
@@ -130,11 +143,6 @@ def alpaca_clerk_journal_path(artifacts_root: Path, account_id: str) -> Path:
     return artifacts_root / "accounts" / "alpaca" / account_id / JOURNAL_FILENAME
 
 
-def _opaque_id(prefix: str, *parts: object) -> str:
-    raw = "\x1f".join(str(part) for part in parts).encode("utf-8")
-    return f"{prefix}_{hashlib.sha256(raw).hexdigest()[:32]}"
-
-
 def _journal_generation(journal_path: Path) -> str | None:
     """Identify one canonical journal incarnation without parsing its contents."""
 
@@ -154,84 +162,6 @@ def fold_lifecycle_state(current: str, incoming: str) -> str:
     return current if current in _TERMINAL_STATES else incoming
 
 
-def _callback_state(entry: AccountClerkJournalEntry) -> tuple[str, str, str, float | None]:
-    """Classify one raw IBKR callback; no consumer re-derives this lifecycle."""
-
-    if entry.entry_kind == "broker_acked":
-        return "submitted", "submitted", f"journal:{entry.seq}:broker_acked", None
-    if entry.broker_event is None:
-        raise ValueError("broker callback journal row is missing raw evidence")
-    event = entry.broker_event
-    callback = event.get("event_type")
-    status = str(event.get("status") or "").lower()
-    identity = entry.broker_callback_idempotency_key
-    if not isinstance(identity, str) or not identity:
-        raise ValueError("broker callback journal row is missing callback identity")
-    fee = event.get("fee")
-    if fee is not None and not isinstance(fee, int | float):
-        raise ValueError("broker callback fee is not numeric")
-    error_code = event.get("error_code")
-    if error_code is not None and not isinstance(error_code, int):
-        raise ValueError("broker callback error code is not an integer")
-    if callback == "fill":
-        state = "filled" if status == "filled" or event.get("remaining") == 0 else "partially_filled"
-        return "execution", state, identity, float(fee) if fee is not None else None
-    if callback == "cancel" or status in {"cancelled", "apicancelled"}:
-        return "cancelled", "cancelled", identity, None
-    if callback == "error":
-        state = "rejected" if error_code == 201 or status in {"inactive", "rejected"} else "error"
-        return state, state, identity, None
-    if fee is not None:
-        # IBKR can report commission on a later callback than the fill. It is
-        # a receipt update, not a lifecycle regression.
-        return "commission", "submitted", identity, float(fee)
-    if status == "filled":
-        return "filled", "filled", identity, None
-    if status in {"partiallyfilled", "partialfilled"}:
-        return "partial_fill", "partially_filled", identity, None
-    if status in {"inactive", "rejected"}:
-        return "rejected", "rejected", identity, None
-    return "status", "submitted", identity, None
-
-
-def _row_from_ack(account_id: str, entry: AccountClerkJournalEntry) -> tuple[ClerkTransactionRow, ClerkTransactionEventRow]:
-    if entry.intent is None:
-        raise ValueError("broker acknowledgement is missing its Clerk intent")
-    transaction_id = _opaque_id("ctxn", account_id, entry.intent.order_ref)
-    event_id = _opaque_id("ctxnev", account_id, entry.seq, "broker_acked")
-    receipt = entry.model_dump(mode="json", exclude_none=True)
-    event = ClerkTransactionEventRow(
-        event_id=event_id,
-        event_kind="submitted",
-        callback_identity=f"journal:{entry.seq}:broker_acked",
-        lifecycle_state="submitted",
-        journal_seq=entry.seq,
-        recorded_at_ms=entry.recorded_at_ms,
-        receipt=receipt,
-    )
-    return (
-        ClerkTransactionRow(
-            transaction_id=transaction_id,
-            broker="ibkr",
-            account_id=account_id,
-            journal_seq=entry.seq,
-            recorded_at_ms=entry.recorded_at_ms,
-            transaction_kind="manual_ibkr_acknowledgement",
-            strategy_instance_id=entry.intent.strategy_instance_id,
-            run_id=entry.intent.run_id,
-            intent_id=entry.intent.intent_id,
-            order_ref=entry.intent.order_ref,
-            order_id=entry.order_id,
-            perm_id=entry.perm_id,
-            exec_id=entry.exec_id,
-            lifecycle_state="submitted",
-            receipt=receipt,
-            events=[event],
-        ),
-        event,
-    )
-
-
 def _alpaca_lifecycle_state(kind: ClerkEntryKind, entry: OrderJournalEntry) -> str:
     """Map only Alpaca's documented journal vocabulary; never reuse IBKR callbacks."""
 
@@ -249,7 +179,7 @@ def _alpaca_lifecycle_state(kind: ClerkEntryKind, entry: OrderJournalEntry) -> s
 
 
 def _alpaca_transaction_id(account_id: str, order_ref: str) -> str:
-    return _opaque_id("ctxn", "alpaca", account_id, order_ref)
+    return opaque_projection_id("ctxn", "alpaca", account_id, order_ref)
 
 
 def _row_from_alpaca_ack(
@@ -262,7 +192,7 @@ def _row_from_alpaca_ack(
     receipt = entry.model_dump(mode="json", exclude_none=True)
     transaction_id = _alpaca_transaction_id(account_id, entry.order_ref)
     event = ClerkTransactionEventRow(
-        event_id=_opaque_id("ctxnev", "alpaca", account_id, journal_seq, "submit_acked"),
+        event_id=opaque_projection_id("ctxnev", "alpaca", account_id, journal_seq, "submit_acked"),
         broker="alpaca",
         event_kind="submitted",
         callback_identity=f"alpaca-journal:{journal_seq}:submit_acked",
@@ -280,6 +210,17 @@ def _row_from_alpaca_ack(
             journal_seq=journal_seq,
             recorded_at_ms=entry.recorded_at_ms,
             transaction_kind="manual_alpaca_acknowledgement",
+            transaction_origin="manual",
+            order_instruction=ClerkOrderInstruction(
+                symbol=entry.leg.symbol if entry.leg is not None else entry.order.symbol,
+                action=entry.leg.side if entry.leg is not None else entry.order.side,
+                quantity=entry.leg.quantity if entry.leg is not None else entry.order.quantity,
+                order_type=entry.leg.order_type if entry.leg is not None else entry.order.order_type,
+                limit_price=entry.leg.limit_price if entry.leg is not None else entry.order.limit_price,
+                time_in_force=(
+                    entry.leg.time_in_force if entry.leg is not None else entry.order.time_in_force
+                ),
+            ),
             strategy_instance_id=f"manual/{entry.operator}",
             run_id="manual_operator",
             intent_id=entry.intent_id,
@@ -303,7 +244,7 @@ def _event_from_alpaca_journal(
             return None
         receipt = entry.model_dump(mode="json", exclude_none=True)
         return ClerkTransactionEventRow(
-            event_id=_opaque_id("ctxnev", "alpaca", account_id, journal_seq, entry.activity.activity_id),
+            event_id=opaque_projection_id("ctxnev", "alpaca", account_id, journal_seq, entry.activity.activity_id),
             broker="alpaca",
             event_kind=f"activity_{entry.activity.activity_type.lower()}",
             callback_identity=f"alpaca-activity:{entry.activity.activity_id}",
@@ -316,7 +257,7 @@ def _event_from_alpaca_journal(
     if entry.kind is ClerkEntryKind.CANCEL_ACKED:
         receipt = entry.model_dump(mode="json", exclude_none=True)
         return ClerkTransactionEventRow(
-            event_id=_opaque_id("ctxnev", "alpaca", account_id, journal_seq, "cancel_acked"),
+            event_id=opaque_projection_id("ctxnev", "alpaca", account_id, journal_seq, "cancel_acked"),
             broker="alpaca",
             event_kind="cancelled",
             callback_identity=f"alpaca-journal:{journal_seq}:cancel_acked",
@@ -331,7 +272,7 @@ def _event_from_alpaca_journal(
     receipt = entry.model_dump(mode="json", exclude_none=True)
     identity = entry.event_key or f"alpaca-journal:{journal_seq}:order_event"
     return ClerkTransactionEventRow(
-        event_id=_opaque_id("ctxnev", "alpaca", account_id, journal_seq, identity),
+        event_id=opaque_projection_id("ctxnev", "alpaca", account_id, journal_seq, identity),
         broker="alpaca",
         event_kind=entry.event.event_type,
         callback_identity=identity,
@@ -339,26 +280,6 @@ def _event_from_alpaca_journal(
         native_order_id=entry.broker_order_id,
         native_execution_id=(identity[5:] if identity.startswith("exec:") else None),
         journal_seq=journal_seq,
-        recorded_at_ms=entry.recorded_at_ms,
-        receipt=receipt,
-    )
-
-
-def _event_from_callback(
-    account_id: str, entry: AccountClerkJournalEntry
-) -> ClerkTransactionEventRow | None:
-    if entry.intent is None or entry.intent.intent_kind != MANUAL_ORDER_INTENT_KIND:
-        return None
-    event_kind, lifecycle_state, identity, fee = _callback_state(entry)
-    receipt = entry.model_dump(mode="json", exclude_none=True)
-    return ClerkTransactionEventRow(
-        event_id=_opaque_id("ctxnev", account_id, identity),
-        event_kind=event_kind,
-        callback_identity=identity,
-        lifecycle_state=lifecycle_state,
-        commission_status="reported" if fee is not None else "unknown",
-        fee=fee,
-        journal_seq=entry.seq,
         recorded_at_ms=entry.recorded_at_ms,
         receipt=receipt,
     )
@@ -426,14 +347,13 @@ def read_appended_clerk_journal(
         if entry.seq <= last_seq:
             raise ValueError("non-monotonic Clerk journal sequence after projection cursor")
         last_seq = entry.seq
-        if entry.entry_kind == "broker_acked" and entry.intent is not None and entry.intent.intent_kind == MANUAL_ORDER_INTENT_KIND:
-            transaction, event = _row_from_ack(account_id, entry)
-            transactions.append(transaction)
+        event = event_from_journal(entry)
+        if event is not None:
+            # A callback can be journaled before its acknowledgement and in a
+            # different replay window. Seed the same opaque transaction ID so
+            # the later acknowledgement enriches it instead of regressing it.
+            transactions.append(row_from_event(account_id, entry, event))
             events.append(event)
-        elif entry.entry_kind == "broker_event":
-            event = _event_from_callback(account_id, entry)
-            if event is not None:
-                events.append(event)
     return ClerkTransactionBatch(
         account_id=account_id,
         journal_path=str(journal_path),
@@ -901,11 +821,25 @@ def _decode_cursor(value: str | None) -> tuple[int, int, str] | None:
 
 
 async def transaction_history(
-    *, account_id: str, limit: int, cursor: str | None, store: ClerkTransactionProjectionStore | None = None
+    *,
+    account_id: str,
+    limit: int,
+    cursor: str | None,
+    origin: TransactionOrigin | None = None,
+    lifecycle_state: str | None = None,
+    strategy_instance_id: str | None = None,
+    run_id: str | None = None,
+    store: ClerkTransactionProjectionStore | None = None,
 ) -> ClerkTransactionHistoryResponse:
     resolved_store = store or _default_store()
     rows, high_water, lag = await resolved_store.history_page(
-        account_id=account_id, limit=limit, after=_decode_cursor(cursor)
+        account_id=account_id,
+        limit=limit,
+        after=_decode_cursor(cursor),
+        origin=origin,
+        lifecycle_state=lifecycle_state,
+        strategy_instance_id=strategy_instance_id,
+        run_id=run_id,
     )
     feed_state, feed_headline, feed_detail, status_high_water, status_lag, lag_is_lower_bound = (
         await resolved_store.feed_status(account_id)
@@ -948,28 +882,6 @@ async def transaction_detail(
 
 def _json_value(value: Any) -> Any:
     return json.loads(value) if isinstance(value, str) else value
-
-
-def _event_order_ref(event: ClerkTransactionEventRow) -> str:
-    if event.broker == "alpaca":
-        value = event.receipt.get("order_ref")
-        if isinstance(value, str) and value:
-            return value
-        raise ValueError("Alpaca event has no opaque order_ref")
-    broker_event = event.receipt.get("broker_event")
-    if not isinstance(broker_event, dict) or not isinstance(broker_event.get("order_ref"), str):
-        raise ValueError("callback event has no opaque order_ref")
-    return broker_event["order_ref"]
-
-
-def _event_transaction_id(account_id: str, event: ClerkTransactionEventRow) -> str:
-    if event.broker == "alpaca":
-        return _alpaca_transaction_id(account_id, _event_order_ref(event))
-    if event.event_kind == "submitted":
-        intent = event.receipt.get("intent")
-        if isinstance(intent, dict) and isinstance(intent.get("order_ref"), str):
-            return _opaque_id("ctxn", account_id, intent["order_ref"])
-    return _opaque_id("ctxn", account_id, _event_order_ref(event))
 
 
 def __getattr__(name: str) -> object:

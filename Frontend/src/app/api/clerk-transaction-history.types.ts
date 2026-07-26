@@ -1,5 +1,32 @@
 /** Backend-authored Clerk-native transaction history contract (#1219). */
 
+export type ClerkTransactionOrigin =
+  | 'manual'
+  | 'strategy'
+  | 'recovery'
+  | 'emergency'
+  | 'shutdown'
+  | 'force_flat'
+  | 'other';
+
+export interface ClerkOrderInstruction {
+  readonly symbol: string | null;
+  readonly sec_type: string | null;
+  readonly action: string | null;
+  readonly quantity: number | null;
+  readonly order_type: string | null;
+  readonly limit_price: number | null;
+  readonly time_in_force: string | null;
+  readonly outside_rth: boolean | null;
+}
+
+export interface ClerkTransactionFilters {
+  readonly origin?: ClerkTransactionOrigin | null;
+  readonly lifecycleState?: string | null;
+  readonly strategyInstanceId?: string | null;
+  readonly runId?: string | null;
+}
+
 export interface ClerkTransactionEvent {
   readonly event_id: string;
   readonly broker: 'ibkr' | 'alpaca';
@@ -23,6 +50,8 @@ export interface ClerkTransactionSummary {
   readonly journal_seq: number;
   readonly recorded_at_ms: number;
   readonly transaction_kind: string;
+  readonly transaction_origin?: ClerkTransactionOrigin;
+  readonly order_instruction?: ClerkOrderInstruction;
   readonly strategy_instance_id: string;
   readonly run_id: string;
   readonly intent_id: string;

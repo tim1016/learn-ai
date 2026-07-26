@@ -9,7 +9,7 @@ CLERK_TRANSACTIONS = TableExpectation(
     columns=(
         ColumnExpectation("id", "bigint", False), ColumnExpectation("transaction_id", "character varying", False),
         ColumnExpectation("broker", "character varying", False), ColumnExpectation("account_id", "character varying", False), ColumnExpectation("journal_generation", "character varying", False), ColumnExpectation("journal_seq", "bigint", False),
-        ColumnExpectation("recorded_at_ms", "bigint", False), ColumnExpectation("transaction_kind", "character varying", False),
+        ColumnExpectation("recorded_at_ms", "bigint", False), ColumnExpectation("transaction_kind", "character varying", False), ColumnExpectation("transaction_origin", "character varying", False), ColumnExpectation("order_instruction", "jsonb", False),
         ColumnExpectation("strategy_instance_id", "character varying", False), ColumnExpectation("run_id", "character varying", False),
         ColumnExpectation("intent_id", "character varying", False), ColumnExpectation("order_ref", "character varying", False),
         ColumnExpectation("order_id", "bigint", True), ColumnExpectation("perm_id", "bigint", True),
@@ -17,8 +17,8 @@ CLERK_TRANSACTIONS = TableExpectation(
         ColumnExpectation("commission_status", "character varying", False), ColumnExpectation("fee", "double precision", True), ColumnExpectation("receipt", "jsonb", False),
         ColumnExpectation("inserted_at_ms", "bigint", False), ColumnExpectation("updated_at_ms", "bigint", False),
     ), primary_key=("id",), partial_unique_indexes=(),
-    check_constraints=("ck_clerk_transactions_recorded_at_ms", "ck_clerk_transactions_journal_seq"),
-    indexes=("uq_clerk_transactions_transaction_id", "uq_clerk_transactions_broker_account_journal_seq", "ix_clerk_transactions_history", "ix_clerk_transactions_order_ref"),
+    check_constraints=("ck_clerk_transactions_recorded_at_ms", "ck_clerk_transactions_journal_seq", "ck_clerk_transactions_origin"),
+    indexes=("uq_clerk_transactions_transaction_id", "uq_clerk_transactions_broker_account_journal_seq", "ix_clerk_transactions_history", "ix_clerk_transactions_lifecycle_history", "ix_clerk_transactions_origin_history", "ix_clerk_transactions_order_ref", "ix_clerk_transactions_run_history", "ix_clerk_transactions_strategy_history"),
 )
 CLERK_TRANSACTION_EVENTS = TableExpectation(
     name="clerk_transaction_events",

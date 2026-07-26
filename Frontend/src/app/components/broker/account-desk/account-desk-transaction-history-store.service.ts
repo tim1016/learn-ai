@@ -2,6 +2,7 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 
 import type {
   ClerkTransactionDetail,
+  ClerkTransactionFilters,
   ClerkTransactionHistoryResponse,
   ClerkTransactionSummary,
 } from '../../../api/clerk-transaction-history.types';
@@ -20,6 +21,7 @@ export class AccountDeskTransactionHistoryStore {
   private readonly feedState = signal<ClerkTransactionHistoryResponse | null>(null);
   private readonly loadingState = signal(false);
   private readonly errorState = signal<string | null>(null);
+  private readonly filtersState = signal<ClerkTransactionFilters>({});
   private requestGeneration = 0;
 
   readonly accountId = this.accountKey.asReadonly();
@@ -28,6 +30,7 @@ export class AccountDeskTransactionHistoryStore {
   readonly feed = this.feedState.asReadonly();
   readonly loading = this.loadingState.asReadonly();
   readonly errorMessage = this.errorState.asReadonly();
+  readonly filters = this.filtersState.asReadonly();
   readonly hasLastGood = computed(() => this.feedState() !== null);
 
   async load(accountId: string): Promise<void> {
@@ -52,6 +55,18 @@ export class AccountDeskTransactionHistoryStore {
     if (cursor !== null) void this.fetchPage(cursor, false);
   }
 
+  setFilters(filters: ClerkTransactionFilters): void {
+    this.requestGeneration += 1;
+    this.filtersState.set(normalizeFilters(filters));
+    this.rowsState.set([]);
+    this.nextCursorState.set(null);
+    // The prior request is deliberately allowed to finish but cannot publish
+    // after its generation changes. Clear the local gate so this new bounded
+    // request is not stranded behind it.
+    this.loadingState.set(false);
+    void this.fetchPage(null, true);
+  }
+
   transactionDetail(transactionId: string): Promise<ClerkTransactionDetail> {
     const accountId = this.accountKey();
     if (accountId === null) return Promise.reject(new Error('No account is selected.'));
@@ -65,7 +80,12 @@ export class AccountDeskTransactionHistoryStore {
     this.loadingState.set(true);
     this.errorState.set(null);
     try {
-      const page = await this.broker.accountTransactions(accountId, cursor, FIRST_PAGE_SIZE);
+      const page = await this.broker.accountTransactions(
+        accountId,
+        cursor,
+        FIRST_PAGE_SIZE,
+        this.filtersState(),
+      );
       if (!this.isCurrentRequest(accountId, requestGeneration)) return;
       this.feedState.set(page);
       this.rowsState.set(replace ? page.rows : mergeRows(this.rowsState(), page.rows));
@@ -82,6 +102,15 @@ export class AccountDeskTransactionHistoryStore {
   private isCurrentRequest(accountId: string, requestGeneration: number): boolean {
     return this.accountKey() === accountId && this.requestGeneration === requestGeneration;
   }
+}
+
+function normalizeFilters(filters: ClerkTransactionFilters): ClerkTransactionFilters {
+  return {
+    origin: filters.origin ?? null,
+    lifecycleState: filters.lifecycleState?.trim() || null,
+    strategyInstanceId: filters.strategyInstanceId?.trim() || null,
+    runId: filters.runId?.trim() || null,
+  };
 }
 
 function mergeRows(

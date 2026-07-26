@@ -338,16 +338,21 @@ the account as flat.
 
 ## Transaction-history projection amendment (2026-07-25, #1219)
 
-Manual IBKR `broker_acked` receipts are first materialized into a dedicated,
-rebuildable transaction projection. The Clerk retains ownership of the durable
-acknowledgement and journal. The projector tails complete appended journal bytes
+Every order-producing Clerk intent is materialized into a dedicated,
+rebuildable transaction projection from its durable `recorded` receipt. The
+Clerk retains ownership of the durable journal; the projector tail folds that
+row through submitting, uncertainty, acknowledgement, and broker callbacks.
+The typed `transaction_origin` distinguishes manual, strategy, recovery, and
+emergency orders without asking a client to infer it. Namespace-wide
+`CANCEL_NAMESPACE` control activity remains an account operation and creates no
+invented transaction row. The projector tails complete appended journal bytes
 after a durable byte/sequence cursor and atomically stores transaction/event
-rows with that cursor. A projection failure may replay but never retracts,
-delays, or invalidates the Clerk acknowledgement. This is not a lifecycle
-projection: Python owns the receipt/pagination meaning, .NET owns only the
-migration shape, and Angular renders the supplied opaque IDs/status fields.
-Successful manual Clerk RPCs trigger that best-effort tail only after the
-acknowledgement is durable.
+rows with that cursor. A projection failure may replay but never retract,
+delay, or invalidate the Clerk acknowledgement. This is not a lifecycle
+projection: Python owns receipt, instruction, lifecycle, and pagination
+meaning; .NET owns only the migration shape; Angular renders supplied fields
+and opaque IDs. Successful Clerk submissions trigger the best-effort tail only
+after the `recorded` evidence is durable.
 
 The #1220 lifecycle extension remains in that dedicated runtime. It never
 extends `lifecycle_projection_*`: the account Clerk JSONL remains canonical,
@@ -396,6 +401,7 @@ pretending that EF can recreate lost projection evidence.
 The separately owned `bot_lifecycle_projection.py` is retained as Python's
 canonical lifecycle-evidence fold for the live-instance chart. Its historical
 `lifecycle_projection.*` template IDs are opaque audit values, not imports of
-the retired runtime. Manual transaction history remains solely the bounded Clerk
-transaction projector: indexed opaque-keyset reads (maximum 100 rows; initial
-render 25) never scan journals, sweep brokers, or fall back to Account Truth.
+the retired runtime. Account transaction history remains solely the bounded
+Clerk transaction projector: indexed opaque-keyset reads (maximum 100 rows;
+initial render 25) may apply origin, lifecycle, bot, and run predicates but
+never scan journals, sweep brokers, or fall back to Account Truth.
