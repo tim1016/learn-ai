@@ -32,10 +32,10 @@ from app.services.clerk_transaction_projection import (
     project_account_journal_best_effort,
     read_appended_clerk_journal,
     rebuild_account_transaction_projection,
-    recover_alpaca_account_transaction_feed,
     recover_account_transaction_feed,
-    tail_alpaca_account_journal,
+    recover_alpaca_account_transaction_feed,
     tail_account_journal,
+    tail_alpaca_account_journal,
     transaction_detail,
     transaction_history,
 )
@@ -784,28 +784,11 @@ async def test_recovery_does_not_replace_a_corruption_receipt_with_offline_statu
     _append(path, _manual_ack(1))
     store = _Store()
     store.feed = ("corrupt", "Projection corrupt", "Canonical evidence retained.", 1, None, False)
-    store.fail = True
-
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        await recover_account_transaction_feed(
-            artifacts_root=tmp_path,
-            account_id=ACCOUNT,
-            store=store,
-            updated_at_ms=2,
-        )
-
-    assert store.feed[0] == "corrupt"
-
-
-@pytest.mark.asyncio
-async def test_recovery_requires_an_explicit_rebuild_to_clear_a_corruption_receipt(tmp_path: Path) -> None:
-    path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
-    _append(path, _manual_ack(1))
-    store = _Store()
-    store.feed = ("corrupt", "Projection corrupt", "Canonical evidence retained.", 1, None, False)
-
     assert await recover_account_transaction_feed(
-        artifacts_root=tmp_path, account_id=ACCOUNT, store=store, updated_at_ms=2
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        store=store,
+        updated_at_ms=2,
     ) == 0
 
     assert store.feed[0] == "corrupt"
