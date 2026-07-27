@@ -218,8 +218,22 @@ function resolveVerb(state: BotLifecycleDisplayStatus, status: LiveInstanceStatu
   // changes the desired state. Keep the visible verb aligned with that
   // server-enforced transition instead of offering a known-refused Start.
   if (status.desired_state?.state === 'STOPPED') return { kind: 'remediation' };
-  if (lifecycle.primary_action) return { kind: 'lifecycle', action: lifecycle.primary_action };
   const remediation = status.operator_surface.trader_guidance.primary_remediation;
+  // An on-duty bot can retain the normal End-day lifecycle action while a
+  // broker-safety proof (for example reconciliation) is blocking submits.
+  // Surface the backend-declared cure first; after the proof clears, the
+  // normal lifecycle verb returns automatically.
+  if (
+    state === 'On duty' &&
+    !status.operator_surface.submit_readiness.can_submit &&
+    remediation.kind !== 'none'
+  ) {
+    if (remediation.kind === 'open_runbook' && runbookOpensInstancePage(remediation.slug)) {
+      return { kind: 'evidence' };
+    }
+    return { kind: 'remediation' };
+  }
+  if (lifecycle.primary_action) return { kind: 'lifecycle', action: lifecycle.primary_action };
   if (remediation.kind === 'open_runbook' && runbookOpensInstancePage(remediation.slug)) {
     // The runbook route is this bot's own page — navigating is a no-op. Open the
     // why-drawer, which holds this bot's recovery evidence and blockers.

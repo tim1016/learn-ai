@@ -97,6 +97,11 @@ describe('resolveVerdictCardModel', () => {
         },
         (status) => {
           status.operator_surface.current_risk = RISK;
+          status.operator_surface.submit_readiness.can_submit = true;
+          status.operator_surface.trader_guidance.primary_remediation = {
+            kind: 'none',
+            reason: 'READY',
+          };
         },
       ),
     );
@@ -112,6 +117,25 @@ describe('resolveVerdictCardModel', () => {
       'Unrealized P&L',
       'Orders today',
     ]);
+  });
+
+  it('prioritizes the declared safety cure over End day while an on-duty bot is blocked', () => {
+    const model = resolveVerdictCardModel(
+      statusWith({
+        display_status: 'On duty',
+        phase: 'ON_DUTY',
+        primary_action: {
+          id: 'end_day_now',
+          label: 'End day now',
+          enabled: true,
+          reason: null,
+          offer_id: null,
+          expires_at_ms: null,
+        },
+      }),
+    );
+
+    expect(model.verb).toEqual({ kind: 'remediation' });
   });
 
   it('falls back to the trader remediation verb for a Sick bay bot with no lifecycle action', () => {
