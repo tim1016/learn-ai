@@ -47,6 +47,13 @@ function onDutyStatus(): LiveInstanceStatus {
   return status;
 }
 
+function stoppedReadyStatus(): LiveInstanceStatus {
+  const status = startableReadyStatus();
+  if (!status.desired_state) throw new Error('Fixture expected desired state.');
+  status.desired_state.state = 'STOPPED';
+  return status;
+}
+
 function unreachableSickBayStatus(): LiveInstanceStatus {
   const status = makeStatus({ hostState: 'UNREACHABLE' });
   status.daily_lifecycle.display_status = 'Sick bay';
@@ -294,6 +301,26 @@ describe('BotControlPageComponent', () => {
       max_orders_per_day: 2,
       ibkr_host: '127.0.0.1',
       roll_call_offer_id: 'offer-run-x',
+    });
+  });
+
+  it('shows Resume instead of a known-refused Start for a durably stopped bot', async () => {
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status: stoppedReadyStatus(),
+      mutationResponses: { setInstanceDesiredState: makeDesiredStateResponse() },
+    });
+
+    const verb = element.querySelector<HTMLButtonElement>('[data-testid="trader-primary-action"]');
+    expect(verb?.textContent?.trim()).toBe('Resume');
+
+    verb?.click();
+    await flush(fixture);
+
+    expect(liveRuns.startHostRunner).not.toHaveBeenCalled();
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+      action: 'resume',
+      reason: 'Resume',
+      updated_by: 'operator',
     });
   });
 

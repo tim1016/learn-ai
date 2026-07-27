@@ -213,6 +213,11 @@ function resolveVerb(state: BotLifecycleDisplayStatus, status: LiveInstanceStatu
   ) {
     return { kind: 'crash_recovery' };
   }
+  // STOPPED is a durable operator latch. A roll-call offer can still project
+  // a lifecycle Start action, but Start is required to refuse until Resume
+  // changes the desired state. Keep the visible verb aligned with that
+  // server-enforced transition instead of offering a known-refused Start.
+  if (status.desired_state?.state === 'STOPPED') return { kind: 'remediation' };
   if (lifecycle.primary_action) return { kind: 'lifecycle', action: lifecycle.primary_action };
   const remediation = status.operator_surface.trader_guidance.primary_remediation;
   if (remediation.kind === 'open_runbook' && runbookOpensInstancePage(remediation.slug)) {

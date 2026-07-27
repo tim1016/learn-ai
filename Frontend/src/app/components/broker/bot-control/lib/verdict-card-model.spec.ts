@@ -43,6 +43,17 @@ describe('resolveVerdictCardModel', () => {
     expect(model.showChart).toBe(false);
   });
 
+  it('replaces a stale roll-call Start verb with Resume for a durably stopped bot', () => {
+    const model = resolveVerdictCardModel(
+      statusWith({ display_status: 'Ready' }, (status) => {
+        if (!status.desired_state) throw new Error('Fixture expected desired state.');
+        status.desired_state.state = 'STOPPED';
+      }),
+    );
+
+    expect(model.verb).toEqual({ kind: 'remediation' });
+  });
+
   it('does not synthesize a start verb when an Off duty bot has no roll-call offer', () => {
     const model = resolveVerdictCardModel(
       statusWith({ display_status: 'Off duty', primary_action: null }, (status) => {

@@ -52,7 +52,6 @@ export class VerdictCardComponent {
   readonly crashRecoveryRequested = output();
   readonly settingsRequested = output();
   readonly accountsRequested = output();
-  readonly reconcileRequested = output();
   readonly blockerMoveRequested = output<OperatorMove>();
 
   readonly whyOpen = signal(false);
@@ -178,10 +177,9 @@ export class VerdictCardComponent {
       this.lifecycleAction.emit('retire_replace');
       return;
     }
-    if (target === 'reconcile') {
-      this.reconcileRequested.emit();
-      return;
-    }
+    // Account-scoped reconciliation cannot run through the stopped bot's
+    // instance endpoint. Route the operator to the Account Desk, whose
+    // selected-account refresh records the canonical account receipt.
     this.accountsRequested.emit();
   }
 
