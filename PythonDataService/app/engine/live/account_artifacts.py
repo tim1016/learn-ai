@@ -7,7 +7,8 @@ import logging
 import os
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -20,6 +21,7 @@ from app.schemas.live_runs import GateResult
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
 ACCOUNT_EVENTS_FILENAME = "account_events.jsonl"
 ACCOUNT_EVENTS_SEQUENCE_FILENAME = "account_events.seq"
+ACCOUNT_EVENTS_MUTEX_FILENAME = ".account_events.mutex"
 ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACCOUNT_CLERK_GENERATION_FILENAME = "clerk_generation.json"
 ACCOUNT_CLERK_LEASE_FILENAME = "clerk_lease.json"
@@ -55,6 +57,8 @@ ACCOUNT_EVENT_TIMESTAMP_FIELDS: frozenset[str] = frozenset(
 )
 
 _ACCOUNT_ID_RE = re.compile(r"^[A-Z][A-Z0-9]+$")
+_ACCOUNT_EVENT_MUTEX_TIMEOUT_SECONDS = 10.0
+_ACCOUNT_EVENT_MUTEX_POLL_SECONDS = 0.01
 logger = logging.getLogger(__name__)
 
 
@@ -506,7 +510,9 @@ def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
     path = _account_event_ledger_path(artifacts_root, account_id)
     if not path.is_file():
         return []
-    return _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
+    with _account_event_lock(path):
+        raw = path.read_bytes()
+    return _parse_account_event_bytes(path, raw, tolerant=False)
 
 
 def read_account_events_with_snapshot(
@@ -528,7 +534,7 @@ def read_account_events_with_snapshot(
     )
     if path is None:
         return [], b""
-    with _file_lock(path):
+    with _account_event_lock(path):
         raw = path.read_bytes()
     return _parse_account_event_bytes(path, raw, tolerant=False), raw
 
@@ -554,13 +560,14 @@ def repair_account_event_sequence(
     """
 
     path = _account_event_ledger_path(artifacts_root, account_id)
-    if not path.is_file():
-        return AccountEventSequenceRepair(
-            account_id=account_id,
-            rewritten_rows=0,
-            backup_path=None,
-        )
-    with _file_lock(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _account_event_lock(path):
+        if not path.is_file():
+            return AccountEventSequenceRepair(
+                account_id=account_id,
+                rewritten_rows=0,
+                backup_path=None,
+            )
         raw = path.read_bytes()
         events = _parse_account_event_bytes(path, raw, tolerant=False)
         for index, event in enumerate(events, start=1):
@@ -617,7 +624,7 @@ def read_account_events_tolerant_with_hash(artifacts_root: Path, account_id: str
     events: list[dict] = []
     if not path.is_file():
         return events, None
-    with _file_lock(path):
+    with _account_event_lock(path):
         raw = path.read_bytes()
     return _parse_account_event_bytes(path, raw, tolerant=True), _sha256_bytes(raw)
 
@@ -1094,9 +1101,13 @@ def _append_account_event(
 ) -> bool:
     path = _account_event_ledger_path(artifacts_root, account_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(path):
+    with _account_event_lock(path):
         if only_if_receipt_absent:
-            events = read_account_events(artifacts_root, account_id)
+            events = (
+                _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
+                if path.is_file()
+                else []
+            )
             receipt_id = payload["receipt_id"]
             if any(event.get("receipt_id") == receipt_id for event in events):
                 return False
@@ -1115,6 +1126,62 @@ def _append_account_event(
         _write_account_event_sequence_locked(path, enriched["seq"])
         _fsync_parent_dir(path)
     return True
+
+
+@contextmanager
+def _account_event_lock(path: Path) -> Iterator[None]:
+    """Serialize account-event reads and writes across the host/VM boundary.
+
+    ``flock`` coordinates local processes but the host daemon and podman VM
+    observe the bind mount through independent advisory-lock domains. An
+    exclusive-create marker is arbitrated by the shared filesystem itself, so
+    only one runtime can allocate a sequence or replace the ledger at a time.
+    A stranded marker fails closed after a bounded wait; it is deliberately
+    never guessed stale and removed by a concurrent writer.
+    """
+
+    mutex_path = path.with_name(ACCOUNT_EVENTS_MUTEX_FILENAME)
+    deadline = time.monotonic() + _ACCOUNT_EVENT_MUTEX_TIMEOUT_SECONDS
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    with _file_lock(path):
+        while True:
+            try:
+                descriptor = os.open(mutex_path, flags, 0o600)
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise AccountArtifactError(
+                        f"account event mutex is already held: {mutex_path}"
+                    ) from None
+                time.sleep(_ACCOUNT_EVENT_MUTEX_POLL_SECONDS)
+                continue
+            except OSError as exc:
+                raise AccountArtifactError(
+                    f"account event mutex could not be acquired: {mutex_path}: {exc}"
+                ) from exc
+            break
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "created_at_ms": time.time_ns() // 1_000_000,
+                            "pid": os.getpid(),
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+            yield
+        finally:
+            try:
+                mutex_path.unlink()
+            except FileNotFoundError:
+                logger.error(
+                    "Account event mutex disappeared while held",
+                    extra={"path": str(mutex_path)},
+                )
 
 
 def _account_event_ledger_path(artifacts_root: Path, account_id: str) -> Path:

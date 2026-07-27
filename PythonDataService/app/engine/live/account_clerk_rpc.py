@@ -37,6 +37,7 @@ from app.engine.live.account_clerk_rpc_protocol import (
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
+    ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S,
     AccountClerkRpcCancelNamespaceUncertainError,  # noqa: F401 - public compatibility re-export
     AccountClerkRpcError,
     AccountClerkRpcErrorEnvelope,
@@ -984,6 +985,7 @@ __all__ = [
     "ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S",
     "ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S",
     "ACCOUNT_CLERK_RPC_SCHEMA_VERSION",
+    "ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S",
     "AccountClerkCallbackPersistenceError",
     "AccountClerkDeliveredEvent",
     "AccountClerkEventConsumerIdentity",
