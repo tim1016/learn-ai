@@ -227,7 +227,8 @@ _OUTSIDE_MUTATION_RE = re.compile(r"(?:poison_sentinel\.)?outside_mutation", re.
 _COLD_START_RE = re.compile(r"(?:poison_sentinel\.)?cold_start_divergence", re.IGNORECASE)
 _OPERATOR_HALT_RE = re.compile(r"(?:poison_sentinel\.)?operator_declared", re.IGNORECASE)
 _SUBSCRIPTION_STALE_RE = re.compile(
-    r"(?:absorb_count.*threshold|live_idempotent.*absorb)",
+    r"(?:absorb_count.*threshold|live_idempotent.*absorb|"
+    r"IBKR reqRealTimeBars has not delivered (?:raw )?5-second bars)",
     re.IGNORECASE,
 )
 _FOREIGN_FILL_DROPPED_RE = re.compile(

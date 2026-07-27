@@ -108,7 +108,7 @@ export const INCIDENT_COPY: Record<IncidentCategory, IncidentCopy> = {
   subscription_stale: {
     title: 'Bar subscription stalled',
     message:
-      'The live bar subscription absorbed too many redelivered events. The feed may be stale.',
+      'The live bar subscription stopped delivering fresh 5-second bars or absorbed too many redelivered events. The feed may be stale.',
     severity: 'warning',
     recommendedAction:
       'No action needed if bars resume in the next minute. Restart the bot if the stall persists.',
