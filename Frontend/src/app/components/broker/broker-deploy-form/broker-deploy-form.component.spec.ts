@@ -396,9 +396,24 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.executionCapability()).toBe('paper_orders');
     expect(component.readonlyFlag()).toBe(false);
     expect(component.maxOrdersPerDay()).toBe(2000);
+    expect(component.hydratePolicy()).toBe('optional');
     expect(fixture.nativeElement.textContent).toContain('Paper orders');
     expect(fixture.nativeElement.textContent).toContain('Daily order limit');
+    expect(fieldControl(fixture, 'Saved strategy state').value).toBe('optional');
+    expect(fixture.nativeElement.textContent).toContain(
+      'Use saved state when available (recommended)',
+    );
     expect(deployButton(fixture).textContent).toContain('Deploy & run');
+  });
+
+  it('keeps strict saved-state hydration available as an explicit operator choice', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    changeSelect(fixture, 'Saved strategy state', 'require');
+
+    expect(component.hydratePolicy()).toBe('require');
   });
 
   it('renders a single trade ticket with all required trading decisions visible', async () => {
@@ -482,7 +497,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(typeof req.start_date_ms).toBe('number');
     expect(req.start_options).toMatchObject({
       readonly: false,
-      hydrate_policy: 'require',
+      hydrate_policy: 'optional',
       strategy: 'deployment_validation',
       max_orders_per_day: 2000,
       ibkr_host: '127.0.0.1',
