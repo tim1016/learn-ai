@@ -456,6 +456,42 @@ def test_snapshot_reconciler_lifts_gvproxy_and_data_plane_to_global_events() -> 
     assert result.global_events[1].current is True
 
 
+def test_snapshot_reconciler_lifts_account_clerk_to_global_infrastructure() -> None:
+    result = reconcile_broker_session_snapshot(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=12757,
+                command="Python",
+                argv=[
+                    "/usr/bin/python",
+                    "-m",
+                    "app.engine.live.account_clerk",
+                    "--account-id",
+                    "DUM284968",
+                    "--generation",
+                    "78",
+                ],
+                local_port=51085,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+    )
+
+    assert result.rows == []
+    assert len(result.global_events) == 1
+    event = result.global_events[0]
+    assert event.code == "ACCOUNT_CLERK_BROKER_CLIENT"
+    assert event.label == "Account Clerk broker client"
+    assert event.current is True
+    assert event.severity == "info"
+    assert "write-authority infrastructure" in event.summary
+
+
 def test_reconciler_authors_row_display_labels() -> None:
     rows = reconcile_broker_session_roster(
         socket_rows=[
