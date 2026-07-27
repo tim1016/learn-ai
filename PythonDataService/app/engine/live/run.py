@@ -1239,6 +1239,38 @@ def _build_live_state_writer(
     return _write
 
 
+def _build_owned_position_quantities_provider(
+    *,
+    artifacts_root: Path,
+    account_id: str,
+    strategy_instance_id: str,
+):
+    """Read this instance's canonical Clerk-journal position projection."""
+
+    from app.engine.live.account_clerk import read_account_clerk_journal
+    from app.engine.live.journal_exposure import project_journal_exposure
+
+    def _read() -> dict[str, int]:
+        quantities: dict[str, int] = {}
+        for exposure in project_journal_exposure(
+            read_account_clerk_journal(artifacts_root, account_id),
+            account_id=account_id,
+            group_by="strategy_instance",
+        ):
+            if exposure.group_id != strategy_instance_id:
+                continue
+            quantity = int(exposure.quantity)
+            if float(quantity) != exposure.quantity:
+                raise RuntimeError(
+                    "CLERK_INSTANCE_POSITION_NON_INTEGRAL:"
+                    f"{strategy_instance_id}:{exposure.symbol}:{exposure.quantity}"
+                )
+            quantities[exposure.symbol] = quantity
+        return quantities
+
+    return _read
+
+
 def _build_live_state_seed_envelope(
     *,
     strategy_instance_id: str,
@@ -2225,6 +2257,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         owner_generation_provider=_account_owner_generation_provider if account_owner is not None else None,
         current_owner_generation_provider=(
             _current_account_owner_generation_provider if account_owner is not None else None
+        ),
+        owned_position_quantities_provider=_build_owned_position_quantities_provider(
+            artifacts_root=_artifacts_root,
+            account_id=ledger.account_id,
+            strategy_instance_id=strategy_instance_id,
         ),
     )
     broker_recovery_engine_ref["engine"] = engine

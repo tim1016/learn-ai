@@ -578,6 +578,11 @@ class LiveEngine:
         owner_generation_provider: object = None,
         current_owner_generation_provider: object = None,
         trace_id_provider: object = None,
+        # ADR 0030 — account broker positions are net across every sibling
+        # bot. Production supplies a Clerk-journal projection so this
+        # instance portfolio never adopts another namespace's inventory.
+        # ``None`` preserves isolated replay/test behavior.
+        owned_position_quantities_provider: Callable[[], dict[str, int]] | None = None,
         # Phase 5C / VCR-0002 — managed cancel/flatten paths await per-order
         # cancel confirms with this timeout. Tests pass a short value
         # (e.g. 0.05s) to exercise the timeout path without waiting 5s.
@@ -737,6 +742,7 @@ class LiveEngine:
             else owner_generation_provider
         )
         self._trace_id_provider = trace_id_provider
+        self._owned_position_quantities_provider = owned_position_quantities_provider
         require_owner_write_fence = getattr(self._broker, "require_account_owner_write_fence", None)
         if self._current_owner_generation_provider is not None and callable(require_owner_write_fence):
             require_owner_write_fence(self._current_owner_generation_provider)
@@ -1130,6 +1136,10 @@ class LiveEngine:
             )
         portfolio.registered_sizing_surface = self._sizing_surface
         await portfolio.refresh_from_broker()
+        if self._owned_position_quantities_provider is not None:
+            portfolio.retain_owned_position_quantities(
+                self._owned_position_quantities_provider(),
+            )
         initial_cash = portfolio.cash
         ctx = LiveContext(
             portfolio=portfolio,
@@ -1272,6 +1282,10 @@ class LiveEngine:
             await reconcile_real_broker_events(
                 last_clean_bar_close_ms=last_clean_ms,
             )
+            if self._owned_position_quantities_provider is not None:
+                portfolio.retain_owned_position_quantities(
+                    self._owned_position_quantities_provider(),
+                )
 
         # PRD #619-B B3 — engine_runtime aggregator startup hooks. All
         # four blocks are seeded here so the publisher's first snapshot

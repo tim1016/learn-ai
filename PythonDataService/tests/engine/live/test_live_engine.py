@@ -271,6 +271,99 @@ class IdleStrategy(Strategy):
 
 
 @pytest.mark.asyncio
+async def test_live_engine_seeds_only_clerk_owned_positions_from_account_snapshot() -> None:
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=756733,
+                symbol="SPY",
+                sec_type="STK",
+                quantity=1.0,
+                avg_cost=500.0,
+                fetched_at_ms=1,
+            ),
+            IbkrPosition(
+                account_id="DU123",
+                con_id=320227571,
+                symbol="QQQ",
+                sec_type="STK",
+                quantity=7.0,
+                avg_cost=600.0,
+                fetched_at_ms=1,
+            ),
+        ],
+        fetched_at_ms=1,
+    )
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        owned_position_quantities_provider=lambda: {"SPY": 1},
+    )
+
+    result = await engine.run(
+        IdleStrategy(),
+        iter_bars([_bar_at(14, minute, "500", "500") for minute in range(30, 33)]),
+    )
+
+    assert result.open_positions == {"SPY": 1}
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+async def test_live_engine_force_flat_never_liquidates_sibling_account_position() -> None:
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=756733,
+                symbol="SPY",
+                sec_type="STK",
+                quantity=1.0,
+                avg_cost=500.0,
+                fetched_at_ms=1,
+            ),
+            IbkrPosition(
+                account_id="DU123",
+                con_id=320227571,
+                symbol="QQQ",
+                sec_type="STK",
+                quantity=7.0,
+                avg_cost=600.0,
+                fetched_at_ms=1,
+            ),
+        ],
+        fetched_at_ms=1,
+    )
+
+    def owned_positions() -> dict[str, int]:
+        return {} if any(order.action == "SELL" for order in broker.orders) else {"SPY": 1}
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        owned_position_quantities_provider=owned_positions,
+    )
+
+    result = await engine.run(
+        HoldsExistingStrategy(),
+        iter_bars([_bar_at(15, minute, "500", "500") for minute in range(53, 59)]),
+    )
+
+    assert [(order.symbol, order.quantity) for order in broker.orders] == [("SPY", 1)]
+    assert result.open_positions == {}
+
+
+@pytest.mark.asyncio
 async def test_live_engine_force_flat_does_not_fire_before_threshold() -> None:
     broker = FakeBroker()
     broker.position_snapshot = IbkrPositionsSnapshot(
