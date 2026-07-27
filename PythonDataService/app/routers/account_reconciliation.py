@@ -274,7 +274,12 @@ async def account_cockpit_endpoint(
         settings = get_settings()
         return await AccountCockpitService(
             directory=directory,
-            fetch_daemon_health=lambda: host_daemon_client.fetch_health(
+            # The operator cockpit is a startability/readiness surface, not
+            # the sub-second connectivity monitor. The single-loop daemon may
+            # spend more than two seconds composing concurrent bot facts, so
+            # use the existing bounded 10-second readiness probe and avoid a
+            # false "Daemon Down" while authenticated requests return 200.
+            fetch_daemon_health=lambda: host_daemon_client.fetch_startability_health(
                 settings.live_runner_daemon_url
             ),
         ).surface(account_id=canonical_account_id)

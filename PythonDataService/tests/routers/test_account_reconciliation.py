@@ -1910,7 +1910,11 @@ async def test_account_cockpit_projects_restore_clerk_only_when_daemon_is_availa
     async def daemon_is_reachable() -> tuple[DaemonResult, object]:
         return DaemonResult.connected(), object()
 
-    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_reachable())
+    monkeypatch.setattr(
+        host_daemon_client,
+        "fetch_startability_health",
+        lambda _url: daemon_is_reachable(),
+    )
     app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -1954,7 +1958,11 @@ async def test_account_cockpit_projects_restore_clerk_only_when_daemon_is_availa
     async def daemon_is_down() -> tuple[DaemonResult, None]:
         return DaemonResult(kind="UNREACHABLE", detail="connection refused", error_category="connect_error"), None
 
-    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_down())
+    monkeypatch.setattr(
+        host_daemon_client,
+        "fetch_startability_health",
+        lambda _url: daemon_is_down(),
+    )
     app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -1992,7 +2000,11 @@ async def test_account_cockpit_authors_the_only_journal_corruption_ceremony(
     async def daemon_is_reachable() -> tuple[DaemonResult, object]:
         return DaemonResult.connected(), object()
 
-    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_reachable())
+    monkeypatch.setattr(
+        host_daemon_client,
+        "fetch_startability_health",
+        lambda _url: daemon_is_reachable(),
+    )
     app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: directory
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -2015,7 +2027,11 @@ async def test_account_cockpit_authors_the_only_journal_corruption_ceremony(
     async def daemon_is_down() -> tuple[DaemonResult, None]:
         return DaemonResult(kind="UNREACHABLE", detail="connection refused", error_category="connect_error"), None
 
-    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_down())
+    monkeypatch.setattr(
+        host_daemon_client,
+        "fetch_startability_health",
+        lambda _url: daemon_is_down(),
+    )
     app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: directory
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
