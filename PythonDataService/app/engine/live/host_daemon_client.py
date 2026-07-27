@@ -403,7 +403,10 @@ async def fetch_instances(base_url: str) -> tuple[DaemonResult, dict | None]:
     fail-closed callers can keep checking ``payload is None``; the result is
     additive context for typed-failure surfacing.
     """
-    return await _typed_get_json(f"{base_url.rstrip('/')}/instances")
+    return await _typed_get_json(
+        f"{base_url.rstrip('/')}/instances",
+        timeout=_INSTANCE_PROBE_TIMEOUT,
+    )
 
 
 async def fetch_instance_process(

@@ -33,6 +33,24 @@ async def test_fetch_instance_process_uses_instance_probe_timeout(monkeypatch) -
     assert host_daemon_client._INSTANCE_PROBE_TIMEOUT.read > host_daemon_client._TIMEOUT.read
 
 
+async def test_fetch_instances_uses_instance_probe_timeout(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_typed_get_json(url, *, timeout=host_daemon_client._TIMEOUT):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return DaemonResult.connected(status=200), {"instances": []}
+
+    monkeypatch.setattr(host_daemon_client, "_typed_get_json", fake_typed_get_json)
+
+    _result, payload = await host_daemon_client.fetch_instances("http://d")
+
+    assert payload == {"instances": []}
+    assert str(captured["url"]).endswith("/instances")
+    assert captured["timeout"] is host_daemon_client._INSTANCE_PROBE_TIMEOUT
+    assert host_daemon_client._INSTANCE_PROBE_TIMEOUT.read > host_daemon_client._TIMEOUT.read
+
+
 async def test_fetch_startability_health_uses_instance_probe_timeout(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
