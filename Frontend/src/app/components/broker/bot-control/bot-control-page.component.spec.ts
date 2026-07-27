@@ -541,7 +541,7 @@ describe('BotControlPageComponent', () => {
   });
 
   it('opens Retire & Replace from a sick-bay cure when the lifecycle action is disabled', async () => {
-    const { fixture, component, element } = await setupBotControlPage({
+    const { fixture, component, element, liveRuns } = await setupBotControlPage({
       status: sickBayRetireConditionStatus(),
     });
 
@@ -561,6 +561,7 @@ describe('BotControlPageComponent', () => {
 
     expect(component.retireReplaceConfirmOpen()).toBe(true);
     expect(element.textContent).toContain('Backend-authored retire body.');
+    expect(liveRuns.runRollCall).not.toHaveBeenCalled();
   });
 
   it('shows an error banner when the status request fails', async () => {

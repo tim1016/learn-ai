@@ -695,6 +695,7 @@ export class BotControlPageComponent {
     return (
       lifecycle.on_roster &&
       lifecycle.phase === 'OFF_DUTY' &&
+      lifecycle.display_status === 'Off duty' &&
       lifecycle.primary_action === null &&
       canStartHostProcess(capability)
     );
