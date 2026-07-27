@@ -55,7 +55,6 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
     BotLifecycleStateRecord,
     BotLifecycleStateRepo,
-    BotRollCallOfferRecord,
     stable_bot_lifecycle_state_path,
 )
 from app.engine.live.clock_out import clock_out_is_in_progress
@@ -235,8 +234,8 @@ from app.services.bot_lifecycle_projection import (
     sort_lifecycle_events,
 )
 from app.services.bot_roll_call import (
-    active_roll_call_offer,
     bot_roll_call_offer_repo,
+    safe_active_roll_call_offer,
     status_is_roll_call_eligible,
 )
 from app.services.broker_activity_publisher_registry import get_publisher_registry
@@ -245,6 +244,7 @@ from app.services.broker_capability_service import get_broker_capability_service
 from app.services.broker_free_fleet_reads import (
     BrokerFreeFleetReadDependencies,
     BrokerFreeFleetReadService,
+    catalog_page_response,
 )
 from app.services.daemon_diagnostics import (
     DaemonHealthPayloadError,
@@ -280,6 +280,7 @@ from app.services.live_chart_window import (
     coerce_chart_timeframe,
     resolve_chart_window,
 )
+from app.services.live_instance_config import live_config_for_run_dir
 from app.services.live_instance_surface_assembler import (
     LiveInstanceSurfaceAssembler,
     LiveInstanceSurfaceDependencies,
@@ -446,17 +447,6 @@ def _resolve_bot_lifecycle_state(root: Path, sid: str) -> BotLifecycleStateRecor
     except BotLifecycleStateCorruptError as exc:
         logger.warning(
             "failed to read bot lifecycle state",
-            extra={"strategy_instance_id": sid, "exception": repr(exc)},
-        )
-        return None
-
-
-def _active_roll_call_offer(root: Path, sid: str, *, now_ms: int) -> BotRollCallOfferRecord | None:
-    try:
-        return active_roll_call_offer(root, sid, now_ms=now_ms)
-    except BotLifecycleStateCorruptError as exc:
-        logger.warning(
-            "failed to read bot roll-call offers",
             extra={"strategy_instance_id": sid, "exception": repr(exc)},
         )
         return None
@@ -1869,7 +1859,7 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
             compute_operator_surface=compute_operator_surface,
             resolve_durable_control_write_failure_for_status=(_resolve_durable_control_write_failure_for_status),
             resolve_start_run_id=_resolve_start_run_id,
-            active_roll_call_offer=_active_roll_call_offer,
+            active_roll_call_offer=safe_active_roll_call_offer,
             lifecycle_conditions_for_instance=lifecycle_conditions_for_instance,
             project_bot_daily_lifecycle=project_bot_daily_lifecycle,
             provenance=_provenance,
@@ -1901,7 +1891,7 @@ def _broker_free_fleet_read_service() -> BrokerFreeFleetReadService:
             get_account_truth_snapshot_provider=get_account_truth_snapshot_provider,
             now_ms=_now_ms,
             read_sidecar=_read_sidecar,
-            live_config_for_run_dir=_live_config_for_run_dir,
+            live_config_for_run_dir=live_config_for_run_dir,
             status_is_roll_call_eligible=status_is_roll_call_eligible,
             fetch_broker_connected_account=_fetch_broker_connected_account,
         )
@@ -2091,8 +2081,7 @@ async def _ensure_surface_hub_started(
 async def list_bot_catalog() -> BotCatalogResponse:
     """Server-authored bot catalog cards for the frontend DataView."""
     settings = get_settings()
-    root = Path(settings.live_runs_root)
-    return await _broker_free_fleet_read_service().catalog(settings, root)
+    return await _broker_free_fleet_read_service().catalog(settings, Path(settings.live_runs_root))
 
 
 @router.get("/catalog/page", response_model=BotCatalogPageResponse)
@@ -2100,18 +2089,10 @@ async def list_bot_catalog_page(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: Annotated[str | None, Query(max_length=256)] = None,
 ) -> BotCatalogPageResponse:
-    """Return a bounded catalog page for post-first-paint loading.
-
-    This remains broker-free. It reads one daemon fleet snapshot so each
-    card's runtime state is current, then composes daemon/account evidence
-    only for the requested page.
-    """
-
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    return await _broker_free_fleet_read_service().catalog_page(
-        settings,
-        root,
+    """Return one broker-free catalog page for post-first-paint loading."""
+    return await catalog_page_response(
+        _broker_free_fleet_read_service(),
+        get_settings(),
         limit=limit,
         cursor=cursor,
     )
@@ -2126,18 +2107,8 @@ async def run_roll_call() -> BotRollCallResponse:
     return await _broker_free_fleet_read_service().roll_call(settings, root)
 
 
-def _live_config_for_run_dir(run_dir: Path) -> Mapping[str, object] | None:
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, json.JSONDecodeError):
-        return None
-    live_config = ledger.get("live_config")
-    return live_config if isinstance(live_config, Mapping) else None
-
-
 def _is_retired_bot(root: Path, sid: str) -> bool:
-    lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
-    return lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED
+    return (state := _resolve_bot_lifecycle_state(root, sid)) is not None and state.phase == BotLifecyclePhase.RETIRED
 
 
 @router.delete("/{strategy_instance_id}", response_model=BotDeleteResponse)
@@ -2716,12 +2687,12 @@ def _start_admission_service(settings: IbkrSettings) -> StartAdmissionService:
             interactive_observation_guard=_interactive_start_observation_guard,
             interactive_fleet_guard=_interactive_start_fleet_guard,
             fetch_instance_process=host_daemon_client.fetch_instance_process,
-            active_roll_call_offer=lambda live_root, strategy_instance_id, now_ms: _active_roll_call_offer(
+            active_roll_call_offer=lambda live_root, strategy_instance_id, now_ms: safe_active_roll_call_offer(
                 live_root,
                 strategy_instance_id,
                 now_ms=now_ms,
             ),
-            live_config_for_run=_live_config_for_run_dir,
+            live_config_for_run=live_config_for_run_dir,
             start_boundary_allowed=start_boundary_verdict,
             now_ms=_now_ms,
         ),

@@ -5,6 +5,7 @@ Append + fsync + reload; the Alpaca-scoped, traversal-safe path.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from threading import get_ident
 
@@ -94,6 +95,38 @@ async def test_append_async_offloads_the_durable_write(
 
     assert len(append_threads) == 1
     assert append_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_append_async_coalesces_projection_requests_after_durable_appends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.services import clerk_transaction_projection
+
+    journal = OrderJournal(account_id="PA-1", root=tmp_path)
+    projection_started = asyncio.Event()
+    release_projection = asyncio.Event()
+    calls = 0
+
+    async def project(*, artifacts_root: Path, account_id: str) -> None:
+        nonlocal calls
+        assert artifacts_root == tmp_path
+        assert account_id == "PA-1"
+        calls += 1
+        projection_started.set()
+        await release_projection.wait()
+
+    monkeypatch.setattr(clerk_transaction_projection, "project_alpaca_journal_best_effort", project)
+
+    await journal.append_async(_entry())
+    await journal.append_async(_entry())
+    await asyncio.wait_for(projection_started.wait(), timeout=1)
+
+    assert calls == 1
+    release_projection.set()
+    task = journal._projection_task
+    assert task is not None
+    await task
 
 
 def test_first_append_fsyncs_the_account_directory_and_new_ancestors(

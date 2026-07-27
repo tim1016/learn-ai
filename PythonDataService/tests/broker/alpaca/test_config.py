@@ -10,14 +10,20 @@ from pydantic import ValidationError
 from app.broker.alpaca.clerk import (
     AlpacaClerk,
     get_alpaca_clerk,
+    get_clerk_settings,
     reset_alpaca_clerk_for_testing,
     set_alpaca_clerk,
 )
+from app.broker.alpaca.clerk.journal import get_clerk_settings as get_journal_clerk_settings
 from app.broker.alpaca.config import (
     AlpacaSettings,
     reset_alpaca_settings_for_testing,
 )
 from app.main import _alpaca_clerk_configuration_is_valid
+
+
+def test_clerk_package_exports_lifespan_settings_accessor() -> None:
+    assert get_clerk_settings is get_journal_clerk_settings
 
 
 def test_paper_mode_derives_paper_base_url() -> None:

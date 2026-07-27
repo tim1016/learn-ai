@@ -36,6 +36,7 @@ from app.broker.alpaca.trade_updates import (
 from app.broker.capture.journal import CaptureJournal
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
+    BrokerActivity,
     BrokerOrder,
     BrokerOrderLeg,
     BrokerOrderRequest,
@@ -159,7 +160,9 @@ class _FakeBroker:
     def __init__(self, *, account: BrokerAccountSnapshot | None = None) -> None:
         self._account = account or _account()
         self.orders: list[BrokerOrder] = []
+        self.activities: list[BrokerActivity] = []
         self.list_orders_calls: list[dict[str, Any]] = []
+        self.list_activities_calls: list[dict[str, Any]] = []
 
     async def get_account(self) -> BrokerAccountSnapshot:
         return self._account
@@ -175,6 +178,12 @@ class _FakeBroker:
     ) -> list[BrokerOrder]:
         self.list_orders_calls.append({"status": status, "limit": limit, "after_ms": after_ms})
         return list(self.orders)
+
+    async def list_activities(
+        self, *, after_ms: int | None = None, limit: int = 100
+    ) -> list[BrokerActivity]:
+        self.list_activities_calls.append({"after_ms": after_ms, "limit": limit})
+        return list(self.activities)
 
 
 def _frame_source(frames: list[Any]):
@@ -857,6 +866,64 @@ async def test_gap_reconcile_pulls_closed_orders_no_submission_time_filter(
     ]
     assert len(fills) == 1
     assert consumer.counters.gap_reconciled >= 1
+
+
+async def test_activity_recovery_is_bounded_durable_and_idempotent(tmp_path: Path) -> None:
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    await _warm(clerk)
+    owned_order_id = _accepted_order(_OWNED_COID).order_id
+    broker.activities = [
+        BrokerActivity(
+            broker="alpaca",
+            activity_id="owned-fill",
+            native_order_id=owned_order_id,
+            activity_type="FILL",
+            category="trade_activity",
+            symbol="AAPL",
+            side="buy",
+            quantity=10.0,
+            price=135.8,
+            net_amount=None,
+            occurred_at_ms=_FIXED_MS + 1,
+            observed_at_ms=_FIXED_MS + 2,
+        ),
+        BrokerActivity(
+            broker="alpaca",
+            activity_id="foreign-fill",
+            native_order_id="foreign-order",
+            activity_type="FILL",
+            category="trade_activity",
+            symbol="SPY",
+            side="buy",
+            quantity=1.0,
+            price=500.0,
+            net_amount=None,
+            occurred_at_ms=_FIXED_MS + 3,
+            observed_at_ms=_FIXED_MS + 4,
+        ),
+    ]
+    consumer = TradeUpdatesConsumer(
+        clerk=clerk,
+        read=broker,
+        frame_source=_frame_source([]),
+        journal=_capture_journal(tmp_path),
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=0,
+    )
+
+    await consumer._reconcile_activity_window()
+    await consumer._reconcile_activity_window()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    activities = [entry for entry in entries if entry.kind is ClerkEntryKind.ACTIVITY_RECOVERY]
+    assert [entry.activity.activity_id for entry in activities] == ["owned-fill", "foreign-fill"]  # type: ignore[union-attr]
+    assert activities[0].owned is True
+    assert activities[1].owned is False
+    assert [call["limit"] for call in broker.list_activities_calls] == [100, 100]
+    assert broker.list_activities_calls[0]["after_ms"] is None
+    assert broker.list_activities_calls[1]["after_ms"] == _FIXED_MS + 3
 
 
 async def test_reconnect_opens_the_next_source_before_gap_reconcile(tmp_path: Path) -> None:

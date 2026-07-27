@@ -27,7 +27,7 @@ interface AccountTimelineRow {
   readonly evidence: AccountEventEvidenceRef[];
 }
 
-/** Operations timeline for the full backend-classified account journal. */
+/** Non-transaction account evidence, including unattributed broker activity. */
 @Component({
   selector: "app-account-desk-operator-events",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -47,7 +47,7 @@ export class AccountDeskOperatorEventsComponent {
   readonly eventKinds = EVENT_KINDS;
   private readonly timelineRowsByEventId = new Map<string, AccountTimelineRow>();
   readonly timelineAccessibility = {
-    host: { role: "list", "aria-label": "Journal timeline events" },
+    host: { role: "list", "aria-label": "Account operations events" },
     event: { role: "listitem" },
   };
   readonly timelineRows = computed(() =>
@@ -68,7 +68,7 @@ export class AccountDeskOperatorEventsComponent {
   }
 
   retry(): void {
-    this.store.retry();
+    this.store.retryOperations();
   }
 
   loadOlder(): void {

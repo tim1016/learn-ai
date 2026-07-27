@@ -345,7 +345,7 @@
         [loading]="isLoadingMore()"
         (click)="loadMoreBots()"
       >
-        <span class="p-button-label">Load up to {{ 25 }} more bots</span>
+        <span class="p-button-label">Load up to {{ pageSize }} more bots</span>
       </button>
     </div>
   }
@@ -507,6 +507,8 @@
             <td [attr.colspan]="9" class="empty-cell">
               @if (isLoading()) {
                 Loading bots...
+              } @else if (hasActiveFilters() && hasMoreBots()) {
+                Loading remaining bots before applying these filters...
               } @else {
                 No {{ emptyMode }} bots match these filters.
               }
@@ -630,6 +632,8 @@
           <p class="mobile-empty">
             @if (isLoading()) {
               Loading bots...
+            } @else if (hasActiveFilters() && hasMoreBots()) {
+              Loading remaining bots before applying these filters...
             } @else {
               No {{ emptyMode }} bots match these filters.
             }

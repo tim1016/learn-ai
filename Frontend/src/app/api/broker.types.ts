@@ -219,6 +219,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/events/trader": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trader Account Events Endpoint
+         * @description Return trader-authored outcomes through a schema with no receipt fields.
+         */
+        get: operations["trader_account_events_endpoint_api_accounts__account_id__events_trader_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/freeze/accept-exposure-override": {
         parameters: {
             query?: never;
@@ -517,6 +537,46 @@ export interface paths {
          * @description Set the account-wide outside-live-session exception explicitly.
          */
         put: operations["update_account_session_policy_endpoint_api_accounts__account_id__session_policy_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Clerk Transaction History
+         * @description Read one indexed keyset page without broker, Account Truth, or journal I/O.
+         */
+        get: operations["get_clerk_transaction_history_api_accounts__account_id__transactions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/transactions/{transaction_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Clerk Transaction Detail
+         * @description Read exactly one selected projected receipt; never rescan Clerk or IBKR.
+         */
+        get: operations["get_clerk_transaction_detail_api_accounts__account_id__transactions__transaction_id__get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -2845,46 +2905,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/lifecycle-projection/safety-triage": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Lifecycle Safety Triage
-         * @description Return warning/critical projection rows for fleet triage.
-         */
-        get: operations["get_lifecycle_safety_triage_api_lifecycle_projection_safety_triage_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lifecycle-projection/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Lifecycle Timeline
-         * @description Return a bounded timeline from the rebuildable projection.
-         */
-        get: operations["get_lifecycle_timeline_api_lifecycle_projection_timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/live-instances": {
         parameters: {
             query?: never;
@@ -3029,11 +3049,7 @@ export interface paths {
         };
         /**
          * List Bot Catalog Page
-         * @description Return a bounded catalog page for post-first-paint loading.
-         *
-         *     This remains broker-free. It reads one daemon fleet snapshot so each
-         *     card's runtime state is current, then composes daemon/account evidence
-         *     only for the requested page.
+         * @description Return one broker-free catalog page for post-first-paint loading.
          */
         get: operations["list_bot_catalog_page_api_live_instances_catalog_page_get"];
         put?: never;
@@ -5539,6 +5555,7 @@ export interface components {
             account_id: string;
             /** Bot Order Namespace */
             bot_order_namespace: string;
+            broker_ack?: components["schemas"]["IbkrOrderAck"] | null;
             /** Exec Id */
             exec_id?: string | null;
             /** Intent Id */
@@ -5828,6 +5845,43 @@ export interface components {
             source: string;
         };
         /**
+         * AccountEventOperatorOrderReceipt
+         * @description The receipt fields an operator needs to audit one manual paper order.
+         */
+        AccountEventOperatorOrderReceipt: {
+            /** Acknowledged At Ms */
+            acknowledged_at_ms: number;
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "BUY" | "SELL";
+            /**
+             * Broker
+             * @constant
+             */
+            broker: "ibkr";
+            /** Limit Price */
+            limit_price?: number | null;
+            /** Order Id */
+            order_id: number;
+            /** Order Ref */
+            order_ref: string;
+            /**
+             * Order Type
+             * @enum {string}
+             */
+            order_type: "MKT" | "LMT";
+            /** Perm Id */
+            perm_id?: number | null;
+            /** Quantity */
+            quantity: number;
+            /** Status */
+            status: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * AccountEventRow
          * @description One backend-classified journal event for a desk view.
          */
@@ -5845,6 +5899,7 @@ export interface components {
             occurred_at_ms: number;
             /** Operator Detail */
             operator_detail: string;
+            operator_order_receipt?: components["schemas"]["AccountEventOperatorOrderReceipt"] | null;
             /**
              * Schema Version
              * @default 1
@@ -5898,9 +5953,9 @@ export interface components {
             schema_version?: 1;
             /**
              * View
-             * @enum {string}
+             * @constant
              */
-            view: "trader_today" | "operations";
+            view: "operations";
         };
         /**
          * AccountFalseCrashBackfillResponse
@@ -8013,9 +8068,9 @@ export interface components {
          */
         BotCatalogPageResponse: {
             /** Bots */
-            bots?: components["schemas"]["BotCatalogRow"][];
+            bots: components["schemas"]["BotCatalogRow"][];
             /** Next Cursor */
-            next_cursor?: string | null;
+            next_cursor: string | null;
             /** Observed At Ms */
             observed_at_ms: number;
             /** Total Count */
@@ -8564,8 +8619,8 @@ export interface components {
              * @default 0
              */
             retired?: number;
-            /** Session Date */
-            session_date?: string | null;
+            /** Session Date Ms */
+            session_date_ms?: number | null;
             /**
              * Sick Bay
              * @default 0
@@ -8636,6 +8691,8 @@ export interface components {
             broker: string;
             /** Category */
             category: string | null;
+            /** Native Order Id */
+            native_order_id?: string | null;
             /** Net Amount */
             net_amount: number | null;
             /** Observed At Ms */
@@ -9748,6 +9805,28 @@ export interface components {
             reason?: string;
         };
         /**
+         * ClerkOrderInstruction
+         * @description Typed, receipt-supplied order fields; never a client-side inference.
+         */
+        ClerkOrderInstruction: {
+            /** Action */
+            action?: string | null;
+            /** Limit Price */
+            limit_price?: number | null;
+            /** Order Type */
+            order_type?: string | null;
+            /** Outside Rth */
+            outside_rth?: boolean | null;
+            /** Quantity */
+            quantity?: number | null;
+            /** Sec Type */
+            sec_type?: string | null;
+            /** Symbol */
+            symbol?: string | null;
+            /** Time In Force */
+            time_in_force?: string | null;
+        };
+        /**
          * ClerkStatus
          * @description The clerk's observable state for the operator status surface (S6).
          *
@@ -9766,6 +9845,196 @@ export interface components {
             observed_at_ms: number;
             /** Outstanding Intents */
             outstanding_intents: number;
+        };
+        /**
+         * ClerkTransactionEventRow
+         * @description One immutable event materialized from a Clerk journal receipt.
+         */
+        ClerkTransactionEventRow: {
+            /**
+             * Broker
+             * @default ibkr
+             * @enum {string}
+             */
+            broker?: "ibkr" | "alpaca";
+            /** Callback Identity */
+            callback_identity: string;
+            /**
+             * Commission Status
+             * @default unknown
+             * @enum {string}
+             */
+            commission_status?: "unknown" | "reported";
+            /** Event Id */
+            event_id: string;
+            /** Event Kind */
+            event_kind: string;
+            /** Fee */
+            fee?: number | null;
+            /** Journal Seq */
+            journal_seq: number;
+            /** Lifecycle State */
+            lifecycle_state: string;
+            /** Native Execution Id */
+            native_execution_id?: string | null;
+            /** Native Order Id */
+            native_order_id?: string | null;
+            /** Receipt */
+            receipt?: Record<string, never>;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /**
+         * ClerkTransactionHistoryResponse
+         * @description One bounded keyset page, with backend-owned projection status.
+         */
+        ClerkTransactionHistoryResponse: {
+            /** Canonical Fallback Required */
+            canonical_fallback_required: boolean;
+            /** Feed Detail */
+            feed_detail: string;
+            /** Feed Headline */
+            feed_headline: string;
+            /**
+             * Feed State
+             * @enum {string}
+             */
+            feed_state: "live" | "reconnecting" | "rebuilding" | "stale" | "offline_but_saved" | "corrupt" | "projection_unavailable";
+            /** High Water Journal Seq */
+            high_water_journal_seq?: number | null;
+            /**
+             * Lag Is Lower Bound
+             * @default false
+             */
+            lag_is_lower_bound?: boolean;
+            /** Lag Records */
+            lag_records?: number | null;
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Projection Available */
+            projection_available: boolean;
+            /** Rows */
+            rows: components["schemas"]["ClerkTransactionSummaryRow"][];
+        };
+        /**
+         * ClerkTransactionRow
+         * @description One operator transaction, projected from a durable Clerk receipt.
+         */
+        ClerkTransactionRow: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Broker
+             * @default ibkr
+             * @enum {string}
+             */
+            broker?: "ibkr" | "alpaca";
+            /**
+             * Commission Status
+             * @default unknown
+             * @enum {string}
+             */
+            commission_status?: "unknown" | "reported";
+            /** Events */
+            events?: components["schemas"]["ClerkTransactionEventRow"][];
+            /** Exec Id */
+            exec_id?: string | null;
+            /** Fee */
+            fee?: number | null;
+            /** Intent Id */
+            intent_id: string;
+            /** Journal Seq */
+            journal_seq: number;
+            /** Lifecycle State */
+            lifecycle_state: string;
+            /** Native Execution Id */
+            native_execution_id?: string | null;
+            /** Native Order Id */
+            native_order_id?: string | null;
+            /** Order Id */
+            order_id?: number | null;
+            order_instruction?: components["schemas"]["ClerkOrderInstruction"];
+            /** Order Ref */
+            order_ref: string;
+            /** Perm Id */
+            perm_id?: number | null;
+            /** Receipt */
+            receipt?: Record<string, never>;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Transaction Id */
+            transaction_id: string;
+            /** Transaction Kind */
+            transaction_kind: string;
+            /**
+             * Transaction Origin
+             * @default manual
+             * @enum {string}
+             */
+            transaction_origin?: "manual" | "strategy" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
+        };
+        /**
+         * ClerkTransactionSummaryRow
+         * @description Compact, receipt-free row for the operator transaction grid.
+         */
+        ClerkTransactionSummaryRow: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Broker
+             * @default ibkr
+             * @enum {string}
+             */
+            broker?: "ibkr" | "alpaca";
+            /**
+             * Commission Status
+             * @default unknown
+             * @enum {string}
+             */
+            commission_status?: "unknown" | "reported";
+            /** Event Count */
+            event_count: number;
+            /** Exec Id */
+            exec_id?: string | null;
+            /** Fee */
+            fee?: number | null;
+            /** Intent Id */
+            intent_id: string;
+            /** Journal Seq */
+            journal_seq: number;
+            /** Lifecycle State */
+            lifecycle_state: string;
+            /** Native Execution Id */
+            native_execution_id?: string | null;
+            /** Native Order Id */
+            native_order_id?: string | null;
+            /** Order Id */
+            order_id?: number | null;
+            order_instruction?: components["schemas"]["ClerkOrderInstruction"];
+            /** Order Ref */
+            order_ref: string;
+            /** Perm Id */
+            perm_id?: number | null;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Transaction Id */
+            transaction_id: string;
+            /** Transaction Kind */
+            transaction_kind: string;
+            /**
+             * Transaction Origin
+             * @default manual
+             * @enum {string}
+             */
+            transaction_origin?: "manual" | "strategy" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other";
         };
         /** CloseAllAction */
         CloseAllAction: {
@@ -15519,166 +15788,6 @@ export interface components {
             unit?: string | null;
             /** Value */
             value: string;
-        };
-        /**
-         * LifecycleProjectionEventRow
-         * @description One persisted lifecycle projection row returned by the read API.
-         */
-        LifecycleProjectionEventRow: {
-            /** Account Id */
-            account_id: string;
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "decision" | "risk_gate" | "order" | "fill" | "position_change" | "account_balance" | "freeze" | "halt" | "poison" | "desired_state" | "lifecycle_transition" | "account_event" | "evidence";
-            /** Event Id */
-            event_id: string;
-            /** Event Type */
-            event_type: string;
-            /** Evidence Refs */
-            evidence_refs?: Record<string, never>[];
-            /** Gate Id */
-            gate_id?: string | null;
-            /** Id */
-            id?: number | null;
-            /** Inserted At Ms */
-            inserted_at_ms?: number | null;
-            /** Node Id */
-            node_id?: string | null;
-            /** Operator Next Step */
-            operator_next_step?: string | null;
-            /** Receipt Payload */
-            receipt_payload?: Record<string, never>;
-            /** Rendered Headline */
-            rendered_headline?: string | null;
-            /** Rendered Template Id */
-            rendered_template_id?: string | null;
-            /** Run Id */
-            run_id?: string | null;
-            /**
-             * Severity
-             * @enum {string}
-             */
-            severity: "info" | "warning" | "critical";
-            /** Source Artifact */
-            source_artifact: string;
-            /** Source Hash */
-            source_hash?: string | null;
-            /** Source Offset */
-            source_offset?: number | null;
-            /** Source Rank */
-            source_rank: number;
-            /** Source Seq */
-            source_seq?: number | null;
-            /** Source Type */
-            source_type: string;
-            /** Status */
-            status?: ("passed" | "active" | "blocked" | "poison" | "freeze" | "inactive" | "unknown") | null;
-            /** Strategy Instance Id */
-            strategy_instance_id?: string | null;
-            /** Summary */
-            summary: string;
-            /** Ts Ms */
-            ts_ms?: number | null;
-            /** Ts Ms Resolved */
-            ts_ms_resolved: boolean;
-            /** Updated At Ms */
-            updated_at_ms?: number | null;
-            /** Why */
-            why?: string | null;
-        };
-        /**
-         * LifecycleSafetyProjectionEventRow
-         * @description Safety triage row with the endpoint's warning/critical invariant.
-         */
-        LifecycleSafetyProjectionEventRow: {
-            /** Account Id */
-            account_id: string;
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "decision" | "risk_gate" | "order" | "fill" | "position_change" | "account_balance" | "freeze" | "halt" | "poison" | "desired_state" | "lifecycle_transition" | "account_event" | "evidence";
-            /** Event Id */
-            event_id: string;
-            /** Event Type */
-            event_type: string;
-            /** Evidence Refs */
-            evidence_refs?: Record<string, never>[];
-            /** Gate Id */
-            gate_id?: string | null;
-            /** Id */
-            id?: number | null;
-            /** Inserted At Ms */
-            inserted_at_ms?: number | null;
-            /** Node Id */
-            node_id?: string | null;
-            /** Operator Next Step */
-            operator_next_step?: string | null;
-            /** Receipt Payload */
-            receipt_payload?: Record<string, never>;
-            /** Rendered Headline */
-            rendered_headline?: string | null;
-            /** Rendered Template Id */
-            rendered_template_id?: string | null;
-            /** Run Id */
-            run_id?: string | null;
-            /**
-             * Severity
-             * @enum {string}
-             */
-            severity: "warning" | "critical";
-            /** Source Artifact */
-            source_artifact: string;
-            /** Source Hash */
-            source_hash?: string | null;
-            /** Source Offset */
-            source_offset?: number | null;
-            /** Source Rank */
-            source_rank: number;
-            /** Source Seq */
-            source_seq?: number | null;
-            /** Source Type */
-            source_type: string;
-            /** Status */
-            status?: ("passed" | "active" | "blocked" | "poison" | "freeze" | "inactive" | "unknown") | null;
-            /** Strategy Instance Id */
-            strategy_instance_id?: string | null;
-            /** Summary */
-            summary: string;
-            /** Ts Ms */
-            ts_ms?: number | null;
-            /** Ts Ms Resolved */
-            ts_ms_resolved: boolean;
-            /** Updated At Ms */
-            updated_at_ms?: number | null;
-            /** Why */
-            why?: string | null;
-        };
-        /**
-         * LifecycleSafetyTriageResponse
-         * @description Bounded safety query over warning/critical lifecycle projection rows.
-         */
-        LifecycleSafetyTriageResponse: {
-            /** Canonical Fallback Required */
-            canonical_fallback_required: boolean;
-            /** Projection Available */
-            projection_available: boolean;
-            /** Rows */
-            rows: components["schemas"]["LifecycleSafetyProjectionEventRow"][];
-        };
-        /**
-         * LifecycleTimelineResponse
-         * @description Bounded timeline response for bot/account/run lifecycle events.
-         */
-        LifecycleTimelineResponse: {
-            /** Canonical Fallback Required */
-            canonical_fallback_required: boolean;
-            /** Projection Available */
-            projection_available: boolean;
-            /** Rows */
-            rows: components["schemas"]["LifecycleProjectionEventRow"][];
         };
         /**
          * LiveBinding
@@ -22269,6 +22378,46 @@ export interface components {
             time_stop_bars?: number;
         };
         /**
+         * TraderAccountEventRow
+         * @description Trader-safe outcome copy; deliberately contains no operator evidence.
+         */
+        TraderAccountEventRow: {
+            /** Event Id */
+            event_id: string;
+            /** Occurred At Ms */
+            occurred_at_ms: number;
+            /** Outcome */
+            outcome: string;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+            /** Seq */
+            seq: number;
+        };
+        /**
+         * TraderAccountEventsResponse
+         * @description Trader event page with an intentionally disjoint schema from operations.
+         */
+        TraderAccountEventsResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Latest Seq */
+            latest_seq?: number | null;
+            /** Next Before Seq */
+            next_before_seq?: number | null;
+            /** Rows */
+            rows?: components["schemas"]["TraderAccountEventRow"][];
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+        };
+        /**
          * TradesSummary
          * @description Summary of trade records in a live run.
          */
@@ -23539,7 +23688,7 @@ export interface operations {
     account_events_endpoint_api_accounts__account_id__events_get: {
         parameters: {
             query?: {
-                view?: "trader_today" | "operations";
+                view?: "operations";
                 limit?: number;
                 kinds?: ("activity" | "safety" | "reconciliation" | "clerk" | "configuration" | "other")[] | null;
                 before_seq?: number | null;
@@ -23595,6 +23744,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountEventSequenceRepairReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trader_account_events_endpoint_api_accounts__account_id__events_trader_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraderAccountEventsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24133,6 +24317,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountSessionPolicyUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clerk_transaction_history_api_accounts__account_id__transactions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+                origin?: ("manual" | "strategy" | "recovery" | "emergency" | "shutdown" | "force_flat" | "other") | null;
+                lifecycle_state?: string | null;
+                strategy_instance_id?: string | null;
+                run_id?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkTransactionHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clerk_transaction_detail_api_accounts__account_id__transactions__transaction_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkTransactionRow"];
                 };
             };
             /** @description Validation Error */
@@ -27440,78 +27698,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedRunResponseModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_lifecycle_safety_triage_api_lifecycle_projection_safety_triage_get: {
-        parameters: {
-            query?: {
-                account_id?: string | null;
-                strategy_instance_id?: string | null;
-                run_id?: string | null;
-                status?: string | null;
-                event_type?: string | null;
-                node_id?: string | null;
-                severity?: ("warning" | "critical") | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LifecycleSafetyTriageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_lifecycle_timeline_api_lifecycle_projection_timeline_get: {
-        parameters: {
-            query?: {
-                account_id?: string | null;
-                strategy_instance_id?: string | null;
-                run_id?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LifecycleTimelineResponse"];
                 };
             };
             /** @description Validation Error */

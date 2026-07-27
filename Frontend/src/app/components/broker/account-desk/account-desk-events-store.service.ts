@@ -5,16 +5,20 @@ import type {
   AccountEventRow,
   AccountEventsRequest,
   AccountEventsResponse,
-  AccountEventView,
+  TraderAccountEventRow,
+  TraderAccountEventsResponse,
 } from '../../../api/account-events.types';
 import { isRecord } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
 import { extractServerMessage } from '../operation-error';
 
 const POLL_INTERVAL_MS = 15_000;
+const NON_TRANSACTION_EVIDENCE_KINDS: readonly AccountEventKind[] = [
+  'activity', 'safety', 'reconciliation', 'clerk', 'configuration', 'other',
+];
 
-interface EventViewState {
-  readonly rows: readonly AccountEventRow[];
+interface EventViewState<T extends { readonly seq: number }> {
+  readonly rows: readonly T[];
   readonly latestSeq: number | null;
   readonly nextBeforeSeq: number | null;
   readonly loading: boolean;
@@ -22,7 +26,7 @@ interface EventViewState {
   readonly lastGoodAtMs: number | null;
 }
 
-const EMPTY_STATE: EventViewState = {
+const EMPTY_STATE: EventViewState<never> = {
   rows: [],
   latestSeq: null,
   nextBeforeSeq: null,
@@ -41,10 +45,11 @@ export class AccountDeskEventsStore {
   private readonly destroyRef = inject(DestroyRef);
   private routeGeneration = 0;
   private operationsFilterGeneration = 0;
+  private operationsRequested = false;
   private readonly accountKey = signal<string | null>(null);
-  private readonly traderState = signal<EventViewState>(EMPTY_STATE);
-  private readonly operationsState = signal<EventViewState>(EMPTY_STATE);
-  private readonly operationKindsState = signal<readonly AccountEventKind[]>([]);
+  private readonly traderState = signal<EventViewState<TraderAccountEventRow>>(EMPTY_STATE);
+  private readonly operationsState = signal<EventViewState<AccountEventRow>>(EMPTY_STATE);
+  private readonly operationKindsState = signal<readonly AccountEventKind[]>(NON_TRANSACTION_EVIDENCE_KINDS);
   private readonly pollId: number;
 
   readonly accountId = this.accountKey.asReadonly();
@@ -81,12 +86,24 @@ export class AccountDeskEventsStore {
       this.accountKey.set(accountId);
       this.traderState.set(EMPTY_STATE);
       this.operationsState.set(EMPTY_STATE);
+      this.operationKindsState.set(NON_TRANSACTION_EVIDENCE_KINDS);
+      this.operationsRequested = false;
     }
-    await Promise.all([this.refreshTrader(), this.refreshOperations()]);
+    await this.refreshTrader();
   }
 
-  retry(): void {
-    void Promise.all([this.refreshTrader(), this.refreshOperations()]);
+  retryTrader(): void {
+    void this.refreshTrader();
+  }
+
+  retryOperations(): void {
+    this.operationsRequested = true;
+    void this.refreshOperations();
+  }
+
+  loadOperations(): void {
+    this.operationsRequested = true;
+    void this.refreshOperations();
   }
 
   loadOlder(): void {
@@ -104,12 +121,14 @@ export class AccountDeskEventsStore {
     this.operationKindsState.set(next);
     this.operationsFilterGeneration += 1;
     this.operationsState.set(EMPTY_STATE);
+    this.operationsRequested = true;
     void this.refreshOperations();
   }
 
   private pollForNewer(): void {
     if (this.accountKey() === null) return;
-    void Promise.all([this.refreshTrader(), this.refreshOperations()]);
+    void this.refreshTrader();
+    if (this.operationsRequested) void this.refreshOperations();
   }
 
   private async refreshTrader(): Promise<void> {
@@ -130,12 +149,9 @@ export class AccountDeskEventsStore {
     const generation = this.routeGeneration;
     this.traderState.update((state) => ({ ...state, loading: true, errorMessage: null }));
     try {
-      const response = await this.broker.accountEvents(accountId, {
-        view: 'trader_today',
-        limit: 100,
-      });
+      const response = await this.broker.traderAccountEvents(accountId, 100);
       if (!this.isCurrentRequest(accountId, generation)) return;
-      const page = validatePage(response, accountId, 'trader_today');
+      const page = validateTraderPage(response, accountId);
       this.traderState.update((state) => replacePage(state, page, Date.now()));
     } catch (error) {
       if (this.isCurrentRequest(accountId, generation)) {
@@ -198,11 +214,11 @@ export class AccountDeskEventsStore {
 }
 
 function applyPage(
-  state: EventViewState,
+  state: EventViewState<AccountEventRow>,
   page: AccountEventsResponse,
   cursor: Pick<AccountEventsRequest, 'afterSeq' | 'beforeSeq'>,
   lastGoodAtMs: number,
-): EventViewState {
+): EventViewState<AccountEventRow> {
   return {
     rows: mergeRows(state.rows, page.rows),
     latestSeq: cursor.beforeSeq === undefined
@@ -215,11 +231,11 @@ function applyPage(
   };
 }
 
-function replacePage(
-  state: EventViewState,
-  page: AccountEventsResponse,
+function replacePage<T extends { readonly seq: number }>(
+  state: EventViewState<T>,
+  page: { readonly rows: readonly T[]; readonly latest_seq: number | null; readonly next_before_seq: number | null },
   lastGoodAtMs: number,
-): EventViewState {
+): EventViewState<T> {
   return {
     ...state,
     rows: page.rows,
@@ -242,7 +258,7 @@ function mergeRows(
 function validatePage(
   value: unknown,
   accountId: string,
-  expectedView: AccountEventView,
+  expectedView: 'operations',
 ): AccountEventsResponse {
   if (!isRecord(value) || value['schema_version'] !== 1 || value['account_id'] !== accountId || value['view'] !== expectedView) {
     throw new Error('Account event response did not attest this route.');
@@ -268,6 +284,28 @@ function validatePage(
   };
 }
 
+function validateTraderPage(value: unknown, accountId: string): TraderAccountEventsResponse {
+  if (!isRecord(value) || value['schema_version'] !== 1 || value['account_id'] !== accountId) {
+    throw new Error('Trader account event response did not attest this route.');
+  }
+  const rows = value['rows'];
+  const latestSeq = value['latest_seq'];
+  const nextBeforeSeq = value['next_before_seq'];
+  if (!Array.isArray(rows) || !isNullableSequence(latestSeq) || !isNullableSequence(nextBeforeSeq)) {
+    throw new Error('Trader account event response was malformed.');
+  }
+  if (!rows.every(isTraderAccountEventRow)) {
+    throw new Error('Trader account event response contained malformed rows.');
+  }
+  return {
+    schema_version: 1,
+    account_id: accountId,
+    rows,
+    latest_seq: latestSeq,
+    next_before_seq: nextBeforeSeq,
+  };
+}
+
 function isAccountEventRow(value: unknown): value is AccountEventRow {
   if (!isRecord(value) || value['schema_version'] !== 1 || !isSequence(value['seq']) || !isInt64Ms(value['occurred_at_ms'])) {
     return false;
@@ -275,12 +313,36 @@ function isAccountEventRow(value: unknown): value is AccountEventRow {
   if (typeof value['event_id'] !== 'string' || typeof value['operator_detail'] !== 'string') return false;
   if (value['trader_narration'] !== null && typeof value['trader_narration'] !== 'string') return false;
   if (!isAccountEventKind(value['kind']) || !Array.isArray(value['evidence_refs'])) return false;
-  return value['evidence_refs'].every(isEvidenceRef);
+  return value['evidence_refs'].every(isEvidenceRef) && isNullableOperatorOrderReceipt(value['operator_order_receipt']);
+}
+
+function isTraderAccountEventRow(value: unknown): value is TraderAccountEventRow {
+  return isRecord(value) && value['schema_version'] === 1 &&
+    typeof value['event_id'] === 'string' && isSequence(value['seq']) &&
+    isInt64Ms(value['occurred_at_ms']) && typeof value['outcome'] === 'string' &&
+    !('operator_order_receipt' in value) && !('evidence_refs' in value);
 }
 
 function isEvidenceRef(value: unknown): boolean {
   return isRecord(value) && typeof value['source'] === 'string' && typeof value['ref'] === 'string' &&
     (value['detail'] === null || typeof value['detail'] === 'string');
+}
+
+function isNullableOperatorOrderReceipt(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (!isRecord(value) || value['broker'] !== 'ibkr') return false;
+  return (
+    isNonnegativeSequence(value['order_id']) &&
+    (value['perm_id'] === null || isNonnegativeSequence(value['perm_id'])) &&
+    typeof value['order_ref'] === 'string' &&
+    typeof value['symbol'] === 'string' &&
+    (value['action'] === 'BUY' || value['action'] === 'SELL') &&
+    typeof value['quantity'] === 'number' && Number.isFinite(value['quantity']) && value['quantity'] > 0 &&
+    (value['order_type'] === 'MKT' || value['order_type'] === 'LMT') &&
+    (value['limit_price'] === null || (typeof value['limit_price'] === 'number' && Number.isFinite(value['limit_price']) && value['limit_price'] > 0)) &&
+    typeof value['status'] === 'string' &&
+    isInt64Ms(value['acknowledged_at_ms'])
+  );
 }
 
 function isAccountEventKind(value: unknown): value is AccountEventKind {
@@ -294,6 +356,10 @@ function isNullableSequence(value: unknown): value is number | null {
 
 function isSequence(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+function isNonnegativeSequence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isInt64Ms(value: unknown): value is number {

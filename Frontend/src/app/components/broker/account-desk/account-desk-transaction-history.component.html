@@ -1,0 +1,60 @@
+<p-panel id="account-desk-transaction-history" class="transaction-history" aria-live="polite">
+  <ng-template #header><h2>Transaction history</h2></ng-template>
+  <p>Projected account order receipts. Select a row to read its complete evidence.</p>
+  <fieldset class="transaction-filters" aria-label="Transaction history filters">
+    <legend>Filter projected transactions</legend>
+    <label>Origin
+      <select [value]="filterOrigin()" (change)="setOriginFilter($event)">
+        <option value="">All origins</option>
+        <option value="manual">{{ 'manual' | receiptLabel }}</option>
+        <option value="strategy">{{ 'strategy' | receiptLabel }}</option>
+        <option value="recovery">{{ 'recovery' | receiptLabel }}</option>
+        <option value="emergency">{{ 'emergency' | receiptLabel }}</option>
+        <option value="shutdown">{{ 'shutdown' | receiptLabel }}</option>
+        <option value="force_flat">{{ 'force_flat' | receiptLabel }}</option>
+        <option value="other">{{ 'other' | receiptLabel }}</option>
+      </select>
+    </label>
+    <label>Lifecycle <input [value]="filterLifecycle()" (input)="filterLifecycle.set(inputValue($event))" /></label>
+    <label>Bot <input [value]="filterStrategy()" (input)="filterStrategy.set(inputValue($event))" /></label>
+    <label>Run <input [value]="filterRun()" (input)="filterRun.set(inputValue($event))" /></label>
+    <button pButton type="button" severity="secondary" (click)="applyFilters()">Apply filters</button>
+    <button pButton type="button" severity="secondary" (click)="clearFilters()">Clear filters</button>
+  </fieldset>
+  @if (store.loading() && !store.hasLastGood()) {
+    <p class="state">Loading transaction history…</p>
+  } @else if (store.errorMessage() && !store.hasLastGood()) {
+    <div class="state state-error" role="alert"><p>{{ store.errorMessage() }}</p><button pButton type="button" severity="secondary" (click)="store.retry()">Retry</button></div>
+  } @else if (store.feed(); as feed) {
+    <p class="state" [class.state-error]="!feed.projection_available || feed.feed_state === 'corrupt'" role="status"><strong>{{ feed.feed_headline }}</strong> {{ feed.feed_detail }}</p>
+    @if (feed.high_water_journal_seq !== null || feed.lag_records !== null) {
+      <p class="state">Projection high-water: {{ feed.high_water_journal_seq ?? 'not yet projected' }}. Lag: {{ feed.lag_records ?? 'unknown' }}{{ feed.lag_is_lower_bound ? '+' : '' }} records.</p>
+    }
+    @if (feed.projection_available && store.rows().length === 0) {
+      <p class="state">No projected transactions match this account and filter set.</p>
+    } @else if (feed.projection_available) {
+      <div class="transaction-grid" role="group" aria-label="Operator transaction history">
+        <div class="transaction-grid__head" aria-hidden="true"><span>Recorded</span><span>Origin and context</span><span>Instruction</span><span>Lifecycle</span><span>Evidence</span></div>
+        @for (row of store.rows(); track trackRow($index, row)) {
+          <button type="button" class="transaction-grid__row" [attr.aria-label]="'Open receipt ' + row.order_ref" (click)="openReceipt(row, $event)">
+            <span data-label="Recorded"><app-timestamp-display [value]="row.recorded_at_ms" mode="local" /></span>
+            <span data-label="Origin and context"><strong>{{ origin(row) | receiptLabel }}</strong><code>{{ row.strategy_instance_id }}</code><small>{{ row.run_id }}</small></span>
+            <span data-label="Instruction"><span>{{ instruction(row) }} {{ row.order_instruction?.action | receiptLabel }} {{ row.order_instruction?.order_type | receiptLabel }}</span><code>{{ row.order_ref }}</code><small>{{ row.broker | receiptLabel }}</small></span>
+            <span data-label="Lifecycle">{{ row.lifecycle_state | receiptLabel }}</span>
+            <span data-label="Evidence">{{ row.event_count }} event{{ row.event_count === 1 ? '' : 's' }}</span>
+          </button>
+        }
+      </div>
+    }
+    @if (store.nextCursor() !== null) { <button pButton type="button" severity="secondary" [disabled]="store.loading()" (click)="store.loadOlder()">Load older</button> }
+  }
+</p-panel>
+
+<dialog #receiptDrawer class="receipt-drawer" aria-labelledby="receiptDrawerTitle" (close)="onDrawerClosed()" (cancel)="closeReceipt()">
+  <header><p class="eyebrow">Operator receipt</p><h2 id="receiptDrawerTitle">Projected transaction evidence</h2><button type="button" aria-label="Close receipt drawer" (click)="closeReceipt()">×</button></header>
+  @if (detailLoading()) { <p>Loading the selected receipt…</p> } @else if (detailError(); as error) { <p role="alert">{{ error }}</p> } @else if (selected(); as receipt) {
+    <dl class="receipt-summary"><div><dt>Broker</dt><dd>{{ receipt.broker | receiptLabel }}</dd></div><div><dt>Origin</dt><dd>{{ (receipt.transaction_origin ?? 'manual') | receiptLabel }}</dd></div><div><dt>Bot</dt><dd><code>{{ receipt.strategy_instance_id }}</code></dd></div><div><dt>Run</dt><dd><code>{{ receipt.run_id }}</code></dd></div><div><dt>Order reference</dt><dd><code>{{ receipt.order_ref }}</code></dd></div><div><dt>Instruction</dt><dd>{{ instruction(receipt) }} {{ receipt.order_instruction?.action | receiptLabel }} {{ receipt.order_instruction?.order_type | receiptLabel }}</dd></div><div><dt>Intent</dt><dd><code>{{ receipt.intent_id }}</code></dd></div><div><dt>Lifecycle</dt><dd>{{ receipt.lifecycle_state | receiptLabel }}</dd></div><div><dt>Commission</dt><dd>{{ receipt.commission_status | receiptLabel }}</dd></div></dl>
+    <section aria-labelledby="receiptTimelineTitle"><h3 id="receiptTimelineTitle">Projected event timeline</h3><ol class="receipt-timeline">@for (event of receipt.events; track trackEvent($index, event)) { <li><app-timestamp-display [value]="event.recorded_at_ms" mode="local" /><strong>{{ event.event_kind | receiptLabel }}</strong><span>{{ event.lifecycle_state | receiptLabel }}</span><code>{{ event.callback_identity }}</code><details><summary>Raw event evidence</summary><pre>{{ eventReceiptJson(event) }}</pre></details></li> }</ol></section>
+    <section aria-labelledby="rawReceiptTitle"><h3 id="rawReceiptTitle">Raw receipt evidence</h3><dl class="raw-receipt">@for (entry of receiptEntries(); track trackReceipt($index, entry)) { <div><dt>{{ entry.label | receiptLabel }}</dt><dd><code>{{ entry.value }}</code></dd></div> }</dl></section>
+  }
+</dialog>

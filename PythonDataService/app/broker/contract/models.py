@@ -215,6 +215,7 @@ class BrokerActivity(_ContractModel):
 
     broker: str
     activity_id: str
+    native_order_id: str | None = None
     activity_type: str
     category: str | None
     symbol: str | None

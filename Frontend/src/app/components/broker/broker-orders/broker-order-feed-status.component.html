@@ -1,0 +1,30 @@
+<section class="order-feed-status" aria-label="Broker and live order update status" aria-live="polite">
+  <div
+    class="status-item"
+    [class.state-ok]="status().broker.state === 'ok'"
+    [class.state-warn]="status().broker.state === 'warn'"
+    [class.state-down]="status().broker.state === 'down'"
+    [class.state-unknown]="status().broker.state === 'unknown'"
+  >
+    <span class="status-dot" aria-hidden="true"></span>
+    <div>
+      <span class="status-kicker">Broker session</span>
+      <strong>{{ status().broker.headline }}</strong>
+      <span class="status-detail">{{ status().broker.detail }}</span>
+    </div>
+  </div>
+  <div
+    class="status-item"
+    [class.state-ok]="status().updates.state === 'live'"
+    [class.state-warn]="status().updates.state === 'reconnecting' || status().updates.state === 'stale' || status().updates.state === 'offline_but_saved' || status().updates.state === 'rebuilding'"
+    [class.state-down]="status().updates.state === 'projection_unavailable' || status().updates.state === 'corrupt'"
+    [class.state-unknown]="status().updates.state === 'loading'"
+  >
+    <span class="status-dot" aria-hidden="true"></span>
+    <div>
+      <span class="status-kicker">Live order updates</span>
+      <strong>{{ status().updates.headline }}</strong>
+      <span class="status-detail">{{ status().updates.detail }}</span>
+    </div>
+  </div>
+</section>

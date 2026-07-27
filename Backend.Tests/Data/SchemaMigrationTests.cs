@@ -139,11 +139,6 @@ public class SchemaMigrationTests
         await using var connection = new NpgsqlConnection(database.ConnectionString);
         await connection.OpenAsync();
 
-        foreach (var tableName in RawSqlMigrationTables)
-        {
-            await AssertRelationExistsAsync(connection, $"public.{tableName}");
-        }
-
         foreach (var constraintName in RawSqlMigrationConstraints)
         {
             await using var command = new NpgsqlCommand(
@@ -157,6 +152,11 @@ public class SchemaMigrationTests
         foreach (var indexName in RawSqlMigrationIndexes)
         {
             await AssertRelationExistsAsync(connection, $"public.{indexName}");
+        }
+
+        foreach (var tableName in RetiredLifecycleProjectionTables)
+        {
+            await AssertRelationDoesNotExistAsync(connection, $"public.{tableName}");
         }
     }
 
@@ -307,7 +307,7 @@ public class SchemaMigrationTests
         Assert.NotNull(exception);
     }
 
-    private static readonly string[] RawSqlMigrationTables =
+    private static readonly string[] RetiredLifecycleProjectionTables =
     [
         "bot_lifecycle_events",
         "account_lifecycle_events",
@@ -318,8 +318,6 @@ public class SchemaMigrationTests
 
     private static readonly string[] RawSqlMigrationConstraints =
     [
-        "ck_bot_lifecycle_events_source_rank_nonnegative",
-        "ck_account_lifecycle_events_source_rank_nonnegative",
         "ck_artifact_kind_fields",
         "ck_artifact_kind_enum",
         "ck_resolution_enum",
@@ -334,8 +332,6 @@ public class SchemaMigrationTests
 
     private static readonly string[] RawSqlMigrationIndexes =
     [
-        "ix_bot_lifecycle_events_timeline",
-        "ix_account_lifecycle_events_timeline",
         "ix_strategyexecution_datapolicy_symbol",
         "uq_data_lake_artifacts_minute_bars",
         "uq_data_lake_artifacts_aggregated_bars",
@@ -356,15 +352,6 @@ public class SchemaMigrationTests
     private static async Task RecreateLegacySchemaDriftAsync(NpgsqlConnection connection)
     {
         await using var command = new NpgsqlCommand(@"
-            ALTER TABLE bot_lifecycle_events
-            DROP CONSTRAINT IF EXISTS ck_bot_lifecycle_events_source_rank_nonnegative;
-            ALTER TABLE bot_lifecycle_events DROP COLUMN IF EXISTS source_rank;
-            ALTER TABLE account_lifecycle_events
-            DROP CONSTRAINT IF EXISTS ck_account_lifecycle_events_source_rank_nonnegative;
-            ALTER TABLE account_lifecycle_events DROP COLUMN IF EXISTS source_rank;
-
-            DROP INDEX IF EXISTS ix_bot_lifecycle_events_timeline;
-            DROP INDEX IF EXISTS ix_account_lifecycle_events_timeline;
             DROP INDEX IF EXISTS ix_strategyexecution_datapolicy_symbol;
             CREATE INDEX ix_strategyexecution_datapolicy_symbol
               ON ""StrategyExecutions"" ((""DataPolicyJson""->>'market'));
@@ -387,12 +374,6 @@ public class SchemaMigrationTests
             DROP INDEX IF EXISTS ix_data_lake_artifacts_corp_action_lookup;
             DROP INDEX IF EXISTS ix_data_lake_artifacts_incomplete;
 
-            ALTER TABLE bot_lifecycle_events
-            ADD COLUMN source_rank integer NOT NULL DEFAULT 0;
-            ALTER TABLE bot_lifecycle_events
-            ADD CONSTRAINT ck_bot_lifecycle_events_source_rank_nonnegative
-            CHECK (source_rank <= 0);
-
             ALTER TABLE ""PortfolioSnapshots"" ADD COLUMN ""NetDelta"" numeric(18,8);
             ALTER TABLE ""PortfolioSnapshots"" ADD COLUMN ""NetGamma"" numeric(18,8);
             ALTER TABLE ""PortfolioSnapshots"" ADD COLUMN ""NetTheta"" numeric(18,8);
@@ -404,12 +385,6 @@ public class SchemaMigrationTests
     private static async Task CorruptRepairedRawSqlCatalogAsync(NpgsqlConnection connection)
     {
         await using var command = new NpgsqlCommand(@"
-            ALTER TABLE bot_lifecycle_events
-            DROP CONSTRAINT ck_bot_lifecycle_events_source_rank_nonnegative;
-            ALTER TABLE bot_lifecycle_events
-            ADD CONSTRAINT ck_bot_lifecycle_events_source_rank_nonnegative
-            CHECK (source_rank <= 0);
-
             DROP INDEX ix_strategyexecution_datapolicy_symbol;
             CREATE INDEX ix_strategyexecution_datapolicy_symbol
               ON ""StrategyExecutions"" ((""DataPolicyJson""->>'market'));
@@ -433,10 +408,8 @@ public class SchemaMigrationTests
                     coalesce(column_default, '')) AS catalog_entry
                 FROM information_schema.columns
                 WHERE table_schema = 'public'
-                  AND ((table_name IN ('bot_lifecycle_events', 'account_lifecycle_events')
-                        AND column_name = 'source_rank')
-                       OR (table_name = 'PortfolioSnapshots'
-                           AND column_name IN ('NetDelta', 'NetGamma', 'NetTheta', 'NetVega')))
+                  AND table_name = 'PortfolioSnapshots'
+                  AND column_name IN ('NetDelta', 'NetGamma', 'NetTheta', 'NetVega')
 
                 UNION ALL
 
@@ -498,6 +471,14 @@ public class SchemaMigrationTests
         command.Parameters.AddWithValue("relationName", relationName);
 
         Assert.IsType<string>(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task AssertRelationDoesNotExistAsync(NpgsqlConnection connection, string relationName)
+    {
+        await using var command = new NpgsqlCommand("SELECT to_regclass(@relationName)::text;", connection);
+        command.Parameters.AddWithValue("relationName", relationName);
+
+        Assert.True(await command.ExecuteScalarAsync() is null or DBNull);
     }
 
     private static string FindRepositoryFile(params string[] relativePathSegments)

@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.clerk import (
     reset_alpaca_clerk_for_testing,
     set_alpaca_clerk,
 )
+from app.broker.alpaca.clerk.journal import get_clerk_settings
 from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
     ClerkStatus,
@@ -54,6 +55,7 @@ __all__ = [
     "ReconciliationSummary",
     "ReconciliationSweep",
     "get_alpaca_clerk",
+    "get_clerk_settings",
     "get_reconciliation_sweep",
     "reset_alpaca_clerk_for_testing",
     "reset_reconciliation_sweep_for_testing",

@@ -85,6 +85,8 @@ class OrderJournal:
         self._dir = self._account_dir()
         self._lock = threading.Lock()
         self._appended = 0
+        self._projection_task: asyncio.Task[None] | None = None
+        self._projection_requested = False
 
     @property
     def account_dir(self) -> Path:
@@ -132,6 +134,27 @@ class OrderJournal:
     async def append_async(self, entry: OrderJournalEntry) -> None:
         """Append durably without blocking the async service's event loop."""
         await asyncio.to_thread(self.append, entry)
+        # The JSONL acknowledgement is canonical. The shared SQL projection is
+        # best-effort and rebuildable, so schedule it only after fsync and never
+        # delay or alter a Clerk outcome when Postgres is unavailable.
+        self._projection_requested = True
+        if self._projection_task is None or self._projection_task.done():
+            self._projection_task = asyncio.create_task(
+                self._drain_projection_requests(),
+                name="alpaca-transaction-projection",
+            )
+
+    async def _drain_projection_requests(self) -> None:
+        """Coalesce bursts of fsync completions into one projection tail at a time."""
+
+        from app.services.clerk_transaction_projection import project_alpaca_journal_best_effort
+
+        while self._projection_requested:
+            self._projection_requested = False
+            await project_alpaca_journal_best_effort(
+                artifacts_root=self._root,
+                account_id=self._account_id,
+            )
 
     @staticmethod
     def _append_fsynced(path: Path, line: str) -> None:

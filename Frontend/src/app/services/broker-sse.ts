@@ -34,6 +34,8 @@ export interface SseStream<T> {
   latest: Signal<T | null>;
   status: Signal<SseStatus>;
   lastError: Signal<string | null>;
+  /** Local receipt time for the latest server ready, heartbeat, or domain event. */
+  lastActivityAtMs: Signal<number | null>;
   clear: () => void;
   close: () => void;
 }
@@ -55,7 +57,10 @@ export function brokerSse<T>(
   const data = signal<T[]>([]);
   const status = signal<SseStatus>('connecting');
   const lastError = signal<string | null>(null);
+  const lastActivityAtMs = signal<number | null>(null);
   const maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
+
+  const markActivity = () => lastActivityAtMs.set(Date.now());
 
   const source = new EventSource(
     options.dataPlaneControlIntent ? withDataPlaneControlIntent(url) : url,
@@ -65,6 +70,12 @@ export function brokerSse<T>(
     status.set('open');
     lastError.set(null);
   });
+
+  // These control frames are optional for generic broker streams. The order
+  // stream emits both so callers can distinguish an open-but-buffered transport
+  // from a live server that has recently confirmed delivery.
+  source.addEventListener('ready', markActivity);
+  source.addEventListener('heartbeat', markActivity);
 
   source.addEventListener(eventName, (e: Event) => {
     const messageEvent = e as MessageEvent<string>;
@@ -77,6 +88,7 @@ export function brokerSse<T>(
       );
       return;
     }
+    markActivity();
     data.update((prev) => {
       const next = [...prev, payload];
       return next.length > maxBuffer ? next.slice(next.length - maxBuffer) : next;
@@ -127,6 +139,7 @@ export function brokerSse<T>(
     }),
     status: status.asReadonly(),
     lastError: lastError.asReadonly(),
+    lastActivityAtMs: lastActivityAtMs.asReadonly(),
     clear,
     close,
   };

@@ -3,7 +3,6 @@ import { ButtonModule } from "primeng/button";
 import { PanelModule } from "primeng/panel";
 import { Timeline } from "primeng/timeline";
 
-import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
 import { TimestampDisplayComponent } from "../../../shared/timestamp";
 import { AccountDeskEventsStore } from "./account-desk-events-store.service";
 
@@ -13,7 +12,7 @@ const RECENT_EVENT_COUNT = 5;
 @Component({
   selector: "app-account-desk-trader-events",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ButtonModule, PanelModule, ReceiptLabelPipe, TimestampDisplayComponent, Timeline],
+  imports: [ButtonModule, PanelModule, TimestampDisplayComponent, Timeline],
   templateUrl: "./account-desk-trader-events.component.html",
   styleUrl: "./account-desk-trader-events.component.scss",
 })
@@ -33,7 +32,7 @@ export class AccountDeskTraderEventsComponent {
   );
 
   retry(): void {
-    this.store.retry();
+    this.store.retryTrader();
   }
 
   toggleHistory(): void {

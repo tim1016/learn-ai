@@ -52,6 +52,17 @@ ephemeral session id:
   _Avoid_: `client_order_id` (retired internally — the name encoded the wrong
   model and trained the `live-{order_id}` mistake; kept only as a transitional
   alias at external compatibility edges, if any).
+- **Manual operator order** — an account-scoped paper order initiated through
+  the operator ticket, not a deployed strategy. Its identity is
+  `manual/operator/v1:{intent_id}` and it is accepted only through the Account
+  Clerk's durable intent/acknowledgement lane. It has no fabricated bot binding;
+  the Clerk journal is its canonical submit receipt and its broker callbacks
+  retain the same `order_ref`.
+- **Order history** — a read-side transaction-history projection over canonical
+  Clerk receipts and broker callbacks. It is not a fresh broker sweep and does
+  not become an authority for order state. The operator view may show its full
+  receipt/evidence details; the trader view receives only the backend-authored
+  outcome suitable for action.
 - **perm_id** — IBKR's stable per-TWS-order handle, captured post-submit.
 - **exec_id** — per-partial-fill id; dedupes fills.
 - **order_id** — IBKR's ephemeral, session-scoped order id. **Convenience for

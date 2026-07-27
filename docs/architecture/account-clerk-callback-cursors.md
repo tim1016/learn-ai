@@ -12,6 +12,20 @@ at-least-once read of the Account Clerk journal. Each run persists
 writes deliberately redelivers the journal row; the callback WAL recognizes
 the original journal sequence and does not reapply its fill effect.
 
+## Alpaca transaction-history parity (Slice 4, #1222)
+
+This document's IBKR callback cursor is not an Alpaca protocol. Alpaca has no
+callback sequence replay: its canonical evidence is the independent
+`accounts/alpaca/<account_id>/order_journal.jsonl` Clerk ledger. The shared
+transaction projection tails that file with its own durable byte/append cursor.
+On every `trade_updates` reconnect, Alpaca records two bounded recovery
+receipts before projection: a closed-order window (maximum 500) and an
+account-activity window (maximum 100) from the durable latest-activity
+watermark reconstructed from that ledger. The operator receipt retains the
+native opaque order/execution/activity IDs plus `recovery_source` and
+`recovery_window_limit`; the product contract does not label either as an IBKR
+callback.
+
 | Requirement | Executable evidence |
 | --- | --- |
 | Ordered journal drain over the production Unix socket | `test_account_clerk_cursors.py::test_drain_events_real_unix_socket_returns_ordered_journal_rows` |

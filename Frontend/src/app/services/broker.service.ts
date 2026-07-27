@@ -30,7 +30,12 @@ import type {
   JournalRecoveryReceipt,
   JournalRecoveryRequest,
 } from '../api/account-cockpit.types';
-import type { AccountEventsRequest, AccountEventsResponse } from '../api/account-events.types';
+import type { AccountEventsRequest, AccountEventsResponse, TraderAccountEventsResponse } from '../api/account-events.types';
+import type {
+  ClerkTransactionDetail,
+  ClerkTransactionFilters,
+  ClerkTransactionHistoryResponse,
+} from '../api/clerk-transaction-history.types';
 import type {
   AccountTruthResponse,
   DataPlaneHealth,
@@ -220,6 +225,37 @@ export class BrokerService {
     );
   }
 
+  accountTransactions(
+    accountId: string,
+    cursor: string | null = null,
+    limit = 50,
+    filters: ClerkTransactionFilters = {},
+  ): Promise<ClerkTransactionHistoryResponse> {
+    const params: Record<string, string | number> = { limit };
+    if (cursor !== null) params['cursor'] = cursor;
+    if (filters.origin) params['origin'] = filters.origin;
+    if (filters.lifecycleState) params['lifecycle_state'] = filters.lifecycleState;
+    if (filters.strategyInstanceId) params['strategy_instance_id'] = filters.strategyInstanceId;
+    if (filters.runId) params['run_id'] = filters.runId;
+    return firstValueFrom(
+      this.http.get<ClerkTransactionHistoryResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions`,
+        { params },
+      ),
+    );
+  }
+
+  accountTransaction(
+    accountId: string,
+    transactionId: string,
+  ): Promise<ClerkTransactionDetail> {
+    return firstValueFrom(
+      this.http.get<ClerkTransactionDetail>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/transactions/${encodeURIComponent(transactionId)}`,
+      ),
+    );
+  }
+
   restoreAccountClerk(
     accountId: string,
     payload: AccountClerkRestoreRequest,
@@ -257,6 +293,15 @@ export class BrokerService {
       this.http.get<AccountEventsResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/events`,
         { params },
+      ),
+    );
+  }
+
+  traderAccountEvents(accountId: string, limit = 100): Promise<TraderAccountEventsResponse> {
+    return firstValueFrom(
+      this.http.get<TraderAccountEventsResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/events/trader`,
+        { params: { limit } },
       ),
     );
   }

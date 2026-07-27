@@ -50,7 +50,7 @@ const EMPTY_ROLL_CALL_SUMMARY: BotRollCallSummary = {
   off_duty: 0,
   retired: 0,
   generated_at_ms: null,
-  session_date: null,
+  session_date_ms: null,
   effective_stop_ms: null,
 };
 
@@ -161,6 +161,8 @@ export class BotsPageComponent {
   readonly deleteConfirmationOpen = signal<boolean>(false);
   readonly isDeleting = signal<boolean>(false);
   readonly deleteErrorMessage = signal<string | null>(null);
+  readonly pageSize = INITIAL_CATALOG_PAGE_SIZE;
+  private catalogRequestGeneration = 0;
 
   readonly visibleBots = computed<BotTableRow[]>(() => {
     const query = normalize(this.searchQuery());
@@ -205,6 +207,11 @@ export class BotsPageComponent {
   readonly activeTabCount = computed(() => this.activeRows().length);
   readonly loadedBotCount = computed(() => this.bots().length);
   readonly hasMoreBots = computed(() => this.nextCatalogCursor() !== null);
+  readonly hasActiveFilters = computed(() =>
+    this.searchQuery().trim().length > 0 ||
+    this.attentionFilter() !== 'all' ||
+    this.lifecycleFilter() !== 'all',
+  );
   readonly connectedAccountId = computed(() => this.health.health()?.account_id ?? null);
   readonly readyRows = computed<BotTableRow[]>(() =>
     this.visibleBots().filter((row) => {
@@ -270,37 +277,49 @@ export class BotsPageComponent {
     });
   }
 
-  async refresh(): Promise<void> {
+  async refresh(selectionToRetain?: ReadonlySet<string>): Promise<void> {
+    const requestGeneration = ++this.catalogRequestGeneration;
+    let loadedFirstPage = false;
     this.isLoading.set(true);
     this.errorMessage.set(null);
     try {
       const page = await this.liveRuns.getBotCatalogPage({
-        limit: INITIAL_CATALOG_PAGE_SIZE,
+        limit: this.pageSize,
       });
+      if (requestGeneration !== this.catalogRequestGeneration) return;
       this.applyCatalogPage(page, { replace: true });
+      loadedFirstPage = true;
+      this.selectedBotIds.set(new Set(selectionToRetain ?? []));
       void this.refreshAccountTriage();
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
     } finally {
-      this.isLoading.set(false);
+      if (requestGeneration === this.catalogRequestGeneration) {
+        this.isLoading.set(false);
+        if (loadedFirstPage && this.hasActiveFilters()) {
+          void this.loadRemainingBotsForActiveFilter();
+        }
+      }
     }
   }
 
   async loadMoreBots(): Promise<void> {
     const cursor = this.nextCatalogCursor();
     if (cursor === null || this.isLoadingMore() || this.isLoading()) return;
+    const requestGeneration = this.catalogRequestGeneration;
     this.isLoadingMore.set(true);
     this.errorMessage.set(null);
     try {
       const page = await this.liveRuns.getBotCatalogPage({
-        limit: INITIAL_CATALOG_PAGE_SIZE,
+        limit: this.pageSize,
         cursor,
       });
+      if (requestGeneration !== this.catalogRequestGeneration) return;
       this.applyCatalogPage(page, { replace: false });
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
     } finally {
-      this.isLoadingMore.set(false);
+      if (requestGeneration === this.catalogRequestGeneration) this.isLoadingMore.set(false);
     }
   }
 
@@ -424,15 +443,18 @@ export class BotsPageComponent {
     const target = event.target;
     if (target instanceof HTMLInputElement) {
       this.searchQuery.set(target.value);
+      void this.loadRemainingBotsForActiveFilter();
     }
   }
 
   setAttentionFilter(value: AttentionFilter): void {
     this.attentionFilter.set(value);
+    void this.loadRemainingBotsForActiveFilter();
   }
 
   setLifecycleFilter(value: LifecycleFilter): void {
     this.lifecycleFilter.set(value);
+    void this.loadRemainingBotsForActiveFilter();
   }
 
   setActiveModeTab(value: string | number | undefined): void {
@@ -550,8 +572,13 @@ export class BotsPageComponent {
       );
       const firstFailure = results.find((result) => result.status === 'rejected');
       if (firstFailure) {
+        const rejectedIds = new Set(
+          results.flatMap((result, index) =>
+            result.status === 'rejected' && ids[index] !== undefined ? [ids[index]] : [],
+          ),
+        );
         if (results.some((result) => result.status === 'fulfilled')) {
-          await this.refresh();
+          await this.refresh(rejectedIds);
         }
         this.deleteErrorMessage.set(this.humanError(firstFailure.reason));
         return;
@@ -611,7 +638,28 @@ export class BotsPageComponent {
     this.catalogTotalCount.set(page.total_count);
     this.nextCatalogCursor.set(page.next_cursor);
     this.catalogLoaded.set(true);
-    if (options.replace) this.clearSelection();
+  }
+
+  private async loadRemainingBotsForActiveFilter(): Promise<void> {
+    if (!this.hasActiveFilters() || this.isLoading() || this.isLoadingMore()) return;
+    const requestGeneration = this.catalogRequestGeneration;
+    this.isLoadingMore.set(true);
+    try {
+      while (this.nextCatalogCursor() !== null && requestGeneration === this.catalogRequestGeneration) {
+        const page = await this.liveRuns.getBotCatalogPage({
+          limit: this.pageSize,
+          cursor: this.nextCatalogCursor() ?? undefined,
+        });
+        if (requestGeneration !== this.catalogRequestGeneration) return;
+        this.applyCatalogPage(page, { replace: false });
+      }
+    } catch (err) {
+      if (requestGeneration === this.catalogRequestGeneration) {
+        this.errorMessage.set(this.humanError(err));
+      }
+    } finally {
+      if (requestGeneration === this.catalogRequestGeneration) this.isLoadingMore.set(false);
+    }
   }
 
   private humanError(err: unknown): string {

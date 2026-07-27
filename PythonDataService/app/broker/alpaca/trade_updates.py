@@ -91,6 +91,7 @@ _DEFAULT_BASE_BACKOFF_S = 1.0
 # terminal transitions missed while disconnected. Alpaca's order-list max is 500;
 # a wider historical sweep is S6's reconciliation job.
 _GAP_RECONCILE_LIMIT = 500
+_ACTIVITY_RECOVERY_LIMIT = 100
 
 
 def _now_ms() -> int:
@@ -532,6 +533,8 @@ class TradeUpdatesConsumer:
             event=event,
             event_key=key,
             order=broker_order,
+            recovery_source="closed_orders_window" if from_gap_reconcile else None,
+            recovery_window_limit=_GAP_RECONCILE_LIMIT if from_gap_reconcile else None,
         )
         # Only a durable Clerk append earns idempotency state. If the Clerk
         # raises, the reconnect loop can retry the still-unseen frame.
@@ -566,6 +569,7 @@ class TradeUpdatesConsumer:
         whose synthetic timestamp differs from the socket's. A full historical
         sweep beyond the bounded page is S6's reconciliation job.
         """
+        await self._reconcile_activity_window()
         try:
             orders = await self._read.list_orders(
                 status="closed", limit=_GAP_RECONCILE_LIMIT
@@ -586,6 +590,38 @@ class TradeUpdatesConsumer:
                 continue
             self._counters.gap_reconciled += 1
             await self._handle_trade_update(synthetic, from_gap_reconcile=True)
+
+    async def _reconcile_activity_window(self) -> None:
+        """Persist a bounded, cursor-derived Alpaca account-activity recovery receipt.
+
+        This is intentionally separate from the synthetic order lifecycle event:
+        Alpaca activities are account evidence and do not claim IBKR callback
+        equivalence.  The cursor is reconstructed from the durable Clerk ledger
+        on every reconnect, so a process restart cannot forget the gap boundary.
+        """
+
+        try:
+            cursor = await self._clerk.activity_recovery.cursor_ms()
+            activities = await self._read.list_activities(
+                after_ms=cursor, limit=_ACTIVITY_RECOVERY_LIMIT
+            )
+            # Alpaca returns this bounded page newest-first. Commit the oldest
+            # observable activity first so a crash cannot advance the durable
+            # high-water past an unrecorded earlier item in the same window.
+            for activity in sorted(
+                activities,
+                key=lambda item: item.occurred_at_ms if item.occurred_at_ms is not None else -1,
+            ):
+                if await self._clerk.activity_recovery.record(
+                    activity=activity, window_limit=_ACTIVITY_RECOVERY_LIMIT
+                ):
+                    self._counters.gap_reconciled += 1
+        except Exception:
+            logger.warning(
+                "alpaca trade_updates account-activity recovery failed",
+                extra={"action": "trade_updates_activity_recovery_error"},
+                exc_info=True,
+            )
 
     # ── Real-socket adapter ──────────────────────────────────────────────────
 

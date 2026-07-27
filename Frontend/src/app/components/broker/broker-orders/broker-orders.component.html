@@ -4,6 +4,8 @@
   subtitle="Review the broker order ledger and place app-stamped manual paper orders against your DU account. Brackets, OCO, and bracket-children are deferred."
 />
 
+<app-broker-order-feed-status [status]="orderFeedStatus()" />
+
 @if (bannerState() === 'disabled-host-runner-active') {
   <div class="disabled-banner" role="status">
     <i class="pi pi-info-circle" aria-hidden="true"></i>
@@ -219,6 +221,9 @@
           <span class="ack-headline">Order request acknowledged by IBKR API.</span>
           <span class="ack-detail">
             Verify the terminal state in the order ledger or live order events.
+            @if (accountId(); as accountId) {
+              <a [routerLink]="['/broker/accounts', accountId]" fragment="account-desk-transaction-history">Open operator receipt history</a>
+            }
           </span>
           <span class="ack-meta">
             Order #{{ ack.order_id }} · status
@@ -302,28 +307,28 @@
                 [class.foreign-row]="o.owner.owner_class === 'foreign_or_unclaimed'"
                 [class.manual-row]="o.owner.owner_class === 'manual'"
               >
-                <td class="mono source-broker">{{ o.symbol }}</td>
-                <td class="mono token source-mixed">
+                <td class="mono source-broker" data-label="Symbol">{{ o.symbol }}</td>
+                <td class="mono token source-mixed" data-label="Order ref">
                   @if (o.order_ref; as ref) {
                     {{ ref }}
                   } @else {
                     —
                   }
                 </td>
-                <td class="mono source-broker">{{ o.action }}</td>
-                <td class="mono source-broker">{{ o.order_type }}</td>
-                <td class="num mono source-broker">{{ fmtCurrency(o.limit_price) }}</td>
-                <td class="num mono source-broker">
+                <td class="mono source-broker" data-label="Side">{{ o.action }}</td>
+                <td class="mono source-broker" data-label="Type">{{ o.order_type }}</td>
+                <td class="num mono source-broker" data-label="Limit">{{ fmtCurrency(o.limit_price) }}</td>
+                <td class="num mono source-broker" data-label="Fill">
                   {{ formatQuantity(o.cumulative_filled) }}/{{ formatQuantity(o.quantity) }}
                 </td>
-                <td class="mono token source-broker">
+                <td class="mono token source-broker" data-label="Broker order">
                   @if (o.perm_id !== null) {
                     Perm {{ o.perm_id }}
                   } @else {
                     —
                   }
                 </td>
-                <td class="mono token source-broker">
+                <td class="mono token source-broker" data-label="Broker execution">
                   @if (row.executionIds.length > 0) {
                     @for (execId of row.executionIds; track execId; let last = $last) {
                       <span class="exec-id">{{ execId }}</span>
@@ -336,7 +341,7 @@
                   }
                 </td>
                 @if (hasVisibleCancelActions()) {
-                  <td>
+                  <td data-label="Action">
                     @if (canCancelLedgerOrder(o)) {
                       <button
                         type="button"
@@ -368,7 +373,6 @@
   <article class="card events-card">
     <header class="card-header">
       Live order events
-      <span class="badge mono">{{ eventStatus() }}</span>
     </header>
 
     @if (eventStreamError(); as err) {

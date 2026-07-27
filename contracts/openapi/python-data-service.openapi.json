@@ -250,6 +250,16 @@
             "title": "Bot Order Namespace",
             "type": "string"
           },
+          "broker_ack": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IbkrOrderAck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "exec_id": {
             "anyOf": [
               {
@@ -975,6 +985,102 @@
         "title": "AccountEventEvidenceRef",
         "type": "object"
       },
+      "AccountEventOperatorOrderReceipt": {
+        "description": "The receipt fields an operator needs to audit one manual paper order.",
+        "properties": {
+          "acknowledged_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Acknowledged At Ms",
+            "type": "integer"
+          },
+          "action": {
+            "enum": [
+              "BUY",
+              "SELL"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "broker": {
+            "const": "ibkr",
+            "title": "Broker"
+          },
+          "limit_price": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Price"
+          },
+          "order_id": {
+            "minimum": 0.0,
+            "title": "Order Id",
+            "type": "integer"
+          },
+          "order_ref": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "order_type": {
+            "enum": [
+              "MKT",
+              "LMT"
+            ],
+            "title": "Order Type",
+            "type": "string"
+          },
+          "perm_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perm Id"
+          },
+          "quantity": {
+            "exclusiveMinimum": 0.0,
+            "title": "Quantity",
+            "type": "number"
+          },
+          "status": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker",
+          "order_id",
+          "order_ref",
+          "symbol",
+          "action",
+          "quantity",
+          "order_type",
+          "status",
+          "acknowledged_at_ms"
+        ],
+        "title": "AccountEventOperatorOrderReceipt",
+        "type": "object"
+      },
       "AccountEventRow": {
         "description": "One backend-classified journal event for a desk view.",
         "properties": {
@@ -1014,6 +1120,16 @@
             "minLength": 1,
             "title": "Operator Detail",
             "type": "string"
+          },
+          "operator_order_receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEventOperatorOrderReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "schema_version": {
             "const": 1,
@@ -1133,12 +1249,8 @@
             "title": "Schema Version"
           },
           "view": {
-            "enum": [
-              "trader_today",
-              "operations"
-            ],
-            "title": "View",
-            "type": "string"
+            "const": "operations",
+            "title": "View"
           }
         },
         "required": [
@@ -5937,6 +6049,8 @@
             "title": "Next Cursor"
           },
           "observed_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
             "title": "Observed At Ms",
             "type": "integer"
           },
@@ -5947,7 +6061,9 @@
           }
         },
         "required": [
+          "bots",
           "total_count",
+          "next_cursor",
           "observed_at_ms"
         ],
         "title": "BotCatalogPageResponse",
@@ -7251,16 +7367,18 @@
             "title": "Retired",
             "type": "integer"
           },
-          "session_date": {
+          "session_date_ms": {
             "anyOf": [
               {
-                "type": "string"
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Session Date"
+            "title": "Session Date Ms"
           },
           "sick_bay": {
             "default": 0,
@@ -7420,6 +7538,17 @@
               }
             ],
             "title": "Category"
+          },
+          "native_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Order Id"
           },
           "net_amount": {
             "anyOf": [
@@ -10206,6 +10335,107 @@
         "title": "ClearHoldRequest",
         "type": "object"
       },
+      "ClerkOrderInstruction": {
+        "additionalProperties": false,
+        "description": "Typed, receipt-supplied order fields; never a client-side inference.",
+        "properties": {
+          "action": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "limit_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Price"
+          },
+          "order_type": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Type"
+          },
+          "outside_rth": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outside Rth"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "sec_type": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sec Type"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "time_in_force": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time In Force"
+          }
+        },
+        "title": "ClerkOrderInstruction",
+        "type": "object"
+      },
       "ClerkStatus": {
         "additionalProperties": false,
         "description": "The clerk's observable state for the operator status surface (S6).\n\nComposes the exposure hold, the latest reconciliation verdict, and the count\nof outstanding (unresolved) intents (the S5 unfinished set) \u2014 everything the\ndesk needs to render the hold banner and a health line.",
@@ -10248,6 +10478,594 @@
           "observed_at_ms"
         ],
         "title": "ClerkStatus",
+        "type": "object"
+      },
+      "ClerkTransactionEventRow": {
+        "additionalProperties": false,
+        "description": "One immutable event materialized from a Clerk journal receipt.",
+        "properties": {
+          "broker": {
+            "default": "ibkr",
+            "enum": [
+              "ibkr",
+              "alpaca"
+            ],
+            "title": "Broker",
+            "type": "string"
+          },
+          "callback_identity": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Callback Identity",
+            "type": "string"
+          },
+          "commission_status": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "reported"
+            ],
+            "title": "Commission Status",
+            "type": "string"
+          },
+          "event_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Event Id",
+            "type": "string"
+          },
+          "event_kind": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Event Kind",
+            "type": "string"
+          },
+          "fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee"
+          },
+          "journal_seq": {
+            "minimum": 1.0,
+            "title": "Journal Seq",
+            "type": "integer"
+          },
+          "lifecycle_state": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Lifecycle State",
+            "type": "string"
+          },
+          "native_execution_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Execution Id"
+          },
+          "native_order_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Order Id"
+          },
+          "receipt": {
+            "title": "Receipt",
+            "type": "object"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "event_kind",
+          "callback_identity",
+          "lifecycle_state",
+          "journal_seq",
+          "recorded_at_ms"
+        ],
+        "title": "ClerkTransactionEventRow",
+        "type": "object"
+      },
+      "ClerkTransactionHistoryResponse": {
+        "additionalProperties": false,
+        "description": "One bounded keyset page, with backend-owned projection status.",
+        "properties": {
+          "canonical_fallback_required": {
+            "title": "Canonical Fallback Required",
+            "type": "boolean"
+          },
+          "feed_detail": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Feed Detail",
+            "type": "string"
+          },
+          "feed_headline": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Feed Headline",
+            "type": "string"
+          },
+          "feed_state": {
+            "enum": [
+              "live",
+              "reconnecting",
+              "rebuilding",
+              "stale",
+              "offline_but_saved",
+              "corrupt",
+              "projection_unavailable"
+            ],
+            "title": "Feed State",
+            "type": "string"
+          },
+          "high_water_journal_seq": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "High Water Journal Seq"
+          },
+          "lag_is_lower_bound": {
+            "default": false,
+            "title": "Lag Is Lower Bound",
+            "type": "boolean"
+          },
+          "lag_records": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lag Records"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "projection_available": {
+            "title": "Projection Available",
+            "type": "boolean"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ClerkTransactionSummaryRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "projection_available",
+          "canonical_fallback_required",
+          "feed_state",
+          "feed_headline",
+          "feed_detail",
+          "rows"
+        ],
+        "title": "ClerkTransactionHistoryResponse",
+        "type": "object"
+      },
+      "ClerkTransactionRow": {
+        "additionalProperties": false,
+        "description": "One operator transaction, projected from a durable Clerk receipt.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "default": "ibkr",
+            "enum": [
+              "ibkr",
+              "alpaca"
+            ],
+            "title": "Broker",
+            "type": "string"
+          },
+          "commission_status": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "reported"
+            ],
+            "title": "Commission Status",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ClerkTransactionEventRow"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "exec_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exec Id"
+          },
+          "fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee"
+          },
+          "intent_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Intent Id",
+            "type": "string"
+          },
+          "journal_seq": {
+            "minimum": 1.0,
+            "title": "Journal Seq",
+            "type": "integer"
+          },
+          "lifecycle_state": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Lifecycle State",
+            "type": "string"
+          },
+          "native_execution_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Execution Id"
+          },
+          "native_order_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Order Id"
+          },
+          "order_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Id"
+          },
+          "order_instruction": {
+            "$ref": "#/components/schemas/ClerkOrderInstruction"
+          },
+          "order_ref": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "perm_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perm Id"
+          },
+          "receipt": {
+            "title": "Receipt",
+            "type": "object"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "transaction_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Transaction Id",
+            "type": "string"
+          },
+          "transaction_kind": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Transaction Kind",
+            "type": "string"
+          },
+          "transaction_origin": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "strategy",
+              "recovery",
+              "emergency",
+              "shutdown",
+              "force_flat",
+              "other"
+            ],
+            "title": "Transaction Origin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "account_id",
+          "journal_seq",
+          "recorded_at_ms",
+          "transaction_kind",
+          "strategy_instance_id",
+          "run_id",
+          "intent_id",
+          "order_ref",
+          "lifecycle_state"
+        ],
+        "title": "ClerkTransactionRow",
+        "type": "object"
+      },
+      "ClerkTransactionSummaryRow": {
+        "additionalProperties": false,
+        "description": "Compact, receipt-free row for the operator transaction grid.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "default": "ibkr",
+            "enum": [
+              "ibkr",
+              "alpaca"
+            ],
+            "title": "Broker",
+            "type": "string"
+          },
+          "commission_status": {
+            "default": "unknown",
+            "enum": [
+              "unknown",
+              "reported"
+            ],
+            "title": "Commission Status",
+            "type": "string"
+          },
+          "event_count": {
+            "minimum": 1.0,
+            "title": "Event Count",
+            "type": "integer"
+          },
+          "exec_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exec Id"
+          },
+          "fee": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee"
+          },
+          "intent_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Intent Id",
+            "type": "string"
+          },
+          "journal_seq": {
+            "minimum": 1.0,
+            "title": "Journal Seq",
+            "type": "integer"
+          },
+          "lifecycle_state": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Lifecycle State",
+            "type": "string"
+          },
+          "native_execution_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Execution Id"
+          },
+          "native_order_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Native Order Id"
+          },
+          "order_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Id"
+          },
+          "order_instruction": {
+            "$ref": "#/components/schemas/ClerkOrderInstruction"
+          },
+          "order_ref": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "perm_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Perm Id"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "transaction_id": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Transaction Id",
+            "type": "string"
+          },
+          "transaction_kind": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Transaction Kind",
+            "type": "string"
+          },
+          "transaction_origin": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "strategy",
+              "recovery",
+              "emergency",
+              "shutdown",
+              "force_flat",
+              "other"
+            ],
+            "title": "Transaction Origin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "account_id",
+          "journal_seq",
+          "recorded_at_ms",
+          "transaction_kind",
+          "strategy_instance_id",
+          "run_id",
+          "intent_id",
+          "order_ref",
+          "lifecycle_state",
+          "event_count"
+        ],
+        "title": "ClerkTransactionSummaryRow",
         "type": "object"
       },
       "CloseAllAction": {
@@ -22149,631 +22967,6 @@
           "value"
         ],
         "title": "LifecycleChartReceipt",
-        "type": "object"
-      },
-      "LifecycleProjectionEventRow": {
-        "additionalProperties": false,
-        "description": "One persisted lifecycle projection row returned by the read API.",
-        "properties": {
-          "account_id": {
-            "title": "Account Id",
-            "type": "string"
-          },
-          "category": {
-            "enum": [
-              "decision",
-              "risk_gate",
-              "order",
-              "fill",
-              "position_change",
-              "account_balance",
-              "freeze",
-              "halt",
-              "poison",
-              "desired_state",
-              "lifecycle_transition",
-              "account_event",
-              "evidence"
-            ],
-            "title": "Category",
-            "type": "string"
-          },
-          "event_id": {
-            "title": "Event Id",
-            "type": "string"
-          },
-          "event_type": {
-            "title": "Event Type",
-            "type": "string"
-          },
-          "evidence_refs": {
-            "items": {
-              "type": "object"
-            },
-            "title": "Evidence Refs",
-            "type": "array"
-          },
-          "gate_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Gate Id"
-          },
-          "id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Id"
-          },
-          "inserted_at_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Inserted At Ms"
-          },
-          "node_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Node Id"
-          },
-          "operator_next_step": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Operator Next Step"
-          },
-          "receipt_payload": {
-            "title": "Receipt Payload",
-            "type": "object"
-          },
-          "rendered_headline": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rendered Headline"
-          },
-          "rendered_template_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rendered Template Id"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          },
-          "severity": {
-            "enum": [
-              "info",
-              "warning",
-              "critical"
-            ],
-            "title": "Severity",
-            "type": "string"
-          },
-          "source_artifact": {
-            "title": "Source Artifact",
-            "type": "string"
-          },
-          "source_hash": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "minLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Hash"
-          },
-          "source_offset": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Offset"
-          },
-          "source_rank": {
-            "minimum": 0.0,
-            "title": "Source Rank",
-            "type": "integer"
-          },
-          "source_seq": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Seq"
-          },
-          "source_type": {
-            "title": "Source Type",
-            "type": "string"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "enum": [
-                  "passed",
-                  "active",
-                  "blocked",
-                  "poison",
-                  "freeze",
-                  "inactive",
-                  "unknown"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status"
-          },
-          "strategy_instance_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Strategy Instance Id"
-          },
-          "summary": {
-            "title": "Summary",
-            "type": "string"
-          },
-          "ts_ms": {
-            "anyOf": [
-              {
-                "maximum": 9.223372036854776e+18,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ts Ms"
-          },
-          "ts_ms_resolved": {
-            "title": "Ts Ms Resolved",
-            "type": "boolean"
-          },
-          "updated_at_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At Ms"
-          },
-          "why": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Why"
-          }
-        },
-        "required": [
-          "account_id",
-          "event_id",
-          "event_type",
-          "category",
-          "severity",
-          "ts_ms_resolved",
-          "source_artifact",
-          "source_type",
-          "source_rank",
-          "summary"
-        ],
-        "title": "LifecycleProjectionEventRow",
-        "type": "object"
-      },
-      "LifecycleSafetyProjectionEventRow": {
-        "additionalProperties": false,
-        "description": "Safety triage row with the endpoint's warning/critical invariant.",
-        "properties": {
-          "account_id": {
-            "title": "Account Id",
-            "type": "string"
-          },
-          "category": {
-            "enum": [
-              "decision",
-              "risk_gate",
-              "order",
-              "fill",
-              "position_change",
-              "account_balance",
-              "freeze",
-              "halt",
-              "poison",
-              "desired_state",
-              "lifecycle_transition",
-              "account_event",
-              "evidence"
-            ],
-            "title": "Category",
-            "type": "string"
-          },
-          "event_id": {
-            "title": "Event Id",
-            "type": "string"
-          },
-          "event_type": {
-            "title": "Event Type",
-            "type": "string"
-          },
-          "evidence_refs": {
-            "items": {
-              "type": "object"
-            },
-            "title": "Evidence Refs",
-            "type": "array"
-          },
-          "gate_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Gate Id"
-          },
-          "id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Id"
-          },
-          "inserted_at_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Inserted At Ms"
-          },
-          "node_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Node Id"
-          },
-          "operator_next_step": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Operator Next Step"
-          },
-          "receipt_payload": {
-            "title": "Receipt Payload",
-            "type": "object"
-          },
-          "rendered_headline": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rendered Headline"
-          },
-          "rendered_template_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Rendered Template Id"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          },
-          "severity": {
-            "enum": [
-              "warning",
-              "critical"
-            ],
-            "title": "Severity",
-            "type": "string"
-          },
-          "source_artifact": {
-            "title": "Source Artifact",
-            "type": "string"
-          },
-          "source_hash": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "minLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Hash"
-          },
-          "source_offset": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Offset"
-          },
-          "source_rank": {
-            "minimum": 0.0,
-            "title": "Source Rank",
-            "type": "integer"
-          },
-          "source_seq": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Seq"
-          },
-          "source_type": {
-            "title": "Source Type",
-            "type": "string"
-          },
-          "status": {
-            "anyOf": [
-              {
-                "enum": [
-                  "passed",
-                  "active",
-                  "blocked",
-                  "poison",
-                  "freeze",
-                  "inactive",
-                  "unknown"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Status"
-          },
-          "strategy_instance_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Strategy Instance Id"
-          },
-          "summary": {
-            "title": "Summary",
-            "type": "string"
-          },
-          "ts_ms": {
-            "anyOf": [
-              {
-                "maximum": 9.223372036854776e+18,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ts Ms"
-          },
-          "ts_ms_resolved": {
-            "title": "Ts Ms Resolved",
-            "type": "boolean"
-          },
-          "updated_at_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At Ms"
-          },
-          "why": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Why"
-          }
-        },
-        "required": [
-          "account_id",
-          "event_id",
-          "event_type",
-          "category",
-          "severity",
-          "ts_ms_resolved",
-          "source_artifact",
-          "source_type",
-          "source_rank",
-          "summary"
-        ],
-        "title": "LifecycleSafetyProjectionEventRow",
-        "type": "object"
-      },
-      "LifecycleSafetyTriageResponse": {
-        "additionalProperties": false,
-        "description": "Bounded safety query over warning/critical lifecycle projection rows.",
-        "properties": {
-          "canonical_fallback_required": {
-            "title": "Canonical Fallback Required",
-            "type": "boolean"
-          },
-          "projection_available": {
-            "title": "Projection Available",
-            "type": "boolean"
-          },
-          "rows": {
-            "items": {
-              "$ref": "#/components/schemas/LifecycleSafetyProjectionEventRow"
-            },
-            "title": "Rows",
-            "type": "array"
-          }
-        },
-        "required": [
-          "projection_available",
-          "canonical_fallback_required",
-          "rows"
-        ],
-        "title": "LifecycleSafetyTriageResponse",
-        "type": "object"
-      },
-      "LifecycleTimelineResponse": {
-        "additionalProperties": false,
-        "description": "Bounded timeline response for bot/account/run lifecycle events.",
-        "properties": {
-          "canonical_fallback_required": {
-            "title": "Canonical Fallback Required",
-            "type": "boolean"
-          },
-          "projection_available": {
-            "title": "Projection Available",
-            "type": "boolean"
-          },
-          "rows": {
-            "items": {
-              "$ref": "#/components/schemas/LifecycleProjectionEventRow"
-            },
-            "title": "Rows",
-            "type": "array"
-          }
-        },
-        "required": [
-          "projection_available",
-          "canonical_fallback_required",
-          "rows"
-        ],
-        "title": "LifecycleTimelineResponse",
         "type": "object"
       },
       "LiveBinding": {
@@ -37312,6 +37505,99 @@
         "title": "TradeSimRunBody",
         "type": "object"
       },
+      "TraderAccountEventRow": {
+        "description": "Trader-safe outcome copy; deliberately contains no operator evidence.",
+        "properties": {
+          "event_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Event Id",
+            "type": "string"
+          },
+          "occurred_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Occurred At Ms",
+            "type": "integer"
+          },
+          "outcome": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Outcome",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          },
+          "seq": {
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "event_id",
+          "seq",
+          "occurred_at_ms",
+          "outcome"
+        ],
+        "title": "TraderAccountEventRow",
+        "type": "object"
+      },
+      "TraderAccountEventsResponse": {
+        "description": "Trader event page with an intentionally disjoint schema from operations.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "latest_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Seq"
+          },
+          "next_before_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before Seq"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/TraderAccountEventRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "TraderAccountEventsResponse",
+        "type": "object"
+      },
       "TradesSummary": {
         "description": "Summary of trade records in a live run.",
         "properties": {
@@ -39843,13 +40129,9 @@
             "name": "view",
             "required": false,
             "schema": {
+              "const": "operations",
               "default": "operations",
-              "enum": [
-                "trader_today",
-                "operations"
-              ],
-              "title": "View",
-              "type": "string"
+              "title": "View"
             }
           },
           {
@@ -40024,6 +40306,77 @@
           }
         },
         "summary": "Repair Account Event Sequence Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/events/trader": {
+      "get": {
+        "description": "Return trader-authored outcomes through a schema with no receipt fields.",
+        "operationId": "trader_account_events_endpoint_api_accounts__account_id__events_trader_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraderAccountEventsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Trader Account Events Endpoint",
         "tags": [
           "accounts"
         ]
@@ -41029,6 +41382,242 @@
         "summary": "Update Account Session Policy Endpoint",
         "tags": [
           "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/transactions": {
+      "get": {
+        "description": "Read one indexed keyset page without broker, Account Truth, or journal I/O.",
+        "operationId": "get_clerk_transaction_history_api_accounts__account_id__transactions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origin",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "manual",
+                    "strategy",
+                    "recovery",
+                    "emergency",
+                    "shutdown",
+                    "force_flat",
+                    "other"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origin"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lifecycle_state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lifecycle State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "strategy_instance_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Strategy Instance Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkTransactionHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clerk Transaction History",
+        "tags": [
+          "clerk-transactions"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/transactions/{transaction_id}": {
+      "get": {
+        "description": "Read exactly one selected projected receipt; never rescan Clerk or IBKR.",
+        "operationId": "get_clerk_transaction_detail_api_accounts__account_id__transactions__transaction_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "transaction_id",
+            "required": true,
+            "schema": {
+              "title": "Transaction Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkTransactionRow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clerk Transaction Detail",
+        "tags": [
+          "clerk-transactions"
         ]
       }
     },
@@ -46534,280 +47123,6 @@
         ]
       }
     },
-    "/api/lifecycle-projection/safety-triage": {
-      "get": {
-        "description": "Return warning/critical projection rows for fleet triage.",
-        "operationId": "get_lifecycle_safety_triage_api_lifecycle_projection_safety_triage_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "account_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Account Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "strategy_instance_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 128,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Strategy Instance Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "run_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 128,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Run Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 40,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Status"
-            }
-          },
-          {
-            "in": "query",
-            "name": "event_type",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 128,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Event Type"
-            }
-          },
-          {
-            "in": "query",
-            "name": "node_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 80,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Node Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "severity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "warning",
-                    "critical"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Severity"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "maximum": 500,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LifecycleSafetyTriageResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Lifecycle Safety Triage",
-        "tags": [
-          "lifecycle-projection"
-        ]
-      }
-    },
-    "/api/lifecycle-projection/timeline": {
-      "get": {
-        "description": "Return a bounded timeline from the rebuildable projection.",
-        "operationId": "get_lifecycle_timeline_api_lifecycle_projection_timeline_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "account_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Account Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "strategy_instance_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 128,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Strategy Instance Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "run_id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 128,
-                  "minLength": 1,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Run Id"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "maximum": 500,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LifecycleTimelineResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Lifecycle Timeline",
-        "tags": [
-          "lifecycle-projection"
-        ]
-      }
-    },
     "/api/live-instances": {
       "get": {
         "description": "Account fleet overview: every known strategy instance, live or not.",
@@ -47169,7 +47484,7 @@
     },
     "/api/live-instances/catalog/page": {
       "get": {
-        "description": "Return a bounded catalog page for post-first-paint loading.\n\nThis remains broker-free. It reads one daemon fleet snapshot so each\ncard's runtime state is current, then composes daemon/account evidence\nonly for the requested page.",
+        "description": "Return one broker-free catalog page for post-first-paint loading.",
         "operationId": "list_bot_catalog_page_api_live_instances_catalog_page_get",
         "parameters": [
           {

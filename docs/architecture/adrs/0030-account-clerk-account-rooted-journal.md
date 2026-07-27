@@ -121,7 +121,8 @@ both the Clerk and a historic replay.
 | `engine/live/account_owner.py::AccountOwnerSubmitIntent`; `engine/live/account_clerk*.py`; `schemas/journal_cures.py`; Clerk journal/reconciler/operation models | **CLERK-BACKED-LEGACY-NAME** | The name is the compatibility wire identity for Clerk intake and journal rows. It does not select a per-runner broker writer. Defer the coordinated wire/model rename; do not churn it in Track B. |
 | `engine/live/run.py` Clerk-generation providers, `owner_generation` callback fields, and `AccountOwnerSubmitResult` adaptation; `engine/live/live_engine.py`; `engine/live/live_portfolio.py`; `engine/live/reconciliation_orchestrator.py` | **CLERK-BACKED-LEGACY-NAME** | Normal strategy submit and namespace cancellation use Clerk RPC. These parameters retain the old vocabulary while carrying the active Clerk generation. Rename only with the compatibility model above. |
 | `broker/ibkr/orders.py`; `routers/broker.py`; `engine/live/account_owner_fence.py` | **CLERK-BACKED-LEGACY-NAME** | The grant/fence spelling is compatibility debt at the broker boundary. It remains fail-closed and is not evidence of a runner-owned normal submit path. A separate rename must preserve the existing fail-closed fence. |
-| `engine/live/account_artifacts.py` legacy `AccountOwnerGeneration` read/write model and `owner_generation.json`; `services/bot_lifecycle_projection.py`; `services/lifecycle_projection_{store,replay,schema}.py`; `schemas/lifecycle_projection.py`; `schemas/bot_events.py` | **LEGACY-READER** | These consume or preserve historic owner-keyed artifacts/events and PostgreSQL projection rows. They are not current write authority. Keep dual-read/history until a versioned artifact and database migration retires the historic record. |
+| `engine/live/account_artifacts.py` legacy `AccountOwnerGeneration` read/write model and `owner_generation.json`; `schemas/bot_events.py` | **LEGACY-READER** | These consume or preserve historic owner-keyed artifacts/events. They are not current write authority. Keep dual-read/history until a versioned artifact migration retires the historic record. |
+| `services/bot_lifecycle_projection.py` | **PYTHON-EVIDENCE-FOLD** | The active Python-owned lifecycle-evidence fold for the live-instance chart. It is not the retired Postgres read model and has no broker-write authority. Its historical `lifecycle_projection.*` template IDs remain opaque audit values. |
 | `services/bot_lifecycle_receipt_copy.py` historical receipt labels and `services/account_reconciliation.py`'s generic account-condition helper | **LEGACY-READER** / **not a runner owner** | Historic raw receipt tokens remain exact audit values. The account-condition helper's `owner` is ordinary domain ownership, not `AccountOwner` broker authority. Neither is renamed in this track. |
 | `routers/live_instances.py::_resolve_account_owner_surface`; `services/live_instance_surface_assembler.py`; `services/operator_surface.py`; `services/operator_trader_guidance.py`; `services/operator_blockage_ladder.py`; `services/bot_lifecycle_{chart,receipts}.py`; Frontend operator-surface types and fixtures | **LEGACY-READER — MIGRATED** | Done in Track B. The read-only response is now schema v2 `account_clerk`, sourced from the Clerk generation plus matching active lease. It no longer reads or returns the legacy owner artifact. Historic account-event tokens remain opaque audit data. |
 | `engine/live/run.py::emergency_flatten` direct broker cancel/place calls, `read_account_owner_generation`, and `account_owner_write_grant` | **SAFETY-LANE** | Do not modify in Track B. This is the separately invoked emergency path, not the normal Clerk RPC path. Its direct IBKR session and lock/fence coordination require a dedicated design and regression suite. |
@@ -335,6 +336,44 @@ the account as flat.
 
 ## Issue #1044 callback-stream hardening traceability
 
+## Transaction-history projection amendment (2026-07-25, #1219)
+
+Every order-producing Clerk intent is materialized into a dedicated,
+rebuildable transaction projection from its durable `recorded` receipt. The
+Clerk retains ownership of the durable journal; the projector tail folds that
+row through submitting, uncertainty, acknowledgement, and broker callbacks.
+The typed `transaction_origin` distinguishes manual, strategy, recovery, and
+emergency orders without asking a client to infer it. Namespace-wide
+`CANCEL_NAMESPACE` control activity remains an account operation and creates no
+invented transaction row. The projector tails complete appended journal bytes
+after a durable byte/sequence cursor and atomically stores transaction/event
+rows with that cursor. A projection failure may replay but never retract,
+delay, or invalidate the Clerk acknowledgement. This is not a lifecycle
+projection: Python owns receipt, instruction, lifecycle, and pagination
+meaning; .NET owns only the migration shape; Angular renders supplied fields
+and opaque IDs. Successful Clerk submissions trigger the best-effort tail only
+after the `recorded` evidence is durable.
+
+The #1220 lifecycle extension remains in that dedicated runtime. It never
+extends `lifecycle_projection_*`: the account Clerk JSONL remains canonical,
+Python is the sole lifecycle fold authority, and the frontend receives explicit
+feed/freshness states rather than classifying broker callbacks or transport
+timing itself.
+
+### Replay-scale amendment (2026-07-25, #1223)
+
+Projection replay consumes at most 500 complete records and 1 MiB per tail
+window; recovery runs at most 64 windows before it reports bounded catch-up
+instead of holding an unbounded operation. Complete malformed records,
+cursor-behind-truncation, and oversize records stop the projector with explicit
+`corrupt` evidence while leaving the journal byte-for-byte intact. An explicit
+operator rebuild resets only the derived rows/cursor under a journal-scoped SQL
+lock, then replays the canonical Clerk journal. `rebuilding`, `reconnecting`,
+`corrupt`, high-water, and lag/lower-bound facts are backend-authored API
+evidence; Angular only renders them. Normal history requests remain a maximum
+100-row opaque-keyset query (the initial render requests 25 summaries) and do
+not read journals or call brokers.
+
 | Requirement | Verification |
 | --- | --- |
 | Start after broker connect; always stop in shutdown | `test_clerk_process_acquires_lock_before_broker_connect_and_releases_after_disconnect` |
@@ -344,3 +383,25 @@ the account as flat.
 | Callback is journal-fsynced before relay and duplicate callbacks have one semantic journal row | `test_clerk_relays_callbacks_only_to_the_originating_namespace`; `test_journal_exposure_survives_bot_crash_and_deduplicates_execution` |
 | Unattributed callbacks persist without a guessed namespace, create a consumed account alarm, and block starts | `test_unattributed_broker_callback_is_persisted_and_blocks_new_account_starts`; `test_account_projection_includes_unattributed_callbacks` |
 | Journal fsync does not block the callback event loop | `test_callback_fsync_is_offloaded_without_allowing_relay_before_record` |
+
+### Legacy lifecycle-projection retirement (2026-07-25, #1224)
+
+The superseded Postgres lifecycle projection runtime is deleted after its active
+consumer inventory reached zero. This removes its two `/api/lifecycle-projection`
+read routes, `LIFECYCLE_PROJECTION_ENABLED`, router/schema/store/replay/tailer,
+schema-drift registration, Angular client wrappers and generated OpenAPI surface,
+and active tests. Forward migration
+`20260725050000_DropLegacyLifecycleProjectionReadModel` drops only its five
+derived tables: `bot_lifecycle_events`, `account_lifecycle_events`,
+`operator_gate_snapshots`, `lifecycle_node_receipts`, and
+`account_owner_status_snapshots`. Applied migrations remain immutable forensic
+history; rollback requires an audited derived-data backup restore rather than
+pretending that EF can recreate lost projection evidence.
+
+The separately owned `bot_lifecycle_projection.py` is retained as Python's
+canonical lifecycle-evidence fold for the live-instance chart. Its historical
+`lifecycle_projection.*` template IDs are opaque audit values, not imports of
+the retired runtime. Account transaction history remains solely the bounded
+Clerk transaction projector: indexed opaque-keyset reads (maximum 100 rows;
+initial render 25) may apply origin, lifecycle, bot, and run predicates but
+never scan journals, sweep brokers, or fall back to Account Truth.

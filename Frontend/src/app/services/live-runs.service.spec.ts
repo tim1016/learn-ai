@@ -9,8 +9,6 @@ import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type { HostRunnerActionResponse, HostRunnerHealth } from '../api/live-runs.types';
 import type {
   CrashRecoveryOverrideResponse,
-  LifecycleSafetyTriageResponse,
-  LifecycleTimelineResponse,
 } from '../api/live-instances.types';
 
 /**
@@ -152,33 +150,6 @@ describe('LiveRunsService start/stop proxy', () => {
     await expect(promise).resolves.toEqual(response);
   });
 
-  it('reads the bounded lifecycle projection timeline through the data plane', async () => {
-    const response: LifecycleTimelineResponse = {
-      projection_available: true,
-      canonical_fallback_required: false,
-      rows: [],
-    };
-    const promise = service.getLifecycleTimeline({
-      account_id: 'DU123',
-      strategy_instance_id: 'sid-x',
-      run_id: 'run-x',
-      limit: 5,
-    });
-
-    const req = httpMock.expectOne((request) =>
-      request.url === '/api/lifecycle-projection/timeline'
-      && request.params.get('account_id') === 'DU123'
-      && request.params.get('strategy_instance_id') === 'sid-x'
-      && request.params.get('run_id') === 'run-x'
-      && request.params.get('limit') === '5',
-    );
-    expect(req.request.method).toBe('GET');
-    expect(req.request.url.startsWith('http')).toBe(false);
-    req.flush(response);
-
-    await expect(promise).resolves.toEqual(response);
-  });
-
   it('records crash recovery overrides through the data-plane instance endpoint', async () => {
     const response: CrashRecoveryOverrideResponse = {
       accepted: true,
@@ -201,41 +172,6 @@ describe('LiveRunsService start/stop proxy', () => {
     expect(req.request.method).toBe('POST');
     expect(req.request.url.startsWith('http')).toBe(false);
     expect(req.request.body).toEqual({ confirm_account_flat: true, approved_by: 'operator' });
-    req.flush(response);
-
-    await expect(promise).resolves.toEqual(response);
-  });
-
-  it('reads filtered lifecycle safety triage through the data plane', async () => {
-    const response: LifecycleSafetyTriageResponse = {
-      projection_available: true,
-      canonical_fallback_required: false,
-      rows: [],
-    };
-    const promise = service.getLifecycleSafetyTriage({
-      account_id: 'DU123',
-      strategy_instance_id: 'sid-x',
-      run_id: 'run-x',
-      status: 'blocked',
-      event_type: 'BrokerOrderUncertain',
-      node_id: 'ack_or_reconcile',
-      severity: 'warning',
-      limit: 25,
-    });
-
-    const req = httpMock.expectOne((request) =>
-      request.url === '/api/lifecycle-projection/safety-triage'
-      && request.params.get('account_id') === 'DU123'
-      && request.params.get('strategy_instance_id') === 'sid-x'
-      && request.params.get('run_id') === 'run-x'
-      && request.params.get('status') === 'blocked'
-      && request.params.get('event_type') === 'BrokerOrderUncertain'
-      && request.params.get('node_id') === 'ack_or_reconcile'
-      && request.params.get('severity') === 'warning'
-      && request.params.get('limit') === '25',
-    );
-    expect(req.request.method).toBe('GET');
-    expect(req.request.url.startsWith('http')).toBe(false);
     req.flush(response);
 
     await expect(promise).resolves.toEqual(response);

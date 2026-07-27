@@ -20,6 +20,7 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
+import { describeBrokerConnection } from '../../../services/broker-connectivity.service';
 import type {
   AccountTruthEvidenceGap,
   AccountTruthExecutionRow,
@@ -36,9 +37,15 @@ import type {
   OrderType,
   SecType,
 } from '../../../api/broker-models';
+import type { ClerkTransactionHistoryResponse } from '../../../api/clerk-transaction-history.types';
 import { fmtCurrency, fmtNumber, fmtSignedNumber, fmtTimestampNy } from '../format';
+import {
+  BrokerOrderFeedStatusComponent,
+  type OrderFeedStatus,
+} from './broker-order-feed-status.component';
 
 const ORDER_EVENT_BUFFER = 50;
+const ORDER_LEDGER_REFRESH_DEBOUNCE_MS = 1_000;
 const CONFIRM_DIALOG_COOLDOWN_MS = 3000;
 const CONFIRM_DIALOG_TICK_MS = 100;
 
@@ -89,7 +96,15 @@ interface OpenExposurePrefill {
 @Component({
   selector: 'app-broker-orders',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, PageHeaderComponent, SectionErrorComponent, PaperOnlyDirective, RouterLink, ReceiptLabelPipe],
+  imports: [
+    FormsModule,
+    PageHeaderComponent,
+    SectionErrorComponent,
+    PaperOnlyDirective,
+    RouterLink,
+    ReceiptLabelPipe,
+    BrokerOrderFeedStatusComponent,
+  ],
   styleUrl: './broker-orders.component.scss',
   templateUrl: './broker-orders.component.html',
 })
@@ -179,6 +194,8 @@ export class BrokerOrdersComponent {
   readonly ledgerLoading = signal(false);
   readonly ledgerError = signal<unknown>(null);
   readonly accountTruth = signal<AccountTruthResponse | null>(null);
+  /** The Python-owned Clerk projection says whether lifecycle history is fresh. */
+  readonly transactionFeed = signal<ClerkTransactionHistoryResponse | null>(null);
   readonly retainedCompletedHistory = signal(false);
   readonly ledgerOrders = computed<AccountTruthOrderRow[]>(
     () => this.accountTruth()?.orders ?? [],
@@ -211,6 +228,17 @@ export class BrokerOrdersComponent {
       displayTs: fmtTimestampNy(ev.ts_ms),
     }));
   });
+  readonly orderFeedStatus = computed<OrderFeedStatus>(() => {
+    const broker = describeBrokerConnection(this.health.health());
+    return {
+      broker: {
+        state: broker.state,
+        headline: broker.headline,
+        detail: broker.detail,
+      },
+      updates: this.buildOrderStreamStatus(),
+    };
+  });
 
   readonly isPaperConnected = this.health.isPaperConnected;
   readonly accountId = computed(() => this.health.health()?.account_id ?? null);
@@ -234,16 +262,18 @@ export class BrokerOrdersComponent {
   readonly fmtTimestampNy = fmtTimestampNy;
 
   private ledgerRefreshRunning = false;
-  private ledgerRefreshQueued = false;
+  private ledgerRefreshPending = false;
+  private ledgerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private lastLedgerRefreshEventKey: string | null = null;
+  private transactionFeedRequestGeneration = 0;
 
   constructor() {
     void this.refreshLedger();
     this.openEventStream();
 
-    // Refresh the account-truth ledger when a new order event arrives.
-    // The SSE payload itself is not a ledger source; it is only a nudge
-    // to re-sweep the broker projection.
+    // The SSE payload is not a ledger source; it only nudges a broker
+    // projection refresh. Coalesce bursts so one active order does not make
+    // the screen repeatedly run the expensive Account Truth sweep.
     effect(() => {
       const stream = this.eventStream();
       if (stream === null) return;
@@ -252,11 +282,23 @@ export class BrokerOrdersComponent {
       const key = this.orderEventKey(latest);
       if (key !== this.lastLedgerRefreshEventKey) {
         this.lastLedgerRefreshEventKey = key;
-        void this.refreshLedger();
+        this.scheduleLedgerRefresh();
       }
     });
 
-    this.destroyRef.onDestroy(() => this.clearConfirmTick());
+    effect(() => {
+      const accountId = this.accountId();
+      if (accountId === null) {
+        this.transactionFeed.set(null);
+        return;
+      }
+      void this.refreshTransactionFeed(accountId);
+    });
+
+    this.destroyRef.onDestroy(() => {
+      this.clearConfirmTick();
+      this.clearScheduledLedgerRefresh();
+    });
 
     // Drive native <dialog> open/close from the confirmDialogOpen
     // signal. showModal() gives focus management, focus trap, and
@@ -341,27 +383,28 @@ export class BrokerOrdersComponent {
   async refreshLedger(): Promise<void> {
     if (!this.health.health()?.connected) return;
     if (this.ledgerRefreshRunning) {
-      this.ledgerRefreshQueued = true;
+      this.ledgerRefreshPending = true;
       return;
     }
 
     this.ledgerRefreshRunning = true;
     this.ledgerLoading.set(true);
     try {
-      do {
-        this.ledgerRefreshQueued = false;
-        this.ledgerError.set(null);
-        try {
-          const truth = await this.broker.accountTruth();
-          this.applyAccountTruth(truth);
-          this.prefillOpenExposureFromDeepLink();
-        } catch (err) {
-          this.ledgerError.set(err);
+      this.ledgerError.set(null);
+      try {
+        const truth = await this.broker.accountTruth();
+        this.applyAccountTruth(truth);
+        if (truth.account_id !== null) {
+          void this.refreshTransactionFeed(truth.account_id);
         }
-      } while (this.ledgerRefreshQueued);
+        this.prefillOpenExposureFromDeepLink();
+      } catch (err) {
+        this.ledgerError.set(err);
+      }
     } finally {
       this.ledgerRefreshRunning = false;
       this.ledgerLoading.set(false);
+      if (this.ledgerRefreshPending) this.scheduleLedgerRefresh();
     }
   }
 
@@ -549,9 +592,55 @@ export class BrokerOrdersComponent {
     const stream = runInInjectionContext(this.injector, () =>
       brokerSse<IbkrOrderEvent>('/api/broker/orders/stream?poll_ms=500', 'order', {
         maxBuffer: ORDER_EVENT_BUFFER,
+        // Native EventSource cannot use Angular's HTTP interceptor. Mark this
+        // protected stream so the local proxy can attach its private control
+        // credential; without it the backend rejects the request before SSE
+        // can send its ready frame.
+        dataPlaneControlIntent: true,
       }),
     );
     this.eventStream.set(stream);
+  }
+
+  private scheduleLedgerRefresh(): void {
+    this.ledgerRefreshPending = true;
+    if (this.ledgerRefreshRunning || this.ledgerRefreshTimer !== null) return;
+    this.ledgerRefreshTimer = setTimeout(() => {
+      this.ledgerRefreshTimer = null;
+      if (!this.ledgerRefreshPending) return;
+      this.ledgerRefreshPending = false;
+      void this.refreshLedger();
+    }, ORDER_LEDGER_REFRESH_DEBOUNCE_MS);
+  }
+
+  private clearScheduledLedgerRefresh(): void {
+    if (this.ledgerRefreshTimer !== null) {
+      clearTimeout(this.ledgerRefreshTimer);
+      this.ledgerRefreshTimer = null;
+    }
+    this.ledgerRefreshPending = false;
+  }
+
+  private buildOrderStreamStatus(): OrderFeedStatus['updates'] {
+    const feed = this.transactionFeed();
+    if (feed === null) return { state: 'loading', headline: 'Loading', detail: 'Loading Clerk transaction-feed status.' };
+    return { state: feed.feed_state, headline: feed.feed_headline, detail: feed.feed_detail };
+  }
+
+  private async refreshTransactionFeed(accountId: string): Promise<void> {
+    const requestGeneration = ++this.transactionFeedRequestGeneration;
+    try {
+      const feed = await this.broker.accountTransactions(accountId, null, 1);
+      if (this.accountId() === accountId && requestGeneration === this.transactionFeedRequestGeneration) {
+        this.transactionFeed.set(feed);
+      }
+    } catch {
+      // Transport failure does not invent a lifecycle state; the next refresh
+      // will render only a backend-authored feed state once it is available.
+      if (this.accountId() === accountId && requestGeneration === this.transactionFeedRequestGeneration) {
+        this.transactionFeed.set(null);
+      }
+    }
   }
 
   private applyAccountTruth(truth: AccountTruthResponse): void {

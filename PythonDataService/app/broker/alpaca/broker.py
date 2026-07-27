@@ -15,7 +15,6 @@ from app.broker.alpaca import adapter
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
@@ -87,42 +86,16 @@ class AlpacaBroker:
             payloads = await self._client.list_activities(limit=limit)
             return [adapter.from_alpaca_activity(payload) for payload in payloads]
 
-        # The vendor page cursor is ordered by a different timestamp than our
-        # occurred_at_ms contract cursor. Continue through every vendor page,
-        # then apply the contract filter and output cap.
-        activities: list[BrokerActivity] = []
-        page_token: str | None = None
-        seen_page_tokens: set[str] = set()
-        while True:
-            payloads = await self._client.list_activities(
-                limit=limit,
-                page_token=page_token,
-            )
-            activities.extend(
-                activity
-                for activity in (adapter.from_alpaca_activity(payload) for payload in payloads)
-                if activity.occurred_at_ms is not None and activity.occurred_at_ms >= after_ms
-            )
-            if len(payloads) < limit:
-                break
-
-            next_page_token = payloads[-1].get("id")
-            if not isinstance(next_page_token, str) or not next_page_token:
-                raise BrokerUnavailable(
-                    "Alpaca activity pagination could not continue.",
-                    broker=self.broker_id,
-                    detail="A full activity page did not include a usable activity ID.",
-                )
-            if next_page_token in seen_page_tokens:
-                raise BrokerUnavailable(
-                    "Alpaca activity pagination repeated a page token.",
-                    broker=self.broker_id,
-                    detail="Stopping to avoid returning incomplete or duplicated activities.",
-                )
-            seen_page_tokens.add(next_page_token)
-            page_token = next_page_token
-
-        return activities[:limit]
+        # Recovery is explicitly a bounded window. Alpaca's page cursor has a
+        # different ordering than the canonical occurred-at cursor, so following
+        # it would turn a reconnect into an unbounded history scan. One newest-
+        # first page plus durable idempotency is the honest recovery contract.
+        payloads = await self._client.list_activities(limit=limit)
+        return [
+            activity
+            for activity in (adapter.from_alpaca_activity(payload) for payload in payloads)
+            if activity.occurred_at_ms is not None and activity.occurred_at_ms >= after_ms
+        ]
 
     async def list_assets(
         self,

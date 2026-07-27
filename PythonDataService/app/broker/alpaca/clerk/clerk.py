@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.broker.alpaca.clerk import derive, reconcile
+from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.models import (
     UNEXPLAINED_ORDER_HOLD_CODE,
@@ -79,16 +80,13 @@ _RECONCILIATION_TERMINAL_ORDER_STATUSES = frozenset(
 # ``TradeUpdatesConsumer`` seam) so journaled timestamps are deterministic.
 type Clock = Callable[[], int]
 
-
 def _now_ms() -> int:
     """Current instant as ``int64`` ms UTC (ingestion boundary)."""
     return int(datetime.now(UTC).timestamp() * 1000)
 
-
 def _leg_error(exc: BrokerError) -> OrderLegError:
     """Adapt a broker exception to the clerk's typed *what/why* leg error."""
     return OrderLegError(message=exc.message, why=exc.detail)
-
 
 @dataclass(frozen=True, slots=True)
 class _LegIdentity:
@@ -154,7 +152,6 @@ class _LegIdentity:
             clock=clock,
         )
 
-
 class AlpacaClerk:
     """Single-writer order-submission facade for one Alpaca account.
 
@@ -176,6 +173,9 @@ class AlpacaClerk:
         self._trade = trade
         self._clock = clock
         self._intake_lock = asyncio.Lock()
+        self.activity_recovery = AlpacaActivityRecovery(
+            intake_lock=self._intake_lock, ensure_journal=self._ensure_journal, clock=clock
+        )
         # Recovery owns historical, already-minted refs. Keep concurrent sweep
         # replays serial without making a slow by-client-id lookup block cancel.
         self._recovery_lock = asyncio.Lock()
@@ -332,6 +332,8 @@ class AlpacaClerk:
         event: BrokerOrderEvent,
         event_key: str,
         order: BrokerOrder | None = None,
+        recovery_source: str | None = None,
+        recovery_window_limit: int | None = None,
     ) -> ClerkEntryKind:
         """Journal one parsed ``trade_updates`` lifecycle event, with attribution.
 
@@ -382,6 +384,8 @@ class AlpacaClerk:
                     order=order,
                     event=event,
                     event_key=event_key,
+                    recovery_source=recovery_source,
+                    recovery_window_limit=recovery_window_limit,
                 )
             )
             if not owned:
@@ -972,9 +976,7 @@ class AlpacaClerk:
             )
         return plan.verdict
 
-
 _clerk: AlpacaClerk | None = None
-
 
 def get_alpaca_clerk() -> AlpacaClerk | None:
     """Return the process-wide Alpaca clerk, or ``None`` when unconfigured.
@@ -983,7 +985,6 @@ def get_alpaca_clerk() -> AlpacaClerk | None:
     present; a ``None`` return means the router surfaces "not configured".
     """
     return _clerk
-
 
 def set_alpaca_clerk(clerk: AlpacaClerk | None) -> None:
     """Install (or clear) the process-wide Alpaca clerk — lifespan wiring."""

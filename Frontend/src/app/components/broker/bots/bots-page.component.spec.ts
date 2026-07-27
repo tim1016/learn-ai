@@ -110,7 +110,7 @@ describe('BotsPageComponent', () => {
       off_duty: 1,
       retired: 0,
       generated_at_ms: 1,
-      session_date: '2026-07-21',
+      session_date_ms: 1_784_650_200_000,
       effective_stop_ms: null,
     };
     liveRuns.getBotCatalogPage.mockResolvedValue(catalog);
@@ -181,6 +181,63 @@ describe('BotsPageComponent', () => {
       await settle(fixture);
 
       expect(liveRuns.getBotCatalogPage).toHaveBeenCalledWith({ limit: 25 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('continues filtered pagination after refreshing the first catalog page', async () => {
+    vi.useFakeTimers();
+    const liveRuns = new FakeLiveRunsService();
+    const broker = new FakeBrokerService();
+    const health = new FakeBrokerHealthService();
+    const laterMatch = {
+      ...READY_BOT,
+      strategy_instance_id: 'paper-later',
+      name: 'paper-later',
+    } as BotCatalogRow;
+    liveRuns.getBotCatalogPage
+      .mockResolvedValueOnce({
+        bots: [READY_BOT],
+        total_count: 2,
+        next_cursor: 'next-page',
+        observed_at_ms: 1,
+      })
+      .mockResolvedValueOnce({
+        bots: [laterMatch],
+        total_count: 2,
+        next_cursor: null,
+        observed_at_ms: 2,
+      });
+    broker.accountTriage.mockResolvedValue({ freeze_banner: null } as AccountTriageResponse);
+
+    try {
+      TestBed.resetTestingModule();
+      await TestBed.configureTestingModule({
+        imports: [BotsPageComponent],
+        providers: [
+          provideZonelessChangeDetection(),
+          provideRouter([]),
+          { provide: LiveRunsService, useValue: liveRuns },
+          { provide: BrokerService, useValue: broker },
+          { provide: BrokerHealthService, useValue: health },
+        ],
+      }).compileComponents();
+      const fixture = TestBed.createComponent(BotsPageComponent);
+      fixture.detectChanges();
+      fixture.componentInstance.searchQuery.set('later');
+
+      await fixture.componentInstance.refresh();
+      await vi.waitFor(() =>
+        expect(liveRuns.getBotCatalogPage).toHaveBeenNthCalledWith(2, {
+          limit: 25,
+          cursor: 'next-page',
+        }),
+      );
+      await settle(fixture);
+
+      expect(fixture.componentInstance.visibleBots().map((row) => row.id)).toEqual(['paper-later']);
+      expect(fixture.componentInstance.isLoadingMore()).toBe(false);
     } finally {
       vi.useRealTimers();
     }
