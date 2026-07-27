@@ -1195,6 +1195,131 @@ async def test_operator_adjustment_endpoint_maps_clerk_rejection_to_409(
     assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
 
 
+async def test_operator_recovery_flatten_endpoint_forwards_to_host_local_clerk(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon as hd
+    from app.engine.live.account_clerk_journal import (
+        AccountClerkBrokerAckReceipt,
+        AccountClerkRecordedReceipt,
+        AccountClerkRecoveryFlattenReceipt,
+    )
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
+
+    manager, _ = daemon_context
+    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: None)
+    namespace = "learn-ai/retired-bot/v1"
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-recovery",
+        account_id="DU123",
+        strategy_instance_id="retired-bot",
+        run_id="retired-run",
+        bot_order_namespace=namespace,
+        intent_id="recovery-1",
+        order_ref=f"{namespace}:recovery-1",
+        intent_kind="RECOVERY_FLATTEN",
+        order_spec={},
+        owner_generation=3,
+        created_at_ms=100,
+    )
+    recorded = AccountClerkRecordedReceipt(
+        trace_id=intent.trace_id,
+        account_id=intent.account_id,
+        strategy_instance_id=intent.strategy_instance_id,
+        run_id=intent.run_id,
+        bot_order_namespace=intent.bot_order_namespace,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        journal_seq=9,
+        recorded_at_ms=101,
+    )
+    receipt = AccountClerkRecoveryFlattenReceipt(
+        recorded=recorded,
+        broker_acked=AccountClerkBrokerAckReceipt(
+            **recorded.model_dump(exclude={"status", "recorded_at_ms"}),
+            order_id=42,
+            recorded_at_ms=102,
+        ),
+        cancelled_order_ids=(),
+    )
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == manager.artifacts_root
+            assert account_id == "DU123"
+
+        async def submit_operator_recovery_flatten(
+            self,
+            submitted_intent: AccountOwnerSubmitIntent,
+        ) -> AccountClerkRecoveryFlattenReceipt:
+            assert submitted_intent == intent
+            return receipt
+
+    monkeypatch.setattr(hd, "AccountClerkRpcClient", FakeRpcClient)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU123/clerk/operator-recovery-flatten",
+            json={
+                "intent": intent.model_dump(mode="json"),
+                "request_provenance": "account-monitor/recovery",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["recovery_flatten"]["broker_acked"]["order_id"] == 42
+
+
+async def test_emergency_authorization_endpoint_forwards_to_host_local_clerk(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon as hd
+    from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
+
+    manager, _ = daemon_context
+    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: None)
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == manager.artifacts_root
+            assert account_id == "DU123"
+
+        async def authorize_emergency_flatten(
+            self,
+            *,
+            operation_id: str,
+            reconciliation_evidence_version: str,
+        ) -> AccountClerkEmergencyAuthorization:
+            return AccountClerkEmergencyAuthorization(
+                authorization_id="a" * 16,
+                account_id="DU123",
+                operation_id=operation_id,
+                confirmation_token="FLATTEN",
+                reconciliation_evidence_version=reconciliation_evidence_version,
+                evidence_observed_at_ms=100,
+                expires_at_ms=200,
+                no_exact_recovery_candidate=True,
+            )
+
+    monkeypatch.setattr(hd, "AccountClerkRpcClient", FakeRpcClient)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU123/clerk/authorize-emergency-flatten",
+            json={
+                "operation_id": "emergency-1",
+                "reconciliation_evidence_version": "reconciliation-1",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["authorization_id"] == "a" * 16
+
+
 async def test_retire_stale_binding_endpoint_retires_deployed_binding(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,

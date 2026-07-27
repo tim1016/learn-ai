@@ -374,6 +374,15 @@ class AccountEmergencyFlattenDispatchRequest(EmergencyFlattenRequest):
     )
 
 
+class AccountEmergencyFlattenAuthorizationRequest(BaseModel):
+    """Host-only request for the Clerk's short-lived flatten authorization."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation_id: str = Field(..., min_length=1, max_length=128)
+    reconciliation_evidence_version: str = Field(..., min_length=1, max_length=128)
+
+
 class AccountEmergencyFlattenResponse(BaseModel):
     """Receipt returned after the Clerk re-observes the account flat."""
 

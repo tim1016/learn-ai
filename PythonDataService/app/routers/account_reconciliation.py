@@ -18,11 +18,7 @@ from app.engine.live.account_artifacts import (
     append_account_event,
     repair_account_event_sequence,
 )
-from app.engine.live.account_clerk_rpc import (
-    AccountClerkRpcClient,
-    AccountClerkRpcError,
-    clerk_rejection_reason,
-)
+from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import (
     account_binding_ledger_parity,
@@ -212,16 +208,6 @@ def _outcome_unknown_http_error(
     return HTTPException(
         status.HTTP_409_CONFLICT,
         detail=detail,
-    )
-
-
-def _clerk_rpc_http_error(exc: AccountClerkRpcError) -> HTTPException:
-    """Expose normal Clerk rejections without collapsing them into a server error."""
-
-    retry_safe, reason_code = clerk_rejection_reason(exc)
-    return HTTPException(
-        status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
-        detail={"reason_code": reason_code, "message": "Clerk rejected or could not complete the request."},
     )
 
 
@@ -749,18 +735,20 @@ async def operator_recovery_flatten_endpoint(
     request: OperatorRecoveryFlattenRequest,
     artifacts_root: AccountArtifactsRoot,
 ) -> OperatorRecoveryFlattenResponse:
-    """Run the existing retired-namespace flatten lane after Clerk readiness proof."""
+    """Run a retired-namespace flatten through the host-local Clerk lane."""
 
     canonical_account_id = _canonical_account_id(account_id)
     if request.intent.account_id != canonical_account_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "intent account_id does not match path")
     try:
         settings = get_settings()
-        await host_daemon_client.ensure_account_clerk(settings.live_runner_daemon_url, canonical_account_id)
-        receipt = await AccountClerkRpcClient(
-            artifacts_root=artifacts_root,
-            account_id=canonical_account_id,
-        ).submit_operator_recovery_flatten(request.intent)
+        body = await host_daemon_client.operator_recovery_flatten(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+            request.model_dump(mode="json"),
+        )
+        response = OperatorRecoveryFlattenResponse.model_validate(body)
+        receipt = response.recovery_flatten
         append_account_event(
             artifacts_root,
             canonical_account_id,
@@ -777,13 +765,11 @@ async def operator_recovery_flatten_endpoint(
             },
             only_if_receipt_absent=True,
         )
-        return OperatorRecoveryFlattenResponse(recovery_flatten=receipt)
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        return response
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         raise _outcome_unknown_http_error(exc) from exc
-    except AccountClerkRpcError as exc:
-        raise _clerk_rpc_http_error(exc) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
 
 @router.post(
@@ -821,16 +807,16 @@ async def emergency_flatten_account_endpoint(
     idempotency_key = request.idempotency_key
     try:
         settings = get_settings()
-        await host_daemon_client.ensure_account_clerk(
+        authorization_payload = await host_daemon_client.authorize_emergency_flatten(
             settings.live_runner_daemon_url,
             canonical_account_id,
+            {
+                "operation_id": idempotency_key,
+                "reconciliation_evidence_version": receipt.receipt_id,
+            },
         )
-        authorization = await AccountClerkRpcClient(
-            artifacts_root=artifacts_root,
-            account_id=canonical_account_id,
-        ).authorize_emergency_flatten(
-            operation_id=idempotency_key,
-            reconciliation_evidence_version=receipt.receipt_id,
+        authorization = AccountClerkEmergencyAuthorization.model_validate(
+            authorization_payload
         )
         payload = await host_daemon_client.emergency_flatten_account(
             settings.live_runner_daemon_url,
@@ -862,8 +848,6 @@ async def emergency_flatten_account_endpoint(
         raise _outcome_unknown_http_error(exc, idempotency_key=idempotency_key) from exc
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    except AccountClerkRpcError as exc:
-        raise _clerk_rpc_http_error(exc) from exc
 
 
 @router.get(

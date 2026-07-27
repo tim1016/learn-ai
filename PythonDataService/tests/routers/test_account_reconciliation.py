@@ -543,11 +543,25 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.engine.live import host_daemon_client
+    from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
     from app.main import app
 
-    async def ensure_clerk(_base_url: str, account_id: str) -> dict:
+    async def authorize(_base_url: str, account_id: str, payload: dict) -> dict:
         assert account_id == "DU1234567"
-        return {}
+        assert payload == {
+            "operation_id": "account-emergency-flatten-1",
+            "reconciliation_evidence_version": "reconciliation-1",
+        }
+        return AccountClerkEmergencyAuthorization(
+            authorization_id="a" * 16,
+            account_id=account_id,
+            operation_id=payload["operation_id"],
+            confirmation_token="FLATTEN",
+            reconciliation_evidence_version=payload["reconciliation_evidence_version"],
+            evidence_observed_at_ms=1_780_000_000_000,
+            expires_at_ms=1_780_000_060_000,
+            no_exact_recovery_candidate=True,
+        ).model_dump(mode="json")
 
     async def flatten(_base_url: str, account_id: str, payload: dict) -> dict:
         assert account_id == "DU1234567"
@@ -562,13 +576,13 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
             "completed_at_ms": 1_780_000_010_000,
         }
 
-    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
-    monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
     monkeypatch.setattr(
-        account_reconciliation.AccountClerkRpcClient,
+        host_daemon_client,
         "authorize_emergency_flatten",
-        lambda *_args, **_kwargs: _async_value(SimpleNamespace(authorization_id="a" * 16)),
+        authorize,
+        raising=False,
     )
+    monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
     app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
     app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: SimpleNamespace(
         triage=lambda **_: SimpleNamespace(
@@ -1089,11 +1103,13 @@ async def test_journal_cure_preview_honors_artifact_root_dependency_override(
     assert observed_roots == [tmp_path]
 
 
-async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audit_event(
+async def test_operator_recovery_flatten_endpoint_delegates_to_host_clerk_and_appends_audit_event(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from app.config import settings
     from app.main import app
+    from app.security.data_plane_control import CONTROL_SECRET_HEADER
 
     namespace = "learn-ai/retired-bot/v1"
     intent = AccountOwnerSubmitIntent(
@@ -1129,29 +1145,31 @@ async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audi
         ),
         cancelled_order_ids=(11,),
     )
-    ensured: list[str] = []
+    forwarded: list[tuple[str, str, dict[str, object]]] = []
 
-    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
-        ensured.append(account_id)
-        return {}
+    async def _operator_recovery_flatten(
+        base_url: str,
+        account_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        forwarded.append((base_url, account_id, payload))
+        return {"recovery_flatten": receipt.model_dump(mode="json")}
 
-    class FakeRpcClient:
-        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
-            assert artifacts_root == tmp_path
-            assert account_id == "DU1234567"
-
-        async def submit_operator_recovery_flatten(
-            self,
-            submitted_intent: AccountOwnerSubmitIntent,
-        ) -> AccountClerkRecoveryFlattenReceipt:
-            assert submitted_intent == intent
-            return receipt
-
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
-    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    monkeypatch.setattr(
+        account_reconciliation.host_daemon_client,
+        "operator_recovery_flatten",
+        _operator_recovery_flatten,
+        raising=False,
+    )
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
     app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
     try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={CONTROL_SECRET_HEADER: "test-control-secret"},
+        ) as client:
             response = await client.post(
                 "/api/accounts/DU1234567/operator-recovery-flatten",
                 json={"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
@@ -1165,7 +1183,8 @@ async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audi
 
     assert response.status_code == 200
     assert replay.status_code == 200
-    assert ensured == ["DU1234567", "DU1234567"]
+    assert [row[1] for row in forwarded] == ["DU1234567", "DU1234567"]
+    assert all(row[2]["intent"] == intent.model_dump(mode="json") for row in forwarded)
     [event] = read_account_events(tmp_path, "DU1234567")
     assert {
         key: event[key]
