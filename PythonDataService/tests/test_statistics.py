@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.engine.results.statistics import (
     EquityPoint,
     _daily_returns,
@@ -21,6 +23,7 @@ from app.engine.results.statistics import (
     _sortino,
     compute_portfolio_statistics,
     compute_trade_statistics,
+    max_drawdown,
     summarize,
     validate_equity_curve,
     validate_statistics,
@@ -98,6 +101,110 @@ def _make_equity_curve(initial: float = 100_000.0) -> list[EquityPoint]:
 # Unit tests: max drawdown
 # ---------------------------------------------------------------------------
 class TestMaxDrawdown:
+    def test_max_drawdown_unsorted_points_reports_peak_and_trough(self) -> None:
+        points = [(30, 90.0), (10, 100.0), (20, 120.0), (40, 110.0)]
+
+        result = max_drawdown(points)
+
+        assert result == {
+            "max_drawdown": 0.25,
+            "peak_timestamp": 20,
+            "trough_timestamp": 30,
+        }
+
+    def test_max_drawdown_duplicate_timestamp_uses_last_input_occurrence(self) -> None:
+        points = [(3, 80.0), (1, 100.0), (2, 150.0), (2, 120.0)]
+
+        result = max_drawdown(points)
+
+        assert result["max_drawdown"] == pytest.approx(1 / 3)
+        assert result["peak_timestamp"] == 2
+        assert result["trough_timestamp"] == 3
+
+    def test_max_drawdown_duplicate_last_invalid_value_replaces_prior_value(self) -> None:
+        points = [(1, 100.0), (2, 120.0), (2, None), (3, 80.0)]
+
+        result = max_drawdown(points)
+
+        assert result == {
+            "max_drawdown": 0.2,
+            "peak_timestamp": 1,
+            "trough_timestamp": 3,
+        }
+
+    def test_max_drawdown_does_not_mutate_input(self) -> None:
+        points = [(3, 80.0), (1, 100.0), (2, 120.0)]
+        original = list(points)
+
+        max_drawdown(points)
+
+        assert points == original
+
+    def test_max_drawdown_ignores_none_and_nonfinite_equity(self) -> None:
+        points = [
+            (50, 80.0),
+            (10, 100.0),
+            (20, None),
+            (30, float("nan")),
+            (40, float("inf")),
+            (45, float("-inf")),
+        ]
+
+        result = max_drawdown(points)
+
+        assert result == {
+            "max_drawdown": 0.2,
+            "peak_timestamp": 10,
+            "trough_timestamp": 50,
+        }
+
+    @pytest.mark.parametrize("invalid_equity", [0.0, -1.0])
+    def test_max_drawdown_rejects_nonpositive_finite_equity(self, invalid_equity: float) -> None:
+        with pytest.raises(ValueError, match="must be greater than zero"):
+            max_drawdown([(1, 100.0), (2, invalid_equity)])
+
+    @pytest.mark.parametrize(
+        "points",
+        [
+            [],
+            [(1, 100.0)],
+            [(1, None), (2, float("nan")), (3, float("inf")), (4, 100.0)],
+        ],
+    )
+    def test_max_drawdown_fewer_than_two_valid_points_returns_empty_pair(
+        self, points: list[tuple[int, float | None]]
+    ) -> None:
+        assert max_drawdown(points) == {
+            "max_drawdown": 0.0,
+            "peak_timestamp": None,
+            "trough_timestamp": None,
+        }
+
+    def test_max_drawdown_without_a_drop_returns_empty_pair(self) -> None:
+        assert max_drawdown([(1, 100.0), (2, 100.0), (3, 120.0)]) == {
+            "max_drawdown": 0.0,
+            "peak_timestamp": None,
+            "trough_timestamp": None,
+        }
+
+    def test_max_drawdown_equal_drawdowns_choose_earliest_peak(self) -> None:
+        result = max_drawdown([(1, 100.0), (2, 50.0), (3, 200.0), (4, 100.0)])
+
+        assert result == {
+            "max_drawdown": 0.5,
+            "peak_timestamp": 1,
+            "trough_timestamp": 2,
+        }
+
+    def test_max_drawdown_equal_drawdowns_from_same_peak_choose_earliest_trough(self) -> None:
+        result = max_drawdown([(1, 100.0), (2, 50.0), (3, 50.0)])
+
+        assert result == {
+            "max_drawdown": 0.5,
+            "peak_timestamp": 1,
+            "trough_timestamp": 2,
+        }
+
     def test_monotonic_up(self) -> None:
         assert _max_drawdown([100, 110, 120, 130]) == 0.0
 
