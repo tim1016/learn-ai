@@ -61,6 +61,34 @@ function unreachableSickBayStatus(): LiveInstanceStatus {
   return status;
 }
 
+function sickBayRetireConditionStatus(): LiveInstanceStatus {
+  const status = makeStatus();
+  status.daily_lifecycle.display_status = 'Sick bay';
+  status.daily_lifecycle.primary_action = null;
+  status.daily_lifecycle.ambient_actions = [
+    {
+      id: 'retire_replace',
+      label: 'Retire & Replace',
+      enabled: false,
+      reason: 'Fleet state blocks starts.',
+      offer_id: null,
+      expires_at_ms: null,
+    },
+  ];
+  status.daily_lifecycle.conditions = [
+    {
+      scope: 'bot',
+      severity: 'critical',
+      title: 'Bot halted before submit',
+      detail: 'The prior run halted and cannot be resumed safely.',
+      owner_label: 'sid-x',
+      cure_action: 'retire_replace',
+      cure_label: 'Retire & Replace',
+    },
+  ];
+  return status;
+}
+
 function startableStatusWithoutOffer(): LiveInstanceStatus {
   const status = startableReadyStatus();
   if (!status.daily_lifecycle.primary_action) {
@@ -510,6 +538,29 @@ describe('BotControlPageComponent', () => {
       updated_by: 'operator',
       reason: 'Retire & Replace',
     });
+  });
+
+  it('opens Retire & Replace from a sick-bay cure when the lifecycle action is disabled', async () => {
+    const { fixture, component, element } = await setupBotControlPage({
+      status: sickBayRetireConditionStatus(),
+    });
+
+    const operations = Array.from(element.querySelectorAll<HTMLButtonElement>(
+      '.bot-lens-switch button',
+    )).find((button) => button.textContent?.trim() === 'Operations');
+    operations?.click();
+    fixture.detectChanges();
+
+    const retire = Array.from(element.querySelectorAll<HTMLButtonElement>(
+      '.vc-condition button',
+    )).find((button) => button.textContent?.trim() === 'Retire & Replace');
+    expect(retire).toBeDefined();
+
+    retire?.click();
+    await flush(fixture);
+
+    expect(component.retireReplaceConfirmOpen()).toBe(true);
+    expect(element.textContent).toContain('Backend-authored retire body.');
   });
 
   it('shows an error banner when the status request fails', async () => {

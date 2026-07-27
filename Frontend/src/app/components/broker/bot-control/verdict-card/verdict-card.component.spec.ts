@@ -48,6 +48,18 @@ function accountStaleCondition(): BotLifecycleCondition {
   };
 }
 
+function retireReplaceCondition(): BotLifecycleCondition {
+  return {
+    scope: 'bot',
+    severity: 'critical',
+    title: 'Bot halted before submit',
+    detail: 'The prior run halted and cannot be resumed safely.',
+    owner_label: 'dv-test',
+    cure_action: 'retire_replace',
+    cure_label: 'Retire & Replace',
+  };
+}
+
 function renderCard(
   status: LiveInstanceStatus,
   remediation: PresentedAction | null = null,
@@ -171,6 +183,42 @@ describe('VerdictCardComponent', () => {
     button?.click();
 
     expect(accountsRequested).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes a retire condition independently from a disabled lifecycle action', () => {
+    const fixture = renderCard(
+      statusWith({
+        display_status: 'Sick bay',
+        primary_action: null,
+        ambient_actions: [
+          {
+            id: 'retire_replace',
+            label: 'Retire & Replace',
+            enabled: false,
+            reason: 'Fleet state blocks starts.',
+            offer_id: null,
+            expires_at_ms: null,
+          },
+        ],
+        conditions: [retireReplaceCondition()],
+      }),
+    );
+    const el = fixture.nativeElement as HTMLElement;
+    const lifecycleAction = vi.fn();
+    const conditionRetireReplaceRequested = vi.fn();
+    fixture.componentInstance.lifecycleAction.subscribe(lifecycleAction);
+    fixture.componentInstance.conditionRetireReplaceRequested.subscribe(
+      conditionRetireReplaceRequested,
+    );
+
+    const button = Array.from(el.querySelectorAll<HTMLButtonElement>('.vc-condition button'))
+      .find((candidate) => candidate.textContent?.includes('Retire & Replace'));
+    expect(button).toBeDefined();
+
+    button?.click();
+
+    expect(conditionRetireReplaceRequested).toHaveBeenCalledTimes(1);
+    expect(lifecycleAction).not.toHaveBeenCalled();
   });
 
   it('opens the why drawer when a self-runbook verb is clicked', () => {
