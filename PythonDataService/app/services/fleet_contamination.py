@@ -80,14 +80,42 @@ def read_instance_live_state(root: Path, sid: str) -> LiveStateEnvelope | None:
 
 
 def instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
-    """Read an instance's namespace-attributed broker slice from live state."""
+    """Read an instance's Clerk-owned exposure plus local pending intents.
+
+    Formula: instance_position[symbol] =
+      ClerkJournalExposure[account, strategy_instance, symbol].
+    Reference: ADR 0030; docs/architecture/engine-authority-map.md,
+      "Live account contamination verdict".
+    Canonical implementation: journal_exposure.py::project_journal_exposure;
+      this function is an operator-surface consumer.
+    Validated against:
+      tests/services/test_fleet_contamination.py::
+      test_instance_broker_uses_clerk_positions_not_stale_sidecar.
+
+    ``expected_position_by_symbol`` remains a compatibility fallback only when
+    no account journal exists. Once the Clerk journal exists, a retired or
+    crashed run's stale sidecar must not drive current risk or replacement
+    deployment decisions.
+    """
 
     envelope = read_instance_live_state(root, sid)
     if envelope is None:
         return None
+    owned_positions = dict(envelope.expected_position_by_symbol)
+    try:
+        ledger = read_ledger(root / envelope.run_id / "run_ledger.json")
+    except (OSError, ValueError):
+        ledger = None
+    if ledger is not None and ledger.account_id:
+        journal_positions = _collect_journal_position_explanations(
+            root,
+            account_id=ledger.account_id,
+        )
+        if journal_positions is not None:
+            owned_positions = journal_positions.get(sid, {})
     return InstanceBrokerView(
         bot_order_namespace=envelope.bot_order_namespace,
-        owned_positions=dict(envelope.expected_position_by_symbol),
+        owned_positions=owned_positions,
         pending_order_count=len(envelope.pending_intents),
     )
 
