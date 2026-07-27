@@ -32,6 +32,7 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
     OptionRight,
     SecType,
+    _coerce_optional_float,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -75,7 +76,7 @@ def _coerce_float_or_none(value: str | float | None) -> float | None:
     if value is None or value == "":
         return None
     try:
-        return float(value)
+        return _coerce_optional_float(float(value))
     except (TypeError, ValueError):
         return None
 

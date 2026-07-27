@@ -95,7 +95,7 @@ export class AccountDeskHoldingsStore {
       cash: holdings.account.cash_balance ?? null,
       buyingPower: holdings.account.buying_power ?? null,
       dayPnl: this.accountTickState()?.daily_pnl ?? holdings.account.day_pnl ?? null,
-      openPositions: holdings.positions.positions.length,
+      openPositions: this.openPositions(holdings).length,
     };
   });
   readonly rows = computed<readonly AccountDeskHoldingRow[]>(() => this.rowsForLens('trader'));
@@ -104,7 +104,7 @@ export class AccountDeskHoldingsStore {
     const holdings = this.holdingsState();
     if (holdings === null) return [];
     const ticks = this.positionTicks();
-    return holdings.positions.positions.map((position) => {
+    return this.openPositions(holdings).map((position) => {
       const truth = holdings.truthByConId.get(position.con_id);
       if (truth === undefined) {
         throw new Error('Attested holdings must include Account Truth ownership for every position.');
@@ -123,6 +123,13 @@ export class AccountDeskHoldingsStore {
         ),
       };
     });
+  }
+
+  private openPositions(holdings: AttestedHoldings): readonly IbkrPosition[] {
+    const ticks = this.positionTicks();
+    return holdings.positions.positions.filter(
+      (position) => (ticks.get(position.con_id)?.position ?? position.quantity) !== 0,
+    );
   }
 
   constructor() {

@@ -8,6 +8,7 @@ test_router.py.
 from __future__ import annotations
 
 import asyncio
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -96,6 +97,7 @@ def test_coerce_float_or_none_handles_strings_and_empties() -> None:
     # Marker strings IBKR sometimes returns
     assert _coerce_float_or_none("BASE") is None
     assert _coerce_float_or_none("not-a-number") is None
+    assert _coerce_float_or_none(str(sys.float_info.max)) is None
 
 
 # ── fetch_account_summary ───────────────────────────────────────────────
