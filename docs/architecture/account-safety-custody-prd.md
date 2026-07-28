@@ -7,6 +7,7 @@
 - **Incident dependency:** PR #1241 is open and not merged at this baseline. Every
   implementation slice below must start after #1241 merges, or explicitly rebase
   and re-prove the incident regressions it changes.
+- **Implementation issues:** #1243 through #1257.
 - **Builds on:** ADR 0004 (durable desired state), ADR 0008 (durable submit and
   uncertain acknowledgement), ADR 0010 (operator action semantics), ADR 0018
   (broker recovery), ADR 0025 (single dominant headline), ADR 0026 (daily bot
@@ -643,60 +644,60 @@ These are the product slices to turn into GitHub issues after operator
 approval. Each slice must be independently mergeable and demonstrate a
 visible behavior or safety receipt.
 
-1. **Instrument Clerk custody and ratify the A0/epoch contracts.** Add phase
+1. **#1243 — Instrument Clerk custody and ratify the A0/epoch contracts.** Add phase
    stamps/metrics to the existing synchronous path, render a custody timeline
    in existing evidence, and record the required ADR amendments. No behavior
    cutover yet.
-2. **Introduce bounded asynchronous Clerk submit behind a disabled
+2. **#1244 — Introduce bounded asynchronous Clerk submit behind a disabled
    capability.** Add entry and risk-reducing queues plus an RPC that returns
    A0, advances A1–A3 in the background, exposes per-intent reads, and proves
    delayed/reordered broker behavior with a fake broker. Normal strategy submit
    remains on the old call.
-3. **Cut normal paper strategy submission over to A0 custody.** Move the
+3. **#1245 — Cut normal paper strategy submission over to A0 custody.** Move the
    strategy path to the asynchronous API, add the one-nonterminal-entry gate
    and originator notification/fold, and prove bot death after A0.
-4. **Shadow account epochs and prove every invalidation trigger.** Persist the
+4. **#1246 — Shadow account epochs and prove every invalidation trigger.** Persist the
    epoch, add dual epoch stamps and reconciliation IDs, and publish a
    would-block shadow verdict for socket loss, broker signals, silence, and
    Clerk death without changing admission yet.
-5. **Enforce the account-epoch write fence and reconcile before reopening.**
+5. **#1247 — Enforce the account-epoch write fence and reconcile before reopening.**
    Block new entry writes after invalidation, reconcile required broker facts,
    mint a new epoch only from durable clean/adopted proof, and emit an outage
    diff for 1100/1101/1102, silence, and Clerk death.
-6. **Suspend late exposure from a retired bot without killing siblings.**
+6. **#1248 — Suspend late exposure from a retired bot without killing siblings.**
    Project `retired_owner_live_exposure` into `SUSPENDED`, make retirement
    custody-aware, and prove the dead-bot late-fill lifecycle and lift predicate
    end to end.
-7. **Permit only server-proved risk reduction while suspended.** Derive effect
+7. **#1249 — Permit only server-proved risk reduction while suspended.** Derive effect
    class from intent purpose plus current account projection, keep entries
    blocked, and permit only exact cancels/closes whose worst-case effect does
    not add risk.
-8. **Expose the versioned `AccountSafetySnapshot` composition API.** Compose
+8. **#1250 — Expose the versioned `AccountSafetySnapshot` composition API.** Compose
    existing account authorities into one read contract with per-source
    freshness, epoch relationships, custody/exposure summaries, blockers, and
    evidence references.
-9. **Render one account truth spine on Deploy, Bot Control, and Account
+9. **#1251 — Render one account truth spine on Deploy, Bot Control, and Account
    Desk.** Consume the shared snapshot, show one verdict/epoch/primary move,
    label browser connectivity as local evidence, and remove the superseded
    contradictory safety strips.
-10. **Add the per-bot custody ribbon and evidence-drawer timeline.** Show the
+10. **#1252 — Add the per-bot custody ribbon and evidence-drawer timeline.** Show the
     selected namespace's A0–A3 counts and intent timeline without duplicating
     account-level verdict logic.
-11. **Prove the presented action envelope with Reconcile Now.** Extend existing
+11. **#1253 — Prove the presented action envelope with Reconcile Now.** Extend existing
     capability/move/mutation contracts with snapshot version, expiry,
     idempotency, evidence references, and server revalidation; route one
     recovery action end to end before migrating the dangerous actions.
-12. **Enforce the outage matrix for ordinary lifecycle actions.** Durably
+12. **#1254 — Enforce the outage matrix for ordinary lifecycle actions.** Durably
     accept Pause/Stop while actuation is unavailable, reject rather than queue
     Deploy/Start/Resume, and report intent separately from observed effect.
-13. **Make exact Cancel and fresh-evidence Flatten snapshot-bound.** Queue only
+13. **#1255 — Make exact Cancel and fresh-evidence Flatten snapshot-bound.** Queue only
     an exact current order cancel; require reconciliation, confirmation, and
     post-action proof before a flatten broker write.
-14. **Separate operational producer logs from the Clerk ledger.** Migrate
+14. **#1256 — Separate operational producer logs from the Clerk ledger.** Migrate
     multi-producer operational events away from shared order/exposure
     authority, keep the Clerk sole writer, and expose a deterministic
     non-causal history merge.
-15. **Qualify the supported eight-bot fleet under deterministic faults.**
+15. **#1257 — Qualify the supported eight-bot fleet under deterministic faults.**
     Package the full fault suite, capacity/latency report, and one paper
     acceptance run into a reproducible content-hashed artifact. Tune production
     deadlines only from the measured results.
