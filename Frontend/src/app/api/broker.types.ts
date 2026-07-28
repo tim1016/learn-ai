@@ -524,6 +524,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/safety-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Account Safety Snapshot Endpoint
+         * @description Return the broker-free, versioned account safety composition.
+         */
+        get: operations["account_safety_snapshot_endpoint_api_accounts__account_id__safety_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/session-policy": {
         parameters: {
             query?: never;
@@ -6277,6 +6297,132 @@ export interface components {
              * @enum {string}
              */
             state: "FROZEN" | "NOT_PROVEN" | "NEEDS_ATTENTION" | "CLEAN";
+        };
+        /**
+         * AccountSafetySnapshot
+         * @description Read-only safety spine shared by Deploy, Bot Control, and Account Desk.
+         */
+        AccountSafetySnapshot: {
+            account_epoch?: components["schemas"]["AccountEpoch"] | null;
+            /** Account Id */
+            account_id: string;
+            /**
+             * Actions
+             * @default []
+             */
+            actions?: unknown[];
+            /**
+             * Blockers
+             * @default []
+             */
+            blockers?: components["schemas"]["OperatorBlocker"][];
+            custody: components["schemas"]["AccountSafetySnapshotCustody"];
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: components["schemas"]["AccountReconciliationEvidenceRef"][];
+            exposure: components["schemas"]["AccountSafetySnapshotExposure"];
+            /** Generated At Ms */
+            generated_at_ms: number;
+            /** Outage Diff */
+            outage_diff?: Record<string, never> | null;
+            /**
+             * Posture
+             * @enum {string}
+             */
+            posture: "PAPER_EXECUTION" | "UNSAFE" | "UNKNOWN";
+            /** Reason Code */
+            reason_code: string;
+            /** Reconciliation Id */
+            reconciliation_id?: string | null;
+            /** Reconciliation State */
+            reconciliation_state?: ("CLEAN" | "NOT_PROVEN") | null;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Snapshot Version */
+            snapshot_version: string;
+            /** Sources */
+            sources: components["schemas"]["AccountSafetySnapshotSource"][];
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "CLEAN" | "RECONCILING" | "SUSPENDED" | "CONTAMINATED" | "STALE" | "UNAVAILABLE";
+            /** Verdict Reason */
+            verdict_reason: string;
+        };
+        /** AccountSafetySnapshotCustody */
+        AccountSafetySnapshotCustody: {
+            /** A0 Custody Accepted Count */
+            a0_custody_accepted_count: number;
+            /** A1 Broker Write Started Count */
+            a1_broker_write_started_count: number;
+            /** A2 Broker Known Count */
+            a2_broker_known_count: number;
+            /** A3 Economic Terminal Count */
+            a3_economic_terminal_count: number;
+            /** Clerk Journal Last Seq */
+            clerk_journal_last_seq?: number | null;
+            /** Retired Owner Custody Count */
+            retired_owner_custody_count: number;
+        };
+        /** AccountSafetySnapshotExposure */
+        AccountSafetySnapshotExposure: {
+            /** Execution Count */
+            execution_count: number;
+            /** Open Order Count */
+            open_order_count: number;
+            /** Position Count */
+            position_count: number;
+        };
+        /**
+         * AccountSafetySnapshotSource
+         * @description One independently ageing source; assembly never restamps it.
+         */
+        AccountSafetySnapshotSource: {
+            /** Age Ms */
+            age_ms?: number | null;
+            /** As Of Ms */
+            as_of_ms?: number | null;
+            /**
+             * Critical
+             * @default true
+             */
+            critical?: boolean;
+            epoch?: components["schemas"]["AccountEpoch"] | null;
+            /**
+             * Epoch Relation
+             * @default UNATTESTED
+             * @enum {string}
+             */
+            epoch_relation?: "CURRENT" | "PRE_EPOCH" | "UNATTESTED" | "MISMATCH";
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: components["schemas"]["AccountReconciliationEvidenceRef"][];
+            /** Hard Ttl Ms */
+            hard_ttl_ms?: number | null;
+            /** Reason Code */
+            reason_code: string;
+            /** Reconciliation Id */
+            reconciliation_id?: string | null;
+            /** Reconciliation State */
+            reconciliation_state?: ("CLEAN" | "NOT_PROVEN") | null;
+            /** Source */
+            source: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "FRESH" | "STALE" | "UNAVAILABLE";
         };
         /**
          * AccountServiceBinding
@@ -24416,6 +24562,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountFalseCrashBackfillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_safety_snapshot_endpoint_api_accounts__account_id__safety_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSafetySnapshot"];
                 };
             };
             /** @description Validation Error */
