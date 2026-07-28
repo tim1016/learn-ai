@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.account_recovery import AccountRecoveryState
@@ -165,8 +166,8 @@ async def test_presented_reconcile_claims_once_and_returns_an_explicit_replay(
     }
 
 
-async def test_replayed_unknown_attempt_returns_accepted_for_reconciliation(
-    monkeypatch,
+async def test_execute_presented_reconcile_action_endpoint_replayed_unknown_returns_accepted(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from app.config import settings
     from app.main import app

@@ -180,7 +180,7 @@ def test_presentation_token_uses_the_shared_configured_secret_across_processes(
     assert has_valid_presented_operator_action_token(second_process_invocation) is True
 
 
-def test_missing_signing_configuration_rejects_an_envelope_without_raising(
+def test_has_valid_presented_operator_action_token_missing_configuration_returns_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     action = _action()
@@ -380,7 +380,7 @@ async def test_timeout_is_durable_outcome_unknown_and_never_replays_effect(tmp_p
     assert replay.replayed is True
 
 
-async def test_replay_of_an_inflight_action_reports_in_progress(tmp_path: Path) -> None:
+async def test_execute_reconcile_replay_of_inflight_action_reports_in_progress(tmp_path: Path) -> None:
     service = PresentedAccountActionService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
     action = _action()
     started = asyncio.Event()
@@ -413,7 +413,9 @@ async def test_replay_of_an_inflight_action_reports_in_progress(tmp_path: Path) 
     assert (await first).state == "ACCEPTED"
 
 
-async def test_snapshot_refresh_failure_preserves_accepted_reconciliation(tmp_path: Path) -> None:
+async def test_execute_reconcile_snapshot_refresh_failure_preserves_accepted_reconciliation(
+    tmp_path: Path,
+) -> None:
     service = PresentedAccountActionService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
     action = _action()
 
