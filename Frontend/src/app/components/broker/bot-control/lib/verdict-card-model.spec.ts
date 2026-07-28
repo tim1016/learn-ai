@@ -119,7 +119,7 @@ describe('resolveVerdictCardModel', () => {
     ]);
   });
 
-  it('prioritizes the declared safety cure over End day while an on-duty bot is blocked', () => {
+  it('shows End day even when submit is blocked — lifecycle action always wins for on-duty bots', () => {
     const model = resolveVerdictCardModel(
       statusWith({
         display_status: 'On duty',
@@ -135,7 +135,10 @@ describe('resolveVerdictCardModel', () => {
       }),
     );
 
-    expect(model.verb).toEqual({ kind: 'remediation' });
+    expect(model.verb).toEqual({
+      kind: 'lifecycle',
+      action: expect.objectContaining({ id: 'end_day_now' }),
+    });
   });
 
   it('falls back to the trader remediation verb for a Sick bay bot with no lifecycle action', () => {

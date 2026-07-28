@@ -8278,7 +8278,7 @@ export interface components {
              * @default false
              */
             drift_detected?: boolean;
-            duty_outcome?: components["schemas"]["app__schemas__live_runs__BotDutyOutcomeView"] | null;
+            duty_outcome?: components["schemas"]["BotDutyOutcomeView"] | null;
             /** Latest Run Id */
             latest_run_id?: string | null;
             /**
@@ -8350,6 +8350,23 @@ export interface components {
             reason?: string | null;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+        };
+        /**
+         * BotDutyOutcomeView
+         * @description Durable terminal duty evidence rendered by the operator surface.
+         */
+        BotDutyOutcomeView: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
+            /** Reason Code */
+            reason_code: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id?: string | null;
         };
         /**
          * BotEveningReport
@@ -8698,7 +8715,7 @@ export interface components {
              * @enum {string}
              */
             desired_state: "RUNNING" | "PAUSED" | "STOPPED";
-            duty_outcome: components["schemas"]["app__schemas__broker_bots__BotDutyOutcomeView"] | null;
+            duty_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
             /** Last Transition At Ms */
             last_transition_at_ms: number | null;
             /**
@@ -23556,40 +23573,6 @@ export interface components {
             signal_reason: string;
             /** Trade Number */
             trade_number: number;
-        };
-        /**
-         * BotDutyOutcomeView
-         * @description Projection of the durable terminal duty fact (never liveness-inferred).
-         */
-        app__schemas__broker_bots__BotDutyOutcomeView: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
-            /** Reason Code */
-            reason_code: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id?: string | null;
-        };
-        /**
-         * BotDutyOutcomeView
-         * @description Durable terminal duty evidence rendered by the operator surface.
-         */
-        app__schemas__live_runs__BotDutyOutcomeView: {
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
-            /** Reason Code */
-            reason_code: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id?: string | null;
         };
         /**
          * OpenRunbookAction

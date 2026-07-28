@@ -1245,10 +1245,21 @@ def _build_owned_position_quantities_provider(
     account_id: str,
     strategy_instance_id: str,
 ):
-    """Read this instance's canonical Clerk-journal position projection."""
+    """Read this instance's canonical Clerk-journal position projection.
 
-    from app.engine.live.account_clerk import read_account_clerk_journal
+    Returns ``None`` when no Clerk journal exists for the account yet —
+    the engine then defers to the broker snapshot for position authority
+    (original pre-Clerk behaviour, safe for the pre-Clerk-init window).
+    """
+
+    from app.engine.live.account_clerk import (
+        account_clerk_journal_path,
+        read_account_clerk_journal,
+    )
     from app.engine.live.journal_exposure import project_journal_exposure
+
+    if not account_clerk_journal_path(artifacts_root, account_id).exists():
+        return None
 
     def _read() -> dict[str, int]:
         quantities: dict[str, int] = {}
