@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -189,7 +190,7 @@ async def test_async_custody_is_disabled_without_explicit_capacity_config(tmp_pa
     _bind(tmp_path, "bot-a")
     clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_DelayedBroker())
 
-    assert clerk.async_custody_health().model_dump() == {
+    assert (await clerk.async_custody_health()).model_dump() == {
         "enabled": False,
         "entry_depth": 0,
         "entry_capacity": 0,
@@ -199,6 +200,59 @@ async def test_async_custody_is_disabled_without_explicit_capacity_config(tmp_pa
     with pytest.raises(AccountClerkIntentRejected) as rejected:
         await clerk.submit_async_custody(_intent("bot-a", "disabled"))
     assert getattr(rejected.value, "reason", None) == "CLERK_ASYNC_CUSTODY_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_zero_capacity_risk_lane_fails_closed_before_a0(tmp_path: Path) -> None:
+    """The deployed 8/0 topology cannot silently create an unbounded lane."""
+
+    _bind(tmp_path, "bot-a")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_ImmediateBroker(),
+        async_custody_config=AccountClerkAsyncCustodyConfig(entry_capacity=1, risk_reducing_capacity=0),
+    )
+    await clerk.start_async_custody()
+    try:
+        with pytest.raises(AccountClerkIntentRejected) as rejected:
+            await clerk.submit_async_custody(_intent("bot-a", "unreachable-risk-lane"), lane="risk_reducing")
+        assert rejected.value.reason == "CLERK_ASYNC_RISK_QUEUE_FULL"
+        assert read_account_clerk_journal(tmp_path, ACCOUNT) == []
+        assert (await clerk.async_custody_health()).risk_reducing_capacity == 0
+    finally:
+        await clerk.stop_async_custody()
+
+
+@pytest.mark.asyncio
+async def test_async_custody_health_keeps_durable_journal_scan_off_the_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _bind(tmp_path, "bot-a")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_ImmediateBroker(),
+        async_custody_config=AccountClerkAsyncCustodyConfig(entry_capacity=1, risk_reducing_capacity=1),
+    )
+    scan_started = threading.Event()
+    release_scan = threading.Event()
+
+    def blocked_scan() -> tuple[int, int]:
+        scan_started.set()
+        assert release_scan.wait(timeout=1)
+        return 0, 0
+
+    monkeypatch.setattr(clerk._journal, "nonterminal_async_custody_depths", blocked_scan)
+    health_task = asyncio.create_task(clerk.async_custody_health())
+    assert await asyncio.to_thread(scan_started.wait, 1)
+    event_loop_progressed = asyncio.Event()
+    asyncio.get_running_loop().call_soon(event_loop_progressed.set)
+    await asyncio.wait_for(event_loop_progressed.wait(), timeout=0.1)
+    release_scan.set()
+
+    assert (await health_task).entry_depth == 0
 
 
 @pytest.mark.asyncio
@@ -460,14 +514,14 @@ async def test_async_custody_refuses_full_queue_without_losing_existing_a0(tmp_p
         recorded_at_ms=START_MS,
         source="test",
     ).generation
-    broker = _DelayedBroker()
+    broker = _ConnectionLossBroker()
     server = AccountClerkRpcServer(
         AccountClerk(
             artifacts_root=tmp_path,
             account_id=ACCOUNT,
             broker=broker,
             clerk_generation=generation,
-            async_custody_config=AccountClerkAsyncCustodyConfig(entry_capacity=1, risk_reducing_capacity=2),
+            async_custody_config=AccountClerkAsyncCustodyConfig(entry_capacity=2, risk_reducing_capacity=2),
         )
     )
     await server.start()
@@ -480,8 +534,8 @@ async def test_async_custody_refuses_full_queue_without_losing_existing_a0(tmp_p
         await broker.started.wait()
         await client.submit_custody_v2(second)
         health = await client.custody_health_v2()
-        assert health.entry_depth == 1
-        assert health.entry_capacity == 1
+        assert health.entry_depth == 2
+        assert health.entry_capacity == 2
 
         with pytest.raises(AccountClerkRpcRejectedError) as rejected:
             await client.submit_custody_v2(third)

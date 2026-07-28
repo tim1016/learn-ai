@@ -887,8 +887,9 @@ class AccountClerkRpcServer:
                 payload={"custody": custody.model_dump(mode="json") if custody is not None else None}
             )
         if operation == "custody_health_v2":
+            custody_health = await self._clerk.async_custody_health()
             return AccountClerkRpcSuccessEnvelope(
-                payload={"custody_health": self._clerk.async_custody_health().model_dump(mode="json")}
+                payload={"custody_health": custody_health.model_dump(mode="json")}
             )
         if operation == "epoch_health_v1":
             health = self._clerk.epoch_health()

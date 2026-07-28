@@ -75,10 +75,15 @@ class AccountClerkJournal:
         artifacts_root: Path,
         account_id: str,
         now_ms: Callable[[], int] = _now_ms,
+        after_inbox_durable_append: Callable[[AccountOwnerSubmitIntent], None] | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = safe_account_artifact_id(account_id)
         self._now_ms = now_ms
+        # The normal Clerk never supplies this observer.  Focused integration
+        # tests may observe the exact point after the inbox append has fsynced
+        # and before its timestamp is written into the recorded receipt.
+        self._after_inbox_durable_append = after_inbox_durable_append
         self._entries: list[AccountClerkJournalEntry] | None = None
         self._journal_identity: tuple[int, int, int, int] | None = None
         self._intents_by_order_ref: dict[str, AccountOwnerSubmitIntent] = {}
@@ -133,6 +138,8 @@ class AccountClerkJournal:
                 intent=intent,
             )
             _append_jsonl(inbox_path, inbox_entry)
+            if self._after_inbox_durable_append is not None:
+                self._after_inbox_durable_append(intent)
             inbox_fsynced_at_ms = self._now_ms()
             journal_entry = AccountClerkJournalEntry(
                 seq=inbox_entry.seq,
@@ -249,6 +256,42 @@ class AccountClerkJournal:
             assert intent is not None
             queued.append((intent, status.lane))
         return tuple(queued)
+
+    def nonterminal_async_custody_count(
+        self,
+        lane: Literal["entry", "risk_reducing"],
+    ) -> int:
+        """Count every durable, nonterminal A0-or-later item in one lane."""
+
+        entry_depth, risk_reducing_depth = self.nonterminal_async_custody_depths()
+        return entry_depth if lane == "entry" else risk_reducing_depth
+
+    def nonterminal_async_custody_depths(self) -> tuple[int, int]:
+        """Read both durable lane depths under one journal-lock snapshot.
+
+        Queue size alone is not capacity: a broker-submitting or outcome-
+        unknown intent still consumes the same account risk budget after a
+        worker removes it from the process-local scheduler.
+        """
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = tuple(self._load_tail_locked(inbox_path, journal_path))
+        grouped: dict[str, list[AccountClerkJournalEntry]] = {}
+        for entry in entries:
+            if entry.intent is not None:
+                grouped.setdefault(entry.intent.intent_id, []).append(entry)
+        terminal_states = {"economic_terminal", "expired_before_submit", "cancelled_before_submit"}
+        depths = {"entry": 0, "risk_reducing": 0}
+        for intent_entries in grouped.values():
+            status = _custody_status_for_entries(intent_entries)
+            if (
+                status is not None
+                and status.lane is not None
+                and status.lifecycle_state not in terminal_states
+            ):
+                depths[status.lane] += 1
+        return depths["entry"], depths["risk_reducing"]
 
     def append_custody_expired_before_submit(
         self,

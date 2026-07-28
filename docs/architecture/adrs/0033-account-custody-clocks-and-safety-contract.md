@@ -102,15 +102,17 @@ bounded, coalesced, and never authoritative over the durable read API.
 Normal paper-strategy submission now uses `submit_custody_v2`; the runner
 returns only after the Clerk has durably recorded A0. It must not translate
 that receipt into an `IbkrOrderAck`, a broker order id, or `Submitted` state.
-The production Clerk starts this capability with bounded account-wide entry
-and risk-reducing capacities (64 and 32 respectively); those are backpressure
-limits, not evidence that an individual strategy may have that many entries.
+The production Clerk starts this capability with eight bounded account-wide
+entry slots and **zero** asynchronous risk-reducing order slots. The broker
+does not yet expose an externally reachable atomic reduce-only primitive, so
+inventing a reserved lane would overstate the safety contract. Risk-reducing
+Pause and Stop intents use their separately durable lifecycle path; async
+broker order placement fails closed until that primitive exists.
 
 For each `(account_id, strategy_instance_id)`, the Clerk admits at most one
 nonterminal normal entry. The journal-derived check survives originator death
 and bot restart, and returns `CLERK_ASYNC_ENTRY_PENDING` before creating a
-second A0 row. The dedicated risk-reducing lane does not consume that normal
-entry slot. An entry slot becomes available only after an economic terminal
+second A0 row. An entry slot becomes available only after an economic terminal
 callback or an A0-only expiry before broker submission.
 
 The bot keeps a small in-memory projection of its own A0 admissions so it can
@@ -266,3 +268,45 @@ validated on read. A corrupt artifact fails the corresponding safety decision
 closed; it does not fall back to producer history. The sole migration exception
 is an absent artifact seeding once from immutable pre-split
 `account_events.jsonl`; forward producer rows are excluded from that seed.
+
+## Deterministic eight-bot qualification amendment (2026-07-28, #1257)
+
+The custody program has one broker-free acceptance campaign in
+`app.services.account_custody_qualification`. It executes seventeen backend
+boundaries in the approved PRD with deterministic queue, fsync, qualification,
+broker, callback, epoch, and action timing controls. Its report is an
+operator-readable JSON artifact, not a replacement Clerk journal: every drill
+contains the initial state, injected fault, expected invariant, observed
+receipts, final account verdict, and a deterministic evidence reference.
+
+The campaign exercises the deployed eight-entry / zero-risk-reducing capacity
+configuration through a real ephemeral Clerk journal, epoch authority, safety
+authority, durable desired-state writer, and producer-local log. It directly
+proves eight retained entry slots and the ninth entry's typed refusal. A
+risk-reducing asynchronous order lane is deliberately absent: no externally
+reachable atomic reduction primitive currently exists. Its
+deterministic controls are injected at the actual final A0-admission,
+post-inbox-durable-append, and dequeued-pre-A1 boundaries; they are not clock
+advances staged before the Clerk call. It reports only non-overlapping
+receipt intervals (request→intake, intake→inbox fsync, A0→A1,
+A1→callback, callback→ack, and epoch notice→recovery), never synthetic SLO
+durations or an accepted-to-effect latency when the outage drill correctly
+leaves actuation pending. The report is SHA-256 content-addressed over the
+complete semantic payload, and the verifier recomputes that digest before a
+report is trusted.
+
+The browser portion is qualified separately at its own real transport boundary: the Bot
+Surface test drives the production EventSource retry path from an error through
+a fresh subscription and a new server snapshot. During that interval the
+control panel retains the same-session snapshot read-only and preserves any
+pending mutation until the new snapshot carries its receipt. This cross-stack
+test is a CI/publish gate, not a drill in the backend qualification report;
+the backend runner does not pretend to execute a browser reconnect.
+
+No deterministic result claims broker or paper execution. A deterministic pass
+has the explicit certificate state `DETERMINISTIC_PASSED_AWAITING_PAPER`, and
+the report always records paper status as `NOT_RUN`. The runner has no IBKR
+client and accepts no self-authored paper receipt. A future promotion path must
+be a trusted IBKR adapter that validates immutable broker-originated evidence;
+until then, the distinction between repeatable fault proof and an
+environment-specific broker observation remains explicit.

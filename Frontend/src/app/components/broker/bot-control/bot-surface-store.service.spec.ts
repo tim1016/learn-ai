@@ -49,6 +49,7 @@ describe('BotSurfaceStore', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('retains the same-session snapshot read-only when the stream drops', async () => {
@@ -173,6 +174,7 @@ describe('BotSurfaceStore', () => {
   });
 
   it('keeps a pending attempt across a stream drop and clears it from the reconnect snapshot', async () => {
+    vi.useFakeTimers();
     const initial = makeStatus();
     liveRuns.getInstanceStatus.mockResolvedValue(initial);
     const store = TestBed.inject(BotSurfaceStore);
@@ -190,6 +192,12 @@ describe('BotSurfaceStore', () => {
     expect(store.pendingAttemptId()).toBe('mutation-outage');
     expect(store.readOnly()).toBe(true);
     expect(store.errorMessage()).toContain('same-session snapshot');
+    expect(source.closed).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(500);
+    const reconnectSource = StubEventSource.instances[1];
+    if (!reconnectSource) throw new Error('Expected the control-plane SSE transport to reconnect.');
+    reconnectSource.dispatch('open');
 
     const reconnected = makeStatus();
     reconnected.surface_version = initial.surface_version + 1;
@@ -205,7 +213,7 @@ describe('BotSurfaceStore', () => {
       outcome: { actuated: true },
       evidence: null,
     };
-    source.dispatch('snapshot', JSON.stringify(reconnected));
+    reconnectSource.dispatch('snapshot', JSON.stringify(reconnected));
 
     expect(store.pendingAttemptId()).toBeNull();
     expect(store.latestMutationReceipt()?.mutation_attempt_id).toBe('mutation-outage');

@@ -2683,12 +2683,12 @@ async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_af
     assert events.index("lock_acquired") < events.index("broker_connect") < events.index("socket_serve")
     assert events.index("socket_serve") < events.index("stream_started") < events.index("stream_stopped")
     assert events.index("broker_disconnect") < events.index("lock_released")
-    assert captured["clerk"].async_custody_health().model_dump() == {
+    assert (await captured["clerk"].async_custody_health()).model_dump() == {
         "enabled": True,
         "entry_depth": 0,
-        "entry_capacity": 64,
+        "entry_capacity": 8,
         "risk_reducing_depth": 0,
-        "risk_reducing_capacity": 32,
+        "risk_reducing_capacity": 0,
     }
 
 

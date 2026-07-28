@@ -26,6 +26,7 @@ import signal
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, nullcontext, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -78,6 +79,7 @@ from app.engine.live.account_clerk_operations import (
     AccountClerkOperationDependencies,
     AccountClerkReconciliationOutcome,
 )
+from app.engine.live.account_custody_topology import supported_account_custody_config
 from app.engine.live.account_effect import (
     AccountEffectClassifier,
     AccountEffectEvidence,
@@ -163,9 +165,21 @@ _CRITICAL_BROKER_STREAM_SILENCE_MS = 30_000
 # The per-strategy-instance admission fence below is stricter for normal
 # entries; this is the account-level backpressure limit that protects the
 # Clerk process if many independent strategies are active at once.
-_PRODUCTION_ASYNC_CUSTODY_ENTRY_CAPACITY = 64
-_PRODUCTION_ASYNC_CUSTODY_RISK_REDUCING_CAPACITY = 32
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AccountClerkAsyncCustodyBoundaryHooks:
+    """Optional observers at the three asynchronous-custody boundaries.
+
+    Production leaves these callbacks unset.  They make deterministic
+    integration tests place a controlled delay *inside* the same Clerk path
+    that admits A0, crosses A1, and timestamps the durable inbox append.
+    """
+
+    before_a0_admission: Callable[[AccountOwnerSubmitIntent], Awaitable[None]] | None = None
+    before_a1_dispatch: Callable[[AccountOwnerSubmitIntent, Literal["entry", "risk_reducing"]], Awaitable[None]] | None = None
+    after_inbox_durable_append: Callable[[AccountOwnerSubmitIntent], None] | None = None
 
 
 @asynccontextmanager
@@ -263,6 +277,7 @@ class AccountClerk:
         epoch_authority: AccountEpochAuthority | None = None,
         safety_authority: AccountSafetyAuthority | None = None,
         effect_classifier: AccountEffectClassifier | None = None,
+        async_custody_boundary_hooks: AccountClerkAsyncCustodyBoundaryHooks | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
@@ -277,10 +292,16 @@ class AccountClerk:
         # This lock linearizes a final broker-write admission with a newly
         # observed invalidation. Its ordering is always intake -> epoch gate.
         self._epoch_write_admission_lock = asyncio.Lock()
+        self._async_custody_boundary_hooks = async_custody_boundary_hooks
         self._journal = AccountClerkJournal(
             artifacts_root=artifacts_root,
             account_id=account_id,
             now_ms=self._now_ms,
+            after_inbox_durable_append=(
+                async_custody_boundary_hooks.after_inbox_durable_append
+                if async_custody_boundary_hooks is not None
+                else None
+            ),
         )
         # Kept as a direct alias for focused compatibility tests that model a
         # process restart by clearing only volatile callback attribution.
@@ -337,14 +358,13 @@ class AccountClerk:
             account_id=account_id,
         )
         self._async_custody_admission_lock = asyncio.Lock()
-        self._async_custody_queues: dict[str, asyncio.Queue[AccountOwnerSubmitIntent]] = (
-            {
-                "entry": asyncio.Queue(maxsize=async_custody_config.entry_capacity),
-                "risk_reducing": asyncio.Queue(maxsize=async_custody_config.risk_reducing_capacity),
-            }
-            if async_custody_config is not None
-            else {}
-        )
+        self._async_custody_queues: dict[str, asyncio.Queue[AccountOwnerSubmitIntent]] = {}
+        if async_custody_config is not None:
+            self._async_custody_queues["entry"] = asyncio.Queue(maxsize=async_custody_config.entry_capacity)
+            if async_custody_config.risk_reducing_capacity > 0:
+                self._async_custody_queues["risk_reducing"] = asyncio.Queue(
+                    maxsize=async_custody_config.risk_reducing_capacity
+                )
         self._async_custody_workers: list[asyncio.Task[None]] = []
         self._async_custody_enqueued_ids: set[str] = set()
         self._async_custody_started = False
@@ -419,12 +439,15 @@ class AccountClerk:
             asyncio.create_task(
                 self._run_async_custody_lane("entry"),
                 name="account-clerk-async-custody-entry",
-            ),
-            asyncio.create_task(
-                self._run_async_custody_lane("risk_reducing"),
-                name="account-clerk-async-custody-risk-reducing",
-            ),
+            )
         ]
+        if "risk_reducing" in self._async_custody_queues:
+            self._async_custody_workers.append(
+                asyncio.create_task(
+                    self._run_async_custody_lane("risk_reducing"),
+                    name="account-clerk-async-custody-risk-reducing",
+                )
+            )
 
     async def stop_async_custody(self) -> None:
         """Stop workers only after A1 work is resolved or durably uncertain."""
@@ -451,7 +474,7 @@ class AccountClerk:
             # may ignore cancellation, so never let it block account shutdown.
             self._custody_notification_observer.cancel()
 
-    def async_custody_health(self) -> AccountClerkAsyncCustodyHealth:
+    async def async_custody_health(self) -> AccountClerkAsyncCustodyHealth:
         """Return the bounded lane depths exposed by the versioned read API."""
 
         if self._async_custody_config is None:
@@ -462,11 +485,14 @@ class AccountClerk:
                 risk_reducing_depth=0,
                 risk_reducing_capacity=0,
             )
+        entry_depth, risk_reducing_depth = await asyncio.to_thread(
+            self._journal.nonterminal_async_custody_depths
+        )
         return AccountClerkAsyncCustodyHealth(
             enabled=True,
-            entry_depth=self._async_custody_queues["entry"].qsize(),
+            entry_depth=entry_depth,
             entry_capacity=self._async_custody_config.entry_capacity,
-            risk_reducing_depth=self._async_custody_queues["risk_reducing"].qsize(),
+            risk_reducing_depth=risk_reducing_depth,
             risk_reducing_capacity=self._async_custody_config.risk_reducing_capacity,
         )
 
@@ -670,7 +696,8 @@ class AccountClerk:
                             # ordinary epoch/safety entry gate remains in
                             # force. The socket API cannot choose this path.
                             await self._require_epoch_entry_admission(intent)
-                        self._require_async_custody_capacity(intent, lane)
+                        await self._require_async_custody_capacity(intent, lane)
+                        await self._run_before_a0_admission_hook(intent)
                         intake_admitted_at_ms = self._now_ms()
                         recorded = await asyncio.to_thread(
                             self._record_intent_locked,
@@ -706,13 +733,18 @@ class AccountClerk:
 
         return await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
 
-    def _require_async_custody_capacity(
+    async def _require_async_custody_capacity(
         self,
         intent: AccountOwnerSubmitIntent,
         lane: Literal["entry", "risk_reducing"],
     ) -> None:
-        queue = self._async_custody_queues[lane]
-        if not queue.full():
+        capacity = (
+            self._async_custody_config.entry_capacity
+            if lane == "entry"
+            else self._async_custody_config.risk_reducing_capacity
+        )
+        occupied = await asyncio.to_thread(self._journal.nonterminal_async_custody_count, lane)
+        if occupied < capacity:
             return
         reason = "CLERK_ASYNC_ENTRY_QUEUE_FULL" if lane == "entry" else "CLERK_ASYNC_RISK_QUEUE_FULL"
         self._reject(intent, reason)
@@ -728,7 +760,8 @@ class AccountClerk:
             return True
         if self._async_custody_queues[lane].full():
             if reject_if_full:
-                self._require_async_custody_capacity(intent, lane)
+                reason = "CLERK_ASYNC_ENTRY_QUEUE_FULL" if lane == "entry" else "CLERK_ASYNC_RISK_QUEUE_FULL"
+                self._reject(intent, reason)
             return False
         self._async_custody_queues[lane].put_nowait(intent)
         self._async_custody_enqueued_ids.add(intent.intent_id)
@@ -740,6 +773,7 @@ class AccountClerk:
             intent = await queue.get()
             try:
                 if not self._async_custody_stopping:
+                    await self._run_before_a1_dispatch_hook(intent, lane)
                     await self._advance_async_custody_intent(intent)
             except asyncio.CancelledError:
                 raise
@@ -765,6 +799,24 @@ class AccountClerk:
             finally:
                 self._async_custody_enqueued_ids.discard(intent.intent_id)
                 queue.task_done()
+
+    async def _run_before_a0_admission_hook(self, intent: AccountOwnerSubmitIntent) -> None:
+        """Run an optional observer at the last A0 admission boundary."""
+
+        hooks = self._async_custody_boundary_hooks
+        if hooks is not None and hooks.before_a0_admission is not None:
+            await hooks.before_a0_admission(intent)
+
+    async def _run_before_a1_dispatch_hook(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        lane: Literal["entry", "risk_reducing"],
+    ) -> None:
+        """Run an optional observer after dequeue and before the A1 path."""
+
+        hooks = self._async_custody_boundary_hooks
+        if hooks is not None and hooks.before_a1_dispatch is not None:
+            await hooks.before_a1_dispatch(intent, lane)
 
     async def _advance_async_custody_intent(self, intent: AccountOwnerSubmitIntent) -> None:
         """Cross A1 under the Clerk grant, then retain uncertainty durably."""
@@ -2637,10 +2689,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             durable_generation_provider=durable_generation_provider,
             on_generation_fenced=stop.set,
             host_binding_capability=os.environ.get(CLERK_HOST_BINDING_CAPABILITY_ENV),
-            async_custody_config=AccountClerkAsyncCustodyConfig(
-                entry_capacity=_PRODUCTION_ASYNC_CUSTODY_ENTRY_CAPACITY,
-                risk_reducing_capacity=_PRODUCTION_ASYNC_CUSTODY_RISK_REDUCING_CAPACITY,
-            ),
+            async_custody_config=supported_account_custody_config(),
             epoch_authority=epoch_authority,
             safety_authority=safety_authority,
         )
@@ -2828,6 +2877,7 @@ __all__ = [
     "ACCOUNT_CLERK_INBOX_FILENAME",
     "ACCOUNT_CLERK_JOURNAL_FILENAME",
     "AccountClerk",
+    "AccountClerkAsyncCustodyBoundaryHooks",
     "AccountClerkBrokerAckReceipt",
     "AccountClerkCancelNamespaceUncertainError",
     "AccountClerkGenerationFencedError",

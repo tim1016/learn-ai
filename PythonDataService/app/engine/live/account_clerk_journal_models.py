@@ -441,7 +441,7 @@ class AccountClerkAsyncCustodyConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     entry_capacity: int = Field(ge=1, le=256)
-    risk_reducing_capacity: int = Field(ge=1, le=256)
+    risk_reducing_capacity: int = Field(ge=0, le=256)
 
 
 class AccountClerkAsyncCustodyHealth(BaseModel):
