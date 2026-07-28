@@ -22,13 +22,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from app.broker.alpaca.clerk import derive, reconcile
 from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
+from app.broker.alpaca.clerk.exposure import verify_flatten
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
+from app.broker.alpaca.clerk.leg_identity import Clock, LegIdentity, default_clock, leg_error
 from app.broker.alpaca.clerk.models import (
     UNEXPLAINED_ORDER_HOLD_CODE,
     ClerkEntryKind,
@@ -54,6 +53,7 @@ from app.broker.contract.models import (
 )
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import (
+    build_bot_order_namespace,
     build_manual_order_namespace,
     build_order_ref,
     mint_intent_id,
@@ -62,6 +62,7 @@ from app.engine.live.order_identity import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 # A response-lost POST can still be executing at Alpaca when an immediate
 # by-client-id lookup says 404. Never turn that first absence into a terminal
@@ -75,82 +76,6 @@ _RECONCILIATION_TERMINAL_ORDER_STATUSES = frozenset(
     {"filled", "canceled", "expired", "rejected", "replaced"}
 )
 
-# An injected clock: the current instant as ``int64`` ms UTC. Defaults to the
-# ingestion-boundary wall clock; tests inject a fixed clock (mirrors the S4
-# ``TradeUpdatesConsumer`` seam) so journaled timestamps are deterministic.
-type Clock = Callable[[], int]
-
-def _now_ms() -> int:
-    """Current instant as ``int64`` ms UTC (ingestion boundary)."""
-    return int(datetime.now(UTC).timestamp() * 1000)
-
-def _leg_error(exc: BrokerError) -> OrderLegError:
-    """Adapt a broker exception to the clerk's typed *what/why* leg error."""
-    return OrderLegError(message=exc.message, why=exc.detail)
-
-@dataclass(frozen=True, slots=True)
-class _LegIdentity:
-    """The minted, durable identity for one leg, plus its journal context.
-
-    Built once per leg before any journal write, then stamped onto every
-    entry — so the six identity fields are never re-listed at each append site.
-    ``client_order_id == order_ref`` is the design invariant.
-    """
-
-    account_id: str
-    operator: str
-    intent_id: str
-    order_ref: str
-    leg: BrokerOrderLeg
-    clock: Clock
-
-    def entry(
-        self,
-        kind: ClerkEntryKind,
-        *,
-        order: BrokerOrder | None = None,
-        error: OrderLegError | None = None,
-    ) -> OrderJournalEntry:
-        """A journal entry for this identity, stamped with ``kind`` and outcome.
-
-        ``error`` is the clerk's own typed *what/why* — a broker exception is
-        adapted with :func:`_leg_error` at the call site, and a resolution
-        synthesises its own. Keeping the one error shape lets every terminal /
-        uncertain line reuse this single builder instead of re-listing the six
-        identity fields.
-        """
-        return OrderJournalEntry(
-            kind=kind,
-            account_id=self.account_id,
-            operator=self.operator,
-            intent_id=self.intent_id,
-            order_ref=self.order_ref,
-            client_order_id=self.order_ref,
-            leg=self.leg,
-            recorded_at_ms=self.clock(),
-            order=order,
-            error_message=error.message if error is not None else None,
-            error_detail=error.why if error is not None else None,
-        )
-
-    @classmethod
-    def from_entry(cls, entry: OrderJournalEntry, *, clock: Clock) -> _LegIdentity:
-        """Rebuild the identity from the owning ``intent_recorded`` line (S5).
-
-        Resolution reuses the durable identity the submit minted — never
-        fabricates one. Requires a leg: every submit-side line carries one, and
-        the resolver only calls this on entries whose leg is present.
-        """
-        if entry.leg is None:
-            raise ValueError(f"intent entry {entry.order_ref!r} has no leg to resolve")
-        return cls(
-            account_id=entry.account_id,
-            operator=entry.operator,
-            intent_id=entry.intent_id,
-            order_ref=entry.order_ref,
-            leg=entry.leg,
-            clock=clock,
-        )
 
 class AlpacaClerk:
     """Single-writer order-submission facade for one Alpaca account.
@@ -167,7 +92,7 @@ class AlpacaClerk:
         *,
         read: BrokerReadPort,
         trade: BrokerTradePort,
-        clock: Clock = _now_ms,
+        clock: Clock = default_clock,
     ) -> None:
         self._read = read
         self._trade = trade
@@ -209,6 +134,34 @@ class AlpacaClerk:
         definitive rejection is independent; an ``uncertain`` result means the
         previous leg may have landed, so remaining request legs stay unsent.
         """
+        return await self._submit_batch(
+            operator=request.operator, namespace=None, legs=request.legs
+        )
+
+    async def submit_for_instance(
+        self, *, strategy_instance_id: str, legs: list[BrokerOrderLeg]
+    ) -> OrderSubmitResult:
+        """Submit legs under the bot-namespace scheme (S3, #1261 / ADR 0008).
+
+        The minted refs are ``learn-ai/{strategy_instance_id}/v1:{intent_id}``,
+        a peer of the ``manual/{operator}/v1`` scheme — ``order_ref`` remains
+        the ``client_order_id``. Same capture-first, fail-closed discipline and
+        exposure-hold gate as :meth:`submit`. A bad ``strategy_instance_id``
+        raises ``ValueError`` at this boundary before anything is journaled.
+        """
+        namespace = build_bot_order_namespace(strategy_instance_id)
+        return await self._submit_batch(
+            operator=strategy_instance_id, namespace=namespace, legs=legs
+        )
+
+    async def _submit_batch(
+        self,
+        *,
+        operator: str,
+        namespace: str | None,
+        legs: list[BrokerOrderLeg],
+    ) -> OrderSubmitResult:
+        """Shared hold-gated serial leg submission for both namespace schemes."""
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
             hold = derive.hold_state(journal.read_entries())
@@ -228,8 +181,10 @@ class AlpacaClerk:
                     detail=hold.reason,
                 )
             results: list[OrderLegResult] = []
-            for leg in request.legs:
-                result = await self._submit_leg(request.operator, leg, account_id, journal)
+            for leg in legs:
+                result = await self._submit_leg(
+                    operator, leg, account_id, journal, namespace=namespace
+                )
                 results.append(result)
                 if result.status == "uncertain":
                     logger.warning(
@@ -238,13 +193,52 @@ class AlpacaClerk:
                             "action": "submit_batch_stopped_uncertain",
                             "account_id": account_id,
                             "order_ref": result.order_ref,
-                            "remaining_legs": len(request.legs) - len(results),
+                            "remaining_legs": len(legs) - len(results),
                         },
                     )
                     break
         return OrderSubmitResult(
             broker=self.broker_id, account_id=account_id, results=results
         )
+
+    async def flatten_instance(
+        self, *, strategy_instance_id: str, symbol: str, quantity: float
+    ) -> OrderSubmitResult:
+        """Close (part of) one instance's journal-owned exposure (P3 invariant b).
+
+        ``verify_flatten`` (see its docstring for the refusal rules) runs
+        **inside the intake lock, immediately before submit**, so no concurrent
+        fill — which journals under this same lock — can invalidate the verdict.
+        Not gated by the exposure hold: a verified flatten only *reduces* the
+        instance's own exposure (P6 — reductions are never blocked).
+        """
+        namespace = build_bot_order_namespace(strategy_instance_id)
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            side = verify_flatten(
+                journal.read_entries(),
+                namespace=namespace,
+                symbol=symbol,
+                quantity=quantity,
+            )
+            leg = BrokerOrderLeg(symbol=symbol, side=side, quantity=quantity)
+            result = await self._submit_leg(
+                strategy_instance_id, leg, account_id, journal, namespace=namespace
+            )
+        return OrderSubmitResult(
+            broker=self.broker_id, account_id=account_id, results=[result]
+        )
+
+    async def read_journal_entries(self) -> list[OrderJournalEntry]:
+        """Read-only journal snapshot for the pure projection folds (P3/P12).
+
+        ``project_instance_exposure`` over this snapshot is the ONLY hydration
+        source for a bot's owned exposure — never the broker account-net map
+        (07-27 wave-one defect, regression-pinned); ``project_instance_timeline``
+        over it is the P12 per-bot timeline.
+        """
+        _account_id, journal = await self._ensure_journal()
+        return journal.read_entries()
 
     async def cancel(self, order_id: str) -> OrderCancelResult:
         """Cancel one working order by its broker-assigned id.
@@ -596,6 +590,8 @@ class AlpacaClerk:
         leg: BrokerOrderLeg,
         account_id: str,
         journal: OrderJournal,
+        *,
+        namespace: str | None = None,
     ) -> OrderLegResult:
         # Mint identity — fail closed. Two failure modes, both surfaced as a
         # typed failed leg with NO journal write and NO broker call:
@@ -607,10 +603,16 @@ class AlpacaClerk:
         #     too-long id is a caller error, never truncated.
         # ``OrderRefError`` subclasses ``ValueError``, so the single ``ValueError``
         # catch covers both the bad-operator and over-cap paths.
+        # ``namespace`` (bot-namespace path, S3) arrives prebuilt + validated by
+        # ``build_bot_order_namespace``; when absent the manual scheme is minted
+        # from ``operator`` exactly as before.
         intent_id = mint_intent_id()
+        fallback_namespace = namespace if namespace is not None else f"manual/{operator}/v1"
         try:
-            namespace = build_manual_order_namespace(operator)
-            order_ref = build_order_ref(namespace, intent_id)
+            leg_namespace = (
+                namespace if namespace is not None else build_manual_order_namespace(operator)
+            )
+            order_ref = build_order_ref(leg_namespace, intent_id)
         except ValueError as exc:
             logger.warning(
                 "alpaca clerk rejected order identity",
@@ -618,14 +620,14 @@ class AlpacaClerk:
             )
             return OrderLegResult(
                 status="failed",
-                order_ref=f"manual/{operator}/v1:{intent_id}",
+                order_ref=f"{fallback_namespace}:{intent_id}",
                 intent_id=intent_id,
                 error=OrderLegError(
                     message="Could not build a durable order identity for this leg.",
                     why=str(exc),
                 ),
             )
-        identity = _LegIdentity(
+        identity = LegIdentity(
             account_id, operator, intent_id, order_ref, leg, self._clock
         )
 
@@ -642,7 +644,7 @@ class AlpacaClerk:
             # uncertain leaves the intent at ``submit_uncertain`` for startup
             # replay / a later sweep to finish — never a fabricated terminal.
             await journal.append_async(
-                identity.entry(ClerkEntryKind.SUBMIT_UNCERTAIN, error=_leg_error(exc))
+                identity.entry(ClerkEntryKind.SUBMIT_UNCERTAIN, error=leg_error(exc))
             )
             logger.warning(
                 "alpaca clerk submit outcome uncertain; resolving by client_order_id",
@@ -660,7 +662,7 @@ class AlpacaClerk:
         except BrokerError as exc:
             # Every other BrokerError (invalid 4xx, rejected 409, auth, rate
             # limit) is a DEFINITIVE failure — the order did not land.
-            failure = _leg_error(exc)
+            failure = leg_error(exc)
             await journal.append_async(
                 identity.entry(ClerkEntryKind.SUBMIT_FAILED, error=failure)
             )
@@ -719,7 +721,7 @@ class AlpacaClerk:
             terminal_outcomes = derive.terminal_map(entries)
             uncertain_recorded_at = derive.uncertain_timestamp_map(entries)
             for intent_entry in unresolved:
-                identity = _LegIdentity.from_entry(intent_entry, clock=self._clock)
+                identity = LegIdentity.from_entry(intent_entry, clock=self._clock)
                 await self._resolve_intent(
                     identity,
                     journal,
@@ -731,7 +733,7 @@ class AlpacaClerk:
 
     async def _resolve_intent(
         self,
-        identity: _LegIdentity,
+        identity: LegIdentity,
         journal: OrderJournal,
         *,
         terminal_outcomes: dict[str, OrderLegResult] | None = None,

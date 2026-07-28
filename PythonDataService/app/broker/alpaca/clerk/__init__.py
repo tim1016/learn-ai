@@ -23,6 +23,14 @@ from app.broker.alpaca.clerk.clerk import (
     reset_alpaca_clerk_for_testing,
     set_alpaca_clerk,
 )
+from app.broker.alpaca.clerk.exposure import (
+    FlattenRefusedError,
+    InstanceExposure,
+    project_instance_exposure,
+    project_instance_timeline,
+    strategy_instance_id_for_namespace,
+    verify_flatten,
+)
 from app.broker.alpaca.clerk.journal import get_clerk_settings
 from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
@@ -46,7 +54,9 @@ __all__ = [
     "AlpacaClerk",
     "ClerkEntryKind",
     "ClerkStatus",
+    "FlattenRefusedError",
     "HoldState",
+    "InstanceExposure",
     "OrderCancelResult",
     "OrderJournalEntry",
     "OrderLegError",
@@ -57,8 +67,12 @@ __all__ = [
     "get_alpaca_clerk",
     "get_clerk_settings",
     "get_reconciliation_sweep",
+    "project_instance_exposure",
+    "project_instance_timeline",
     "reset_alpaca_clerk_for_testing",
     "reset_reconciliation_sweep_for_testing",
     "set_alpaca_clerk",
     "set_reconciliation_sweep",
+    "strategy_instance_id_for_namespace",
+    "verify_flatten",
 ]
