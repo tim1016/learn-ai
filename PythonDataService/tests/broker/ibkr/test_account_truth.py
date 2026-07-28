@@ -637,6 +637,11 @@ def test_account_truth_all_retired_mixed_position_is_retired_live_exposure() -> 
     assert truth.positions[0].owner.owner_binding_state == "RETIRED"
     assert truth.positions[0].owner.severity == "critical"
     assert {row.code for row in truth.blockers} == {"retired_owner_live_exposure"}
+    [blocker] = truth.operator_blockers
+    assert blocker.condition.id == "retired_owner_live_exposure"
+    assert blocker.headline == "Retired bot exposure suspends new account entries"
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.label == "Reconcile retired-owner exposure"
 
 
 def test_account_truth_duplicate_active_namespace_fails_closed() -> None:

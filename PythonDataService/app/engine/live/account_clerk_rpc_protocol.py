@@ -44,6 +44,7 @@ AccountClerkRpcOperation = Literal[
     "operator_adjustment",
     "record_binding_decision",
     "fold_binding_retirements",
+    "repair_account_safety_admission",
     "drain_events",
 ]
 WRITE_OPERATIONS = frozenset(
@@ -61,6 +62,7 @@ WRITE_OPERATIONS = frozenset(
         "operator_adjustment",
         "record_binding_decision",
         "fold_binding_retirements",
+        "repair_account_safety_admission",
     }
 )
 AccountClerkRpcServerErrorCode = Literal[
@@ -272,6 +274,7 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
         "operator_adjustment",
         "record_binding_decision",
         "fold_binding_retirements",
+        "repair_account_safety_admission",
         "drain_events",
     ):
         raise _AccountClerkRpcRequestRejected("UNKNOWN_OPERATION")
@@ -289,6 +292,7 @@ def request_timeout_s(operation: AccountClerkRpcOperation) -> float:
         "prepare_emergency_flatten",
         "mark_emergency_bots_paused",
         "mark_emergency_requires_reconciliation",
+        "repair_account_safety_admission",
         "recovery_flatten",
         "recovery_flatten_batch",
     ):

@@ -57,7 +57,10 @@ from app.engine.live.account_clerk_reconciler import (
     _unresolved_intents,
     namespace_expected_exposure,
 )
-from app.engine.live.account_clerk_rpc import AccountClerkCallbackPersistenceError
+from app.engine.live.account_clerk_rpc import (
+    AccountClerkCallbackPersistenceError,
+    AccountClerkHostRpcClient,
+)
 from app.engine.live.account_owner import (
     MANUAL_OPERATOR_RUN_ID,
     MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
@@ -70,6 +73,7 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
     write_account_instance_binding,
 )
+from app.engine.live.account_safety import account_safety_admission_path
 from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref
 from app.services.bot_deletion import (
     BotRetirementBindingTarget,
@@ -778,7 +782,7 @@ async def test_clerk_rejects_an_active_binding_while_retirement_is_pending(tmp_p
 
     _write_active_binding(tmp_path, "bot-a", "run-a")
     transition_path = stable_bot_retirement_transition_path(tmp_path, "bot-a")
-    transition_path.parent.mkdir(parents=True)
+    transition_path.parent.mkdir(parents=True, exist_ok=True)
     transition_path.write_text(
         BotRetirementTransitionRecord(
             strategy_instance_id="bot-a",
@@ -878,7 +882,7 @@ async def test_clerk_retry_revalidates_retirement_before_broker_write(tmp_path: 
     intent = _intent("bot-a", "run-a", "retired-retry")
     await clerk.record_intent(intent)
     transition_path = stable_bot_retirement_transition_path(tmp_path, "bot-a")
-    transition_path.parent.mkdir(parents=True)
+    transition_path.parent.mkdir(parents=True, exist_ok=True)
     transition_path.write_text(
         BotRetirementTransitionRecord(
             strategy_instance_id="bot-a",
@@ -2525,6 +2529,46 @@ async def test_bot_rpc_reaches_clerk_without_a_bot_broker_adapter(tmp_path: Path
 
     assert receipt.status == "broker_acked"
     assert len(broker.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_host_rpc_fences_and_repairs_stranded_account_safety_admission(
+    tmp_path: Path,
+) -> None:
+    """The versioned host-only seam is the production repair control surface."""
+
+    generation = _write_active_clerk_generation(tmp_path)
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_FakeBroker(),
+        clerk_generation=generation,
+        host_binding_capability="repair-host-capability",
+        now_ms=lambda: START_MS,
+    )
+    server = AccountClerkRpcServer(clerk)
+    anchor = account_safety_admission_path(tmp_path, ACCOUNT)
+    coordinator = anchor.with_name(f".{anchor.name}")
+    readers = coordinator / "readers"
+    readers.mkdir(parents=True)
+    (coordinator / "gate").write_text("stranded", encoding="utf-8")
+    (readers / "stranded-reader").write_text("stranded", encoding="utf-8")
+    await server.start()
+    try:
+        receipt = await AccountClerkHostRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            host_capability="repair-host-capability",
+        ).repair_account_safety_admission(
+            operation_id="s6-rpc-admission-repair-001",
+            authorized_by="daemon-host",
+        )
+    finally:
+        await server.close()
+
+    assert receipt.removed_markers == ("gate", "readers/stranded-reader")
+    assert not (coordinator / "gate").exists()
+    assert list(readers.iterdir()) == []
 
 
 def test_two_real_processes_cannot_acquire_account_clerk_authority_together(tmp_path: Path) -> None:

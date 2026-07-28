@@ -83,6 +83,7 @@ from app.engine.live.halt import (
 )
 from app.engine.live.live_context import LiveContext
 from app.engine.live.live_portfolio import (
+    AccountSuspendedEntryPauseError,
     BrokerAdapter,
     ControlledLiveHaltError,
     IbkrBrokerAdapter,
@@ -736,6 +737,7 @@ class LiveEngine:
         self._account_registry_gate_enabled = account_registry_gate_enabled
         self._account_gate_authority = account_gate_authority
         self._account_truth_gate_provider: Callable[[], object] | None = None
+        self._account_safety_gate_provider: Callable[[], object] | None = None
         self._account_live_feed_evidence_write_failed = False
         self._owner_generation_provider = owner_generation_provider
         self._current_owner_generation_provider = (
@@ -944,7 +946,14 @@ class LiveEngine:
                 )
 
         account_truth_gate_provider = None
+        account_safety_gate_provider = None
+        self._account_truth_gate_provider = None
+        self._account_safety_gate_provider = None
         if self._account_id and getattr(self._broker, "requires_durable_submit", False):
+            from app.engine.live.account_safety import (
+                AccountSafetyAuthority,
+                AccountSafetyVerdict,
+            )
             from app.services.account_truth_snapshot import (
                 AccountTruthSubmitGrace,
                 get_account_truth_snapshot_provider,
@@ -952,12 +961,45 @@ class LiveEngine:
             from app.utils.timestamps import now_ms_utc
 
             account_truth_submit_grace = AccountTruthSubmitGrace()
+            safety_authority = (
+                AccountSafetyAuthority(
+                    artifacts_root=self._artifacts_root,
+                    account_id=self._account_id,
+                    now_ms=now_ms_utc,
+                )
+                if self._artifacts_root is not None
+                else None
+            )
+
+            def account_safety_gate_provider():
+                if safety_authority is not None:
+                    # AccountReconciliationService owns the durable Account
+                    # Truth-to-safety fold.  Portfolio submission only reads
+                    # that projection; it must never take a cross-runtime
+                    # writer permit or mutate safety from the bot event loop.
+                    safety = safety_authority.read()
+                    if safety.verdict is not AccountSafetyVerdict.CLEAN:
+                        suspension = safety.suspension
+                        return GateResult(
+                            gate_id="account.safety",
+                            status="block",
+                            source="account_safety",
+                            operator_reason="ACCOUNT_SAFETY_RETIRED_OWNER_LIVE_EXPOSURE",
+                            operator_next_step="RECONCILE_NOW",
+                            evidence_at_ms=(
+                                suspension.detected_at_ms
+                                if suspension is not None
+                                else safety.updated_at_ms
+                            ),
+                        )
+                return None
 
             def account_truth_gate_provider():
                 snapshot = get_account_truth_snapshot_provider().get(self._account_id)
                 return account_truth_submit_grace.gate(snapshot, now_ms=now_ms_utc())
 
             self._account_truth_gate_provider = account_truth_gate_provider
+            self._account_safety_gate_provider = account_safety_gate_provider
 
         account_observation_lease_gate_provider = None
         account_observation_lease_shadow_comparison_observer = None
@@ -1115,6 +1157,7 @@ class LiveEngine:
                 self._account_registry_gate_result if self._account_registry_gate_enabled else None
             ),
             account_truth_gate_provider=self._account_truth_gate_provider,
+            account_safety_gate_provider=self._account_safety_gate_provider,
             account_observation_lease_gate_provider=account_observation_lease_gate_provider,
             account_gate_authority=effective_account_gate_authority,
             account_gate_authority_provider=account_gate_authority_provider,
@@ -2254,6 +2297,19 @@ class LiveEngine:
             return []
         try:
             acks = await portfolio.submit_pending_orders()
+        except AccountSuspendedEntryPauseError as pause:
+            # S6: a sibling's retired-owner exposure suspends account entry
+            # risk, but must not terminally retire or fatal-halt this healthy
+            # run. The pending entry has already been dropped by the portfolio
+            # boundary; wait for the Clerk's current-epoch reconciliation.
+            logger.warning(
+                "[ACCOUNT_SUSPENDED] strategy=%s pending=%d — entries paused this bar; "
+                "run stays alive while %s is reconciled",
+                self._strategy_key,
+                len(pending_snapshot),
+                pause.reason,
+            )
+            return []
         except TransientAccountFreezePauseError as pause:
             # Active restart-intensity evidence paused submits this bar. Pending
             # orders were already dropped at the gate, so nothing was submitted;

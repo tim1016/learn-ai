@@ -37,6 +37,7 @@ from app.engine.live.account_artifacts import (
 from app.engine.live.account_clerk_journal import AccountClerkJournal
 from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.engine.live.account_safety import AccountSafetyAuthority, AccountSafetyVerdict
 from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
 from app.schemas.account_truth import (
     AccountTruthEvidenceGap,
@@ -102,16 +103,18 @@ def _truth(
     connected: bool = True,
     positions: list[IbkrPosition] | None = None,
     evidence_gaps: list[AccountTruthEvidenceGap] | None = None,
+    account_instance_bindings: list[AccountInstanceBinding] | None = None,
+    executions: list[IbkrOrderEvent] | None = None,
 ):
     return compose_account_truth(
         health=_health(account_id=account_id, connected=connected),
-        account_instance_bindings=[],
+        account_instance_bindings=account_instance_bindings or [],
         account_recovery_state=AccountRecoveryState.clear(account_id),
         account=_account_summary(),
         positions_snapshot=_positions_snapshot(positions),
         open_orders=[],
         completed_orders=[],
-        executions=[],
+        executions=executions or [],
         evidence_gaps=evidence_gaps or [],
         generated_at_ms=1_780_000_001_000,
     )
@@ -211,6 +214,74 @@ def test_write_receipt_wraps_clean_account_truth(tmp_path: Path) -> None:
     assert receipt.final_gate_result.status == "pass"
     assert receipt.expires_at_ms == 1_780_000_062_000
     assert service.read_latest_receipt("DU1234567") == receipt
+
+
+def test_repeated_clean_account_truth_sweeps_never_manufacture_a_suspension(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    first = _truth()
+    second = first.model_copy(update={"generated_at_ms": first.generated_at_ms + 1})
+
+    service.observe_account_truth(first, now_ms=1_780_000_002_000)
+    service.observe_account_truth(second, now_ms=1_780_000_002_001)
+
+    safety = AccountSafetyAuthority(
+        artifacts_root=tmp_path,
+        account_id="DU1234567",
+        now_ms=lambda: 1_780_000_002_001,
+    ).read()
+    assert safety.verdict is AccountSafetyVerdict.CLEAN
+    assert safety.suspension is None
+
+
+def test_account_truth_retired_owner_exposure_durably_suspends_then_requires_epoch_cure(
+    tmp_path: Path,
+) -> None:
+    """A broker-detected retired position is never merely an observation-lease block."""
+
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    retired_truth = _truth(
+        positions=[_position(symbol="AMD", quantity=2.0)],
+        account_instance_bindings=[_retired_binding()],
+        executions=[
+            IbkrOrderEvent(
+                account_id="DU1234567",
+                order_id=17,
+                con_id=756733,
+                event_type="fill",
+                status="Filled",
+                order_ref="learn-ai/bot-a/v1:retired-position-fill",
+                symbol="AMD",
+                side="BUY",
+                exec_id="retired-position-fill",
+                fill_quantity=2.0,
+                ts_ms=1_780_000_002_900,
+            )
+        ],
+    )
+
+    service.observe_account_truth(retired_truth, now_ms=1_780_000_003_000)
+
+    safety = AccountSafetyAuthority(
+        artifacts_root=tmp_path,
+        account_id="DU1234567",
+        now_ms=lambda: 1_780_000_003_000,
+    ).read()
+    assert safety.verdict is AccountSafetyVerdict.SUSPENDED
+    assert safety.suspension is not None
+    assert safety.suspension.requires_broker_clearance is True
+    assert {item.evidence_source for item in safety.suspension.custody} == {"broker"}
+
+    clean_truth = _truth().model_copy(update={"generated_at_ms": 1_780_000_004_000})
+    service.observe_account_truth(clean_truth, now_ms=1_780_000_004_000)
+
+    still_suspended = AccountSafetyAuthority(
+        artifacts_root=tmp_path,
+        account_id="DU1234567",
+        now_ms=lambda: 1_780_000_004_000,
+    ).read()
+    assert still_suspended.verdict is AccountSafetyVerdict.SUSPENDED
+    assert still_suspended.suspension is not None
+    assert still_suspended.suspension.requires_broker_clearance is False
 
 
 def test_default_receipt_ttl_is_five_minutes(tmp_path: Path) -> None:

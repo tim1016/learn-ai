@@ -37,6 +37,7 @@ EpochInvalidationTrigger = Literal[
     "ACTIVE_POLL_FAILED",
     "CLERK_DEATH",
     "GENERATION_FENCED",
+    "RETIRED_OWNER_EXPOSURE",
 ]
 EpochReconciliationDepth = Literal["full", "incremental"]
 EpochReconciliationVerdict = Literal["NOT_REQUIRED", "RECONCILING", "CLEAN", "ADOPTED", "CONTAMINATED"]

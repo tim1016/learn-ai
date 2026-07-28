@@ -220,6 +220,21 @@ class AccountTruthBlockError(SubmitGateBlockError):
         self.gate_result = gate_result
 
 
+class AccountSuspendedEntryPauseError(RuntimeError):
+    """Non-terminal pause while retired-owner exposure suspends account entries.
+
+    This is deliberately not a ``ControlledLiveHaltError``. A sibling bot did
+    not create the unmanaged exposure, so it drops this bar's pending entry
+    and remains on duty while the account Clerk obtains the required proof.
+    """
+
+    def __init__(self, *, gate_result: object) -> None:
+        reason = getattr(gate_result, "operator_reason", None)
+        super().__init__(f"AccountSuspendedEntryPauseError(reason={reason!r})")
+        self.gate_result = gate_result
+        self.reason = str(reason)
+
+
 class AccountLiveSessionBlockError(SubmitGateBlockError):
     """Raised when account-wide live-session policy blocks submit or flatten."""
 
@@ -816,6 +831,10 @@ class LivePortfolio:
     # submit is refused before any broker call. The provider must read cached
     # Account Truth only; it must not sweep IBKR from the submit path.
     account_truth_gate_provider: GateResultProvider | None = None
+    # S6 retired-owner custody is a direct account-level entry permission. It
+    # is deliberately independent of the Account Truth / Clerk-proof rollout
+    # resolver: a promoted observation lease may never bypass a suspension.
+    account_safety_gate_provider: GateResultProvider | None = None
     # Running bots may complete a bounded continuous account-truth outage,
     # but must stop adding exposure after the grace window.  Admission uses
     # the same gate without this runtime grace.
@@ -1389,6 +1408,19 @@ class LivePortfolio:
                     raise TransientAccountFreezePauseError(evidence=freeze_evidence)
                 raise AccountFreezeBlockError(evidence=freeze_evidence)
 
+        if self.account_safety_gate_provider is not None:
+            safety_gate = self.account_safety_gate_provider()
+            if (
+                safety_gate is not None
+                and getattr(safety_gate, "status", None) != "pass"
+                and not self._pending_orders_reduce_exposure_only()
+            ):
+                self.drop_pending_before_submit(
+                    drop_reason="account_suspended",
+                    ts_ms=now_ms_utc(),
+                )
+                raise AccountSuspendedEntryPauseError(gate_result=safety_gate)
+
         if self.account_registry_gate_provider is not None:
             registry_gate = self.account_registry_gate_provider()
             if registry_gate is not None and getattr(registry_gate, "status", None) != "pass":
@@ -1495,6 +1527,17 @@ class LivePortfolio:
                     else "account_truth_block"
                 )
                 self.drop_pending_before_submit(drop_reason=drop_reason, ts_ms=submitted_at_ms)
+                if (
+                    account_gate_authority == "account_truth"
+                    and getattr(account_verification_gate, "operator_reason", None)
+                    in {
+                        "ACCOUNT_SAFETY_RETIRED_OWNER_LIVE_EXPOSURE",
+                        "ACCOUNT_TRUTH_RETIRED_OWNER_LIVE_EXPOSURE",
+                    }
+                ):
+                    raise AccountSuspendedEntryPauseError(
+                        gate_result=account_verification_gate,
+                    )
                 raise AccountTruthBlockError(gate_result=account_verification_gate)
             elif outage_reason and requires_durable and self.account_truth_outage_started_at_ms is None:
                 self.account_truth_outage_started_at_ms = submitted_at_ms

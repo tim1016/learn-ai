@@ -84,6 +84,7 @@ from app.engine.live.account_registry import (
     index_account_instance_bindings,
     read_account_instance_registry,
 )
+from app.engine.live.account_safety import AccountSafetyAdmissionRepairReceipt
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.services.bot_deletion import BotDeletionCorruptError, bot_retirement_is_pending
 from app.services.journal_cures import JournalCureError, JournalCureHandler
@@ -649,6 +650,29 @@ class AccountClerkHostRpcClient(AccountClerkRpcClient):
             }
         )
 
+    async def repair_account_safety_admission(
+        self,
+        *,
+        operation_id: str,
+        authorized_by: str,
+    ) -> AccountSafetyAdmissionRepairReceipt:
+        """Fence admission and repair markers through the authenticated Clerk host."""
+
+        request = {
+            "operation": "repair_account_safety_admission",
+            "operation_id": operation_id,
+            "authorized_by": authorized_by,
+            "host_capability": self._host_capability,
+        }
+        payload = await self._request(request)
+        try:
+            return AccountSafetyAdmissionRepairReceipt.model_validate(payload["admission_repair"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="repair_account_safety_admission",
+                request_identity=request_identity(request),
+            ) from exc
+
 
 class AccountClerkRpcServer:
     """Clerk-process RPC server; the broker stays exclusively behind this seam."""
@@ -935,6 +959,15 @@ class AccountClerkRpcServer:
             )
             return AccountClerkRpcSuccessEnvelope(
                 payload={"binding_decision": recorded.model_dump(mode="json")}
+            )
+        if operation == "repair_account_safety_admission":
+            receipt = await self._clerk.prepare_and_repair_account_safety_admission(
+                operation_id=required_string(request, "operation_id"),
+                authorized_by=required_string(request, "authorized_by"),
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"admission_repair": receipt.model_dump(mode="json")}
             )
         if operation == "fold_binding_retirements":
             folded = await self._clerk.fold_binding_retirement_proposals()

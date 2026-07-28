@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Mapping, Sequence, Set
+from collections.abc import Callable, Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -529,6 +529,7 @@ def fold_account_binding_retirements(
     artifacts_root: Path,
     *,
     account_id: str,
+    before_legacy_retirement: Callable[[AccountInstanceBinding], None] | None = None,
 ) -> BindingRetirementFoldResult:
     """Let the Clerk fold all outstanding retirement proposals in ledger order."""
 
@@ -558,10 +559,15 @@ def fold_account_binding_retirements(
             },
         )
 
+    def before_retirement(retirement: dict[str, object]) -> None:
+        if before_legacy_retirement is not None:
+            before_legacy_retirement(AccountInstanceBinding.model_validate(retirement))
+
     return fold_binding_retirement_proposals(
         artifacts_root,
         account_id=account_id,
         read_current_binding=read_current,
+        before_legacy_retirement=before_retirement,
         write_legacy_retirement=write_legacy,
     )
 

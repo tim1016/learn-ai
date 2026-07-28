@@ -35,6 +35,11 @@ from app.engine.live.account_registry import (
     has_account_recovery_evidence_after,
     read_account_instance_registry,
 )
+from app.engine.live.account_safety import (
+    AccountSafetyAuthority,
+    account_safety_admission_lock,
+    retired_owner_broker_custody_from_account_truth,
+)
 from app.engine.live.exit_taxonomy import (
     CRASH_RETIRED_BINDING_SOURCES,
     ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES,
@@ -208,6 +213,18 @@ class AccountReconciliationService:
         if canonical_account_id is None:
             return None
         observed_at_ms = now_ms_utc() if now_ms is None else now_ms
+        # Account Truth is the canonical broker-attribution projection. Fold
+        # its retired-owner evidence into durable entry permission before any
+        # promoted observation lease could authorize a new account entry.
+        with account_safety_admission_lock(self._artifacts_root, canonical_account_id):
+            AccountSafetyAuthority(
+                artifacts_root=self._artifacts_root,
+                account_id=canonical_account_id,
+                now_ms=lambda: observed_at_ms,
+            ).observe_broker_retired_owner_custody(
+                retired_owner_broker_custody_from_account_truth(account_truth),
+                observed_at_ms=account_truth.generated_at_ms,
+            )
         self._observe_observation_lease(
             account_id=canonical_account_id,
             account_truth=account_truth,

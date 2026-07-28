@@ -8,10 +8,12 @@ immutable proof for :mod:`account_epoch` to validate and persist.
 from __future__ import annotations
 
 import asyncio
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
 from app.broker.ibkr.models import IbkrOpenOrder, IbkrOrderEvent, IbkrPosition, IbkrPositionsSnapshot
+from app.engine.live.account_clerk_journal import is_economic_terminal_broker_event
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.engine.live.account_epoch import (
     AccountEpochOutageChanges,
@@ -109,6 +111,10 @@ def _complete_proof(
         and (
             entry.entry_kind in {"broker_acked", "cancel_confirmed"}
             or (
+                entry.entry_kind == "broker_event"
+                and is_economic_terminal_broker_event(entry.broker_event)
+            )
+            or (
                 entry.entry_kind == "reconciliation"
                 and entry.reconciliation_verdict in {"RECOVER_ADOPT", "HALT"}
             )
@@ -132,11 +138,40 @@ def _complete_proof(
         if execution.order_ref not in known_order_refs
     ]
     baseline_exposure = project_journal_account_exposure(entries, account_id=state.account_id)
-    nonflat_positions = [_position_fact(position) for position in positions.positions if position.quantity != 0]
+    expected_position_by_symbol = {
+        exposure.symbol.upper(): exposure.quantity for exposure in baseline_exposure
+    }
+    observed_position_by_symbol: dict[str, float] = defaultdict(float)
+    observed_position_count_by_symbol: dict[str, int] = defaultdict(int)
+    for position in positions.positions:
+        if position.quantity != 0:
+            observed_position_by_symbol[position.symbol.upper()] += position.quantity
+            observed_position_count_by_symbol[position.symbol.upper()] += 1
+    # A healthy sibling's journal-proven position is not contamination. The
+    # proof remains conservative for any broker position without an exact
+    # account-level journal baseline (including an ack-only broker order).
+    nonflat_positions = [
+        _position_fact(position)
+        for position in positions.positions
+        if position.quantity != 0
+        and not _is_single_position_journal_match(
+            position=position,
+            expected_position_by_symbol=expected_position_by_symbol,
+            observed_position_count_by_symbol=observed_position_count_by_symbol,
+        )
+    ]
     missing_baseline_positions = [
-        {"symbol": exposure.symbol, "expected_signed_quantity": exposure.quantity, "observed_signed_quantity": 0.0}
-        for exposure in baseline_exposure
-    ] if not nonflat_positions else []
+        {
+            "symbol": symbol,
+            "expected_signed_quantity": expected_quantity,
+            "observed_signed_quantity": observed_position_by_symbol.get(symbol, 0.0),
+        }
+        for symbol, expected_quantity in expected_position_by_symbol.items()
+        if (
+            observed_position_by_symbol.get(symbol, 0.0) != expected_quantity
+            or observed_position_count_by_symbol.get(symbol, 0) != 1
+        )
+    ]
     outage_diff = AccountEpochOutageDiff(
         required_reconciliation_depth=_required_reconciliation_depth(state),
         intents=AccountEpochOutageChanges(changed=tuple(unresolved_intents)),
@@ -155,6 +190,28 @@ def _complete_proof(
         journal_tail_seq=max((entry.seq for entry in entries), default=0),
         evidence_status="COMPLETE",
         outage_diff=outage_diff,
+    )
+
+
+def _is_single_position_journal_match(
+    *,
+    position: IbkrPosition,
+    expected_position_by_symbol: dict[str, float],
+    observed_position_count_by_symbol: dict[str, int],
+) -> bool:
+    """Accept a baseline only when no same-symbol contract can be hidden.
+
+    The canonical Clerk account exposure is symbol-granular.  When the broker
+    reports more than one non-flat contract for a symbol, netting their
+    quantities could conceal an unmanaged option or a different stock lot.
+    Keep such a case contaminated until the journal evolves a contract-level
+    identity; the normal one-symbol, one-position sibling path stays usable.
+    """
+
+    symbol = position.symbol.upper()
+    return (
+        observed_position_count_by_symbol.get(symbol, 0) == 1
+        and position.quantity == expected_position_by_symbol.get(symbol)
     )
 
 

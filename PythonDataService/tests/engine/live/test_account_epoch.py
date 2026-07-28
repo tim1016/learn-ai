@@ -308,6 +308,57 @@ async def test_epoch_reconciliation_nonflat_position_without_full_contract_proof
 
 
 @pytest.mark.asyncio
+async def test_epoch_reconciliation_allows_a_healthy_sibling_journal_proven_position(tmp_path: Path) -> None:
+    """S6: an attributable sibling position is not retired-owner contamination."""
+
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    epoch = authority.initialize().current_epoch
+    intent = _intent()
+    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id=ACCOUNT_ID)
+    journal.record_intent(intent, validate_intent=lambda _: None, origin_epoch=epoch, observed_epoch=epoch)
+    fill = IbkrOrderEvent(
+        account_id=ACCOUNT_ID,
+        order_ref=intent.order_ref,
+        order_id=42,
+        exec_id="healthy-sibling-fill",
+        event_type="fill",
+        status="Filled",
+        symbol="AMD",
+        side="BUY",
+        fill_quantity=5.0,
+        ts_ms=1_780_000_000_001,
+    )
+    journal.record_broker_event(fill)
+    authority.invalidate("RETIRED_OWNER_EXPOSURE")
+    broker = _EpochBroker()
+    broker.positions = [
+        IbkrPosition(
+            account_id=ACCOUNT_ID,
+            con_id=123,
+            symbol="AMD",
+            sec_type="STK",
+            quantity=5.0,
+            avg_cost=100.0,
+            fetched_at_ms=1_780_000_000_001,
+        )
+    ]
+    broker.executions = [fill]
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=broker,
+        epoch_authority=authority,
+    )
+
+    reconciled = await clerk.reconcile_epoch_if_required()
+
+    assert reconciled is not None
+    assert reconciled.status == "CLEAN"
+    assert reconciled.outage_diff is not None
+    assert reconciled.outage_diff["positions"] == {"discovered": [], "changed": []}
+
+
+@pytest.mark.asyncio
 async def test_clerk_reconciler_proves_epoch_before_it_considers_uncertain_intents(tmp_path: Path) -> None:
     authority = _authority(tmp_path, generation=4, boot_id="boot-a")
     authority.initialize()

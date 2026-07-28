@@ -32,6 +32,7 @@ from app.engine.live.live_portfolio import (
     AccountFreezeBlockError,
     AccountLiveSessionBlockError,
     AccountRegistryBlockError,
+    AccountSuspendedEntryPauseError,
     AccountTruthBlockError,
     CustodyPendingOrder,
     LivePortfolio,
@@ -525,6 +526,42 @@ async def test_submit_pending_orders_blocks_when_account_truth_rejects_unexplain
     assert exc.value.gate_result == gate
     assert gate.gate_id == "account.account_truth"
     assert gate.operator_reason == "ACCOUNT_TRUTH_UNKNOWN_POSITIONS"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_pauses_healthy_sibling_for_retired_owner_suspension() -> None:
+    broker = FakeBroker()
+    suspended_gate = GateResult(
+        gate_id="account.safety",
+        status="block",
+        source="account_safety",
+        operator_reason="ACCOUNT_SAFETY_RETIRED_OWNER_LIVE_EXPOSURE",
+        operator_next_step="RECONCILE_NOW",
+        evidence_at_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(
+        broker,
+        account_safety_gate_provider=lambda: suspended_gate,
+        account_observation_lease_gate_provider=lambda: GateResult(
+            gate_id="account.observation_lease",
+            status="pass",
+            source="account_observation_lease",
+            operator_reason="",
+            operator_next_step="",
+            evidence_at_ms=_NOW_MS,
+        ),
+        account_gate_authority="observation_lease",
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountSuspendedEntryPauseError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == suspended_gate
     assert broker.orders == []
     assert list(portfolio.drain_pending()) == []
 
