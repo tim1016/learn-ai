@@ -8,12 +8,13 @@ import {
   BrowserLocalEvidenceService,
   type AccountSafetySnapshotState,
 } from './account-safety-snapshot.store';
+import { PresentedAccountActionComponent } from './presented-account-action.component';
 
 /** Compact, server-authored account-safety spine shared across operator hosts. */
 @Component({
   selector: 'app-account-truth-spine',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CardModule, ReceiptLabelPipe, TagModule, TimestampDisplayComponent],
+  imports: [CardModule, PresentedAccountActionComponent, ReceiptLabelPipe, TagModule, TimestampDisplayComponent],
   templateUrl: './account-truth-spine.component.html',
   styleUrl: './account-truth-spine.component.scss',
 })
@@ -23,6 +24,9 @@ export class AccountTruthSpineComponent {
   readonly browserOnline = this.browserEvidence.online;
   readonly snapshot = computed(() => this.accountState().snapshot);
   readonly primaryBlocker = computed(() => this.snapshot()?.blockers?.[0] ?? null);
+  readonly presentedAction = computed(
+    () => this.snapshot()?.actions?.find((action) => action.action_id === 'reconcile_now') ?? null,
+  );
   readonly sourceNeedingAttention = computed(
     () => this.snapshot()?.sources.find((source) => source.state !== 'FRESH') ?? null,
   );

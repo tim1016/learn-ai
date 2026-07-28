@@ -14,6 +14,7 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
+from app.config import settings
 from app.engine.live.account_artifacts import (
     AccountClerkLease,
     account_artifact_file_path,
@@ -49,6 +50,12 @@ from app.services.account_truth_snapshot import get_account_truth_snapshot_provi
 from app.services.journal_recovery import JournalRecoveryService
 
 _ACCOUNT_ID = "DU1234567"
+
+
+@pytest.fixture(autouse=True)
+def _configured_presented_action_signing_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
 
 
 def _service(tmp_path: Path, *, now_ms: int) -> AccountSafetySnapshotService:
@@ -128,7 +135,15 @@ def test_snapshot_unavailable_critical_evidence_is_never_clean_and_has_stable_se
     assert first.generated_at_ms != later.generated_at_ms
     assert first.snapshot_version == later.snapshot_version
     assert first.snapshot_id == later.snapshot_id
-    assert first.actions == ()
+    assert len(first.actions) == 1
+    unavailable_action = first.actions[0]
+    assert unavailable_action.action_id == "reconcile_now"
+    assert unavailable_action.availability == "UNAVAILABLE"
+    assert unavailable_action.target.account_id == _ACCOUNT_ID
+    assert unavailable_action.issued_at_ms == first.generated_at_ms
+    assert unavailable_action.expires_at_ms - unavailable_action.issued_at_ms == 60_000
+    assert later.actions[0].issued_at_ms == later.generated_at_ms
+    assert later.actions[0].expires_at_ms - later.actions[0].issued_at_ms == 60_000
     assert {
         "account_truth",
         "reconciliation",
@@ -150,6 +165,25 @@ def test_first_snapshot_does_not_create_any_account_artifact(tmp_path: Path) -> 
     assert list(tmp_path.rglob("*")) == []
 
 
+def test_reconciling_snapshot_does_not_present_an_executable_action_without_a_signing_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "   ")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+
+    action = AccountSafetySnapshotService._presented_actions(
+        account_id=_ACCOUNT_ID,
+        snapshot_id="a" * 64,
+        generated_at_ms=1_780_000_000_000,
+        verdict="RECONCILING",
+        reason_code="ACCOUNT_RECONCILIATION_REQUIRED",
+        evidence_refs=(),
+    )[0]
+
+    assert action.availability == "UNAVAILABLE"
+    assert action.presentation_token is None
+
+
 def test_snapshot_clean_then_epoch_invalid_and_truth_stale_advance_semantic_version(
     tmp_path: Path,
 ) -> None:
@@ -169,6 +203,11 @@ def test_snapshot_clean_then_epoch_invalid_and_truth_stale_advance_semantic_vers
     assert clean.verdict == "CLEAN"
     assert stale.verdict == "STALE"
     assert reconciling.verdict == "RECONCILING"
+    assert reconciling.actions[0].availability == "AVAILABLE"
+    assert reconciling.actions[0].snapshot_version == reconciling.snapshot_version
+    assert reconciling.actions[0].idempotency_key == _service(
+        tmp_path, now_ms=now_ms + 60_002
+    ).snapshot(account_id=_ACCOUNT_ID).actions[0].idempotency_key
     clean_truth = next(source for source in clean.sources if source.source == "account_truth")
     stale_truth = next(source for source in stale.sources if source.source == "account_truth")
     clean_positions = next(source for source in clean.sources if source.source == "account_truth.positions")

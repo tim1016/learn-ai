@@ -1,0 +1,28 @@
+<section class="presented-action" [attr.data-action-id]="action().action_id">
+  <h3>{{ action().confirmation.title }}</h3>
+  <p>{{ action().confirmation.body }}</p>
+  <p class="presented-action__consequence">{{ action().confirmation.consequence }}</p>
+
+  <button
+    pButton
+    type="button"
+    [disabled]="action().availability !== 'AVAILABLE' || busy()"
+    (click)="execute()"
+  >{{ busy() ? 'Working…' : action().confirmation.confirm_label }}</button>
+
+  @if (result(); as result) {
+    <p class="presented-action__result" aria-live="polite">
+      {{ result.state | receiptLabel }} · {{ result.finished_copy }}
+    </p>
+  }
+  @if (rejection(); as rejection) {
+    <p class="presented-action__result" aria-live="polite">
+      {{ rejection.reason_code | receiptLabel }} · {{ rejection.message }}
+    </p>
+  }
+  @if (transportFailed()) {
+    <p class="presented-action__result" aria-live="polite">
+      {{ 'REQUEST_OUTCOME_UNAVAILABLE' | receiptLabel }}
+    </p>
+  }
+</section>

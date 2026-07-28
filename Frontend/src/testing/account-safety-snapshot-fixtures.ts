@@ -1,5 +1,33 @@
 import type { AccountSafetySnapshot } from '../app/api/broker-models';
 
+export function makePresentedReconcileAction(): NonNullable<AccountSafetySnapshot['actions']>[number] {
+  return {
+    action_id: 'reconcile_now',
+    target: { account_id: 'DU1234567' },
+    snapshot_id: 'b'.repeat(64),
+    snapshot_version: 'a'.repeat(64),
+    evidence_refs: [],
+    effect_class: 'EVIDENCE_REFRESH',
+    idempotency_key: 'c'.repeat(64),
+    issued_at_ms: 1_780_000_000_000,
+    expires_at_ms: 1_780_000_060_000,
+    presentation_token: 'd'.repeat(64),
+    preconditions: [
+      { code: 'account_safety.verdict', expected_value: 'RECONCILING' },
+    ],
+    confirmation: {
+      title: 'Run account reconciliation',
+      body: 'Request a fresh account reconciliation for this account.',
+      consequence: 'The server will revalidate this snapshot before it refreshes account evidence.',
+      confirm_label: 'Run account reconcile',
+      required_token: '',
+    },
+    availability: 'AVAILABLE',
+    disposition: 'fix_here',
+    finished_copy: 'Reconciliation request accepted. Refresh account safety evidence for its observed result.',
+  };
+}
+
 export function makeAccountSafetySnapshot(
   overrides: Partial<AccountSafetySnapshot> = {},
 ): AccountSafetySnapshot {

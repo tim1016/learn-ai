@@ -151,6 +151,51 @@ describe('BrokerService diagnostics endpoints', () => {
     await expect(promise).resolves.toMatchObject({ enabled: true });
   });
 
+  it('posts only the closed presented reconciliation envelope', async () => {
+    const action = {
+      action_id: 'reconcile_now' as const,
+      target: { account_id: 'DU 123' },
+      snapshot_id: 'a'.repeat(64),
+      snapshot_version: 'b'.repeat(64),
+      evidence_refs: [],
+      effect_class: 'EVIDENCE_REFRESH' as const,
+      idempotency_key: 'c'.repeat(64),
+      issued_at_ms: 1_780_000_000_000,
+      expires_at_ms: 1_780_000_060_000,
+      presentation_token: 'd'.repeat(64),
+      preconditions: [],
+      confirmation: { title: 'Title', body: 'Body', consequence: 'Consequence', confirm_label: 'Confirm', required_token: '' },
+      availability: 'AVAILABLE' as const,
+      disposition: 'fix_here' as const,
+      finished_copy: 'Finished.',
+    };
+    const promise = service.executePresentedReconcileNow('DU 123', action);
+    const req = http.expectOne('/api/accounts/DU%20123/presented-actions/reconcile-now');
+
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({
+      action_id: action.action_id,
+      target: action.target,
+      snapshot_id: action.snapshot_id,
+      snapshot_version: action.snapshot_version,
+      idempotency_key: action.idempotency_key,
+      issued_at_ms: action.issued_at_ms,
+      expires_at_ms: action.expires_at_ms,
+      presentation_token: action.presentation_token,
+    });
+    req.flush({
+      action_id: 'reconcile_now',
+      action_attempt_id: action.idempotency_key,
+      state: 'ACCEPTED',
+      replayed: false,
+      finished_copy: action.finished_copy,
+      reconciliation_receipt: null,
+      refreshed_snapshot_id: 'd'.repeat(64),
+    });
+
+    await expect(promise).resolves.toMatchObject({ state: 'ACCEPTED' });
+  });
+
   it('posts what-if previews to the non-submitting endpoint', async () => {
     const spec = {
       symbol: 'SPY',

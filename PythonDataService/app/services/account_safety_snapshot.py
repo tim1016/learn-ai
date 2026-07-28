@@ -34,9 +34,15 @@ from app.schemas.account_safety_snapshot import (
     AccountSafetySnapshotExposure,
     AccountSafetySnapshotSource,
     AccountSafetySnapshotVerdict,
+    PresentedOperatorAction,
+    PresentedOperatorActionPrecondition,
+    PresentedOperatorActionTarget,
+    issue_presented_operator_action_token,
+    presented_operator_action_signing_available,
 )
 from app.schemas.account_truth import AccountTruthResponse
 from app.schemas.artifact_io import read_pydantic_artifact
+from app.schemas.operator_blocker import OperatorConfirmationCopy
 from app.services.account_directory import AccountDirectoryService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_snapshot import (
@@ -52,6 +58,7 @@ _CUSTODY_STAGES = (
     "A2_BROKER_KNOWN",
     "A3_ECONOMIC_TERMINAL",
 )
+_PRESENTED_ACTION_TTL_MS = 60_000
 _VERDICT_REASONS = {
     "ACCOUNT_SAFETY_CLEAN": "Current critical evidence proves the managed account state.",
     "ACCOUNT_SAFETY_CONTAMINATED": "Exposure or order attribution is foreign or cannot be safely proven.",
@@ -190,6 +197,14 @@ class AccountSafetySnapshotService:
             "evidence_refs": [ref.model_dump(mode="json") for ref in evidence_refs],
         }
         fingerprint = hashlib.sha256(json.dumps(semantic, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        actions = self._presented_actions(
+            account_id=account_id,
+            snapshot_id=fingerprint,
+            generated_at_ms=now_ms,
+            verdict=verdict,
+            reason_code=reason_code,
+            evidence_refs=evidence_refs,
+        )
         return AccountSafetySnapshot(
             snapshot_version=fingerprint,
             snapshot_id=fingerprint,
@@ -217,6 +232,79 @@ class AccountSafetySnapshotService:
             blockers=() if truth is None else tuple(truth.operator_blockers),
             outage_diff=None if epoch is None else epoch.outage_diff,
             evidence_refs=evidence_refs,
+            actions=actions,
+        )
+
+    @staticmethod
+    def _presented_actions(
+        *,
+        account_id: str,
+        snapshot_id: str,
+        generated_at_ms: int,
+        verdict: AccountSafetySnapshotVerdict,
+        reason_code: str,
+        evidence_refs: tuple[AccountReconciliationEvidenceRef, ...],
+    ) -> tuple[PresentedOperatorAction, ...]:
+        """Present the one migrated, account-safe recovery action.
+
+        The deterministic key is bound to the safety fingerprint, so a retry
+        of this exact presentation cannot start a second reconciliation. A
+        changed snapshot gets a new key and must pass fresh preconditions.
+        """
+
+        signing_available = presented_operator_action_signing_available()
+        available = verdict == "RECONCILING" and signing_available
+        confirmation = OperatorConfirmationCopy(
+            title="Run account reconciliation",
+            body="Request a fresh account reconciliation for this account.",
+            consequence="The server will revalidate this snapshot before it refreshes account evidence.",
+            confirm_label="Run account reconcile",
+        )
+        idempotency_key = hashlib.sha256(
+            f"reconcile_now:{account_id}:{snapshot_id}".encode()
+        ).hexdigest()
+        issued_at_ms = generated_at_ms
+        expires_at_ms = issued_at_ms + _PRESENTED_ACTION_TTL_MS
+        target = PresentedOperatorActionTarget(account_id=account_id)
+        return (
+            PresentedOperatorAction(
+                action_id="reconcile_now",
+                target=target,
+                snapshot_id=snapshot_id,
+                snapshot_version=snapshot_id,
+                evidence_refs=evidence_refs,
+                effect_class="EVIDENCE_REFRESH",
+                idempotency_key=idempotency_key,
+                issued_at_ms=issued_at_ms,
+                expires_at_ms=expires_at_ms,
+                presentation_token=(
+                    issue_presented_operator_action_token(
+                        action_id="reconcile_now",
+                        target=target,
+                        snapshot_id=snapshot_id,
+                        snapshot_version=snapshot_id,
+                        idempotency_key=idempotency_key,
+                        issued_at_ms=issued_at_ms,
+                        expires_at_ms=expires_at_ms,
+                    )
+                    if signing_available
+                    else None
+                ),
+                preconditions=(
+                    PresentedOperatorActionPrecondition(
+                        code="account_safety.verdict",
+                        expected_value="RECONCILING",
+                    ),
+                    PresentedOperatorActionPrecondition(
+                        code="account_safety.reason_code",
+                        expected_value=reason_code,
+                    ),
+                ),
+                confirmation=confirmation,
+                availability="AVAILABLE" if available else "UNAVAILABLE",
+                disposition="fix_here" if available else "wait",
+                finished_copy="Reconciliation request accepted. Refresh account safety evidence for its observed result.",
+            ),
         )
 
     def _safety(

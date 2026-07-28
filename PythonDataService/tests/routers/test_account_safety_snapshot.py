@@ -51,5 +51,7 @@ async def test_account_safety_snapshot_endpoint_is_broker_free_and_uses_int64_ms
     assert body["posture"] == "PAPER_EXECUTION"
     assert body["verdict"] == "UNAVAILABLE"
     assert body["verdict_reason"]
-    assert body["actions"] == []
+    assert body["actions"][0]["action_id"] == "reconcile_now"
+    assert body["actions"][0]["availability"] == "UNAVAILABLE"
+    assert body["actions"][0]["disposition"] == "wait"
     assert all("critical" in source for source in body["sources"])

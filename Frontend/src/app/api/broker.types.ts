@@ -444,6 +444,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/presented-actions/reconcile-now": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Presented Reconcile Action Endpoint
+         * @description Execute only the currently presented Reconcile Now envelope.
+         */
+        post: operations["execute_presented_reconcile_action_endpoint_api_accounts__account_id__presented_actions_reconcile_now_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/reconciliation": {
         parameters: {
             query?: never;
@@ -6310,7 +6330,7 @@ export interface components {
              * Actions
              * @default []
              */
-            actions?: unknown[];
+            actions?: components["schemas"]["PresentedOperatorAction"][];
             /**
              * Blockers
              * @default []
@@ -18848,6 +18868,146 @@ export interface components {
             prediction_set_id: string;
         };
         /**
+         * PresentedOperatorAction
+         * @description Closed, snapshot-bound operator action; never an executable URL or command.
+         */
+        PresentedOperatorAction: {
+            /**
+             * Action Id
+             * @constant
+             */
+            action_id: "reconcile_now";
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "AVAILABLE" | "UNAVAILABLE";
+            confirmation: components["schemas"]["OperatorConfirmationCopy"];
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "fix_here" | "wait";
+            /**
+             * Effect Class
+             * @constant
+             */
+            effect_class: "EVIDENCE_REFRESH";
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: components["schemas"]["AccountReconciliationEvidenceRef"][];
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Finished Copy */
+            finished_copy: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Issued At Ms */
+            issued_at_ms: number;
+            /**
+             * Preconditions
+             * @default []
+             */
+            preconditions?: components["schemas"]["PresentedOperatorActionPrecondition"][];
+            /** Presentation Token */
+            presentation_token?: string | null;
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Snapshot Version */
+            snapshot_version: string;
+            target: components["schemas"]["PresentedOperatorActionTarget"];
+        };
+        /**
+         * PresentedOperatorActionInvocation
+         * @description The browser may return only this closed, signed-by-snapshot envelope.
+         */
+        PresentedOperatorActionInvocation: {
+            /**
+             * Action Id
+             * @constant
+             */
+            action_id: "reconcile_now";
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Issued At Ms */
+            issued_at_ms: number;
+            /** Presentation Token */
+            presentation_token: string;
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Snapshot Version */
+            snapshot_version: string;
+            target: components["schemas"]["PresentedOperatorActionTarget"];
+        };
+        /**
+         * PresentedOperatorActionPrecondition
+         * @description One server-owned fact that must still hold when an action executes.
+         */
+        PresentedOperatorActionPrecondition: {
+            /** Code */
+            code: string;
+            /** Expected Value */
+            expected_value: string;
+        };
+        /**
+         * PresentedOperatorActionRejection
+         * @description Typed refusal for a closed presented action; never an inferred UI error.
+         */
+        PresentedOperatorActionRejection: {
+            /** Message */
+            message: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
+            /** Snapshot Version */
+            snapshot_version?: string | null;
+        };
+        /**
+         * PresentedOperatorActionRejectionResponse
+         * @description FastAPI HTTP-error envelope for a presented-action refusal.
+         */
+        PresentedOperatorActionRejectionResponse: {
+            detail: components["schemas"]["PresentedOperatorActionRejection"];
+        };
+        /**
+         * PresentedOperatorActionResult
+         * @description Durable dispatch result; acceptance and observed effect stay distinct.
+         */
+        PresentedOperatorActionResult: {
+            /** Action Attempt Id */
+            action_attempt_id: string;
+            /**
+             * Action Id
+             * @constant
+             */
+            action_id: "reconcile_now";
+            /** Finished Copy */
+            finished_copy: string;
+            reconciliation_receipt?: components["schemas"]["AccountReconciliationReceipt"] | null;
+            /** Refreshed Snapshot Id */
+            refreshed_snapshot_id?: string | null;
+            /** Replayed */
+            replayed: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ACCEPTED" | "OUTCOME_UNKNOWN";
+        };
+        /**
+         * PresentedOperatorActionTarget
+         * @description Exact account scope bound into one server-presented operator action.
+         */
+        PresentedOperatorActionTarget: {
+            /** Account Id */
+            account_id: string;
+        };
+        /**
          * PricingCompareRequest
          * @description Compare pricing models across a range of underlying prices.
          */
@@ -24450,6 +24610,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperatorRecoveryFlattenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_presented_reconcile_action_endpoint_api_accounts__account_id__presented_actions_reconcile_now_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresentedOperatorActionInvocation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
+                };
+            };
+            /** @description Action was durably claimed but its external outcome is not proven. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
+                };
+            };
+            /** @description The presented action is stale, unavailable, or does not match its target. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
                 };
             };
             /** @description Validation Error */

@@ -2185,8 +2185,9 @@
           },
           "actions": {
             "default": [],
-            "maxItems": 0,
-            "minItems": 0,
+            "items": {
+              "$ref": "#/components/schemas/PresentedOperatorAction"
+            },
             "title": "Actions",
             "type": "array"
           },
@@ -30289,6 +30290,351 @@
         "title": "PredictionRef",
         "type": "object"
       },
+      "PresentedOperatorAction": {
+        "additionalProperties": false,
+        "description": "Closed, snapshot-bound operator action; never an executable URL or command.",
+        "properties": {
+          "action_id": {
+            "const": "reconcile_now",
+            "title": "Action Id"
+          },
+          "availability": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
+          "confirmation": {
+            "$ref": "#/components/schemas/OperatorConfirmationCopy"
+          },
+          "disposition": {
+            "enum": [
+              "fix_here",
+              "wait"
+            ],
+            "title": "Disposition",
+            "type": "string"
+          },
+          "effect_class": {
+            "const": "EVIDENCE_REFRESH",
+            "title": "Effect Class"
+          },
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AccountReconciliationEvidenceRef"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "expires_at_ms": {
+            "minimum": 0.0,
+            "title": "Expires At Ms",
+            "type": "integer"
+          },
+          "finished_copy": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Finished Copy",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 160,
+            "minLength": 16,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "issued_at_ms": {
+            "minimum": 0.0,
+            "title": "Issued At Ms",
+            "type": "integer"
+          },
+          "preconditions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PresentedOperatorActionPrecondition"
+            },
+            "title": "Preconditions",
+            "type": "array"
+          },
+          "presentation_token": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Presentation Token"
+          },
+          "snapshot_id": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "snapshot_version": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Version",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/PresentedOperatorActionTarget"
+          }
+        },
+        "required": [
+          "action_id",
+          "target",
+          "snapshot_id",
+          "snapshot_version",
+          "effect_class",
+          "idempotency_key",
+          "issued_at_ms",
+          "expires_at_ms",
+          "confirmation",
+          "availability",
+          "disposition",
+          "finished_copy"
+        ],
+        "title": "PresentedOperatorAction",
+        "type": "object"
+      },
+      "PresentedOperatorActionInvocation": {
+        "additionalProperties": false,
+        "description": "The browser may return only this closed, signed-by-snapshot envelope.",
+        "properties": {
+          "action_id": {
+            "const": "reconcile_now",
+            "title": "Action Id"
+          },
+          "expires_at_ms": {
+            "minimum": 0.0,
+            "title": "Expires At Ms",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 160,
+            "minLength": 16,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "issued_at_ms": {
+            "minimum": 0.0,
+            "title": "Issued At Ms",
+            "type": "integer"
+          },
+          "presentation_token": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Presentation Token",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "snapshot_version": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Version",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/PresentedOperatorActionTarget"
+          }
+        },
+        "required": [
+          "action_id",
+          "target",
+          "snapshot_id",
+          "snapshot_version",
+          "idempotency_key",
+          "issued_at_ms",
+          "expires_at_ms",
+          "presentation_token"
+        ],
+        "title": "PresentedOperatorActionInvocation",
+        "type": "object"
+      },
+      "PresentedOperatorActionPrecondition": {
+        "additionalProperties": false,
+        "description": "One server-owned fact that must still hold when an action executes.",
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "expected_value": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Expected Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "expected_value"
+        ],
+        "title": "PresentedOperatorActionPrecondition",
+        "type": "object"
+      },
+      "PresentedOperatorActionRejection": {
+        "additionalProperties": false,
+        "description": "Typed refusal for a closed presented action; never an inferred UI error.",
+        "properties": {
+          "message": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "reason_code": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          },
+          "snapshot_version": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Version"
+          }
+        },
+        "required": [
+          "reason_code",
+          "message"
+        ],
+        "title": "PresentedOperatorActionRejection",
+        "type": "object"
+      },
+      "PresentedOperatorActionRejectionResponse": {
+        "additionalProperties": false,
+        "description": "FastAPI HTTP-error envelope for a presented-action refusal.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/PresentedOperatorActionRejection"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "PresentedOperatorActionRejectionResponse",
+        "type": "object"
+      },
+      "PresentedOperatorActionResult": {
+        "additionalProperties": false,
+        "description": "Durable dispatch result; acceptance and observed effect stay distinct.",
+        "properties": {
+          "action_attempt_id": {
+            "maxLength": 160,
+            "minLength": 16,
+            "title": "Action Attempt Id",
+            "type": "string"
+          },
+          "action_id": {
+            "const": "reconcile_now",
+            "title": "Action Id"
+          },
+          "finished_copy": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Finished Copy",
+            "type": "string"
+          },
+          "reconciliation_receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountReconciliationReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refreshed_snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed Snapshot Id"
+          },
+          "replayed": {
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "ACCEPTED",
+              "OUTCOME_UNKNOWN"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "action_attempt_id",
+          "state",
+          "replayed",
+          "finished_copy"
+        ],
+        "title": "PresentedOperatorActionResult",
+        "type": "object"
+      },
+      "PresentedOperatorActionTarget": {
+        "additionalProperties": false,
+        "description": "Exact account scope bound into one server-presented operator action.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "PresentedOperatorActionTarget",
+        "type": "object"
+      },
       "PricingCompareRequest": {
         "description": "Compare pricing models across a range of underlying prices.",
         "properties": {
@@ -42090,6 +42436,95 @@
           }
         },
         "summary": "Operator Recovery Flatten Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/presented-actions/reconcile-now": {
+      "post": {
+        "description": "Execute only the currently presented Reconcile Now envelope.",
+        "operationId": "execute_presented_reconcile_action_endpoint_api_accounts__account_id__presented_actions_reconcile_now_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionResult"
+                }
+              }
+            },
+            "description": "Action was durably claimed but its external outcome is not proven."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
+                }
+              }
+            },
+            "description": "The presented action is stale, unavailable, or does not match its target."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Presented Reconcile Action Endpoint",
         "tags": [
           "accounts"
         ]

@@ -39,6 +39,8 @@ import type {
 import type {
   AccountTruthResponse,
   AccountSafetySnapshot,
+  PresentedOperatorAction,
+  PresentedOperatorActionResult,
   DataPlaneHealth,
   DiagnosticReport,
   ExpirationsResponse,
@@ -155,6 +157,37 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<AccountSafetySnapshot>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/safety-snapshot`,
+      ),
+    );
+  }
+
+  executePresentedReconcileNow(
+    accountId: string,
+    action: PresentedOperatorAction,
+  ): Promise<PresentedOperatorActionResult> {
+    const {
+      action_id,
+      target,
+      snapshot_id,
+      snapshot_version,
+      idempotency_key,
+      issued_at_ms,
+      expires_at_ms,
+      presentation_token,
+    } = action;
+    return firstValueFrom(
+      this.http.post<PresentedOperatorActionResult>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-actions/reconcile-now`,
+        {
+          action_id,
+          target,
+          snapshot_id,
+          snapshot_version,
+          idempotency_key,
+          issued_at_ms,
+          expires_at_ms,
+          presentation_token,
+        },
       ),
     );
   }

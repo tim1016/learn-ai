@@ -19,6 +19,9 @@ import type { OperatorBlocker } from './operator-blocker.types';
 
 export type IbkrAccountSummary = components['schemas']['IbkrAccountSummary'];
 export type AccountSafetySnapshot = components['schemas']['AccountSafetySnapshot'];
+export type PresentedOperatorAction = components['schemas']['PresentedOperatorAction'];
+export type PresentedOperatorActionRejection = components['schemas']['PresentedOperatorActionRejection'];
+export type PresentedOperatorActionResult = components['schemas']['PresentedOperatorActionResult'];
 export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth'];
 export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &
   IbkrOrderEvidenceFields &

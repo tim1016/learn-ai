@@ -34,8 +34,11 @@
         @if (blocker.detail) { <span>{{ blocker.detail }}</span> }
         @if (blocker.primary_move; as move) { <span>Next step: {{ move.label }}</span> }
       </section>
-    } @else {
+    } @else if (!presentedAction()) {
       <p class="truth-spine__blocker">No account action is presented by this summary.</p>
+    }
+    @if (presentedAction(); as action) {
+      <app-presented-account-action [action]="action" />
     }
     @if (accountState().state === 'stale') {
       <p class="truth-spine__stale">The server could not refresh this snapshot. Showing the last received safety evidence.</p>
