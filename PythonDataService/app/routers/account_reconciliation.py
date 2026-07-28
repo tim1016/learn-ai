@@ -19,7 +19,6 @@ from app.engine.live.account_artifacts import (
     append_account_event,
     repair_account_event_sequence,
 )
-from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import (
     account_binding_ledger_parity,
@@ -78,14 +77,9 @@ from app.schemas.journal_cures import (
     JournalCureReceipt,
     JournalCureRequest,
     OperatorRecoveryFlattenRequest,
-    OperatorRecoveryFlattenResponse,
 )
 from app.schemas.journal_recovery import JournalRecoveryReceipt, JournalRecoveryRequest
-from app.schemas.live_runs import (
-    AccountEmergencyFlattenDispatchRequest,
-    AccountEmergencyFlattenResponse,
-    EmergencyFlattenRequest,
-)
+from app.schemas.live_runs import EmergencyFlattenRequest
 from app.schemas.presented_operator_action import (
     PresentedOperatorActionInvocation,
     PresentedOperatorActionTarget,
@@ -119,6 +113,13 @@ from app.services.presented_lifecycle_actions import (
     LifecyclePresentedActionId,
     PresentedLifecycleActionRejectedError,
     PresentedLifecycleActionService,
+)
+from app.services.presented_recovery_action_dispatch import (
+    dispatch_presented_recovery_action,
+)
+from app.services.presented_recovery_actions import (
+    PresentedRecoveryActionOutcome,
+    PresentedRecoveryActionService,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -201,6 +202,12 @@ def get_presented_account_action_service(
     artifacts_root: AccountArtifactsRoot,
 ) -> PresentedAccountActionService:
     return PresentedAccountActionService(artifacts_root=artifacts_root)
+
+
+def get_presented_recovery_action_service(
+    artifacts_root: AccountArtifactsRoot,
+) -> PresentedRecoveryActionService:
+    return PresentedRecoveryActionService(artifacts_root=artifacts_root)
 
 
 def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
@@ -791,12 +798,111 @@ def _presented_action_response(
 ) -> PresentedOperatorActionResult | JSONResponse:
     """Use 202 for claimed work whose terminal broker result is not yet known."""
 
-    if result.state in {"IN_PROGRESS", "OUTCOME_UNKNOWN"}:
+    if result.state in {"IN_PROGRESS", "PENDING_PROOF", "OUTCOME_UNKNOWN"}:
         return JSONResponse(
             status_code=status.HTTP_202_ACCEPTED,
             content=result.model_dump(mode="json"),
         )
     return result
+
+
+@router.post(
+    "/{account_id}/presented-actions/recovery",
+    response_model=PresentedOperatorActionResult,
+    responses={
+        status.HTTP_202_ACCEPTED: {
+            "description": "Action is durable, but current broker proof is still required.",
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/PresentedOperatorActionResult"},
+                },
+            },
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": PresentedOperatorActionRejectionResponse,
+            "description": "The action is stale, unavailable, or no longer targets current evidence.",
+        },
+    },
+)
+async def execute_presented_recovery_action_endpoint(
+    account_id: str,
+    request: PresentedOperatorActionInvocation,
+    client: ConnectedIbkrClient,
+    reconciliation: Annotated[AccountReconciliationService, Depends(get_account_reconciliation_service)],
+    snapshot_service: Annotated[AccountSafetySnapshotService, Depends(get_account_safety_snapshot_service)],
+    action_service: Annotated[
+        PresentedRecoveryActionService,
+        Depends(get_presented_recovery_action_service),
+    ],
+    artifacts_root: AccountArtifactsRoot,
+) -> PresentedOperatorActionResult | JSONResponse:
+    """Run one signed Cancel or Flatten action through the existing Clerk lanes."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    if request.target.account_id != canonical_account_id:
+        raise _presented_action_rejection_http_error(
+            reason_code="ACTION_TARGET_MISMATCH",
+            message="This action belongs to a different account.",
+        )
+    replay_error: PresentedActionRejectedError | None = None
+    try:
+        prior_result = action_service.replay_if_claimed(request)
+    except PresentedActionRejectedError as exc:
+        replay_error = exc
+        prior_result = None
+    if prior_result is not None:
+        return _presented_action_response(prior_result)
+    current_snapshot = snapshot_service.snapshot(account_id=canonical_account_id)
+    if replay_error is not None:
+        raise _presented_action_rejection_http_error(
+            reason_code=replay_error.reason_code,
+            message=replay_error.message,
+            snapshot=current_snapshot,
+        ) from replay_error
+    action = next(
+        (
+            candidate
+            for candidate in current_snapshot.actions
+            if candidate.action_id == request.action_id and candidate.target == request.target
+        ),
+        None,
+    )
+    if action is None:
+        raise _presented_action_rejection_http_error(
+            reason_code="ACTION_NOT_PRESENTED",
+            message="This action is no longer presented for current account safety evidence.",
+            snapshot=current_snapshot,
+        )
+
+    async def invoke() -> PresentedRecoveryActionOutcome:
+        return await dispatch_presented_recovery_action(
+            action=action,
+            account_id=canonical_account_id,
+            reconciliation=reconciliation,
+            snapshot_service=snapshot_service,
+            artifacts_root=artifacts_root,
+            reconcile_after_effect=lambda: _reconcile_account(
+                canonical_account_id,
+                client,
+                reconciliation,
+            ),
+        )
+
+    try:
+        result = await action_service.execute(
+            action=action,
+            invocation=request,
+            invoke=invoke,
+        )
+        return _presented_action_response(result)
+    except PresentedActionRejectedError as exc:
+        raise _presented_action_rejection_http_error(
+            reason_code=exc.reason_code,
+            message=exc.message,
+            snapshot=current_snapshot,
+        ) from exc
+    except PresentedActionOutcomeUnknownError as exc:
+        return _presented_action_response(exc.result)
 
 
 @router.get(
@@ -931,125 +1037,52 @@ async def journal_cure_preview_endpoint(
     )
 
 
-@router.post("/{account_id}/operator-recovery-flatten", response_model=OperatorRecoveryFlattenResponse)
+@router.post(
+    "/{account_id}/operator-recovery-flatten",
+    deprecated=True,
+    response_model=None,
+)
 async def operator_recovery_flatten_endpoint(
     account_id: str,
-    request: OperatorRecoveryFlattenRequest,
-    artifacts_root: AccountArtifactsRoot,
-) -> OperatorRecoveryFlattenResponse:
-    """Run a retired-namespace flatten through the host-local Clerk lane."""
+    _request: OperatorRecoveryFlattenRequest,
+) -> None:
+    """Retire raw recovery writes in favor of the signed safety action envelope."""
 
-    canonical_account_id = _canonical_account_id(account_id)
-    if request.intent.account_id != canonical_account_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "intent account_id does not match path")
-    try:
-        settings = get_settings()
-        body = await host_daemon_client.operator_recovery_flatten(
-            settings.live_runner_daemon_url,
-            canonical_account_id,
-            request.model_dump(mode="json"),
-        )
-        response = OperatorRecoveryFlattenResponse.model_validate(body)
-        receipt = response.recovery_flatten
-        append_account_event(
-            artifacts_root,
-            canonical_account_id,
-            {
-                "event_type": "account_clerk_operator_recovery_flatten",
-                "intent_id": request.intent.intent_id,
-                "order_ref": request.intent.order_ref,
-                "request_provenance": request.request_provenance,
-                "recorded_at_ms": receipt.broker_acked.recorded_at_ms,
-                "receipt_id": (
-                    f"account-clerk-operator-recovery:"
-                    f"{request.intent.intent_id}:{receipt.broker_acked.journal_seq}"
-                ),
-            },
-            only_if_receipt_absent=True,
-        )
-        return response
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        raise _outcome_unknown_http_error(exc) from exc
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    _canonical_account_id(account_id)
+    raise HTTPException(
+        status.HTTP_410_GONE,
+        detail={
+            "reason_code": "PRESENTED_ACTION_REQUIRED",
+            "message": (
+                "Raw recovery flatten is retired. Refresh Account Safety and submit its exact "
+                "snapshot-bound Flatten action."
+            ),
+        },
+    )
 
 
 @router.post(
     "/{account_id}/emergency-flatten",
-    response_model=AccountEmergencyFlattenResponse,
+    deprecated=True,
+    response_model=None,
 )
 async def emergency_flatten_account_endpoint(
     account_id: str,
-    request: EmergencyFlattenRequest,
-    artifacts_root: AccountArtifactsRoot,
-    reconciliation: Annotated[
-        AccountReconciliationService,
-        Depends(get_account_reconciliation_service),
-    ],
-) -> AccountEmergencyFlattenResponse:
-    """Authorize and dispatch one Clerk-owned account-wide paper flatten."""
+    _request: EmergencyFlattenRequest,
+) -> None:
+    """Retire raw emergency writes in favor of the signed safety action envelope."""
 
-    canonical_account_id = _canonical_account_id(account_id)
-    if request.account != canonical_account_id:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "request account does not match path")
-    triage = reconciliation.triage(account_id=canonical_account_id)
-    receipt = triage.account_reconciliation_receipt
-    if (
-        triage.emergency_flatten_confirmation is None
-        or receipt is None
-        or triage.recovery_flatten_candidates
-    ):
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "ACCOUNT_EMERGENCY_FLATTEN_NOT_DECLARED",
-                "message": "Fresh paper-account evidence does not declare an emergency flatten safe.",
-            },
-        )
-    idempotency_key = request.idempotency_key
-    try:
-        settings = get_settings()
-        authorization_payload = await host_daemon_client.authorize_emergency_flatten(
-            settings.live_runner_daemon_url,
-            canonical_account_id,
-            {
-                "operation_id": idempotency_key,
-                "reconciliation_evidence_version": receipt.receipt_id,
-            },
-        )
-        authorization = AccountClerkEmergencyAuthorization.model_validate(
-            authorization_payload
-        )
-        payload = await host_daemon_client.emergency_flatten_account(
-            settings.live_runner_daemon_url,
-            canonical_account_id,
-            AccountEmergencyFlattenDispatchRequest(
-                account=canonical_account_id,
-                confirmation_token="FLATTEN",
-                idempotency_key=idempotency_key,
-                authorization_id=authorization.authorization_id,
-            ).model_dump(mode="json"),
-        )
-        response = AccountEmergencyFlattenResponse.model_validate(payload)
-        response = response.model_copy(
-            update={"idempotency_key": response.idempotency_key or idempotency_key}
-        )
-        append_account_event(
-            artifacts_root,
-            canonical_account_id,
-            {
-                "event_type": "account_emergency_flatten_completed",
-                "audit_run_id": response.audit_run_id,
-                "recorded_at_ms": response.completed_at_ms,
-                "receipt_id": f"account-emergency-flatten:{response.audit_run_id}",
-            },
-            only_if_receipt_absent=True,
-        )
-        return response
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        raise _outcome_unknown_http_error(exc, idempotency_key=idempotency_key) from exc
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    _canonical_account_id(account_id)
+    raise HTTPException(
+        status.HTTP_410_GONE,
+        detail={
+            "reason_code": "PRESENTED_ACTION_REQUIRED",
+            "message": (
+                "Raw emergency flatten is retired. Refresh Account Safety and submit its exact "
+                "snapshot-bound Flatten action."
+            ),
+        },
+    )
 
 
 @router.get(

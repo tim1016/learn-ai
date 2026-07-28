@@ -37,6 +37,7 @@ from app.engine.live.account_clerk_journal import normalize_broker_event
 from app.engine.live.account_clerk_journal_models import (
     AccountClerkAsyncCustodyHealth,
     AccountClerkEmergencyAuthorization,
+    AccountClerkPendingCancelReceipt,
 )
 from app.engine.live.account_clerk_rpc_protocol import (
     ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S,
@@ -336,6 +337,38 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="cancel_namespace",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def cancel_pending_a0(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkPendingCancelReceipt:
+        """Cancel a still-queued A0 intent without a broker write."""
+
+        request = {"operation": "cancel_pending_a0", "intent": intent.model_dump(mode="json")}
+        payload = await self._request(request)
+        try:
+            return AccountClerkPendingCancelReceipt.model_validate(payload["cancelled_before_submit"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="cancel_pending_a0",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def cancel_exact_order(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Run the Clerk's exact current-order cancel lifecycle."""
+
+        request = {"operation": "cancel_exact_order", "intent": intent.model_dump(mode="json")}
+        payload = await self._request(request)
+        try:
+            return AccountClerkCancelNamespaceReceipt.model_validate(payload["cancel_confirmed"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="cancel_exact_order",
                 request_identity=request_identity(request),
             ) from exc
 
@@ -940,6 +973,18 @@ class AccountClerkRpcServer:
         if operation == "cancel_namespace":
             intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
             receipt = await self._clerk.cancel_namespace(intent)
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"cancel_confirmed": receipt.model_dump(mode="json")}
+            )
+        if operation == "cancel_pending_a0":
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
+            receipt = await self._clerk.cancel_pending_a0(intent)
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"cancelled_before_submit": receipt.model_dump(mode="json")}
+            )
+        if operation == "cancel_exact_order":
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
+            receipt = await self._clerk.cancel_exact_order(intent)
             return AccountClerkRpcSuccessEnvelope(
                 payload={"cancel_confirmed": receipt.model_dump(mode="json")}
             )

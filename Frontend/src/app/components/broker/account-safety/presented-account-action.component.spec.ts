@@ -58,6 +58,61 @@ describe('PresentedAccountActionComponent', () => {
     expect(broker.executePresentedReconcileNow).not.toHaveBeenCalled();
   });
 
+  it('requires the server-specified token and dispatches only its recovery envelope', async () => {
+    const action = {
+      ...makePresentedReconcileAction(),
+      action_id: 'flatten' as const,
+      effect_class: 'RISK_REDUCING_BROKER' as const,
+      confirmation: {
+        title: 'Record flatten intention',
+        body: 'Record the intention after current broker proof is rebuilt.',
+        consequence: 'No liquidation is submitted without fresh current proof.',
+        confirm_label: 'Record flatten intention',
+        required_token: 'FLATTEN',
+      },
+    };
+    const broker = {
+      executePresentedReconcileNow: vi.fn(),
+      executePresentedRecoveryAction: vi.fn().mockResolvedValue({
+        action_id: 'flatten',
+        action_attempt_id: action.idempotency_key,
+        state: 'PENDING_PROOF',
+        replayed: false,
+        finished_copy: 'Flatten intention recorded.',
+        effect_receipt: {
+          kind: 'FLATTEN_INTENTION_RECORDED',
+          account_id: action.target.account_id,
+          recorded_at_ms: 1_780_000_000_000,
+        },
+        reconciliation_receipt: null,
+        refreshed_snapshot_id: null,
+      }),
+    };
+    await render(PresentedAccountActionComponent, {
+      inputs: { action },
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: AccountSafetySnapshotStore, useValue: { refresh: vi.fn().mockResolvedValue(undefined) } },
+      ],
+    });
+
+    const button = screen.getByRole('button', { name: 'Record flatten intention' });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.input(screen.getByLabelText(/type flatten/i), { target: { value: 'FLATTEN' } });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(broker.executePresentedRecoveryAction).toHaveBeenCalledWith(
+        action.target.account_id,
+        action,
+        'FLATTEN',
+      );
+    });
+    expect(broker.executePresentedReconcileNow).not.toHaveBeenCalled();
+    expect((await screen.findAllByText('Flatten Intention Recorded', { exact: false })).length).toBe(2);
+  });
+
   it('renders the server-owned unknown-outcome copy without treating it as a failure', async () => {
     const action = makePresentedReconcileAction();
     const unknownCopy = 'The reconciliation request was durably claimed, but its observed outcome is not proven.';

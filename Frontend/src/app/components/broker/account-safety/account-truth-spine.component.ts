@@ -24,9 +24,7 @@ export class AccountTruthSpineComponent {
   readonly browserOnline = this.browserEvidence.online;
   readonly snapshot = computed(() => this.accountState().snapshot);
   readonly primaryBlocker = computed(() => this.snapshot()?.blockers?.[0] ?? null);
-  readonly presentedAction = computed(
-    () => this.snapshot()?.actions?.find((action) => action.action_id === 'reconcile_now') ?? null,
-  );
+  readonly presentedActions = computed(() => this.snapshot()?.actions ?? []);
   readonly sourceNeedingAttention = computed(
     () => this.snapshot()?.sources.find((source) => source.state !== 'FRESH') ?? null,
   );

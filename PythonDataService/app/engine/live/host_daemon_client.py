@@ -293,6 +293,26 @@ async def operator_recovery_flatten(base_url: str, account_id: str, payload: dic
     )
 
 
+async def operator_exact_cancel(base_url: str, account_id: str, payload: dict) -> dict:
+    """POST one exact current-order cancel through the host-local Clerk."""
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-exact-cancel",
+        payload,
+        timeout=_FLATTEN_TIMEOUT,
+    )
+
+
+async def operator_pending_cancel(base_url: str, account_id: str, payload: dict) -> dict:
+    """POST one A0-only local cancellation through the host-local Clerk."""
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-pending-cancel",
+        payload,
+        timeout=_START_ADMISSION_TIMEOUT,
+    )
+
+
 async def authorize_emergency_flatten(base_url: str, account_id: str, payload: dict) -> dict:
     """Ask the host-local Clerk to authorize one account emergency flatten."""
 

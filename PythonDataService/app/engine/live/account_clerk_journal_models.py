@@ -195,6 +195,7 @@ class AccountClerkJournalEntry(BaseModel):
         "recorded",
         "custody_queued",
         "custody_expired_before_submit",
+        "custody_cancelled_before_submit",
         "custody_recovery_action_required",
         "custody_submission_hold",
         "broker_submitting",
@@ -276,6 +277,7 @@ class AccountClerkJournalEntry(BaseModel):
         if self.entry_kind in {
             "custody_queued",
             "custody_expired_before_submit",
+            "custody_cancelled_before_submit",
             "custody_recovery_action_required",
             "custody_submission_hold",
         }:
@@ -475,6 +477,7 @@ class AccountClerkCustodyStatus(BaseModel):
         "broker_known",
         "economic_terminal",
         "expired_before_submit",
+        "cancelled_before_submit",
         "recovery_action_required",
         "submission_hold",
         "uncertain_requires_reconciliation",
@@ -483,6 +486,17 @@ class AccountClerkCustodyStatus(BaseModel):
     recorded: AccountClerkRecordedReceipt
     broker_acked: AccountClerkBrokerAckReceipt | None = None
     updated_at_ms: int = Field(ge=0, le=_MAX_INT64)
+
+
+class AccountClerkPendingCancelReceipt(BaseModel):
+    """Proof that a queued A0 intent was closed before any broker write."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["cancelled_before_submit"] = "cancelled_before_submit"
+    recorded: AccountClerkRecordedReceipt
+    cancelled_journal_seq: int = Field(ge=1)
+    cancelled_at_ms: int = Field(ge=0, le=_MAX_INT64)
 
 
 class AccountClerkRecoveryFlattenReceipt(BaseModel):
@@ -559,6 +573,7 @@ def async_custody_reconciliation_is_held(entries: Sequence[AccountClerkJournalEn
         entry.entry_kind
         in {
             "custody_expired_before_submit",
+            "custody_cancelled_before_submit",
             "custody_recovery_action_required",
             "custody_submission_hold",
         }

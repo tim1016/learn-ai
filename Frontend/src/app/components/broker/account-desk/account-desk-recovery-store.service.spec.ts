@@ -10,9 +10,12 @@ import type {
   LegacyStaleClaimCandidate,
 } from '../../../api/account-reconciliation.types';
 import type { AccountCockpitResponse } from '../../../api/account-cockpit.types';
+import type { PresentedOperatorAction } from '../../../api/broker-models';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { BrokerService } from '../../../services/broker.service';
 import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
+import { makeAccountSafetySnapshot, makePresentedReconcileAction } from '../../../../testing/account-safety-snapshot-fixtures';
+import { AccountSafetySnapshotStore } from '../account-safety/account-safety-snapshot.store';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
@@ -28,14 +31,14 @@ describe('AccountDeskRecoveryStore', () => {
     applyJournalCure: vi.fn(),
     legacyStaleClaimCandidates: vi.fn(),
     retireLegacyStaleClaim: vi.fn(),
-    submitOperatorRecoveryFlatten: vi.fn(),
-    emergencyFlattenAccount: vi.fn(),
+    executePresentedRecoveryAction: vi.fn(),
     restoreAccountClerk: vi.fn(),
     recoverAccountJournal: vi.fn(),
   };
   const surface = { load: vi.fn(), triage: signal<AccountTriageResponse | null>(null) };
   const events = { load: vi.fn() };
   const directory = { cockpit: signal<AccountCockpitResponse | null>(null), loadServiceStatus: vi.fn() };
+  const accountSafety = { stateFor: vi.fn(), refresh: vi.fn() };
 
   beforeEach(() => {
     Object.values(broker).forEach((method) => method.mockReset());
@@ -45,6 +48,8 @@ describe('AccountDeskRecoveryStore', () => {
     events.load.mockReset().mockResolvedValue(undefined);
     directory.cockpit = signal(null);
     directory.loadServiceStatus.mockReset().mockResolvedValue(undefined);
+    accountSafety.stateFor.mockReset().mockReturnValue({ state: 'fresh', snapshot: null });
+    accountSafety.refresh.mockReset().mockResolvedValue(undefined);
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
@@ -53,6 +58,7 @@ describe('AccountDeskRecoveryStore', () => {
         { provide: AccountDeskSurfaceStore, useValue: surface },
         { provide: AccountDeskEventsStore, useValue: events },
         { provide: AccountDeskDirectoryStore, useValue: directory },
+        { provide: AccountSafetySnapshotStore, useValue: accountSafety },
       ],
     });
   });
@@ -84,6 +90,7 @@ describe('AccountDeskRecoveryStore', () => {
     expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
     expect(store.success()?.kind).toBe('reconcile');
     expect(surface.load).toHaveBeenCalledWith('DU1234567');
+    expect(accountSafety.refresh).toHaveBeenCalledWith('DU1234567');
     expect(events.load).toHaveBeenCalledWith('DU1234567');
   });
 
@@ -306,35 +313,30 @@ describe('AccountDeskRecoveryStore', () => {
       accountId: 'DU1234567',
       recoveryFlattenCandidates: [candidate],
     }));
-    broker.submitOperatorRecoveryFlatten.mockResolvedValue({
-      recovery_flatten: {
-        status: 'recovery_flattened',
-        recorded: { intent_id: candidate.intent.intent_id, order_ref: candidate.intent.order_ref, journal_seq: 4, recorded_at_ms: 1_780_000_000_000 },
-        broker_acked: { intent_id: candidate.intent.intent_id, order_ref: candidate.intent.order_ref, journal_seq: 5, recorded_at_ms: 1_780_000_000_001, order_id: 12, perm_id: null, exec_id: null },
-        cancelled_order_ids: [],
-      },
+    const action = presentedRecoveryAction(candidate);
+    accountSafety.stateFor.mockReturnValue({
+      state: 'fresh', snapshot: makeAccountSafetySnapshot({ actions: [action] }),
     });
+    broker.executePresentedRecoveryAction.mockResolvedValue(presentedRecoveryResult(action));
     const store = TestBed.inject(AccountDeskRecoveryStore);
     store.load('DU1234567');
     store.requestDeclaredMove(move('account-recovery-flatten-action', candidate.intent.intent_id));
 
     expect(store.confirmation()?.command).toBe('recovery_flatten');
+    expect(store.canConfirm()).toBe(false);
+    store.setConfirmationToken('FLATTEN');
     await store.confirm();
 
-    expect(broker.submitOperatorRecoveryFlatten).toHaveBeenCalledWith('DU1234567', {
-      intent: candidate.intent,
-      request_provenance: 'account-desk/recovery-flatten',
-    });
+    expect(broker.executePresentedRecoveryAction).toHaveBeenCalledWith('DU1234567', action, 'FLATTEN');
   });
 
   it('submits an account emergency flatten only after typed confirmation', async () => {
     const store = TestBed.inject(AccountDeskRecoveryStore);
-    broker.emergencyFlattenAccount.mockResolvedValue({
-      accepted: true,
-      account_id: 'DU1234567',
-      audit_run_id: 'eflat-audit-1',
-      completed_at_ms: 1_780_000_000_000,
+    const action = presentedEmergencyAction();
+    accountSafety.stateFor.mockReturnValue({
+      state: 'fresh', snapshot: makeAccountSafetySnapshot({ actions: [action] }),
     });
+    broker.executePresentedRecoveryAction.mockResolvedValue(presentedRecoveryResult(action));
     store.load('DU1234567');
     store.requestEmergencyFlatten({
       title: 'Emergency flatten paper account',
@@ -348,11 +350,7 @@ describe('AccountDeskRecoveryStore', () => {
     store.setConfirmationToken('FLATTEN');
     await store.confirm();
 
-    expect(broker.emergencyFlattenAccount).toHaveBeenCalledWith('DU1234567', {
-      account: 'DU1234567',
-      confirmation_token: 'FLATTEN',
-      idempotency_key: expect.any(String),
-    });
+    expect(broker.executePresentedRecoveryAction).toHaveBeenCalledWith('DU1234567', action, 'FLATTEN');
     expect(store.success()?.kind).toBe('emergency_flatten');
   });
 });
@@ -492,6 +490,60 @@ function recoveryFlattenCandidate(): AccountRecoveryFlattenCandidate {
       title: 'Submit Clerk recovery flatten', body: 'Backend candidate body.', consequence: 'Backend consequence.',
       confirm_label: 'Submit recovery flatten', required_token: '',
     },
+  };
+}
+
+function presentedRecoveryAction(candidate: AccountRecoveryFlattenCandidate) {
+  return {
+    ...makePresentedReconcileAction(),
+    action_id: 'flatten' as const,
+    effect_class: 'RISK_REDUCING_BROKER' as const,
+    target: {
+      account_id: candidate.intent.account_id,
+      strategy_instance_id: candidate.intent.strategy_instance_id,
+      run_id: candidate.intent.run_id,
+      kind: 'RECOVERY_NAMESPACE' as const,
+      recovery_intent_id: candidate.intent.intent_id,
+      recovery_order_ref: candidate.intent.order_ref,
+      target_con_id: 756733,
+      expected_signed_quantity: 2,
+    },
+    confirmation: {
+      title: 'Submit exact recovery flatten',
+      body: 'Backend action body.',
+      consequence: 'Fresh reconciliation is required before the position is reported flat.',
+      confirm_label: 'Submit recovery flatten',
+      required_token: 'FLATTEN',
+    },
+  };
+}
+
+function presentedEmergencyAction() {
+  return {
+    ...makePresentedReconcileAction(),
+    action_id: 'flatten' as const,
+    effect_class: 'RISK_REDUCING_BROKER' as const,
+    target: { account_id: 'DU1234567', kind: 'ACCOUNT_EMERGENCY' as const },
+    confirmation: {
+      title: 'Emergency flatten paper account',
+      body: 'Backend action body.',
+      consequence: 'Fresh reconciliation is required before the account is reported flat.',
+      confirm_label: 'Emergency flatten account',
+      required_token: 'FLATTEN',
+    },
+  };
+}
+
+function presentedRecoveryResult(action: PresentedOperatorAction) {
+  return {
+    action_id: action.action_id,
+    action_attempt_id: action.idempotency_key,
+    state: 'PENDING_PROOF' as const,
+    replayed: false,
+    finished_copy: 'The Clerk action is recorded, but fresh reconciliation does not yet prove the requested effect.',
+    effect_receipt: null,
+    reconciliation_receipt: null,
+    refreshed_snapshot_id: null,
   };
 }
 

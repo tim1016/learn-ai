@@ -280,6 +280,45 @@ async def test_async_custody_durably_holds_when_a_post_a0_policy_fence_closes(tm
 
 
 @pytest.mark.asyncio
+async def test_operator_cancel_of_a0_only_custody_is_local_and_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A queued A0 may be cancelled without turning it into a broker claim."""
+
+    _bind(tmp_path, "bot-a")
+    broker = _ImmediateBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        async_custody_config=AccountClerkAsyncCustodyConfig(entry_capacity=1, risk_reducing_capacity=1),
+    )
+    # Freeze only the volatile worker handoff. The durable A0 admission is the
+    # system under test, and this deterministic seam proves the local cancel
+    # cannot need a broker call while no A1 row exists.
+    monkeypatch.setattr(clerk, "_enqueue_async_custody", lambda *_args, **_kwargs: False)
+    await clerk.start_async_custody()
+    intent = _intent("bot-a", "cancel-before-a1")
+    try:
+        _, queued = await clerk.submit_async_custody(intent)
+        assert queued.lifecycle_state == "queued"
+
+        receipt = await clerk.cancel_pending_a0(intent)
+        replay = await clerk.cancel_pending_a0(intent)
+        status = await clerk.async_custody_status(intent)
+
+        assert receipt == replay
+        assert receipt.recorded.intent_id == intent.intent_id
+        assert status is not None
+        assert status.custody_stage == "A3_ECONOMIC_TERMINAL"
+        assert status.lifecycle_state == "cancelled_before_submit"
+        assert broker.calls == []
+    finally:
+        await clerk.stop_async_custody()
+
+
+@pytest.mark.asyncio
 async def test_async_custody_shutdown_does_not_wait_for_uncooperative_observer(tmp_path: Path) -> None:
     _bind(tmp_path, "bot-a")
     clerk = AccountClerk(

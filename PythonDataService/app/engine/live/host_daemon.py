@@ -119,6 +119,9 @@ from app.schemas.broker_session import GatewaySocketsSnapshot
 from app.schemas.journal_cures import (
     JournalCureReceipt,
     JournalCureRequest,
+    OperatorExactCancelRequest,
+    OperatorExactCancelResponse,
+    OperatorPendingCancelResponse,
     OperatorRecoveryFlattenRequest,
     OperatorRecoveryFlattenResponse,
 )
@@ -2773,6 +2776,78 @@ def create_app(
                     "message": str(exc),
                 },
             ) from exc
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        except AccountClerkRpcError as exc:
+            retry_safe, reason_code = clerk_rejection_reason(exc)
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": reason_code,
+                    "message": "Clerk rejected or could not complete the request.",
+                },
+            ) from exc
+
+    @app.post(
+        "/accounts/{account_id}/clerk/operator-pending-cancel",
+        response_model=OperatorPendingCancelResponse,
+        dependencies=auth,
+    )
+    async def operator_pending_cancel(
+        account_id: str,
+        request: OperatorExactCancelRequest,
+    ) -> OperatorPendingCancelResponse:
+        """Forward an A0-only cancel without opening another broker lane."""
+
+        try:
+            account_id = normalize_account_id(account_id)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        if request.intent.account_id != account_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "intent account_id does not match path")
+        try:
+            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            receipt = await AccountClerkRpcClient(
+                artifacts_root=process_manager.artifacts_root,
+                account_id=account_id,
+            ).cancel_pending_a0(request.intent)
+            return OperatorPendingCancelResponse(cancelled_before_submit=receipt)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        except AccountClerkRpcError as exc:
+            retry_safe, reason_code = clerk_rejection_reason(exc)
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": reason_code,
+                    "message": "Clerk rejected or could not complete the request.",
+                },
+            ) from exc
+
+    @app.post(
+        "/accounts/{account_id}/clerk/operator-exact-cancel",
+        response_model=OperatorExactCancelResponse,
+        dependencies=auth,
+    )
+    async def operator_exact_cancel(
+        account_id: str,
+        request: OperatorExactCancelRequest,
+    ) -> OperatorExactCancelResponse:
+        """Forward a snapshot-bound exact cancel to the Clerk lifecycle."""
+
+        try:
+            account_id = normalize_account_id(account_id)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        if request.intent.account_id != account_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "intent account_id does not match path")
+        try:
+            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            receipt = await AccountClerkRpcClient(
+                artifacts_root=process_manager.artifacts_root,
+                account_id=account_id,
+            ).cancel_exact_order(request.intent)
+            return OperatorExactCancelResponse(cancel_confirmed=receipt)
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
         except AccountClerkRpcError as exc:

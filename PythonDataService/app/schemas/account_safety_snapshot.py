@@ -13,6 +13,7 @@ from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCo
 from app.schemas.presented_operator_action import (
     PresentedOperatorActionAvailability,
     PresentedOperatorActionDisposition,
+    PresentedOperatorActionEffectReceipt,
     PresentedOperatorActionId,
     PresentedOperatorActionPrecondition,
     PresentedOperatorActionTarget,
@@ -63,9 +64,10 @@ class PresentedOperatorActionResult(BaseModel):
 
     action_id: PresentedOperatorActionId
     action_attempt_id: str = Field(min_length=16, max_length=160)
-    state: Literal["ACCEPTED", "IN_PROGRESS", "OUTCOME_UNKNOWN"]
+    state: Literal["ACCEPTED", "IN_PROGRESS", "PENDING_PROOF", "OUTCOME_UNKNOWN"]
     replayed: bool
     finished_copy: str = Field(min_length=1, max_length=512)
+    effect_receipt: PresentedOperatorActionEffectReceipt | None = None
     reconciliation_receipt: AccountReconciliationReceipt | None = None
     refreshed_snapshot_id: str | None = Field(default=None, min_length=16, max_length=64)
 

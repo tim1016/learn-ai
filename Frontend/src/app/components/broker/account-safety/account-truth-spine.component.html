@@ -34,10 +34,10 @@
         @if (blocker.detail) { <span>{{ blocker.detail }}</span> }
         @if (blocker.primary_move; as move) { <span>Next step: {{ move.label }}</span> }
       </section>
-    } @else if (!presentedAction()) {
+    } @else if (presentedActions().length === 0) {
       <p class="truth-spine__blocker">No account action is presented by this summary.</p>
     }
-    @if (presentedAction(); as action) {
+    @for (action of presentedActions(); track action.idempotency_key) {
       <app-presented-account-action [action]="action" />
     }
     @if (accountState().state === 'stale') {

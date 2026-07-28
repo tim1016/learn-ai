@@ -165,7 +165,8 @@ export interface paths {
         put?: never;
         /**
          * Emergency Flatten Account Endpoint
-         * @description Authorize and dispatch one Clerk-owned account-wide paper flatten.
+         * @deprecated
+         * @description Retire raw emergency writes in favor of the signed safety action envelope.
          */
         post: operations["emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post"];
         delete?: never;
@@ -435,7 +436,8 @@ export interface paths {
         put?: never;
         /**
          * Operator Recovery Flatten Endpoint
-         * @description Run a retired-namespace flatten through the host-local Clerk lane.
+         * @deprecated
+         * @description Retire raw recovery writes in favor of the signed safety action envelope.
          */
         post: operations["operator_recovery_flatten_endpoint_api_accounts__account_id__operator_recovery_flatten_post"];
         delete?: never;
@@ -458,6 +460,26 @@ export interface paths {
          * @description Execute only the currently presented Reconcile Now envelope.
          */
         post: operations["execute_presented_reconcile_action_endpoint_api_accounts__account_id__presented_actions_reconcile_now_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/presented-actions/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Presented Recovery Action Endpoint
+         * @description Run one signed Cancel or Flatten action through the existing Clerk lanes.
+         */
+        post: operations["execute_presented_recovery_action_endpoint_api_accounts__account_id__presented_actions_recovery_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5577,53 +5599,6 @@ export interface components {
             triage: components["schemas"]["AccountTriageResponse"];
         };
         /**
-         * AccountClerkBrokerAckReceipt
-         * @description Receipt #2, appended by the Clerk only after the paper broker acks.
-         */
-        AccountClerkBrokerAckReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            broker_ack?: components["schemas"]["IbkrOrderAck"] | null;
-            /** Clerk Intake Admitted At Ms */
-            clerk_intake_admitted_at_ms?: number | null;
-            /** Clerk Request Received At Ms */
-            clerk_request_received_at_ms?: number | null;
-            /** Exec Id */
-            exec_id?: string | null;
-            /** Inbox Fsynced At Ms */
-            inbox_fsynced_at_ms?: number | null;
-            /** Intent Id */
-            intent_id: string;
-            /** Journal Seq */
-            journal_seq: number;
-            observed_epoch?: components["schemas"]["AccountEpoch"] | null;
-            /** Order Id */
-            order_id: number;
-            /** Order Ref */
-            order_ref: string;
-            origin_epoch?: components["schemas"]["AccountEpoch"] | null;
-            /** Perm Id */
-            perm_id?: number | null;
-            /** Reconciliation Id */
-            reconciliation_id?: string | null;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Status
-             * @default broker_acked
-             * @constant
-             */
-            status?: "broker_acked";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Trace Id */
-            trace_id: string;
-        };
-        /**
          * AccountClerkHealth
          * @description Daemon-observed health for the sole clerk of one paper account.
          */
@@ -5644,62 +5619,6 @@ export interface components {
             status: string;
             /** Valid Until Ms */
             valid_until_ms?: number | null;
-        };
-        /**
-         * AccountClerkRecordedReceipt
-         * @description Durable receipt #1 returned before any future broker contact.
-         */
-        AccountClerkRecordedReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Clerk Intake Admitted At Ms */
-            clerk_intake_admitted_at_ms?: number | null;
-            /** Clerk Request Received At Ms */
-            clerk_request_received_at_ms?: number | null;
-            /** Inbox Fsynced At Ms */
-            inbox_fsynced_at_ms?: number | null;
-            /** Intent Id */
-            intent_id: string;
-            /** Journal Seq */
-            journal_seq: number;
-            observed_epoch?: components["schemas"]["AccountEpoch"] | null;
-            /** Order Ref */
-            order_ref: string;
-            origin_epoch?: components["schemas"]["AccountEpoch"] | null;
-            /** Reconciliation Id */
-            reconciliation_id?: string | null;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Status
-             * @default recorded
-             * @constant
-             */
-            status?: "recorded";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Trace Id */
-            trace_id: string;
-        };
-        /**
-         * AccountClerkRecoveryFlattenReceipt
-         * @description Durable outcome of one Clerk-owned recovery liquidation.
-         */
-        AccountClerkRecoveryFlattenReceipt: {
-            broker_acked: components["schemas"]["AccountClerkBrokerAckReceipt"];
-            /** Cancelled Order Ids */
-            cancelled_order_ids: number[];
-            recorded: components["schemas"]["AccountClerkRecordedReceipt"];
-            /**
-             * Status
-             * @default recovery_flattened
-             * @constant
-             */
-            status?: "recovery_flattened";
         };
         /**
          * AccountClerkRestartSmokeRequest
@@ -5881,27 +5800,6 @@ export interface components {
             target_order_id?: number | null;
             /** Target Order Ref */
             target_order_ref?: string | null;
-        };
-        /**
-         * AccountEmergencyFlattenResponse
-         * @description Receipt returned after the Clerk re-observes the account flat.
-         */
-        AccountEmergencyFlattenResponse: {
-            /** Accepted */
-            accepted: boolean;
-            /** Account Id */
-            account_id: string;
-            /** Audit Run Id */
-            audit_run_id: string;
-            /** Completed At Ms */
-            completed_at_ms: number;
-            /** Idempotency Key */
-            idempotency_key?: string | null;
-            /**
-             * Idempotency Replayed
-             * @default false
-             */
-            idempotency_replayed?: boolean;
         };
         /**
          * AccountEpoch
@@ -17439,13 +17337,6 @@ export interface components {
             request_provenance: string;
         };
         /**
-         * OperatorRecoveryFlattenResponse
-         * @description Durable receipt returned by the Clerk-owned operator recovery lane.
-         */
-        OperatorRecoveryFlattenResponse: {
-            recovery_flatten: components["schemas"]["AccountClerkRecoveryFlattenReceipt"];
-        };
-        /**
          * OperatorSurface
          * @description Operator-facing projection of run state for the Terminal Cockpit
          *     (PRD #607 / Slice 1 / #608, extended by PRD #616).
@@ -18938,7 +18829,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            action_id: "reconcile_now" | "cancel_exact" | "cancel_pending" | "flatten" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
             /**
              * Availability
              * @enum {string}
@@ -18954,7 +18845,7 @@ export interface components {
              * Effect Class
              * @enum {string}
              */
-            effect_class: "EVIDENCE_REFRESH" | "RISK_REDUCING_LIFECYCLE" | "RISK_INCREASING_LIFECYCLE";
+            effect_class: "EVIDENCE_REFRESH" | "RISK_REDUCING_BROKER" | "RISK_REDUCING_LIFECYCLE" | "RISK_INCREASING_LIFECYCLE";
             /**
              * Evidence Refs
              * @default []
@@ -18982,6 +18873,34 @@ export interface components {
             target: components["schemas"]["PresentedOperatorActionTarget"];
         };
         /**
+         * PresentedOperatorActionEffectReceipt
+         * @description Typed evidence returned by a broker-affecting presented action.
+         *
+         *     This is intentionally a compact cross-process receipt reference rather
+         *     than a second mutable broker model. The full Clerk journal receipt remains
+         *     canonical; these immutable identifiers let every UI host link the action
+         *     attempt, Clerk custody row, and any post-action reconciliation receipt.
+         */
+        PresentedOperatorActionEffectReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Clerk Journal Seq */
+            clerk_journal_seq?: number | null;
+            /** Intent Id */
+            intent_id?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "A0_CANCELLED" | "EXACT_CANCEL_CONFIRMED" | "RECOVERY_FLATTEN_SUBMITTED" | "ACCOUNT_FLATTEN_OBSERVED" | "FLATTEN_INTENTION_RECORDED";
+            /** Operation Id */
+            operation_id?: string | null;
+            /** Order Ref */
+            order_ref?: string | null;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /**
          * PresentedOperatorActionInvocation
          * @description The browser may return only this closed, signed-by-snapshot envelope.
          */
@@ -18990,7 +18909,9 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            action_id: "reconcile_now" | "cancel_exact" | "cancel_pending" | "flatten" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            /** Confirmation Token */
+            confirmation_token?: string | null;
             /** Expires At Ms */
             expires_at_ms: number;
             /** Idempotency Key */
@@ -19047,7 +18968,8 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            action_id: "reconcile_now" | "cancel_exact" | "cancel_pending" | "flatten" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            effect_receipt?: components["schemas"]["PresentedOperatorActionEffectReceipt"] | null;
             /** Finished Copy */
             finished_copy: string;
             reconciliation_receipt?: components["schemas"]["AccountReconciliationReceipt"] | null;
@@ -19059,19 +18981,47 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "ACCEPTED" | "IN_PROGRESS" | "OUTCOME_UNKNOWN";
+            state: "ACCEPTED" | "IN_PROGRESS" | "PENDING_PROOF" | "OUTCOME_UNKNOWN";
         };
         /**
          * PresentedOperatorActionTarget
-         * @description Exact account and optional lifecycle scope bound into one action.
+         * @description Closed account/intent/order identity bound into one action.
+         *
+         *     The browser may echo these fields only as part of the signed envelope. A
+         *     target kind makes the broker-affecting variants unambiguous: an exact
+         *     cancel cannot drift to a reused broker id, an A0 cancel cannot pretend a
+         *     broker write occurred, and a recovery flatten retains the exact server
+         *     authored namespace/position identity that must be re-proven at dispatch.
          */
         PresentedOperatorActionTarget: {
             /** Account Id */
             account_id: string;
+            /** Expected Signed Quantity */
+            expected_signed_quantity?: number | null;
+            /**
+             * Kind
+             * @default ACCOUNT
+             * @enum {string}
+             */
+            kind?: "ACCOUNT" | "EXACT_ORDER" | "A0_INTENT" | "RECOVERY_NAMESPACE" | "ACCOUNT_EMERGENCY";
+            /** Recovery Intent Id */
+            recovery_intent_id?: string | null;
+            /** Recovery Order Ref */
+            recovery_order_ref?: string | null;
             /** Run Id */
             run_id?: string | null;
             /** Strategy Instance Id */
             strategy_instance_id?: string | null;
+            /** Target Con Id */
+            target_con_id?: number | null;
+            /** Target Intent Id */
+            target_intent_id?: string | null;
+            /** Target Intent Order Ref */
+            target_intent_order_ref?: string | null;
+            /** Target Order Id */
+            target_order_id?: number | null;
+            /** Target Order Ref */
+            target_order_ref?: string | null;
         };
         /**
          * PricingCompareRequest
@@ -24204,7 +24154,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AccountEmergencyFlattenResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -24676,7 +24626,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["OperatorRecoveryFlattenResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -24726,6 +24676,61 @@ export interface operations {
                 };
             };
             /** @description The presented action is stale, unavailable, or does not match its target. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_presented_recovery_action_endpoint_api_accounts__account_id__presented_actions_recovery_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresentedOperatorActionInvocation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
+                };
+            };
+            /** @description Action is durable, but current broker proof is still required. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
+                };
+            };
+            /** @description The action is stale, unavailable, or no longer targets current evidence. */
             409: {
                 headers: {
                     [name: string]: unknown;

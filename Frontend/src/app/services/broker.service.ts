@@ -5,7 +5,6 @@ import { presentedActionInvocation } from '../api/broker-models';
 import type {
   AccountAcceptExposureOverrideRequest,
   AccountAcceptExposureOverrideResponse,
-  AccountEmergencyFlattenResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
   AccountEventSequenceRepairReceipt,
@@ -13,8 +12,6 @@ import type {
   JournalCurePreview,
   JournalCureReceipt,
   JournalCureRequest,
-  OperatorRecoveryFlattenRequest,
-  OperatorRecoveryFlattenResponse,
   LegacyStaleClaimCandidatesResponse,
   LegacyStaleClaimRetireRequest,
   LegacyStaleClaimRetirementReceipt,
@@ -186,6 +183,19 @@ export class BrokerService {
       this.http.post<PresentedOperatorActionResult>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-actions/reconcile-now`,
         presentedActionInvocation(action),
+      ),
+    );
+  }
+
+  executePresentedRecoveryAction(
+    accountId: string,
+    action: PresentedOperatorAction,
+    confirmationToken?: string,
+  ): Promise<PresentedOperatorActionResult> {
+    return firstValueFrom(
+      this.http.post<PresentedOperatorActionResult>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-actions/recovery`,
+        presentedActionInvocation(action, confirmationToken),
       ),
     );
   }
@@ -384,30 +394,6 @@ export class BrokerService {
       this.http.post<JournalCureReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-cures`,
         payload,
-      ),
-    );
-  }
-
-  submitOperatorRecoveryFlatten(
-    accountId: string,
-    payload: OperatorRecoveryFlattenRequest,
-  ): Promise<OperatorRecoveryFlattenResponse> {
-    return firstValueFrom(
-      this.http.post<OperatorRecoveryFlattenResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/operator-recovery-flatten`,
-        payload,
-      ),
-    );
-  }
-
-  emergencyFlattenAccount(
-    accountId: string,
-    request: { account: string; confirmation_token: 'FLATTEN'; idempotency_key: string },
-  ): Promise<AccountEmergencyFlattenResponse> {
-    return firstValueFrom(
-      this.http.post<AccountEmergencyFlattenResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/emergency-flatten`,
-        request,
       ),
     );
   }

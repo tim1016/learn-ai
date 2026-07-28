@@ -14,6 +14,7 @@ from app.engine.live.account_clerk_journal import (
     read_account_clerk_durability_spine,
 )
 from app.engine.live.account_clerk_journal_models import (
+    AccountClerkCustodyStatus,
     AccountClerkJournalCorruptError,
 )
 from app.engine.live.account_epoch import ACCOUNT_EPOCH_FILENAME, AccountEpochState
@@ -51,6 +52,10 @@ from app.services.account_truth_snapshot import (
     AccountTruthSnapshot,
     AccountTruthUnavailable,
     get_account_truth_snapshot_provider,
+)
+from app.services.presented_recovery_action_presentation import (
+    present_recovery_actions,
+    recovery_action_semantic_material,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -95,8 +100,15 @@ class AccountSafetySnapshotService:
         account_id = normalize_account_id(account_id)
         clerk = self._directory.service_status(account_id=account_id)
         posture = self._directory.effective_posture(account_id=account_id)
-        custody, custody_read_failure = self._custody_summary(account_id, clerk)
+        custody, custody_read_failure, custody_statuses = self._custody_summary(account_id, clerk)
         receipt = self._reconciliation.read_latest_receipt(account_id)
+        try:
+            triage = self._reconciliation.triage(account_id=account_id, now_ms=now_ms)
+        except (AccountClerkJournalCorruptError, OSError, ValueError):
+            # The snapshot remains a read-only safety surface even when the
+            # optional recovery presentation cannot prove a target. It simply
+            # offers no derived broker action from that unreadable evidence.
+            triage = None
         truth_evidence = get_account_truth_snapshot_provider().get(account_id)
         safety, safety_source = self._safety(account_id, now_ms)
         epoch = read_pydantic_artifact(
@@ -197,6 +209,15 @@ class AccountSafetySnapshotService:
             "blockers": [blocker.model_dump(mode="json") for blocker in (truth.operator_blockers if truth else [])],
             "outage_diff": None if epoch is None else epoch.outage_diff,
             "evidence_refs": [ref.model_dump(mode="json") for ref in evidence_refs],
+            "recovery_actions": recovery_action_semantic_material(
+                custody_statuses=custody_statuses,
+                recovery_candidates=(
+                    () if triage is None else tuple(triage.recovery_flatten_candidates)
+                ),
+                emergency_confirmation=(
+                    None if triage is None else triage.emergency_flatten_confirmation
+                ),
+            ),
         }
         fingerprint = hashlib.sha256(json.dumps(semantic, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         actions = self._presented_actions(
@@ -206,6 +227,16 @@ class AccountSafetySnapshotService:
             verdict=verdict,
             reason_code=reason_code,
             evidence_refs=evidence_refs,
+        ) + present_recovery_actions(
+            account_id=account_id,
+            snapshot_id=fingerprint,
+            generated_at_ms=now_ms,
+            verdict=verdict,
+            evidence_refs=evidence_refs,
+            reconciliation_receipt=receipt,
+            custody_statuses=custody_statuses,
+            recovery_candidates=() if triage is None else triage.recovery_flatten_candidates,
+            emergency_confirmation=None if triage is None else triage.emergency_flatten_confirmation,
         )
         return AccountSafetySnapshot(
             snapshot_version=fingerprint,
@@ -544,19 +575,19 @@ class AccountSafetySnapshotService:
         self,
         account_id: str,
         clerk: AccountServiceStatusResponse,
-    ) -> tuple[dict[str, int], str | None]:
+    ) -> tuple[dict[str, int], str | None, tuple[AccountClerkCustodyStatus, ...]]:
         counts = {stage: 0 for stage in _CUSTODY_STAGES}
         if clerk.journal.integrity != "healthy":
-            return self._custody_count_fields(counts), None
+            return self._custody_count_fields(counts), None, ()
         try:
             statuses = fold_account_clerk_custody_statuses(
                 read_account_clerk_durability_spine(self._artifacts_root, account_id),
             )
         except (AccountClerkJournalCorruptError, OSError, ValueError):
-            return self._custody_count_fields(counts), "ACCOUNT_CLERK_JOURNAL_UNAVAILABLE"
+            return self._custody_count_fields(counts), "ACCOUNT_CLERK_JOURNAL_UNAVAILABLE", ()
         for status in statuses:
             counts[status.custody_stage] += 1
-        return self._custody_count_fields(counts), None
+        return self._custody_count_fields(counts), None, statuses
 
     @staticmethod
     def _custody_count_fields(counts: dict[str, int]) -> dict[str, int]:

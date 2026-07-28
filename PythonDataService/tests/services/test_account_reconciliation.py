@@ -911,6 +911,7 @@ def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tm
         order_spec=IbkrOrderSpec(
             symbol="SPY",
             sec_type="STK",
+            con_id=756733,
             action="BUY",
             quantity=2,
             order_type="MKT",
@@ -964,6 +965,75 @@ def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tm
     ]
     assert blocker.primary_move is not None
     assert blocker.primary_move.target == candidate.intent.intent_id
+
+
+def test_triage_never_authors_recovery_flatten_from_symbol_only_position_matching(
+    tmp_path: Path,
+) -> None:
+    """A duplicate symbol cannot silently turn a stale aggregate into an order."""
+
+    binding = _retired_binding()
+    write_account_instance_binding(tmp_path, binding)
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id="DU1234567",
+            generation=7,
+            phase="accepting",
+            recorded_at_ms=1_780_000_002_000,
+            source="test",
+        ),
+    )
+    intent_id = "symbol-only-source"
+    order_ref = f"{binding.bot_order_namespace}:{intent_id}"
+    source_intent = AccountOwnerSubmitIntent(
+        trace_id="source-trace",
+        account_id="DU1234567",
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        bot_order_namespace=binding.bot_order_namespace,
+        intent_id=intent_id,
+        order_ref=order_ref,
+        intent_kind="ORDER",
+        order_spec=IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action="BUY",
+            quantity=2,
+            order_type="MKT",
+            confirm_paper=True,
+            client_order_id="source-order",
+            order_ref=order_ref,
+        ).model_dump(mode="json"),
+        owner_generation=7,
+        created_at_ms=1_780_000_002_000,
+    )
+    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id="DU1234567")
+    journal.record_intent(source_intent, validate_intent=lambda _: None)
+    journal.record_broker_event(
+        IbkrOrderEvent(
+            account_id="DU1234567",
+            order_id=1,
+            event_type="fill",
+            order_ref=order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=2,
+            exec_id="symbol-only-fill",
+            ts_ms=1_780_000_002_001,
+        )
+    )
+
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(positions=[_position(symbol="SPY", quantity=2)]),
+        now_ms=1_780_000_003_000,
+    )
+
+    assert service.triage(
+        account_id="DU1234567", now_ms=1_780_000_003_100
+    ).recovery_flatten_candidates == []
 
 
 def test_triage_declares_emergency_flatten_only_without_exact_recovery_candidate(

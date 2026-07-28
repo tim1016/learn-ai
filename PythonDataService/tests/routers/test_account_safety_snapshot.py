@@ -95,6 +95,15 @@ async def test_lifecycle_action_presentation_is_target_bound_and_refuses_an_inco
         "account_id": "DU1234567",
         "strategy_instance_id": "amd-outage-bot",
         "run_id": "run-1",
+        "kind": "ACCOUNT",
+        "target_order_id": None,
+        "target_order_ref": None,
+        "target_intent_id": None,
+        "target_intent_order_ref": None,
+        "recovery_intent_id": None,
+        "recovery_order_ref": None,
+        "target_con_id": None,
+        "expected_signed_quantity": None,
     }
     assert action["effect_class"] == "RISK_INCREASING_LIFECYCLE"
     assert action["presentation_token"]

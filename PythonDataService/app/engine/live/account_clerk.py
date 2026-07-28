@@ -67,6 +67,7 @@ from app.engine.live.account_clerk_journal_models import (
     AccountClerkAsyncCustodyHealth,
     AccountClerkCustodyStatus,
     AccountClerkEmergencyAuthorization,
+    AccountClerkPendingCancelReceipt,
 )
 from app.engine.live.account_clerk_lease import AccountClerkLeaseWriter
 from app.engine.live.account_clerk_operations import (
@@ -1322,6 +1323,40 @@ class AccountClerk:
                     cancelled,
                 )
 
+    async def cancel_pending_a0(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkPendingCancelReceipt:
+        """Close a still-queued A0 custody transfer without a broker call.
+
+        The shared broker-write lock serializes this decision with the async
+        worker's A1 transition. If it already crossed A1, this method refuses
+        rather than reporting a local cancel for a potentially live order.
+        """
+
+        if self._async_custody_config is None:
+            self._reject(intent, "CLERK_ASYNC_CUSTODY_DISABLED")
+        async with self._broker_write_lock, self._async_custody_admission_lock, self._intake_lock:
+            await asyncio.to_thread(self._validate_intent_identity, intent)
+            status = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
+            if status is None:
+                self._reject(intent, "CLERK_A0_CANCEL_TARGET_NOT_CURRENT")
+            if status.lifecycle_state == "cancelled_before_submit":
+                receipt = await asyncio.to_thread(
+                    self._journal.append_custody_cancelled_before_submit,
+                    intent,
+                )
+                return receipt
+            if status.lifecycle_state != "queued":
+                self._reject(intent, "CLERK_A0_CANCEL_TARGET_NOT_PENDING")
+            try:
+                return await asyncio.to_thread(
+                    self._journal.append_custody_cancelled_before_submit,
+                    intent,
+                )
+            except ValueError as exc:
+                self._reject(intent, "CLERK_A0_CANCEL_TARGET_NOT_PENDING", error=str(exc))
+
     @property
     def cancel_namespace_in_progress(self) -> bool:
         return self._operations.state.cancel_namespace_in_progress
@@ -2202,6 +2237,20 @@ class AccountClerk:
         # journal identity.  Otherwise the receipt/effect proof could name a
         # different broker order than the one IBKR receives. Namespace cancel
         # is a management operation, never a broker order submission.
+        if intent.intent_kind == "EXACT_CANCEL":
+            if (
+                intent.account_id != self._account_id
+                or intent.strategy_instance_id != MANUAL_OPERATOR_STRATEGY_INSTANCE_ID
+                or intent.run_id != MANUAL_OPERATOR_RUN_ID
+                or intent.bot_order_namespace != build_manual_order_namespace("operator")
+                or intent.effect_request is None
+                or intent.effect_request.purpose is not AccountEffectPurpose.EXACT_CANCEL
+            ):
+                self._reject(intent, "CLERK_EXACT_CANCEL_IDENTITY_MISMATCH")
+            # An exact cancel is not an order-placement intent. Requiring an
+            # unrelated order spec here would create a second, misleading
+            # broker payload beside the signed target being cancelled.
+            return
         if intent.intent_kind != "CANCEL_NAMESPACE":
             try:
                 spec = IbkrOrderSpec.model_validate(intent.order_spec)

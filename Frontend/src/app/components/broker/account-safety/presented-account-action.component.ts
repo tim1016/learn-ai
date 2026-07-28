@@ -1,6 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, signal } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
+import { InputTextModule } from 'primeng/inputtext';
 
 import type {
   PresentedOperatorAction,
@@ -15,7 +16,7 @@ import { AccountSafetySnapshotStore } from './account-safety-snapshot.store';
 @Component({
   selector: 'app-presented-account-action',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ButtonModule, ReceiptLabelPipe],
+  imports: [ButtonModule, InputTextModule, ReceiptLabelPipe],
   templateUrl: './presented-account-action.component.html',
   styleUrl: './presented-account-action.component.scss',
 })
@@ -29,10 +30,26 @@ export class PresentedAccountActionComponent {
   readonly rejection = signal<PresentedOperatorActionRejection | null>(null);
   readonly transportFailed = signal(false);
   readonly refreshFailed = signal(false);
+  readonly confirmationToken = signal('');
+  readonly requiredConfirmationToken = computed(() => this.action().confirmation.required_token ?? '');
+  readonly confirmationRequired = computed(() => this.requiredConfirmationToken() !== '');
+  readonly canExecute = computed(() =>
+    !this.confirmationRequired()
+    || this.confirmationToken() === this.requiredConfirmationToken(),
+  );
+
+  setConfirmationToken(value: string): void {
+    this.confirmationToken.set(value);
+  }
+
+  setConfirmationInput(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) this.setConfirmationToken(target.value);
+  }
 
   async execute(): Promise<void> {
     const action = this.action();
-    if (this.busy() || action.availability !== 'AVAILABLE') return;
+    if (this.busy() || action.availability !== 'AVAILABLE' || !this.canExecute()) return;
 
     this.busy.set(true);
     this.result.set(null);
@@ -64,6 +81,14 @@ export class PresentedAccountActionComponent {
     switch (action.action_id) {
       case 'reconcile_now':
         return this.broker.executePresentedReconcileNow(action.target.account_id, action);
+      case 'cancel_exact':
+      case 'cancel_pending':
+      case 'flatten':
+        return this.broker.executePresentedRecoveryAction(
+          action.target.account_id,
+          action,
+          this.confirmationRequired() ? this.confirmationToken() : undefined,
+        );
       default:
         throw new Error('This action is not dispatched from the account-safety panel.');
     }

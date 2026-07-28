@@ -7,7 +7,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.engine.live.account_clerk_journal import AccountClerkRecoveryFlattenReceipt
+from app.engine.live.account_clerk_journal import (
+    AccountClerkCancelNamespaceReceipt,
+    AccountClerkPendingCancelReceipt,
+    AccountClerkRecoveryFlattenReceipt,
+)
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.schemas.operator_blocker import OperatorConfirmationCopy
 
@@ -125,6 +129,30 @@ class OperatorRecoveryFlattenRequest(BaseModel):
 
     intent: AccountOwnerSubmitIntent
     request_provenance: str = Field(min_length=1, max_length=256)
+
+
+class OperatorExactCancelRequest(BaseModel):
+    """Host-local request constructed only from a validated action envelope."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    intent: AccountOwnerSubmitIntent
+
+
+class OperatorExactCancelResponse(BaseModel):
+    """Clerk receipt for one exact broker-order cancel."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    cancel_confirmed: AccountClerkCancelNamespaceReceipt
+
+
+class OperatorPendingCancelResponse(BaseModel):
+    """Clerk receipt for cancellation that ended before A1."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    cancelled_before_submit: AccountClerkPendingCancelReceipt
 
 
 class OperatorRecoveryFlattenResponse(BaseModel):

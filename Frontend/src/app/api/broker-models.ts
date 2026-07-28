@@ -28,6 +28,7 @@ export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth']
 /** Keep browser mutations to the exact fields the server signed and verifies. */
 export function presentedActionInvocation(
   action: PresentedOperatorAction,
+  confirmationToken?: string,
 ): PresentedOperatorActionInvocation {
   if (!action.presentation_token) {
     throw new Error('Backend action presentation is unavailable; refusing the operation.');
@@ -41,6 +42,7 @@ export function presentedActionInvocation(
     issued_at_ms: action.issued_at_ms,
     expires_at_ms: action.expires_at_ms,
     presentation_token: action.presentation_token,
+    ...(confirmationToken === undefined ? {} : { confirmation_token: confirmationToken }),
   };
 }
 export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &

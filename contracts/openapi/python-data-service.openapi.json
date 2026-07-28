@@ -236,187 +236,6 @@
         "title": "AccountClearFreezeResponse",
         "type": "object"
       },
-      "AccountClerkBrokerAckReceipt": {
-        "additionalProperties": false,
-        "description": "Receipt #2, appended by the Clerk only after the paper broker acks.",
-        "properties": {
-          "account_id": {
-            "minLength": 1,
-            "title": "Account Id",
-            "type": "string"
-          },
-          "bot_order_namespace": {
-            "minLength": 1,
-            "title": "Bot Order Namespace",
-            "type": "string"
-          },
-          "broker_ack": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IbkrOrderAck"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "clerk_intake_admitted_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 9.223372036854776e+18,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Clerk Intake Admitted At Ms"
-          },
-          "clerk_request_received_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 9.223372036854776e+18,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Clerk Request Received At Ms"
-          },
-          "exec_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exec Id"
-          },
-          "inbox_fsynced_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 9.223372036854776e+18,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Inbox Fsynced At Ms"
-          },
-          "intent_id": {
-            "minLength": 1,
-            "title": "Intent Id",
-            "type": "string"
-          },
-          "journal_seq": {
-            "minimum": 1.0,
-            "title": "Journal Seq",
-            "type": "integer"
-          },
-          "observed_epoch": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AccountEpoch"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "order_id": {
-            "minimum": 0.0,
-            "title": "Order Id",
-            "type": "integer"
-          },
-          "order_ref": {
-            "minLength": 1,
-            "title": "Order Ref",
-            "type": "string"
-          },
-          "origin_epoch": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AccountEpoch"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "perm_id": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Perm Id"
-          },
-          "reconciliation_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reconciliation Id"
-          },
-          "recorded_at_ms": {
-            "maximum": 9.223372036854776e+18,
-            "minimum": 0.0,
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "run_id": {
-            "minLength": 1,
-            "title": "Run Id",
-            "type": "string"
-          },
-          "status": {
-            "const": "broker_acked",
-            "default": "broker_acked",
-            "title": "Status"
-          },
-          "strategy_instance_id": {
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
-          },
-          "trace_id": {
-            "minLength": 1,
-            "title": "Trace Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "trace_id",
-          "account_id",
-          "strategy_instance_id",
-          "run_id",
-          "bot_order_namespace",
-          "intent_id",
-          "order_ref",
-          "journal_seq",
-          "recorded_at_ms",
-          "order_id"
-        ],
-        "title": "AccountClerkBrokerAckReceipt",
-        "type": "object"
-      },
       "AccountClerkHealth": {
         "description": "Daemon-observed health for the sole clerk of one paper account.",
         "properties": {
@@ -487,179 +306,6 @@
           "lease_valid"
         ],
         "title": "AccountClerkHealth",
-        "type": "object"
-      },
-      "AccountClerkRecordedReceipt": {
-        "additionalProperties": false,
-        "description": "Durable receipt #1 returned before any future broker contact.",
-        "properties": {
-          "account_id": {
-            "minLength": 1,
-            "title": "Account Id",
-            "type": "string"
-          },
-          "bot_order_namespace": {
-            "minLength": 1,
-            "title": "Bot Order Namespace",
-            "type": "string"
-          },
-          "clerk_intake_admitted_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 9.223372036854776e+18,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Clerk Intake Admitted At Ms"
-          },
-          "clerk_request_received_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 9.223372036854776e+18,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Clerk Request Received At Ms"
-          },
-          "inbox_fsynced_at_ms": {
-            "anyOf": [
-              {
-                "maximum": 9.223372036854776e+18,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Inbox Fsynced At Ms"
-          },
-          "intent_id": {
-            "minLength": 1,
-            "title": "Intent Id",
-            "type": "string"
-          },
-          "journal_seq": {
-            "minimum": 1.0,
-            "title": "Journal Seq",
-            "type": "integer"
-          },
-          "observed_epoch": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AccountEpoch"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "order_ref": {
-            "minLength": 1,
-            "title": "Order Ref",
-            "type": "string"
-          },
-          "origin_epoch": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AccountEpoch"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "reconciliation_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reconciliation Id"
-          },
-          "recorded_at_ms": {
-            "maximum": 9.223372036854776e+18,
-            "minimum": 0.0,
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "run_id": {
-            "minLength": 1,
-            "title": "Run Id",
-            "type": "string"
-          },
-          "status": {
-            "const": "recorded",
-            "default": "recorded",
-            "title": "Status"
-          },
-          "strategy_instance_id": {
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
-          },
-          "trace_id": {
-            "minLength": 1,
-            "title": "Trace Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "trace_id",
-          "account_id",
-          "strategy_instance_id",
-          "run_id",
-          "bot_order_namespace",
-          "intent_id",
-          "order_ref",
-          "journal_seq",
-          "recorded_at_ms"
-        ],
-        "title": "AccountClerkRecordedReceipt",
-        "type": "object"
-      },
-      "AccountClerkRecoveryFlattenReceipt": {
-        "additionalProperties": false,
-        "description": "Durable outcome of one Clerk-owned recovery liquidation.",
-        "properties": {
-          "broker_acked": {
-            "$ref": "#/components/schemas/AccountClerkBrokerAckReceipt"
-          },
-          "cancelled_order_ids": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Cancelled Order Ids",
-            "type": "array"
-          },
-          "recorded": {
-            "$ref": "#/components/schemas/AccountClerkRecordedReceipt"
-          },
-          "status": {
-            "const": "recovery_flattened",
-            "default": "recovery_flattened",
-            "title": "Status"
-          }
-        },
-        "required": [
-          "recorded",
-          "broker_acked",
-          "cancelled_order_ids"
-        ],
-        "title": "AccountClerkRecoveryFlattenReceipt",
         "type": "object"
       },
       "AccountClerkRestartSmokeRequest": {
@@ -1112,57 +758,6 @@
           "purpose"
         ],
         "title": "AccountEffectRequest",
-        "type": "object"
-      },
-      "AccountEmergencyFlattenResponse": {
-        "additionalProperties": false,
-        "description": "Receipt returned after the Clerk re-observes the account flat.",
-        "properties": {
-          "accepted": {
-            "title": "Accepted",
-            "type": "boolean"
-          },
-          "account_id": {
-            "maxLength": 32,
-            "minLength": 2,
-            "title": "Account Id",
-            "type": "string"
-          },
-          "audit_run_id": {
-            "maxLength": 128,
-            "minLength": 2,
-            "title": "Audit Run Id",
-            "type": "string"
-          },
-          "completed_at_ms": {
-            "minimum": 0.0,
-            "title": "Completed At Ms",
-            "type": "integer"
-          },
-          "idempotency_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Idempotency Key"
-          },
-          "idempotency_replayed": {
-            "default": false,
-            "title": "Idempotency Replayed",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "accepted",
-          "account_id",
-          "audit_run_id",
-          "completed_at_ms"
-        ],
-        "title": "AccountEmergencyFlattenResponse",
         "type": "object"
       },
       "AccountEpoch": {
@@ -27345,20 +26940,6 @@
         "title": "OperatorRecoveryFlattenRequest",
         "type": "object"
       },
-      "OperatorRecoveryFlattenResponse": {
-        "additionalProperties": false,
-        "description": "Durable receipt returned by the Clerk-owned operator recovery lane.",
-        "properties": {
-          "recovery_flatten": {
-            "$ref": "#/components/schemas/AccountClerkRecoveryFlattenReceipt"
-          }
-        },
-        "required": [
-          "recovery_flatten"
-        ],
-        "title": "OperatorRecoveryFlattenResponse",
-        "type": "object"
-      },
       "OperatorSurface": {
         "description": "Operator-facing projection of run state for the Terminal Cockpit\n(PRD #607 / Slice 1 / #608, extended by PRD #616).\n\nSingle source of truth for operational verdicts, risk posture,\nstructured daily-cap usage, action-plan consumption, broker safety\nverdict, prior-run classification, host-process state, per-action\ncapability + reason codes, and the per-gate operator-facing\nremediation metadata.  Frontend renders these fields; it does not\nderive verdicts from raw fields.\n\nPRD #616 added ``readiness_gates`` (the ``OperatorGate``\nprojection with structured ``suggested_action`` / unavailable\nreason) and ``actions.stop`` to the contract.  Both are additive;\n``schema_version`` does NOT bump for additive fields (per the\nexisting rule).",
         "properties": {
@@ -30482,6 +30063,9 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "cancel_exact",
+              "cancel_pending",
+              "flatten",
               "pause",
               "stop",
               "end_day",
@@ -30514,6 +30098,7 @@
           "effect_class": {
             "enum": [
               "EVIDENCE_REFRESH",
+              "RISK_REDUCING_BROKER",
               "RISK_REDUCING_LIFECYCLE",
               "RISK_INCREASING_LIFECYCLE"
             ],
@@ -30604,6 +30189,92 @@
         "title": "PresentedOperatorAction",
         "type": "object"
       },
+      "PresentedOperatorActionEffectReceipt": {
+        "additionalProperties": false,
+        "description": "Typed evidence returned by a broker-affecting presented action.\n\nThis is intentionally a compact cross-process receipt reference rather\nthan a second mutable broker model. The full Clerk journal receipt remains\ncanonical; these immutable identifiers let every UI host link the action\nattempt, Clerk custody row, and any post-action reconciliation receipt.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "clerk_journal_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Journal Seq"
+          },
+          "intent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Id"
+          },
+          "kind": {
+            "enum": [
+              "A0_CANCELLED",
+              "EXACT_CANCEL_CONFIRMED",
+              "RECOVERY_FLATTEN_SUBMITTED",
+              "ACCOUNT_FLATTEN_OBSERVED",
+              "FLATTEN_INTENTION_RECORDED"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "account_id",
+          "recorded_at_ms"
+        ],
+        "title": "PresentedOperatorActionEffectReceipt",
+        "type": "object"
+      },
       "PresentedOperatorActionInvocation": {
         "additionalProperties": false,
         "description": "The browser may return only this closed, signed-by-snapshot envelope.",
@@ -30611,6 +30282,9 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "cancel_exact",
+              "cancel_pending",
+              "flatten",
               "pause",
               "stop",
               "end_day",
@@ -30620,6 +30294,19 @@
             ],
             "title": "Action Id",
             "type": "string"
+          },
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation Token"
           },
           "expires_at_ms": {
             "minimum": 0.0,
@@ -30773,6 +30460,9 @@
           "action_id": {
             "enum": [
               "reconcile_now",
+              "cancel_exact",
+              "cancel_pending",
+              "flatten",
               "pause",
               "stop",
               "end_day",
@@ -30782,6 +30472,16 @@
             ],
             "title": "Action Id",
             "type": "string"
+          },
+          "effect_receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionEffectReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "finished_copy": {
             "maxLength": 512,
@@ -30820,6 +30520,7 @@
             "enum": [
               "ACCEPTED",
               "IN_PROGRESS",
+              "PENDING_PROOF",
               "OUTCOME_UNKNOWN"
             ],
             "title": "State",
@@ -30838,13 +30539,62 @@
       },
       "PresentedOperatorActionTarget": {
         "additionalProperties": false,
-        "description": "Exact account and optional lifecycle scope bound into one action.",
+        "description": "Closed account/intent/order identity bound into one action.\n\nThe browser may echo these fields only as part of the signed envelope. A\ntarget kind makes the broker-affecting variants unambiguous: an exact\ncancel cannot drift to a reused broker id, an A0 cancel cannot pretend a\nbroker write occurred, and a recovery flatten retains the exact server\nauthored namespace/position identity that must be re-proven at dispatch.",
         "properties": {
           "account_id": {
             "maxLength": 64,
             "minLength": 1,
             "title": "Account Id",
             "type": "string"
+          },
+          "expected_signed_quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Signed Quantity"
+          },
+          "kind": {
+            "default": "ACCOUNT",
+            "enum": [
+              "ACCOUNT",
+              "EXACT_ORDER",
+              "A0_INTENT",
+              "RECOVERY_NAMESPACE",
+              "ACCOUNT_EMERGENCY"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "recovery_intent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Intent Id"
+          },
+          "recovery_order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Order Ref"
           },
           "run_id": {
             "anyOf": [
@@ -30871,6 +30621,69 @@
               }
             ],
             "title": "Strategy Instance Id"
+          },
+          "target_con_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Con Id"
+          },
+          "target_intent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Intent Id"
+          },
+          "target_intent_order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Intent Order Ref"
+          },
+          "target_order_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Order Id"
+          },
+          "target_order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Order Ref"
           }
         },
         "required": [
@@ -41668,7 +41481,8 @@
     },
     "/api/accounts/{account_id}/emergency-flatten": {
       "post": {
-        "description": "Authorize and dispatch one Clerk-owned account-wide paper flatten.",
+        "deprecated": true,
+        "description": "Retire raw emergency writes in favor of the signed safety action envelope.",
         "operationId": "emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post",
         "parameters": [
           {
@@ -41711,9 +41525,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AccountEmergencyFlattenResponse"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -42628,7 +42440,8 @@
     },
     "/api/accounts/{account_id}/operator-recovery-flatten": {
       "post": {
-        "description": "Run a retired-namespace flatten through the host-local Clerk lane.",
+        "deprecated": true,
+        "description": "Retire raw recovery writes in favor of the signed safety action envelope.",
         "operationId": "operator_recovery_flatten_endpoint_api_accounts__account_id__operator_recovery_flatten_post",
         "parameters": [
           {
@@ -42671,9 +42484,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OperatorRecoveryFlattenResponse"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -42779,6 +42590,95 @@
           }
         },
         "summary": "Execute Presented Reconcile Action Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/presented-actions/recovery": {
+      "post": {
+        "description": "Run one signed Cancel or Flatten action through the existing Clerk lanes.",
+        "operationId": "execute_presented_recovery_action_endpoint_api_accounts__account_id__presented_actions_recovery_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionResult"
+                }
+              }
+            },
+            "description": "Action is durable, but current broker proof is still required."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
+                }
+              }
+            },
+            "description": "The action is stale, unavailable, or no longer targets current evidence."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Presented Recovery Action Endpoint",
         "tags": [
           "accounts"
         ]

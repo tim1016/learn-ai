@@ -538,7 +538,7 @@ async def test_reconciliation_service_honors_artifact_root_dependency_override(t
     assert response.json()["receipt_id"] == receipt.receipt_id
 
 
-async def test_account_emergency_flatten_works_without_surviving_bot_run(
+async def test_raw_account_emergency_flatten_is_retired_in_favor_of_presented_actions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -607,16 +607,11 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 200
-    assert response.json()["audit_run_id"] == "eflat-audit-1"
-    assert response.json()["idempotency_key"].startswith("account-emergency-flatten-")
-    assert any(
-        event.get("event_type") == "account_emergency_flatten_completed"
-        for event in read_account_events(tmp_path, "DU1234567")
-    )
+    assert response.status_code == 410
+    assert response.json()["detail"]["reason_code"] == "PRESENTED_ACTION_REQUIRED"
 
 
-async def test_account_emergency_flatten_fails_closed_without_declared_confirmation(
+async def test_raw_account_emergency_flatten_never_reaches_the_host_clerk(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -646,8 +641,8 @@ async def test_account_emergency_flatten_fails_closed_without_declared_confirmat
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "ACCOUNT_EMERGENCY_FLATTEN_NOT_DECLARED"
+    assert response.status_code == 410
+    assert response.json()["detail"]["reason_code"] == "PRESENTED_ACTION_REQUIRED"
 
 
 async def test_triage_contract_returns_condition_rows_for_active_freeze(tmp_path: Path) -> None:
@@ -1103,7 +1098,7 @@ async def test_journal_cure_preview_honors_artifact_root_dependency_override(
     assert observed_roots == [tmp_path]
 
 
-async def test_operator_recovery_flatten_endpoint_delegates_to_host_clerk_and_appends_audit_event(
+async def test_raw_operator_recovery_flatten_is_retired_before_the_host_clerk(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1181,31 +1176,11 @@ async def test_operator_recovery_flatten_endpoint_delegates_to_host_clerk_and_ap
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 200
-    assert replay.status_code == 200
-    assert [row[1] for row in forwarded] == ["DU1234567", "DU1234567"]
-    assert all(row[2]["intent"] == intent.model_dump(mode="json") for row in forwarded)
-    [event] = read_account_events(tmp_path, "DU1234567")
-    assert {
-        key: event[key]
-        for key in (
-            "account_id",
-            "event_type",
-            "intent_id",
-            "order_ref",
-            "request_provenance",
-            "recorded_at_ms",
-            "receipt_id",
-        )
-    } == {
-        "account_id": "DU1234567",
-        "event_type": "account_clerk_operator_recovery_flatten",
-        "intent_id": intent.intent_id,
-        "order_ref": intent.order_ref,
-        "request_provenance": "account-monitor/recovery",
-        "recorded_at_ms": 101,
-        "receipt_id": "account-clerk-operator-recovery:intent-operator-recovery:1",
-    }
+    assert response.status_code == 410
+    assert replay.status_code == 410
+    assert response.json()["detail"]["reason_code"] == "PRESENTED_ACTION_REQUIRED"
+    assert forwarded == []
+    assert read_account_events(tmp_path, "DU1234567") == []
 
 
 async def test_account_events_endpoint_pages_filters_and_preserves_stable_event_identity(
@@ -1509,7 +1484,9 @@ async def test_trader_account_events_use_new_york_day_across_dst(tmp_path: Path)
 
 async def test_accounts_roster_exposes_the_current_single_account_without_a_service(tmp_path: Path) -> None:
     from app.main import app
+    from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 
+    get_account_truth_snapshot_provider().clear()
     service = AccountDirectoryService(
         artifacts_root=tmp_path,
         current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),

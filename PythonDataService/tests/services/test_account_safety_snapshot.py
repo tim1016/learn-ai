@@ -135,7 +135,7 @@ def test_snapshot_unavailable_critical_evidence_is_never_clean_and_has_stable_se
     assert first.generated_at_ms != later.generated_at_ms
     assert first.snapshot_version == later.snapshot_version
     assert first.snapshot_id == later.snapshot_id
-    assert len(first.actions) == 1
+    assert len(first.actions) == 2
     unavailable_action = first.actions[0]
     assert unavailable_action.action_id == "reconcile_now"
     assert unavailable_action.availability == "UNAVAILABLE"
@@ -144,6 +144,11 @@ def test_snapshot_unavailable_critical_evidence_is_never_clean_and_has_stable_se
     assert unavailable_action.expires_at_ms - unavailable_action.issued_at_ms == 60_000
     assert later.actions[0].issued_at_ms == later.generated_at_ms
     assert later.actions[0].expires_at_ms - later.actions[0].issued_at_ms == 60_000
+    flatten_intention = first.actions[1]
+    assert flatten_intention.action_id == "flatten"
+    assert flatten_intention.target.kind == "ACCOUNT"
+    assert flatten_intention.confirmation.required_token == "FLATTEN"
+    assert flatten_intention.availability == "AVAILABLE"
     assert {
         "account_truth",
         "reconciliation",

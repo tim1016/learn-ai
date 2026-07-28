@@ -38,6 +38,7 @@ from app.engine.live.account_clerk_journal_models import (
     AccountClerkJournalEntry,
     AccountClerkOperatorAdjustment,
     AccountClerkOperatorAdjustmentConflict,
+    AccountClerkPendingCancelReceipt,
     AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
     _require_entry_intent,
@@ -219,7 +220,11 @@ class AccountClerkJournal:
             status = _custody_status_for_entries(intent_entries)
             if status is None or status.lane != "entry":
                 continue
-            if status.lifecycle_state not in {"economic_terminal", "expired_before_submit"}:
+            if status.lifecycle_state not in {
+                "economic_terminal",
+                "expired_before_submit",
+                "cancelled_before_submit",
+            }:
                 return intent
         return None
 
@@ -276,6 +281,66 @@ class AccountClerkJournal:
                     intent=intent,
                     custody_lane=lane,
                 ),
+            )
+
+    def append_custody_cancelled_before_submit(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkPendingCancelReceipt:
+        """Close exactly one queued A0 intent without contacting the broker.
+
+        This is distinct from expiry: the durable row preserves that a human
+        explicitly cancelled the accepted custody transfer. Any A1-or-later
+        row fails closed here; the caller must use the exact broker-cancel
+        lifecycle rather than infer broker absence.
+        """
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            matching = [entry for entry in entries if entry.intent == intent]
+            recorded = _require_recorded_intent_entry(entries, intent)
+            lane = recorded.async_custody_lane
+            if lane is None:
+                raise ValueError("cannot locally cancel a non-asynchronous custody intent")
+            existing = next(
+                (entry for entry in matching if entry.entry_kind == "custody_cancelled_before_submit"),
+                None,
+            )
+            if existing is not None:
+                return AccountClerkPendingCancelReceipt(
+                    recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+                    cancelled_journal_seq=existing.seq,
+                    cancelled_at_ms=existing.recorded_at_ms,
+                )
+            if any(
+                entry.entry_kind
+                in {
+                    "custody_expired_before_submit",
+                    "custody_recovery_action_required",
+                    "custody_submission_hold",
+                }
+                for entry in matching
+            ):
+                raise ValueError("cannot locally cancel a custody intent outside the queued state")
+            if any(
+                entry.entry_kind
+                in {"broker_submitting", "broker_acked", "broker_uncertain", "broker_event"}
+                for entry in matching
+            ):
+                raise ValueError("cannot locally cancel custody after broker-write admission")
+            entry = AccountClerkJournalEntry(
+                seq=_next_seq(entries),
+                entry_kind="custody_cancelled_before_submit",
+                recorded_at_ms=self._now_ms(),
+                intent=intent,
+                custody_lane=lane,
+            )
+            self._append_entry_locked(journal_path, entries, entry)
+            return AccountClerkPendingCancelReceipt(
+                recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+                cancelled_journal_seq=entry.seq,
+                cancelled_at_ms=entry.recorded_at_ms,
             )
 
     def append_custody_recovery_action_required(
@@ -1485,6 +1550,21 @@ def _custody_status_for_entries(
             lane=lane,
             recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
             updated_at_ms=updated_at_ms,
+        )
+    cancelled_before_submit = next(
+        (entry for entry in entries if entry.entry_kind == "custody_cancelled_before_submit"),
+        None,
+    )
+    if cancelled_before_submit is not None:
+        return AccountClerkCustodyStatus(
+            account_id=intent.account_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            custody_stage="A3_ECONOMIC_TERMINAL",
+            lifecycle_state="cancelled_before_submit",
+            lane=lane,
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+            updated_at_ms=cancelled_before_submit.recorded_at_ms,
         )
     if any(entry.entry_kind == "custody_recovery_action_required" for entry in entries):
         return AccountClerkCustodyStatus(

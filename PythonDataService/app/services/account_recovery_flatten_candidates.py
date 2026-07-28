@@ -55,12 +55,13 @@ def recovery_flatten_candidates(
         or account_truth.account_id != account_id
     ):
         return []
-    broker_quantity_by_symbol: dict[str, float] = {}
+    broker_positions_by_identity: dict[tuple[str, int], list[float]] = {}
     for position in account_truth.positions:
         if position.account_id != account_id or not math.isfinite(position.quantity):
             return []
-        symbol = position.symbol.upper()
-        broker_quantity_by_symbol[symbol] = broker_quantity_by_symbol.get(symbol, 0.0) + position.quantity
+        broker_positions_by_identity.setdefault((position.symbol.upper(), position.con_id), []).append(
+            position.quantity
+        )
 
     source_intents: dict[tuple[str, str], dict[str, AccountOwnerSubmitIntent]] = {}
     for entry in entries:
@@ -88,15 +89,26 @@ def recovery_flatten_candidates(
         binding = latest_by_namespace.get(exposure.group_id)
         sources = source_intents.get((exposure.group_id, exposure.symbol), {})
         if (
-            binding is None
-            or binding.lifecycle_state != "RETIRED"
-            or len(sources) != 1
-            or len(symbols_per_namespace[exposure.group_id]) != 1
-            or not math.isclose(broker_quantity_by_symbol.get(exposure.symbol, 0.0), exposure.quantity)
-            or recovery_operation_started_for_namespace(entries, exposure.group_id)
+                binding is None
+                or binding.lifecycle_state != "RETIRED"
+                or len(sources) != 1
+                or len(symbols_per_namespace[exposure.group_id]) != 1
+                or recovery_operation_started_for_namespace(entries, exposure.group_id)
         ):
             continue
         source_intent = next(iter(sources.values()))
+        try:
+            source_order = IbkrOrderSpec.model_validate(source_intent.order_spec)
+        except ValidationError:
+            continue
+        if source_order.con_id is None:
+            # A recovery target must name one current broker instrument. A
+            # symbol can represent multiple contracts, so symbol-only proof
+            # is not a safe liquidation authorization.
+            continue
+        positions = broker_positions_by_identity.get((exposure.symbol, source_order.con_id), [])
+        if len(positions) != 1 or not math.isclose(positions[0], exposure.quantity):
+            continue
         candidate = _candidate_for_residual(
             account_id=account_id,
             binding=binding,
@@ -132,6 +144,7 @@ def _candidate_for_residual(
     if (
         source_order.order_ref != source_intent.order_ref
         or source_order.symbol.upper() != symbol
+        or source_order.con_id is None
     ):
         return None
     digest_payload = json.dumps(
