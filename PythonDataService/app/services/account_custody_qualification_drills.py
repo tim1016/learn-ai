@@ -870,7 +870,7 @@ def _receipt_times(receipts: Sequence[str]) -> dict[str, int]:
         values.setdefault(kind, int(recorded_at_ms))
     required = {"recorded", "broker_submitting"}
     if not required.issubset(values):
-        raise AssertionError(f"missing required receipt timestamps: {sorted(required - values)}")
+        raise AssertionError(f"missing required receipt timestamps: {sorted(required - set(values))}")
     return values
 
 

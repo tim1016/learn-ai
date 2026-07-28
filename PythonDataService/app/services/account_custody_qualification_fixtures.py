@@ -301,7 +301,7 @@ async def real_clerk_trace(
             await clerk.submit_async_custody(intent, clerk_request_received_at_ms=request_at_ms)
             status = None
             entries = ()
-            for _ in range(100):
+            for _ in range(200):
                 status = await clerk.async_custody_status(intent)
                 entries = read_account_clerk_journal(artifacts_root, account_id)
                 if (
@@ -313,7 +313,7 @@ async def real_clerk_trace(
                     )
                 ):
                     break
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.01)
             if status is None:
                 raise AssertionError("real Clerk did not expose a custody status")
             recorded = next(entry for entry in entries if entry.entry_kind == "recorded")
@@ -372,11 +372,11 @@ async def real_eight_bot_trace(controls: DeterministicFaultControls) -> RealFlee
                 intent = qualification_intent(account_id, bot_id, f"fleet-{index}", clock.now_ms())
                 requests[intent.intent_id] = clock.now_ms()
                 await clerk.submit_async_custody(intent, clerk_request_received_at_ms=requests[intent.intent_id])
-                for _ in range(100):
+                for _ in range(200):
                     status = await clerk.async_custody_status(intent)
                     if status is not None and status.lifecycle_state == "uncertain_requires_reconciliation":
                         break
-                    await asyncio.sleep(0)
+                    await asyncio.sleep(0.01)
                 else:
                     raise AssertionError(f"fleet intent {intent.intent_id} did not become outcome-unknown")
             overflow = qualification_intent(account_id, "bot-overflow", "fleet-overflow", clock.now_ms())

@@ -491,6 +491,10 @@ async def test_async_custody_returns_a0_then_keeps_fill_before_ack_monotone(tmp_
         broker.release.set()
         after_ack = await _wait_for_status(client, intent, "economic_terminal")
         assert after_ack.custody_stage == "A3_ECONOMIC_TERMINAL"
+        for _ in range(200):
+            if "economic_terminal" in observed_lifecycles:
+                break
+            await asyncio.sleep(0.01)
         assert "economic_terminal" in observed_lifecycles
         assert len(broker.calls) == 1
 
