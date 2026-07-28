@@ -849,6 +849,22 @@ def test_wrong_account_receipt_cannot_clear_a_frozen_account(tmp_path: Path) -> 
     assert read_account_freeze(tmp_path, "DU1234567") is not None
 
 
+def test_wrong_connected_account_receipt_is_never_returned_as_trusted(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    service.receipt_path("DU1234567").write_text(
+        receipt.model_copy(update={"connected_account_id": "DU7654321"}).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AccountArtifactError, match="receipt belongs to another account"):
+        service.read_latest_receipt("DU1234567")
+
+
 def test_wrong_account_automation_policy_fails_closed(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
     policy_path = service.automation_policy_path("DU1234567")

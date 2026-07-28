@@ -212,17 +212,30 @@ class AccountReconciliationService:
             atomic_write_pydantic_artifact(path, artifact)
         return artifact
 
-    def read_latest_receipt(self, account_id: str) -> AccountReconciliationReceipt | None:
+    def observe_latest_receipt(self, account_id: str) -> AccountReconciliationReceipt | None:
+        """Read a parseable receipt without treating its identity as trusted.
+
+        The Account Safety projection uses this observation only to expose an
+        identity mismatch as a fail-closed condition. All reconciliation and
+        operator-action callers must use :meth:`read_latest_receipt`, which
+        validates account ownership before returning evidence for a decision.
+        """
+
         canonical_account_id = normalize_account_id(account_id)
-        receipt = read_pydantic_artifact(
+        return read_pydantic_artifact(
             self.receipt_path(canonical_account_id),
             AccountReconciliationReceipt,
         )
+
+    def read_latest_receipt(self, account_id: str) -> AccountReconciliationReceipt | None:
+        canonical_account_id = normalize_account_id(account_id)
+        receipt = self.observe_latest_receipt(canonical_account_id)
         if receipt is None:
             return None
         if (
             receipt.account_id != canonical_account_id
             or receipt.requested_account_id != canonical_account_id
+            or receipt.connected_account_id != canonical_account_id
         ):
             raise AccountArtifactError("account reconciliation receipt belongs to another account")
         return receipt

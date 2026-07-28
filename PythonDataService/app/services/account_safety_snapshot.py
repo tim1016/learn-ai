@@ -103,7 +103,7 @@ class AccountSafetySnapshotService:
         clerk = self._directory.service_status(account_id=account_id)
         posture = self._directory.effective_posture(account_id=account_id)
         custody, custody_read_failure, custody_statuses = self._custody_summary(account_id, clerk)
-        receipt = self._reconciliation.read_latest_receipt(account_id)
+        observed_receipt = self._reconciliation.observe_latest_receipt(account_id)
         try:
             triage = self._reconciliation.triage(account_id=account_id, now_ms=now_ms)
         except (AccountClerkJournalCorruptError, OSError, ValueError) as exc:
@@ -153,6 +153,24 @@ class AccountSafetySnapshotService:
                 checked_at_ms=now_ms,
             )
         )
+        reconciliation_source = self._reconciliation_source(
+            observed_receipt,
+            account_id=account_id,
+            epoch=epoch,
+            now_ms=now_ms,
+        )
+        # A parseable receipt for another account is vital evidence of an
+        # identity breach, but must never supply an id, order target, or
+        # action precondition to this account's safety surface.
+        receipt = (
+            observed_receipt
+            if reconciliation_source.epoch_relation != "MISMATCH"
+            else None
+        )
+        if receipt is None and observed_receipt is not None:
+            reconciliation_source = reconciliation_source.model_copy(
+                update={"reconciliation_id": None, "reconciliation_state": None}
+            )
         sources = (
             self._truth_source(
                 truth_evidence,
@@ -162,7 +180,7 @@ class AccountSafetySnapshotService:
                 identity_matches=truth_identity_matches,
             ),
             *truth_sources,
-            self._reconciliation_source(receipt, account_id=account_id, epoch=epoch, now_ms=now_ms),
+            reconciliation_source,
             self._safety_source(
                 safety,
                 safety_source,
@@ -618,6 +636,14 @@ class AccountSafetySnapshotService:
                     ref=f"reconciliation:{receipt.receipt_id}",
                 ),
                 *tuple(receipt.evidence_refs),
+            )
+        elif source.source == "reconciliation":
+            refs = (
+                AccountReconciliationEvidenceRef(
+                    source="reconciliation_receipt",
+                    ref=f"reconciliation:{account_id}",
+                    detail=source.reason_code,
+                ),
             )
         elif source.source == "account_epoch":
             refs = (

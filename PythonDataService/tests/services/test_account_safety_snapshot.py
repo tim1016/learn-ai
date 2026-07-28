@@ -354,7 +354,10 @@ def test_snapshot_truth_that_is_fresh_but_not_proven_cannot_be_clean(tmp_path: P
     assert snapshot.reason_code == "ACCOUNT_TRUTH_NOT_PROVEN"
 
 
-@pytest.mark.parametrize(("foreign_artifact", "expected_source"), [("receipt", "reconciliation"), ("epoch", "account_epoch")])
+@pytest.mark.parametrize(
+    ("foreign_artifact", "expected_source"),
+    [("receipt", "reconciliation"), ("receipt_connected", "reconciliation"), ("epoch", "account_epoch")],
+)
 def test_snapshot_rejects_foreign_critical_artifacts(
     tmp_path: Path,
     foreign_artifact: str,
@@ -371,6 +374,13 @@ def test_snapshot_rejects_foreign_critical_artifacts(
             reconciliation.receipt_path(_ACCOUNT_ID),
             receipt.model_copy(update={"account_id": "DU7654321"}),
         )
+    elif foreign_artifact == "receipt_connected":
+        receipt = reconciliation.read_latest_receipt(_ACCOUNT_ID)
+        assert receipt is not None
+        atomic_write_pydantic_artifact(
+            reconciliation.receipt_path(_ACCOUNT_ID),
+            receipt.model_copy(update={"connected_account_id": "DU7654321"}),
+        )
     else:
         path = account_artifact_file_path(tmp_path, _ACCOUNT_ID, ACCOUNT_EPOCH_FILENAME)
         epoch = read_pydantic_artifact(path, AccountEpochState)
@@ -383,6 +393,10 @@ def test_snapshot_rejects_foreign_critical_artifacts(
     assert source.epoch_relation == "MISMATCH"
     assert snapshot.verdict == "UNAVAILABLE"
     assert snapshot.reason_code == "CRITICAL_SAFETY_IDENTITY_MISMATCH"
+    if foreign_artifact.startswith("receipt"):
+        assert snapshot.reconciliation_id is None
+        assert source.reconciliation_id is None
+        assert all("receipt-" not in ref.ref for ref in snapshot.evidence_refs)
 
 
 @pytest.mark.parametrize(
