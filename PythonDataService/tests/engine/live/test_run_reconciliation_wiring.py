@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -45,6 +46,7 @@ from app.engine.live.reconciliation_classifier import (
 )
 from app.engine.live.reconciliation_orchestrator import reconcile
 from app.engine.live.run import (
+    _account_durable_intents_from_clerk_journal,
     _build_broker_snapshot_from_ibkr,
     _build_owned_position_quantities_provider,
     _resolve_prior_run_dir,
@@ -65,6 +67,37 @@ def test_owned_position_provider_is_empty_without_an_account_identity(tmp_path: 
     )
 
     assert provider() == {}
+
+
+def test_clerk_durable_intents_exclude_a0_only_order_refs() -> None:
+    """A broker order matching a pre-submit A0 must remain an orphan candidate."""
+
+    def entry(kind: str, order_ref: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            entry_kind=kind,
+            recorded_at_ms=10,
+            perm_id=None,
+            exec_id=None,
+            intent=SimpleNamespace(
+                account_id="DU1",
+                strategy_instance_id=SID,
+                run_id="run-1",
+                bot_order_namespace=NS,
+                intent_id=f"intent-{kind}",
+                order_ref=order_ref,
+            ),
+        )
+
+    durable = _account_durable_intents_from_clerk_journal(
+        (
+            entry("recorded", "learn-ai/inst-x/v1:a0-only"),
+            entry("custody_cancelled_before_submit", "learn-ai/inst-x/v1:cancelled-a0"),
+            entry("broker_submitting", "learn-ai/inst-x/v1:crossed-a1"),
+        ),
+        account_id="DU1",
+    )
+
+    assert [intent.order_ref for intent in durable] == ["learn-ai/inst-x/v1:crossed-a1"]
 
 
 def _open_order(

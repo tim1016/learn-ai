@@ -113,7 +113,8 @@ For each `(account_id, strategy_instance_id)`, the Clerk admits at most one
 nonterminal normal entry. The journal-derived check survives originator death
 and bot restart, and returns `CLERK_ASYNC_ENTRY_PENDING` before creating a
 second A0 row. An entry slot becomes available only after an economic terminal
-callback or an A0-only expiry before broker submission.
+callback, a durable `custody_cancelled_before_submit` cancellation, or an
+A0-only expiry before broker submission.
 
 The bot keeps a small in-memory projection of its own A0 admissions so it can
 wait for Clerk callback facts instead of assuming a broker call succeeded. It
@@ -294,6 +295,13 @@ durations or an accepted-to-effect latency when the outage drill correctly
 leaves actuation pending. The report is SHA-256 content-addressed over the
 complete semantic payload, and the verifier recomputes that digest before a
 report is trusted.
+
+An unexpected drill-runner error is a failed `UNAVAILABLE` drill, not a reason
+to discard evidence from later drills. A latency with no observed source sample
+is represented by `sample_count: 0` and null percentiles (and any unavailable
+scalar metric is null); the campaign never substitutes a synthetic zero for
+missing evidence. Its certificate is therefore `FAILED` while the report
+remains archiveable and its remaining fault boundaries remain inspectable.
 
 The browser portion is qualified separately at its own real transport boundary: the Bot
 Surface test drives the production EventSource retry path from an error through

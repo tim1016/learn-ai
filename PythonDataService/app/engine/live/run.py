@@ -1395,12 +1395,22 @@ def _try_int(value: object) -> int | None:
 
 
 def _account_durable_intents_from_clerk_journal(entries: tuple[object, ...], *, account_id: str) -> tuple[object, ...]:
-    """Project submit identity exclusively from canonical Clerk receipts."""
+    """Project only broker-crossing identity from canonical Clerk receipts."""
 
     from app.engine.live.account_classifier import AccountDurableIntent
 
     intents: dict[str, AccountDurableIntent] = {}
     for entry in entries:
+        if getattr(entry, "entry_kind", None) not in {
+            "broker_submitting",
+            "broker_uncertain",
+            "broker_acked",
+            "broker_event",
+        }:
+            # A0-only custody is durable recovery evidence, not proof that an
+            # order ref belongs to any broker-side object. Treating it as
+            # ownership could hide a later foreign order using that ref.
+            continue
         intent = getattr(entry, "intent", None)
         if intent is None or getattr(intent, "account_id", None) != account_id:
             continue
@@ -2258,7 +2268,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         command_channel=command_channel,
         start_paused=start_paused,
         desired_state_writer=_write_desired_state,
-        desired_state_reader=desired_repo.read_state,
+        desired_state_reader=desired_repo.read,
         run_id=ledger.run_id,
         strategy_key=args.strategy,
         strategy_instance_id=strategy_instance_id,

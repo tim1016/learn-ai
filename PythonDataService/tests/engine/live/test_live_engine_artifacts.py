@@ -24,6 +24,7 @@ import pytest
 from app.engine.data.trade_bar import TradeBar
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_engine import LiveEngine
+from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError
 from app.engine.live.reconcile import (
     load_python_decisions,
     load_python_executions,
@@ -472,6 +473,36 @@ async def test_live_engine_swallows_live_state_writer_exceptions(
     bars = [_bar(minute, "500", "500") for minute in range(30, 33)]
     # Must NOT raise.
     await engine.run(_OneEntryWithDecisionSnapshotStrategy(), iter_bars(bars))
+    assert call_count >= 1, "writer was never invoked"
+
+
+@pytest.mark.asyncio
+async def test_live_engine_continues_when_existing_sidecar_is_corrupt(
+    tmp_path: Path,
+) -> None:
+    """A corrupt sidecar is a recovery concern, not a reason to crash the bar loop."""
+    call_count = 0
+    corrupt_path = tmp_path / "live_state.json"
+
+    def corrupt_writer(_portfolio: object, _bar_close_ms: int) -> None:
+        nonlocal call_count
+        call_count += 1
+        raise LiveStateSidecarCorruptError(corrupt_path, ValueError("invalid JSON"))
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        live_state_writer=corrupt_writer,
+    )
+
+    await engine.run(
+        _OneEntryWithDecisionSnapshotStrategy(),
+        iter_bars([_bar(minute, "500", "500") for minute in range(30, 33)]),
+    )
+
     assert call_count >= 1, "writer was never invoked"
 
 

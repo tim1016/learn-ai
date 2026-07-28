@@ -28,6 +28,7 @@ from app.engine.live.account_artifacts import (
     read_account_events,
     read_account_events_tolerant,
     read_account_freeze,
+    read_account_recovery_clearance,
     read_legacy_account_events,
     repair_account_event_sequence,
     require_active_account_clerk_generation,
@@ -647,6 +648,95 @@ def test_account_freeze_clears_after_clean_recovery_proof(tmp_path: Path) -> Non
     assert events[-1]["cleared_source"] == "account_recovery_proof"
     assert [event["seq"] for event in events] == [1, 2, 3]
     assert events[-1]["ts_ms"] == 1_700_000_010_000
+
+
+def test_account_freeze_clear_returns_committed_state_when_history_mirror_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU123456",
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    proof = AccountRecoveryProof(
+        account_id="DU123456",
+        recovery_id="recovery-mirror-failure",
+        requested_action="emergency_flatten",
+        requested_by="operator",
+        broker_evidence={"positions": [], "open_orders": []},
+        reconciliation_result="clean",
+        final_gate_result=GateResult(
+            gate_id="account.classifier",
+            status="pass",
+            source="account_classifier",
+            operator_reason="ACCOUNT_STATE_MATCHES_REGISTRY",
+            operator_next_step="GATE_PASSING",
+            evidence_at_ms=1_700_000_010_000,
+        ),
+        recorded_at_ms=1_700_000_010_000,
+    )
+
+    def fail_history_mirror(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("operator history disk unavailable")
+
+    monkeypatch.setattr(account_artifacts, "_append_account_event", fail_history_mirror)
+
+    clear_account_freeze(tmp_path, recovery_proof=proof)
+
+    assert read_account_freeze(tmp_path, "DU123456") is None
+
+
+def test_account_freeze_write_failure_does_not_record_restart_clearance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU123456",
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    proof = AccountRecoveryProof(
+        account_id="DU123456",
+        recovery_id="recovery-write-failure",
+        requested_action="emergency_flatten",
+        requested_by="operator",
+        broker_evidence={"positions": [], "open_orders": []},
+        reconciliation_result="clean",
+        final_gate_result=GateResult(
+            gate_id="account.classifier",
+            status="pass",
+            source="account_classifier",
+            operator_reason="ACCOUNT_STATE_MATCHES_REGISTRY",
+            operator_next_step="GATE_PASSING",
+            evidence_at_ms=1_700_000_010_000,
+        ),
+        recorded_at_ms=1_700_000_010_000,
+    )
+    original_write = account_artifacts._atomic_write_json_locked
+
+    def fail_freeze_write(path: Path, payload: dict) -> None:
+        if path.name == account_artifacts.ACCOUNT_FREEZE_FILENAME:
+            raise OSError("freeze artifact disk unavailable")
+        original_write(path, payload)
+
+    monkeypatch.setattr(account_artifacts, "_atomic_write_json_locked", fail_freeze_write)
+
+    with pytest.raises(OSError, match="freeze artifact disk unavailable"):
+        clear_account_freeze(tmp_path, recovery_proof=proof)
+
+    assert read_account_recovery_clearance(tmp_path, "DU123456") is None
+    assert read_account_freeze(tmp_path, "DU123456") is not None
 
 
 def test_account_freeze_clear_requires_recovery_proof_or_audited_override(tmp_path: Path) -> None:

@@ -465,7 +465,7 @@ export class BotControlPageComponent {
       });
       this.surface.establishPending(response);
       this.lifecycleIntentNotice.set({
-        title: `Intent accepted: ${response.durable.state}.`,
+        title: `Intent accepted: ${formatReceiptLabel(response.durable.state)}.`,
         detail: response.actuation.detail,
       });
     } catch (err) {
@@ -491,7 +491,7 @@ export class BotControlPageComponent {
       });
       this.surface.establishPending(response);
       this.lifecycleIntentNotice.set({
-        title: `Intent accepted: ${response.durable.state}.`,
+        title: `Intent accepted: ${formatReceiptLabel(response.durable.state)}.`,
         detail: response.actuation.detail,
       });
     } catch (err) {
@@ -876,7 +876,7 @@ export class BotControlPageComponent {
       });
       this.surface.establishPending(response);
       this.lifecycleIntentNotice.set({
-        title: `Intent accepted: ${response.durable.state}.`,
+        title: `Intent accepted: ${formatReceiptLabel(response.durable.state)}.`,
         detail: response.actuation.detail,
       });
     } catch (err) {

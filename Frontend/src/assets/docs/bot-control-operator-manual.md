@@ -608,7 +608,7 @@ reported path to the platform owner and retry only after a clean preflight.
 **12.10 Emergency flatten is blunt and account-wide.** It market-closes *every* position
 and is suppressed when an exact per-namespace recovery candidate exists. Prefer the
 surgical **snapshot-bound recovery Flatten** when a candidate is offered. Both are
-paper-only and must be submitted from the Account Safety action panel: the server validates
+operator-confirmed broker actions and must be submitted from the Account Safety action panel: the server validates
 the signed action, typed `FLATTEN` confirmation, current proof, and post-action reconciliation
 before it reports any position or account flat.
 

@@ -26,7 +26,7 @@ from app.engine.live.account_registry import bot_order_namespace_for_instance
 from app.engine.live.clock_out import clock_out_is_in_progress, read_clock_out_receipt
 from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
-from app.engine.live.desired_state import DesiredState
+from app.engine.live.desired_state import DesiredState, DesiredStateRecord
 from app.engine.live.engine_runtime import CommandLoopBlock
 from app.engine.live.halt import PoisonedHaltTrigger, read_poisoned_flag
 from app.engine.live.live_engine import LiveEngine
@@ -262,6 +262,83 @@ async def test_stale_resume_command_is_acked_without_overwriting_newer_pause_int
         "reason_code": "DURABLE_INTENT_SUPERSEDED",
         "effect": "RESUME skipped because durable intent is PAUSED",
     }
+
+
+@pytest.mark.asyncio
+async def test_stopped_durable_intent_acks_pending_stop_before_exiting() -> None:
+    """A recovered STOP command remains auditable even after its durable intent wins.
+
+    The command might survive a process crash between persisting STOPPED and
+    writing the acknowledgement.  The restarted poll loop must write that ack
+    before it observes the durable shutdown and exits.
+    """
+
+    class _QueuedStopChannel:
+        def __init__(self) -> None:
+            self.acked = asyncio.Event()
+            self.outcome: dict | None = None
+
+        def read_pending(self) -> list[Command]:
+            return [] if self.acked.is_set() else [Command(seq=1, verb=CommandVerb.STOP)]
+
+        def ack(self, _command: Command, *, outcome: dict) -> None:
+            self.outcome = outcome
+            self.acked.set()
+
+    channel = _QueuedStopChannel()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        command_channel=channel,  # type: ignore[arg-type]
+        desired_state_reader=lambda: DesiredState.STOPPED,
+        desired_state_writer=lambda _state, _reason: None,
+    )
+    shutdown_event = asyncio.Event()
+
+    await asyncio.wait_for(engine._command_poll_loop(shutdown_event), timeout=0.2)  # type: ignore[attr-defined]
+
+    assert channel.acked.is_set()
+    assert channel.outcome == {"status": "success", "effect": "shutdown_signalled"}
+    assert shutdown_event.is_set()
+
+
+def test_outage_time_end_day_marker_queues_audited_clock_out(tmp_path: Path) -> None:
+    """A durable end-day request must become a run-local CLOCK_OUT after recovery."""
+    channel = CommandChannel(tmp_path / "commands")
+    end_day = DesiredStateRecord(
+        desired_state=DesiredState.PAUSED,
+        updated_at_ms=1_784_000_000_000,
+        updated_by="operator",
+        reason="end-day-now",
+        end_day_requested=True,
+    )
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        command_channel=channel,
+        desired_state_reader=lambda: end_day,
+        desired_state_writer=lambda _state, _reason: None,
+        run_id="run-end-day",
+        strategy_instance_id="bot-end-day",
+    )
+
+    engine._apply_durable_desired_state(asyncio.Event())
+
+    [command] = channel.read_pending()
+    assert command.verb is CommandVerb.CLOCK_OUT
+    assert engine._dispatch_command(
+        command,
+        asyncio.Event(),
+        durable_state=DesiredState.PAUSED,
+    ) == {
+        "status": "accepted",
+        "effect": "clock_out_queued",
+    }
+    assert engine._paused is True
+    assert engine._end_day_intent_active is True
 
 
 @pytest.mark.parametrize(

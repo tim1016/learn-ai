@@ -206,10 +206,12 @@ async def test_abandoned_claim_is_returned_as_unknown_before_a_missing_presentat
             invoke=crash_after_claim,
         )
 
-    missing = SimpleNamespace(actions=(), snapshot_id="d" * 64, snapshot_version="d" * 64)
+    def current_presentation_must_not_be_read_for_an_abandoned_claim(**_kwargs: object) -> object:
+        raise AssertionError("the abandoned claim must settle before a current-presentation lookup")
+
     app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: object()
     app.dependency_overrides[account_reconciliation.get_account_safety_snapshot_service] = lambda: SimpleNamespace(
-        snapshot=lambda **_kwargs: missing
+        snapshot=current_presentation_must_not_be_read_for_an_abandoned_claim
     )
     app.dependency_overrides[account_reconciliation.get_presented_recovery_action_service] = (
         lambda: action_service

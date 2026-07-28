@@ -26,6 +26,7 @@ from app.services.legacy_stale_claim_retirement import (
     LEGACY_STALE_CLAIM_RETIRED_EVENT,
     LegacyStaleClaimRetirementError,
     LegacyStaleClaimRetirementService,
+    _record_retired_claim_receipt,
     retired_legacy_claim_keys,
 )
 
@@ -262,6 +263,39 @@ async def test_retire_records_receipt_and_excludes_only_retired_legacy_claim(tmp
     assert event["receipt_id"] == receipt.receipt_id
     assert event["ts_ms"] == _NOW_MS
     assert collect_fleet_position_explanations(tmp_path / "live_runs") == {}
+
+
+async def test_retire_allows_a_claim_that_differs_from_a_prior_receipt_only_by_namespace(
+    tmp_path: Path,
+) -> None:
+    _seed_claim(tmp_path)
+    assert _record_retired_claim_receipt(
+        tmp_path,
+        LegacyStaleClaimRetirementReceipt(
+            receipt_id="legacy-retirement-other-namespace",
+            account_id=_ACCOUNT_ID,
+            strategy_instance_id=_SID,
+            run_id=_RUN_ID,
+            bot_order_namespace="learn-ai/other-namespace/v1",
+            symbol="SPY",
+            claimed_quantity=1,
+            requested_by="test.operator",
+            retired_at_ms=_NOW_MS - 1,
+        ),
+    )
+    service = LegacyStaleClaimRetirementService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
+
+    receipt = await service.retire(
+        account_id=_ACCOUNT_ID,
+        strategy_instance_id=_SID,
+        run_id=_RUN_ID,
+        symbol="SPY",
+        requested_by="test.operator",
+        account_truth=_truth(),
+        fetch_run_process=_dead_process,
+    )
+
+    assert receipt.bot_order_namespace == _NAMESPACE
 
 
 async def test_retire_rejects_a_concurrent_duplicate_receipt(tmp_path: Path) -> None:

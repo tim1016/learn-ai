@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -227,7 +227,10 @@ def controlled_clerk_boundary_hooks(
     *,
     clock: DeterministicClock,
     controls: DeterministicFaultControls,
-    before_a1_dispatch: Callable[[AccountOwnerSubmitIntent, Literal["entry", "risk_reducing"]], None] | None = None,
+    before_a1_dispatch: Callable[
+        [AccountOwnerSubmitIntent, Literal["entry", "risk_reducing"]],
+        Awaitable[None],
+    ] | None = None,
 ) -> AccountClerkAsyncCustodyBoundaryHooks:
     """Put each campaign delay at its actual Clerk durability boundary."""
 
@@ -239,7 +242,7 @@ def controlled_clerk_boundary_hooks(
 
     async def before_a1(intent: AccountOwnerSubmitIntent, lane: Literal["entry", "risk_reducing"]) -> None:
         if before_a1_dispatch is not None:
-            before_a1_dispatch(intent, lane)
+            await before_a1_dispatch(intent, lane)
         clock.advance(controls.qualification_delay_ms)
 
     return AccountClerkAsyncCustodyBoundaryHooks(
@@ -301,7 +304,9 @@ async def real_clerk_trace(
             await clerk.submit_async_custody(intent, clerk_request_received_at_ms=request_at_ms)
             status = None
             entries = ()
-            for _ in range(200):
+            reached_expected_state = False
+            deadline = asyncio.get_running_loop().time() + 2.0
+            while asyncio.get_running_loop().time() < deadline:
                 status = await clerk.async_custody_status(intent)
                 entries = read_account_clerk_journal(artifacts_root, account_id)
                 if (
@@ -312,10 +317,11 @@ async def real_clerk_trace(
                         or any(entry.entry_kind == "broker_acked" for entry in entries)
                     )
                 ):
+                    reached_expected_state = True
                     break
-                await asyncio.sleep(0.01)
-            if status is None:
-                raise AssertionError("real Clerk did not expose a custody status")
+                await asyncio.sleep(0.001)
+            if not reached_expected_state:
+                raise AssertionError("real Clerk did not reach its expected custody status")
             recorded = next(entry for entry in entries if entry.entry_kind == "recorded")
             if (
                 recorded.clerk_request_received_at_ms is None
@@ -366,19 +372,22 @@ async def real_eight_bot_trace(controls: DeterministicFaultControls) -> RealFlee
         )
         broker.callback_handler = clerk.record_broker_event
         requests: dict[str, int] = {}
+        queue_high_water = 0
         await clerk.start_async_custody()
         try:
             for index, bot_id in enumerate(bot_ids, start=1):
                 intent = qualification_intent(account_id, bot_id, f"fleet-{index}", clock.now_ms())
                 requests[intent.intent_id] = clock.now_ms()
                 await clerk.submit_async_custody(intent, clerk_request_received_at_ms=requests[intent.intent_id])
-                for _ in range(200):
+                deadline = asyncio.get_running_loop().time() + 2.0
+                while asyncio.get_running_loop().time() < deadline:
                     status = await clerk.async_custody_status(intent)
                     if status is not None and status.lifecycle_state == "uncertain_requires_reconciliation":
                         break
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.001)
                 else:
                     raise AssertionError(f"fleet intent {intent.intent_id} did not become outcome-unknown")
+                queue_high_water = max(queue_high_water, (await clerk.async_custody_health()).entry_depth)
             overflow = qualification_intent(account_id, "bot-overflow", "fleet-overflow", clock.now_ms())
             try:
                 await clerk.submit_async_custody(overflow, clerk_request_received_at_ms=clock.now_ms())
@@ -401,13 +410,12 @@ async def real_eight_bot_trace(controls: DeterministicFaultControls) -> RealFlee
                 (entry.inbox_fsynced_at_ms or 0) - (entry.clerk_intake_admitted_at_ms or 0)
                 for entry in recorded
             )
-            health = await clerk.async_custody_health()
             return RealFleetTrace(
                 receipts=journal_receipts(artifacts_root, account_id),
                 queue_wait_samples_ms=queue_wait_samples,
                 fsync_samples_ms=fsync_samples,
                 entry_broker_call_count=entry_broker_call_count,
-                queue_high_water=health.entry_depth,
+                queue_high_water=queue_high_water,
                 queue_refusal_count=queue_refusal_count,
             )
         finally:

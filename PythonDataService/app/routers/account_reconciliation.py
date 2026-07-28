@@ -851,13 +851,17 @@ async def execute_presented_recovery_action_endpoint(
         prior_result = None
     if prior_result is not None:
         return _presented_action_response(prior_result)
-    current_snapshot = snapshot_service.snapshot(account_id=canonical_account_id)
     if replay_error is not None:
+        current_snapshot = snapshot_service.snapshot(account_id=canonical_account_id)
         raise _presented_action_rejection_http_error(
             reason_code=replay_error.reason_code,
             message=replay_error.message,
             snapshot=current_snapshot,
         ) from replay_error
+    pending_result = action_service.settle_pending_without_current_presentation(request)
+    if pending_result is not None:
+        return _presented_action_response(pending_result)
+    current_snapshot = snapshot_service.snapshot(account_id=canonical_account_id)
     action = next(
         (
             candidate
@@ -867,9 +871,6 @@ async def execute_presented_recovery_action_endpoint(
         None,
     )
     if action is None:
-        pending_result = action_service.settle_pending_without_current_presentation(request)
-        if pending_result is not None:
-            return _presented_action_response(pending_result)
         raise _presented_action_rejection_http_error(
             reason_code="ACTION_NOT_PRESENTED",
             message="This action is no longer presented for current account safety evidence.",

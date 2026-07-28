@@ -65,7 +65,11 @@ from app.engine.live.broker_callbacks import (
 from app.engine.live.broker_callbacks import (
     broker_callbacks_wal_path as default_broker_callbacks_wal_path,
 )
-from app.engine.live.clock_out import ClockOutReceipt, write_clock_out_receipt
+from app.engine.live.clock_out import (
+    ClockOutReceipt,
+    clock_out_is_in_progress,
+    write_clock_out_receipt,
+)
 from app.engine.live.command_channel import (
     Command,
     CommandChannel,
@@ -73,7 +77,11 @@ from app.engine.live.command_channel import (
     CommandVerb,
 )
 from app.engine.live.config import LiveConfig
-from app.engine.live.desired_state import DesiredState, DesiredStateCorruptError
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRecord,
+)
 from app.engine.live.halt import (
     FatalHaltError,
     PoisonedHaltReason,
@@ -91,6 +99,7 @@ from app.engine.live.live_portfolio import (
     LivePortfolio,
     TransientAccountFreezePauseError,
 )
+from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError
 from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_live_readiness_emission
 from app.engine.live.readiness_sidecar import write_readiness
@@ -503,7 +512,7 @@ class LiveEngine:
         # This is the recovery path when the data plane cannot reach the host
         # daemon to enqueue a per-run command, but the shared artifact store
         # remains available to the running engine.
-        desired_state_reader: Callable[[], DesiredState] | None = None,
+        desired_state_reader: Callable[[], DesiredState | DesiredStateRecord] | None = None,
         # NEW: decision-row provenance (PRD-A §16.1 Resolution 5). Threaded
         # from run.py off the ledger + resolved spec. ``decision_columns``
         # is the resolved parquet schema (core + spec.decision_columns);
@@ -654,6 +663,7 @@ class LiveEngine:
         self._command_channel = command_channel
         self._desired_state_writer = desired_state_writer
         self._desired_state_reader = desired_state_reader
+        self._end_day_intent_active = False
         # PAUSE drops new orders the strategy queues each bar; RESUME
         # restores normal submission. STOP / MARK_POISONED set the
         # bar loop's shutdown_event so the existing graceful path runs.
@@ -2179,7 +2189,7 @@ class LiveEngine:
             return
         try:
             self._live_state_writer(portfolio, bar_close_ms)
-        except (DesiredStateCorruptError, OSError):
+        except (DesiredStateCorruptError, LiveStateSidecarCorruptError, OSError):
             logger.exception("live-state sidecar write failed; continuing")
 
     @staticmethod
@@ -2410,9 +2420,6 @@ class LiveEngine:
             # cadence is owned by ``broker_probe_task`` so the two
             # heartbeats don't share a fate.
             await self._publish_command_loop_block()
-            self._apply_durable_desired_state(shutdown_event)
-            if shutdown_event.is_set():
-                return
             try:
                 pending = self._command_channel.read_pending()
             except CommandChannelCorruptError:
@@ -2443,10 +2450,14 @@ class LiveEngine:
                         cmd.seq,
                         cmd.verb.value,
                     )
+            if not pending:
+                self._apply_durable_desired_state(shutdown_event)
             # Mark successful completion of the command-channel critical
             # section too. A slow read/ack pass means the loop is alive but
             # would otherwise look stale until the next cycle starts.
             await self._publish_command_loop_block()
+            if shutdown_event.is_set():
+                return
             await asyncio.sleep(1.0)
 
     def _apply_durable_desired_state(self, shutdown_event: asyncio.Event) -> DesiredState | None:
@@ -2466,18 +2477,68 @@ class LiveEngine:
         if self._desired_state_reader is None:
             return None
         try:
-            desired_state = self._desired_state_reader()
+            observed = self._desired_state_reader()
         except Exception:
             logger.exception("durable desired-state read failed; pausing new entries")
             self._paused = True
             return None
+        if isinstance(observed, DesiredStateRecord):
+            desired_state = observed.desired_state
+            self._end_day_intent_active = (
+                observed.desired_state is DesiredState.PAUSED
+                and observed.end_day_requested
+            )
+        else:
+            desired_state = observed
+            self._end_day_intent_active = False
         if desired_state is DesiredState.PAUSED:
             self._paused = True
         elif desired_state is DesiredState.RUNNING:
             self._paused = False
         elif desired_state is DesiredState.STOPPED:
             shutdown_event.set()
+        if self._end_day_intent_active:
+            self._queue_durable_end_day_clock_out()
         return desired_state
+
+    def _queue_durable_end_day_clock_out(self) -> None:
+        """Turn an outage-time end-day intent into the normal audited command.
+
+        The desired-state marker lives by strategy instance rather than by run,
+        so it survives precisely the data-plane/daemon partition that prevented
+        the API from writing a run-local command.  Once this engine can read
+        that marker it writes the same CLOCK_OUT command and receipt sequence
+        as an observed API request.  A failed clock-out leaves the marker in
+        place, allowing a bounded retry on a later poll instead of silently
+        degrading end-day into an ordinary pause.
+        """
+
+        if self._clock_out_command is not None:
+            return
+        if self._command_channel is None or self._output_dir is None:
+            logger.error(
+                "durable end-day intent cannot enqueue clock-out without run command artifacts",
+                extra={"run_id": self._run_id, "strategy_instance_id": self._strategy_instance_id},
+            )
+            return
+        try:
+            if clock_out_is_in_progress(self._output_dir):
+                return
+            command = self._command_channel.write_from_operator(CommandVerb.CLOCK_OUT)
+        except OSError:
+            logger.exception(
+                "durable end-day intent could not enqueue clock-out; will retry",
+                extra={"run_id": self._run_id, "strategy_instance_id": self._strategy_instance_id},
+            )
+            return
+        logger.info(
+            "durable end-day intent queued clock-out",
+            extra={
+                "run_id": self._run_id,
+                "strategy_instance_id": self._strategy_instance_id,
+                "command_seq": command.seq,
+            },
+        )
 
     def _dispatch_command(
         self,
@@ -2552,10 +2613,11 @@ class LiveEngine:
             if cmd.verb is CommandVerb.CLOCK_OUT:
                 if self._clock_out_command is not None:
                     return {"status": "already_running", "effect": "clock_out_in_progress"}
-                self._persist_command_desired_state(
-                    DesiredState.PAUSED,
-                    "command_channel:CLOCK_OUT",
-                )
+                if not self._end_day_intent_active:
+                    self._persist_command_desired_state(
+                        DesiredState.PAUSED,
+                        "command_channel:CLOCK_OUT",
+                    )
                 self._paused = True
                 self._clock_out_command = cmd
                 return {"status": "accepted", "effect": "clock_out_queued"}

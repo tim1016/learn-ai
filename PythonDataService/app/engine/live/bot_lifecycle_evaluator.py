@@ -508,6 +508,7 @@ class BotLifecycleEvaluator:
         now_ms: int,
         updated_by: str,
         reason: str | None = None,
+        end_day_requested: bool = False,
         idempotency_key: str | None = None,
         operation_fence_held: bool = False,
     ) -> LifecycleDisposition:
@@ -518,6 +519,7 @@ class BotLifecycleEvaluator:
                 now_ms=now_ms,
                 updated_by=updated_by,
                 reason=reason,
+                end_day_requested=end_day_requested,
                 only_if_absent=False,
                 idempotency_key=idempotency_key,
             )
@@ -566,6 +568,7 @@ class BotLifecycleEvaluator:
         reason: str | None,
         only_if_absent: bool,
         idempotency_key: str | None,
+        end_day_requested: bool = False,
     ) -> LifecycleDisposition | None:
         with _file_lock(self._receipt_path):
             self._recover_pending_receipts_locked()
@@ -590,6 +593,7 @@ class BotLifecycleEvaluator:
                         or prior.desired_state is not state
                         or existing is None
                         or existing.desired_state is not state
+                        or existing.end_day_requested is not end_day_requested
                     ):
                         raise LifecycleTransitionRefusedError("IDEMPOTENCY_KEY_REUSED")
                     return LifecycleDisposition(
@@ -609,6 +613,7 @@ class BotLifecycleEvaluator:
                     state,
                     updated_by=updated_by,
                     reason=reason,
+                    end_day_requested=end_day_requested,
                     now_ms=now_ms,
                     disposition_id=pending.receipt_id,
                     disposition_action=action.value,

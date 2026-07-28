@@ -583,6 +583,53 @@ def test_recovered_event_stream_no_longer_blocks_requalification(tmp_path: Path)
     assert _qualification_alarm_is_active(tmp_path, account, _read_authority_state(tmp_path, account)) is False
 
 
+def test_legacy_callback_stream_down_revokes_snapshotted_journal_authority(tmp_path: Path) -> None:
+    account = "DU123456"
+    legacy_path = tmp_path / "accounts" / account / ACCOUNT_EVENTS_FILENAME
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(
+        "\n".join(
+            json.dumps(event)
+            for event in (
+                {
+                    "event_type": "account_clerk_journal_authority_requalified",
+                    "ts_ms": 1_700_000_000_000,
+                },
+                {
+                    "event_type": "account_clerk_event_stream_down",
+                    "ts_ms": 1_700_000_001_000,
+                },
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert account_journal_authority_is_active(tmp_path, account) is False
+    state = _read_authority_state(tmp_path, account)
+    assert state.event_stream_state == "down"
+    assert state.event_stream_changed_at_ms == 1_700_000_001_000
+    assert state.requalification_required_at_ms == 1_700_000_001_000
+
+
+def test_malformed_legacy_requalification_timestamp_cannot_grant_authority(tmp_path: Path) -> None:
+    account = "DU123456"
+    legacy_path = tmp_path / "accounts" / account / ACCOUNT_EVENTS_FILENAME
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "event_type": "account_clerk_journal_authority_requalified",
+                "ts_ms": "not-a-timestamp",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert account_journal_authority_is_active(tmp_path, account) is False
+
+
 def test_legacy_journal_authority_is_snapshotted_once_before_a_live_decision(tmp_path: Path) -> None:
     account = "DU123456"
     legacy_path = tmp_path / "accounts" / account / ACCOUNT_EVENTS_FILENAME

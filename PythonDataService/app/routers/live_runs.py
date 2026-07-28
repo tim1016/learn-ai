@@ -1150,12 +1150,17 @@ async def enqueue_command(run_id: str, body: EnqueueCommandRequest) -> CommandVi
         verb = CommandVerb(body.verb)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid command verb") from exc
-    if verb in {CommandVerb.PAUSE, CommandVerb.RESUME, CommandVerb.STOP}:
+    if verb in {
+        CommandVerb.PAUSE,
+        CommandVerb.RESUME,
+        CommandVerb.STOP,
+        CommandVerb.CLOCK_OUT,
+    }:
         raise HTTPException(
             status.HTTP_410_GONE,
             detail={
                 "reason_code": "DURABLE_INTENT_ENDPOINT_REQUIRED",
-                "message": "Use the instance desired-state control for Pause, Resume, or Stop.",
+                "message": "Use the instance desired-state control for Pause, Resume, Stop, or Clock out.",
             },
         )
     channel = CommandChannel(run_dir / "commands")

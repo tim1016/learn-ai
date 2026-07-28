@@ -57,15 +57,23 @@ class AccountCustodyQualificationMetric(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str = Field(min_length=1, max_length=128)
-    sample_count: int = Field(ge=1)
-    p50_ms: int = Field(ge=0)
-    p95_ms: int = Field(ge=0)
-    p99_ms: int = Field(ge=0)
+    sample_count: int = Field(ge=0)
+    p50_ms: float | None = Field(default=None, ge=0)
+    p95_ms: float | None = Field(default=None, ge=0)
+    p99_ms: float | None = Field(default=None, ge=0)
     source_receipt_refs: tuple[str, ...] = Field(min_length=1, max_length=64)
     sample_trace_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def validate_quantile_order(self) -> AccountCustodyQualificationMetric:
+        percentiles = (self.p50_ms, self.p95_ms, self.p99_ms)
+        if self.sample_count == 0:
+            if any(value is not None for value in percentiles):
+                raise ValueError("an unavailable metric must not contain percentiles")
+            return self
+        if any(value is None for value in percentiles):
+            raise ValueError("an observed metric requires every percentile")
+        assert self.p50_ms is not None and self.p95_ms is not None and self.p99_ms is not None
         if not self.p50_ms <= self.p95_ms <= self.p99_ms:
             raise ValueError("latency percentiles must be nondecreasing")
         return self
@@ -77,11 +85,11 @@ class AccountCustodyQualificationMetrics(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     phase_latencies: tuple[AccountCustodyQualificationMetric, ...] = Field(min_length=1)
-    queue_high_water: int = Field(ge=0)
-    queue_refusal_count: int = Field(ge=0)
-    epoch_recovery_ms: int = Field(ge=0)
-    max_uncertain_intent_age_ms: int = Field(ge=0)
-    projection_gap_count: int = Field(ge=0)
+    queue_high_water: int | None = Field(default=None, ge=0)
+    queue_refusal_count: int | None = Field(default=None, ge=0)
+    epoch_recovery_ms: int | None = Field(default=None, ge=0)
+    max_uncertain_intent_age_ms: int | None = Field(default=None, ge=0)
+    projection_gap_count: int | None = Field(default=None, ge=0)
 
 
 class AccountCustodyQualificationCertificate(BaseModel):

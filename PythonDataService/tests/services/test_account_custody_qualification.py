@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 import pytest
 
@@ -11,12 +12,14 @@ from app.schemas.account_custody_qualification import (
     INT64_MAX,
     AccountCustodyQualificationReport,
 )
+from app.services import account_custody_qualification_drills
 from app.services.account_custody_qualification import (
     DeterministicFaultControls,
-    nearest_rank_percentile,
+    nist_r6_percentile,
     run_deterministic_account_custody_qualification,
     verify_account_custody_qualification_report,
 )
+from app.services.account_custody_qualification_drills import _producer_sequence_gap_count, _receipt_times
 from scripts.run_account_custody_qualification import main
 
 EXPECTED_DRILL_NAMES = (
@@ -40,6 +43,7 @@ EXPECTED_DRILL_NAMES = (
 )
 
 
+@pytest.mark.slow
 def test_default_campaign_covers_every_prd_drill_with_complete_receipts() -> None:
     report = run_deterministic_account_custody_qualification(
         account_id="DU1234567",
@@ -59,6 +63,19 @@ def test_default_campaign_covers_every_prd_drill_with_complete_receipts() -> Non
     assert report.metrics.queue_high_water == 8
     assert report.metrics.queue_refusal_count == 1
     assert report.metrics.projection_gap_count == 0
+    assert report.metrics.epoch_recovery_ms == 240
+    epoch_reconnect = next(drill for drill in report.drills if drill.drill_id == 11)
+    assert epoch_reconnect.final_account_verdict == "CLEAN"
+    assert "first_recovery:CLEAN" in epoch_reconnect.observed_receipts
+    assert "second_recovery:CLEAN" in epoch_reconnect.observed_receipts
+    socket_after_a0 = next(drill for drill in report.drills if drill.drill_id == 4)
+    assert any(":custody_submission_hold:" in receipt for receipt in socket_after_a0.observed_receipts)
+    assert "epoch_write_blocked:SOCKET_LOSS" in socket_after_a0.observed_receipts
+    originator_death = next(drill for drill in report.drills if drill.drill_id == 8)
+    assert "retirements_applied:1" in originator_death.observed_receipts
+    outage_control = next(drill for drill in report.drills if drill.drill_id == 14)
+    assert "pause_desired_state:PAUSED" in outage_control.observed_receipts
+    assert "stop_desired_state:STOPPED" in outage_control.observed_receipts
     retired_fill = report.drills[8]
     assert any(":broker_event:" in receipt for receipt in retired_fill.observed_receipts)
     assert "verdict:SUSPENDED" in retired_fill.observed_receipts
@@ -69,6 +86,7 @@ def test_default_campaign_covers_every_prd_drill_with_complete_receipts() -> Non
     assert report.certificate.paper_environment_status == "NOT_RUN"
 
 
+@pytest.mark.slow
 def test_campaign_fault_controls_map_to_non_overlapping_receipt_intervals() -> None:
     controls = DeterministicFaultControls(
         queue_delay_ms=41,
@@ -95,6 +113,7 @@ def test_campaign_fault_controls_map_to_non_overlapping_receipt_intervals() -> N
     }
 
 
+@pytest.mark.slow
 def test_report_hash_is_reproducible_and_rejects_semantic_tampering() -> None:
     first = run_deterministic_account_custody_qualification(
         account_id="DU1234567",
@@ -110,6 +129,7 @@ def test_report_hash_is_reproducible_and_rejects_semantic_tampering() -> None:
     assert not verify_account_custody_qualification_report(first.model_copy(update={"account_id": "DU7654321"}))
 
 
+@pytest.mark.slow
 def test_failed_deterministic_campaign_stays_unqualified_for_paper_execution() -> None:
     controls = DeterministicFaultControls(queue_delay_ms=10_001)
 
@@ -125,20 +145,91 @@ def test_failed_deterministic_campaign_stays_unqualified_for_paper_execution() -
     assert all(drill.failure_detail is not None for drill in report.drills if not drill.passed)
 
 
-def test_nearest_rank_percentiles_are_pinned() -> None:
-    values = tuple(range(1, 101))
+@pytest.mark.slow
+def test_a0_deadline_includes_inbox_fsync_after_intake_admission() -> None:
+    report = run_deterministic_account_custody_qualification(
+        account_id="DU1234567",
+        generated_at_ms=1_784_950_000_000,
+        controls=DeterministicFaultControls(queue_delay_ms=9_990, fsync_delay_ms=25),
+    )
 
-    assert nearest_rank_percentile(values, 50) == 50
-    assert nearest_rank_percentile(values, 95) == 95
-    assert nearest_rank_percentile(values, 99) == 99
+    assert report.certificate.status == "FAILED"
+    assert report.certificate.failed_drill_ids == (1,)
+
+
+@pytest.mark.slow
+def test_campaign_archives_unexpected_drill_failure_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_queue_drill(_controls: DeterministicFaultControls) -> object:
+        raise AssertionError("injected queue evidence failure")
+
+    monkeypatch.setattr(account_custody_qualification_drills, "_queue_delay_drill", fail_queue_drill)
+    report = run_deterministic_account_custody_qualification(
+        account_id="DU1234567",
+        generated_at_ms=1_784_950_000_000,
+    )
+
+    failed = next(drill for drill in report.drills if drill.drill_id == 1)
+    queue_metric = next(
+        metric
+        for metric in report.metrics.phase_latencies
+        if metric.name == "receipt_request_to_intake_admission"
+    )
+    assert report.certificate.status == "FAILED"
+    assert failed.failure_detail == "AssertionError: injected queue evidence failure"
+    assert failed.observed_receipts == ("campaign_exception:AssertionError",)
+    assert report.metrics.queue_high_water is None
+    assert report.metrics.queue_refusal_count is None
+    assert queue_metric.sample_count == 0
+    assert (queue_metric.p50_ms, queue_metric.p95_ms, queue_metric.p99_ms) == (None, None, None)
+    assert next(drill for drill in report.drills if drill.drill_id == 14).passed
+
+
+def test_nist_r6_percentiles_match_reference_examples() -> None:
+    # NIST R6 §7.2.6.2: p(N + 1) interpolation, including its published
+    # 90th-percentile wafer example and the even-length median boundary.
+    wafer_measurements_scaled = (
+        951_772,
+        951_567,
+        951_937,
+        951_959,
+        951_442,
+        950_610,
+        951_591,
+        951_195,
+        951_065,
+        951_682,
+        951_990,
+        950_925,
+    )
+
+    assert math.isclose(nist_r6_percentile((1, 2, 3, 4), 50), 2.5, abs_tol=0, rel_tol=0)
+    assert math.isclose(nist_r6_percentile(wafer_measurements_scaled, 90), 951_980.7, abs_tol=0.001, rel_tol=0)
+    assert nist_r6_percentile((1, 2, 3, 4), 95) == 4
+    assert nist_r6_percentile((1, 2, 3, 4), 99) == 4
 
 
 @pytest.mark.parametrize("values, percentile", [((), 50), ((-1,), 50), ((1,), 0), ((1,), 101)])
-def test_nearest_rank_percentile_rejects_invalid_inputs(values: tuple[int, ...], percentile: int) -> None:
+def test_nist_r6_percentile_rejects_invalid_inputs(values: tuple[int, ...], percentile: int) -> None:
     with pytest.raises(ValueError):
-        nearest_rank_percentile(values, percentile)
+        nist_r6_percentile(values, percentile)
 
 
+def test_receipt_time_decoder_requires_each_callers_named_boundaries() -> None:
+    with pytest.raises(AssertionError, match="broker_event"):
+        _receipt_times(
+            ("1:recorded:10", "2:broker_submitting:20"),
+            required=frozenset({"recorded", "broker_submitting", "broker_event"}),
+        )
+
+
+def test_producer_sequence_gap_count_is_observed_per_stream() -> None:
+    assert _producer_sequence_gap_count((1, 2, 3)) == 0
+    assert _producer_sequence_gap_count((1, 3, 3)) == 2
+
+
+@pytest.mark.slow
 def test_report_rejects_tampered_json_and_out_of_int64_timestamps() -> None:
     report = run_deterministic_account_custody_qualification(
         account_id="DU1234567",
@@ -156,6 +247,7 @@ def test_report_rejects_tampered_json_and_out_of_int64_timestamps() -> None:
         )
 
 
+@pytest.mark.slow
 def test_cli_archives_verifiable_backend_report(tmp_path, capsys) -> None:
     output = tmp_path / "qualification.json"
 

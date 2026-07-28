@@ -19,6 +19,7 @@ from app.engine.live.account_custody_topology import (
 from app.schemas.account_custody_qualification import (
     INT64_MAX,
     AccountCustodyQualificationCertificate,
+    AccountCustodyQualificationDrill,
     AccountCustodyQualificationMetric,
     AccountCustodyQualificationMetrics,
     AccountCustodyQualificationReport,
@@ -31,14 +32,14 @@ from app.services.account_custody_qualification_drills import (
 from app.services.account_custody_qualification_fixtures import DeterministicFaultControls
 
 
-def nearest_rank_percentile(values: Sequence[int], percentile: int) -> int:
-    """Return a nearest-rank latency percentile.
+def nist_r6_percentile(values: Sequence[int], percentile: int) -> float:
+    """Return the NIST R6 latency percentile.
 
-    Formula: Q_p = x_(ceil(p*n)) for sorted n nonnegative observations.
+    Formula: r = p(n + 1) = k + d; Q_p = x_[k] + d(x_[k+1] - x_[k]).
     Reference: NIST/SEMATECH e-Handbook, §7.2.6.2, Percentiles,
       https://itl.nist.gov/div898/handbook/prc/section2/prc262.htm.
     Canonical implementation: this file.
-    Validated against: tests/services/test_account_custody_qualification.py.
+    Validated against: tests/services/test_account_custody_qualification.py::test_nist_r6_percentiles_match_reference_examples.
     """
 
     if not values:
@@ -48,8 +49,16 @@ def nearest_rank_percentile(values: Sequence[int], percentile: int) -> int:
     if any(value < 0 for value in values):
         raise ValueError("latency samples must be nonnegative")
     ordered = sorted(values)
-    index = min(len(ordered) - 1, math.ceil(percentile * len(ordered) / 100) - 1)
-    return ordered[index]
+    rank = percentile * (len(ordered) + 1) / 100
+    if rank <= 1:
+        return float(ordered[0])
+    if rank >= len(ordered):
+        return float(ordered[-1])
+    lower_rank = math.floor(rank)
+    fractional = rank - lower_rank
+    lower = ordered[lower_rank - 1]
+    upper = ordered[lower_rank]
+    return lower + fractional * (upper - lower)
 
 
 def summarize_latency_samples(
@@ -64,9 +73,9 @@ def summarize_latency_samples(
         AccountCustodyQualificationMetric(
             name=name,
             sample_count=len(values),
-            p50_ms=nearest_rank_percentile(values, 50),
-            p95_ms=nearest_rank_percentile(values, 95),
-            p99_ms=nearest_rank_percentile(values, 99),
+            p50_ms=nist_r6_percentile(values, 50) if values else None,
+            p95_ms=nist_r6_percentile(values, 95) if values else None,
+            p99_ms=nist_r6_percentile(values, 99) if values else None,
             source_receipt_refs=tuple(receipt_refs.get(name, (f"deterministic-custody-metric:{name}",))),
             sample_trace_sha256=_sample_trace_sha256(values),
         )
@@ -140,14 +149,14 @@ def _metrics(campaign: CustodyQualificationCampaign) -> AccountCustodyQualificat
         ),
         queue_high_water=campaign.queue_high_water,
         queue_refusal_count=campaign.queue_refusal_count,
-        epoch_recovery_ms=max(campaign.epoch_recovery_samples_ms),
+        epoch_recovery_ms=max(campaign.epoch_recovery_samples_ms) if campaign.epoch_recovery_samples_ms else None,
         max_uncertain_intent_age_ms=campaign.max_uncertain_intent_age_ms,
         projection_gap_count=campaign.projection_gap_count,
     )
 
 
 def _certificate(
-    drills: Sequence[object],
+    drills: Sequence[AccountCustodyQualificationDrill],
 ) -> AccountCustodyQualificationCertificate:
     failed_ids = tuple(drill.drill_id for drill in drills if not drill.passed)
     if failed_ids:
@@ -167,4 +176,3 @@ def _sample_trace_sha256(values: Sequence[int]) -> str:
     """Hash the exact timing sample sequence behind one reported percentile."""
 
     return account_custody_qualification_payload_sha256({"samples_ms": list(values)})
-

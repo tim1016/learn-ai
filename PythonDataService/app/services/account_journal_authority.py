@@ -57,6 +57,7 @@ class _AccountJournalAuthorityState(BaseModel):
     account_id: str = Field(min_length=1, max_length=64)
     qualified_at_ms: int | None = Field(default=None, ge=0)
     requalification_required_at_ms: int | None = Field(default=None, ge=0)
+    legacy_cutover_requalification_pending: bool = False
     event_stream_state: str = Field(default="unknown", pattern="^(unknown|down|recovered)$")
     event_stream_changed_at_ms: int | None = Field(default=None, ge=0)
     observations: tuple[_JournalParityObservation, ...] = ()
@@ -95,6 +96,7 @@ def record_account_journal_stream_state(
                     "requalification_required_at_ms": (
                         changed_at_ms if state == "down" else current.requalification_required_at_ms
                     ),
+                    "legacy_cutover_requalification_pending": False,
                     "event_stream_state": state,
                     "event_stream_changed_at_ms": changed_at_ms,
                 }
@@ -142,10 +144,15 @@ def _observe_account_journal_parity_locked(
 ) -> None:
     """Advance a parity state while its account-local authority lock is held."""
 
-    if authority.requalification_required_at_ms == 0 and not authority.observations:
+    if authority.legacy_cutover_requalification_pending:
         _write_authority_state_locked(
             path,
-            authority.model_copy(update={"requalification_required_at_ms": now_ms}),
+            authority.model_copy(
+                update={
+                    "legacy_cutover_requalification_pending": False,
+                    "requalification_required_at_ms": now_ms,
+                }
+            ),
         )
         append_account_event(
             artifacts_root,
@@ -202,35 +209,23 @@ def _observe_account_journal_parity_locked(
         }
     )
     if active:
+        _write_authority_state_locked(path, next_authority)
+        _append_parity_event(
+            artifacts_root,
+            account_id,
+            now_ms=now_ms,
+            latest=latest,
+            state_changed=state_changed,
+            observation=observation,
+            journal=journal,
+            legacy=legacy,
+        )
         if not clean:
-            _write_authority_state_locked(path, next_authority)
-            _append_parity_event(
-                artifacts_root,
-                account_id,
-                now_ms=now_ms,
-                latest=latest,
-                state_changed=state_changed,
-                observation=observation,
-                journal=journal,
-                legacy=legacy,
-            )
             _record_post_cutover_drift(
                 artifacts_root,
                 account_id,
                 now_ms=now_ms,
                 reason="ACCOUNT_CLERK_JOURNAL_PARITY_DRIFT",
-            )
-        else:
-            _write_authority_state_locked(path, next_authority)
-            _append_parity_event(
-                artifacts_root,
-                account_id,
-                now_ms=now_ms,
-                latest=latest,
-                state_changed=state_changed,
-                observation=observation,
-                journal=journal,
-                legacy=legacy,
             )
         return
     if clean and _has_requalification_window(next_authority):
@@ -333,19 +328,39 @@ def _seed_authority_state_from_legacy(
     legacy = read_legacy_account_events(artifacts_root, account_id)
     qualified_at_ms = max(
         (
-            _legacy_event_ts_ms(event)
+            timestamp
             for event in legacy
             if event.get("event_type") == REQUALIFIED_EVENT_TYPE
+            and (timestamp := _legacy_event_ts_ms(event)) is not None
         ),
         default=None,
     )
+    stream_transitions = [
+        (
+            timestamp,
+            index,
+            "down" if event.get("event_type") == EVENT_STREAM_DOWN_EVENT_TYPE else "recovered",
+        )
+        for index, event in enumerate(legacy)
+        if event.get("event_type") in {EVENT_STREAM_DOWN_EVENT_TYPE, EVENT_STREAM_RECOVERED_EVENT_TYPE}
+        and (timestamp := _legacy_event_ts_ms(event)) is not None
+    ]
+    latest_stream_transition = max(stream_transitions, default=None, key=lambda transition: transition[:2])
     has_cutover = any(event.get("event_type") == LEGACY_CUTOVER_EVENT_TYPE for event in legacy)
-    if has_cutover and qualified_at_ms is None:
+    if latest_stream_transition is not None and latest_stream_transition[2] == "down":
         return _AccountJournalAuthorityState(
             account_id=account_id,
-            requalification_required_at_ms=0,
+            requalification_required_at_ms=latest_stream_transition[0],
+            event_stream_state="down",
+            event_stream_changed_at_ms=latest_stream_transition[0],
         )
-    return _AccountJournalAuthorityState(account_id=account_id, qualified_at_ms=qualified_at_ms)
+    return _AccountJournalAuthorityState(
+        account_id=account_id,
+        qualified_at_ms=qualified_at_ms,
+        legacy_cutover_requalification_pending=has_cutover and qualified_at_ms is None,
+        event_stream_state="unknown" if latest_stream_transition is None else latest_stream_transition[2],
+        event_stream_changed_at_ms=None if latest_stream_transition is None else latest_stream_transition[0],
+    )
 
 
 def _read_or_migrate_authority_state(
@@ -365,7 +380,17 @@ def _read_or_migrate_authority_state_locked(
     path: Path,
 ) -> _AccountJournalAuthorityState:
     if path.exists():
-        return _read_authority_state(artifacts_root, account_id)
+        state = _read_authority_state(artifacts_root, account_id)
+        if state.qualified_at_ms == 0 or state.requalification_required_at_ms == 0:
+            state = state.model_copy(
+                update={
+                    "qualified_at_ms": None,
+                    "requalification_required_at_ms": None,
+                    "legacy_cutover_requalification_pending": True,
+                }
+            )
+            _write_authority_state_locked(path, state)
+        return state
     state = _seed_authority_state_from_legacy(artifacts_root, account_id)
     _write_authority_state_locked(path, state)
     return state
@@ -383,9 +408,9 @@ def _write_authority_state_locked(path: Path, state: _AccountJournalAuthoritySta
     atomic_write_pydantic_artifact(path, state)
 
 
-def _legacy_event_ts_ms(event: dict) -> int:
+def _legacy_event_ts_ms(event: dict) -> int | None:
     value = event.get("ts_ms")
-    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
 def _parity_fingerprint(*, journal: dict[str, dict[str, int]], legacy: dict[str, dict[str, int]]) -> str:

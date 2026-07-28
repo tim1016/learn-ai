@@ -4379,6 +4379,46 @@ async def test_set_desired_state_actuates_live_binding(app_with_root, monkeypatc
     assert len(queued) == 1
 
 
+async def test_set_desired_state_records_lifecycle_refusal_without_outcome_unknown(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A known local refusal is a 409, never an ambiguous dispatch outcome."""
+    from app.engine.live.bot_lifecycle_evaluator import LifecycleTransitionRefusedError
+    from app.services import risk_reducing_lifecycle_intent
+
+    app, root = app_with_root
+    _write_ledger(root, "run-refused-pause", "spy_ema_paper", 100)
+
+    def refuse(*_args: object, **_kwargs: object) -> object:
+        raise LifecycleTransitionRefusedError("LIFECYCLE_TRANSITION_UNRESOLVED")
+
+    monkeypatch.setattr(
+        risk_reducing_lifecycle_intent.BotLifecycleEvaluator,
+        "set_desired_state",
+        refuse,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "pause", "updated_by": "operator", "reason": "risk"},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "LIFECYCLE_TRANSITION_REFUSED"
+    assert detail["refusal_code"] == "LIFECYCLE_TRANSITION_UNRESOLVED"
+    assert detail["mutation_dispatch_state"] == "EFFECT_NOT_OBSERVED"
+    attempt = MutationAttemptRepo(root.parent / "mutation_attempts").read(detail["mutation_attempt_id"])
+    assert attempt is not None
+    assert attempt.dispatch_state == "EFFECT_NOT_OBSERVED"
+    assert attempt.outcome == {
+        "reason_code": "LIFECYCLE_TRANSITION_REFUSED",
+        "refusal_code": "LIFECYCLE_TRANSITION_UNRESOLVED",
+    }
+
+
 async def test_flatten_and_pause_returns_durable_attempt_receipt(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -6655,6 +6695,7 @@ async def test_end_day_now_persists_paused_intent_when_daemon_cannot_be_observed
     assert body["stop_outcome"] == "durable_intent_pending"
     durable = DesiredStateRepo(stable_desired_state_path(root.parent, "spy_ema_paper")).read()
     assert durable is not None and durable.desired_state is DesiredState.PAUSED
+    assert durable.end_day_requested is True
 
 
 async def test_lifecycle_roster_updates_daily_projection(

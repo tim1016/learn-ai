@@ -61,6 +61,7 @@ async def persist_end_day_intent(
         DesiredState.PAUSED,
         updated_by="operator",
         reason="end-day-now",
+        end_day_requested=True,
         now_ms=now_ms(),
         idempotency_key=idempotency_key,
     )

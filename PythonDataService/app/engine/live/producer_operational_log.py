@@ -155,7 +155,12 @@ def append_producer_operational_event(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     with advisory_file_lock(path):
-        existing = _read_records_from_path(path, expected_account_id=account_id)
+        existing = _read_records_from_path(
+            path,
+            expected_account_id=account_id,
+            expected_producer=producer,
+            expected_producer_boot_id=boot_id,
+        )
         replay = next((record for record in existing if record.idempotency_key == idempotency_key), None)
         if replay is not None:
             _assert_replay_matches(
@@ -363,7 +368,14 @@ def read_producer_operational_events(
                 continue
             if path.is_symlink() or not path.is_file() or path.suffix != ".jsonl":
                 raise ProducerOperationalLogError("producer operational log has an invalid file entry")
-            records.extend(_read_records_from_path(path, expected_account_id=account_id))
+            records.extend(
+                _read_records_from_path(
+                    path,
+                    expected_account_id=account_id,
+                    expected_producer=producer_path.name,
+                    expected_producer_boot_id=path.stem,
+                )
+            )
     return tuple(sorted(records, key=_record_sort_key))
 
 
@@ -448,6 +460,8 @@ def _read_records_from_path(
     path: Path,
     *,
     expected_account_id: str,
+    expected_producer: str,
+    expected_producer_boot_id: str,
 ) -> list[ProducerOperationalLogRecord]:
     if not path.exists():
         return []
@@ -470,6 +484,14 @@ def _read_records_from_path(
         if record.account_id != expected_account_id:
             raise ProducerOperationalLogError(
                 f"producer operational row {line_no} belongs to another account"
+            )
+        if record.producer != expected_producer:
+            raise ProducerOperationalLogError(
+                f"producer operational row {line_no} disagrees with its producer log path"
+            )
+        if record.producer_boot_id != expected_producer_boot_id:
+            raise ProducerOperationalLogError(
+                f"producer operational row {line_no} disagrees with its producer boot log path"
             )
         if record.producer_seq != expected_seq:
             raise ProducerOperationalLogError(

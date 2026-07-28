@@ -450,6 +450,7 @@ class AccountOwner:
             intent,
             diagnostics,
             reason="OWNER_GENERATION_STALE_AT_BROKER_WRITE",
+            clear_prepared_submission=True,
         )
 
         try:
@@ -470,6 +471,7 @@ class AccountOwner:
                     "current_owner_generation": exc.current_owner_generation,
                     "grant_owner_generation": exc.grant_owner_generation,
                 },
+                clear_prepared_submission=True,
             )
         except Exception as exc:
             reason = f"BROKER_SUBMIT_UNCERTAIN:{type(exc).__name__}"
@@ -480,7 +482,6 @@ class AccountOwner:
                 "diagnostics": diagnostics,
             }
             append_account_event(self._artifacts_root, intent.account_id, payload)
-            self._clear_prepared_submission(order_ref=intent.order_ref)
             return self._result(intent, "uncertain", reason=reason, diagnostics=diagnostics)
 
         terminal_diagnostics = diagnostics | {
@@ -512,6 +513,8 @@ class AccountOwner:
         intent: AccountOwnerSubmitIntent,
         reason: str,
         diagnostics: dict,
+        *,
+        clear_prepared_submission: bool = False,
     ) -> None:
         append_account_event(
             self._artifacts_root,
@@ -523,7 +526,8 @@ class AccountOwner:
                 "diagnostics": diagnostics,
             },
         )
-        self._clear_prepared_submission(order_ref=intent.order_ref)
+        if clear_prepared_submission:
+            self._clear_prepared_submission(order_ref=intent.order_ref)
         raise AccountOwnerSubmitRejected(reason=reason, diagnostics=diagnostics)
 
     def _ensure_current_generation(
@@ -532,6 +536,7 @@ class AccountOwner:
         diagnostics: dict,
         *,
         reason: str,
+        clear_prepared_submission: bool = False,
     ) -> None:
         current_generation = self._current_owner_generation_provider()
         if intent.owner_generation != current_generation:
@@ -539,6 +544,7 @@ class AccountOwner:
                 intent,
                 reason,
                 diagnostics | {"current_owner_generation": current_generation},
+                clear_prepared_submission=clear_prepared_submission,
             )
 
     def _diagnostics(self, intent: AccountOwnerSubmitIntent) -> dict:

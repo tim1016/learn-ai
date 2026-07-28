@@ -815,6 +815,50 @@ def test_wrong_account_invalidation_fails_closed_without_changing_reconciliation
     assert service.read_latest_receipt("DU1234567") == original
 
 
+def test_legacy_reconciliation_invalidation_migrates_before_freeze_clear(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="test.freeze",
+            source="test",
+            recorded_at_ms=1_780_000_001_000,
+            operator_next_step="RECONCILE",
+        ),
+    )
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    legacy_path = account_artifacts_root(tmp_path, "DU1234567") / "account_events.jsonl"
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "event_type": "account_reconciliation_invalidated",
+                "account_id": "DU1234567",
+                "execution_ids": ["legacy-exec-1"],
+                "recorded_at_ms": 1_780_000_003_000,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AccountArtifactError, match="predates newly observed broker execution"):
+        service.clear_freeze_from_latest_receipt(
+            account_id="DU1234567",
+            requested_by="test.operator",
+            now_ms=1_780_000_004_000,
+        )
+
+    migrated = json.loads(service.invalidation_path("DU1234567").read_text(encoding="utf-8"))
+    assert migrated["recorded_at_ms"] == 1_780_000_003_000
+    assert migrated["execution_ids"] == ["legacy-exec-1"]
+    assert read_account_freeze(tmp_path, "DU1234567") is not None
+
+
 def test_wrong_account_receipt_cannot_clear_a_frozen_account(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
     receipt = service.write_receipt(

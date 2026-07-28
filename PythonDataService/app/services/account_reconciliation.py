@@ -24,6 +24,7 @@ from app.engine.live.account_artifacts import (
     clear_account_freeze,
     read_account_freeze,
     read_active_accepting_account_clerk_generation,
+    read_legacy_account_events,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_observation_lease import (
@@ -163,6 +164,27 @@ class AccountReconciliationService:
         self,
         account_id: str,
     ) -> _AccountReconciliationInvalidationArtifact | None:
+        existing = self._read_invalidation_artifact_unmigrated(account_id)
+        if existing is not None:
+            return existing
+        legacy = self._legacy_receipt_invalidation(account_id)
+        if legacy is None:
+            return None
+        path = self.invalidation_path(account_id)
+        lock_target = path.with_suffix(path.suffix + ".lock")
+        with advisory_file_lock(lock_target):
+            current = self._read_invalidation_artifact_unmigrated(account_id)
+            if current is not None:
+                return current
+            atomic_write_pydantic_artifact(path, legacy)
+            return legacy
+
+    def _read_invalidation_artifact_unmigrated(
+        self,
+        account_id: str,
+    ) -> _AccountReconciliationInvalidationArtifact | None:
+        """Read only the typed artifact while its migration lock may be held."""
+
         path = self.invalidation_path(account_id)
         if not path.exists():
             return None
@@ -175,6 +197,41 @@ class AccountReconciliationService:
         if artifact.account_id != normalize_account_id(account_id):
             raise AccountArtifactError("account reconciliation invalidation belongs to another account")
         return artifact
+
+    def _legacy_receipt_invalidation(
+        self,
+        account_id: str,
+    ) -> _AccountReconciliationInvalidationArtifact | None:
+        """Seed one typed invalidation from immutable pre-split safety events."""
+
+        canonical_account_id = normalize_account_id(account_id)
+        latest_recorded_at_ms: int | None = None
+        execution_ids: set[str] = set()
+        for event in read_legacy_account_events(self._artifacts_root, canonical_account_id):
+            if event.get("event_type") != ACCOUNT_RECONCILIATION_INVALIDATED_EVENT:
+                continue
+            recorded_at_ms = event.get("recorded_at_ms")
+            if (
+                not isinstance(recorded_at_ms, int)
+                or isinstance(recorded_at_ms, bool)
+                or recorded_at_ms < 0
+            ):
+                raise AccountArtifactError("legacy account reconciliation invalidation has an invalid timestamp")
+            latest_recorded_at_ms = max(recorded_at_ms, latest_recorded_at_ms or recorded_at_ms)
+            event_execution_ids = event.get("execution_ids")
+            if isinstance(event_execution_ids, list):
+                execution_ids.update(
+                    execution_id
+                    for execution_id in event_execution_ids
+                    if isinstance(execution_id, str) and execution_id
+                )
+        if latest_recorded_at_ms is None:
+            return None
+        return _AccountReconciliationInvalidationArtifact(
+            account_id=canonical_account_id,
+            recorded_at_ms=latest_recorded_at_ms,
+            execution_ids=tuple(sorted(execution_ids)),
+        )
 
     def _read_receipt_invalidation(
         self,
@@ -202,7 +259,9 @@ class AccountReconciliationService:
         path = self.invalidation_path(account_id)
         lock_target = path.with_suffix(path.suffix + ".lock")
         with advisory_file_lock(lock_target):
-            current = self._read_invalidation_artifact(account_id)
+            current = self._read_invalidation_artifact_unmigrated(account_id)
+            if current is None:
+                current = self._legacy_receipt_invalidation(account_id)
             merged_ids = set(() if current is None else current.execution_ids) | execution_ids
             artifact = _AccountReconciliationInvalidationArtifact(
                 account_id=account_id,

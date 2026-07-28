@@ -203,7 +203,7 @@ async def test_async_custody_is_disabled_without_explicit_capacity_config(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_zero_capacity_risk_lane_fails_closed_before_a0(tmp_path: Path) -> None:
+async def test_submit_async_custody_zero_risk_capacity_fails_closed_before_a0(tmp_path: Path) -> None:
     """The deployed 8/0 topology cannot silently create an unbounded lane."""
 
     _bind(tmp_path, "bot-a")

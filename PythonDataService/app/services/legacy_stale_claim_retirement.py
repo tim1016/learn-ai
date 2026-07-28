@@ -137,16 +137,6 @@ class LegacyStaleClaimRetirementService:
         """Re-prove and append one retirement receipt immediately before mutation."""
 
         canonical_account_id = normalize_account_id(account_id)
-        if any(
-            receipt.strategy_instance_id == strategy_instance_id
-            and receipt.run_id == run_id
-            and receipt.symbol == symbol.upper()
-            for receipt in _read_retired_claim_receipts(self._artifacts_root, canonical_account_id)
-        ):
-            raise LegacyStaleClaimRetirementError(
-                "LEGACY_CLAIM_ALREADY_RETIRED",
-                "A retirement receipt already exists for this legacy claim.",
-            )
         claim = self._find_claim(
             account_id=canonical_account_id,
             strategy_instance_id=strategy_instance_id,

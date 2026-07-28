@@ -3,13 +3,14 @@ import { Router } from "@angular/router";
 import { fireEvent, render, screen } from "@testing-library/angular";
 import { describe, expect, it, vi } from "vitest";
 
+import type { AccountEventRow } from "../../../api/account-events.types";
 import { AccountDeskEventsStore } from "./account-desk-events-store.service";
 import { AccountDeskGuidanceStore } from "./account-desk-guidance-store.service";
 import { AccountDeskOperatorEventsComponent } from "./account-desk-operator-events.component";
 
 function makeStore(overrides: Record<string, unknown> = {}) {
   return {
-    operationRows: signal([
+    operationRows: signal<AccountEventRow[]>([
       {
         schema_version: 1 as const,
         event_id: "DU1234567:5",
@@ -77,9 +78,45 @@ describe("AccountDeskOperatorEventsComponent", () => {
     expect(store.toggleOperationKind).toHaveBeenCalledWith("safety");
     expect(store.loadOlder).toHaveBeenCalledOnce();
 
-    const firstRow = view.fixture.componentInstance.timelineRows()[0];
-    store.operationRows.set(store.operationRows().map((event) => ({ ...event })));
-    expect(view.fixture.componentInstance.timelineRows()[0]).toBe(firstRow);
+  });
+
+  it("renders fresh details when a head refresh replaces an existing event", async () => {
+    const store = makeStore();
+    const view = await render(AccountDeskOperatorEventsComponent, {
+      providers: [
+        { provide: AccountDeskEventsStore, useValue: store },
+        {
+          provide: AccountDeskGuidanceStore,
+          useValue: { blockersFor: vi.fn().mockReturnValue([]) },
+        },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
+    });
+
+    store.operationRows.update((rows) =>
+      rows.map((event) => ({
+        ...event,
+        provenance: "clerk_journal" as const,
+        producer: "clerk_journal",
+        producer_boot_id: "recovered-clerk-boot",
+        producer_seq: 8,
+        operator_detail: "Reconciled event details replaced the prior timeline row.",
+        evidence_refs: [
+          { source: "account_clerk_journal", ref: "DU1234567:8", detail: "fresh evidence" },
+        ],
+      })),
+    );
+    view.fixture.detectChanges();
+    await view.fixture.whenStable();
+
+    expect(
+      screen.getByText("Reconciled event details replaced the prior timeline row."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Account reconciliation receipt recorded in the journal.")).toBeNull();
+    expect(screen.getByText("Account Clerk Journal:")).toBeTruthy();
+    expect(screen.getAllByText("Clerk Journal")).toHaveLength(2);
+    expect(screen.getByText("recovered-clerk-boot")).toBeTruthy();
+    expect(screen.getByText("DU1234567:8")).toBeTruthy();
   });
 
   it("does not render manual-order receipts in the safety/configuration surface", async () => {

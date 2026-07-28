@@ -513,28 +513,43 @@ def clear_account_freeze(
                 "cleared_source": cleared_source,
             }
         )
-        record_account_recovery_clearance(
-            artifacts_root,
-            recovery_proof=recovery_proof,
-            audited_override=audited_override,
-            cleared_at_ms=cleared_at_ms,
-        )
         _atomic_write_json_locked(path, cleared.model_dump())
-    _append_account_event(artifacts_root, account_id, recovery_event)
-    _append_account_event(
-        artifacts_root,
-        account_id,
-        {
-            "event_type": "account_freeze_cleared",
-            "account_id": account_id,
-            "reason": evidence.reason,
-            "source": evidence.source,
-            "recorded_at_ms": evidence.recorded_at_ms,
-            "cleared_at_ms": cleared_at_ms,
-            "cleared_reason": cleared_reason,
-            "cleared_source": cleared_source,
-        },
-    )
+        try:
+            record_account_recovery_clearance(
+                artifacts_root,
+                recovery_proof=recovery_proof,
+                audited_override=audited_override,
+                cleared_at_ms=cleared_at_ms,
+            )
+        except Exception:
+            # The cleared freeze is the authority transition. A clearance
+            # write failure keeps restart permission conservatively blocked;
+            # it must not turn a committed unfreeze into a false failure.
+            logger.exception(
+                "account freeze cleared but recovery clearance could not be recorded",
+                extra={"account_id": account_id, "cleared_at_ms": cleared_at_ms},
+            )
+    cleared_event = {
+        "event_type": "account_freeze_cleared",
+        "account_id": account_id,
+        "reason": evidence.reason,
+        "source": evidence.source,
+        "recorded_at_ms": evidence.recorded_at_ms,
+        "cleared_at_ms": cleared_at_ms,
+        "cleared_reason": cleared_reason,
+        "cleared_source": cleared_source,
+    }
+    for event in (recovery_event, cleared_event):
+        try:
+            _append_account_event(artifacts_root, account_id, event)
+        except Exception:
+            # Operator history mirrors the committed authority change. Keep a
+            # failed mirror visible in structured logs without lying that the
+            # freeze remains active.
+            logger.exception(
+                "account freeze clearance history mirror failed",
+                extra={"account_id": account_id, "event_type": event["event_type"]},
+            )
 
 
 def read_account_recovery_clearance(

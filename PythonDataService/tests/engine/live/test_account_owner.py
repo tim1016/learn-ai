@@ -468,6 +468,31 @@ async def test_account_owner_rejects_before_broker_when_account_frozen(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_account_owner_early_rejection_preserves_prior_inflight_recovery_evidence(tmp_path: Path) -> None:
+    broker = _Broker()
+    owner = _owner(tmp_path, broker)
+    prior = _intent("prior-crash-after-broker-boundary")
+    await owner.record_prepared_for_test(prior)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id=ACCOUNT,
+            reason="watchdog.flatten_failed",
+            source="watchdog",
+            recorded_at_ms=1,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+
+    with pytest.raises(AccountOwnerSubmitRejected) as rejected:
+        await owner.submit(prior)
+
+    assert rejected.value.reason == "ACCOUNT_FROZEN"
+    assert [prepared["diagnostics"]["order_ref"] for prepared in owner._prepared_without_terminal()] == [prior.order_ref]
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
 async def test_account_owner_rejects_stale_registry_binding(tmp_path: Path) -> None:
     broker = _Broker()
     owner = _owner(tmp_path, broker)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -121,6 +122,43 @@ def test_producer_display_clock_preserves_a_valid_epoch_zero_event_time(tmp_path
     )
 
     assert record.display_clock_ms == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "forged_value", "error"),
+    [
+        ("producer", "bot", "producer log path"),
+        ("producer_boot_id", "forged-boot", "producer boot log path"),
+    ],
+)
+def test_read_rejects_a_row_whose_embedded_stream_identity_disagrees_with_its_path(
+    tmp_path: Path,
+    field: str,
+    forged_value: str,
+    error: str,
+) -> None:
+    record = append_producer_operational_event(
+        tmp_path,
+        account_id=_ACCOUNT_ID,
+        producer="daemon",
+        producer_boot_id="daemon-boot-a",
+        idempotency_key="daemon:one",
+        event_type="daemon_child_started",
+        payload={},
+        recorded_at_ms=100,
+    )
+    path = producer_operational_log_path(
+        tmp_path,
+        account_id=_ACCOUNT_ID,
+        producer="daemon",
+        producer_boot_id="daemon-boot-a",
+    )
+    forged = record.model_dump(mode="json")
+    forged[field] = forged_value
+    path.write_text(json.dumps(forged) + "\n", encoding="utf-8")
+
+    with pytest.raises(ProducerOperationalLogError, match=error):
+        read_producer_operational_events(tmp_path, account_id=_ACCOUNT_ID)
 
 
 def test_receipt_append_is_atomic_across_concurrent_producer_boots(tmp_path: Path) -> None:

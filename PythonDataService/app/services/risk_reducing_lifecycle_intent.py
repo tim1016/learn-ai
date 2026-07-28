@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from app.engine.live import host_daemon_client
-from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
+from app.engine.live.bot_lifecycle_evaluator import (
+    BotLifecycleEvaluator,
+    LifecycleTransitionRefusedError,
+)
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import DesiredState
 from app.schemas.live_runs import (
@@ -37,6 +40,22 @@ class RiskReducingIntentDispatch:
     actuation: IntentActuation
     daemon_process: dict[str, Any] | None
     replayed: bool
+
+
+class RiskReducingIntentRefusedError(RuntimeError):
+    """A lifecycle refusal known to have happened before live actuation.
+
+    This differs from an unavailable daemon response: the evaluator refused
+    locally and deterministically, so the mutation receipt must record a
+    confirmed non-effect rather than incorrectly forcing the operator into an
+    outcome-unknown reconciliation path.
+    """
+
+    def __init__(self, *, refusal_code: str, mutation_attempt_id: str, dispatch_state: str) -> None:
+        super().__init__(f"durable lifecycle intent refused: {refusal_code}")
+        self.refusal_code = refusal_code
+        self.mutation_attempt_id = mutation_attempt_id
+        self.dispatch_state = dispatch_state
 
 
 async def persist_risk_reducing_intent(
@@ -184,19 +203,32 @@ async def persist_risk_reducing_intent_response(
 
     with mutation_scope:
         mutation_scope.stage = "durable_intent_write"
-        dispatch = await persist_risk_reducing_intent(
-            artifacts_root=artifacts_root,
-            strategy_instance_id=strategy_instance_id,
-            desired_state=desired_state,
-            command_verb=command_verb,
-            updated_by=updated_by,
-            reason=reason,
-            idempotency_key=idempotency_key,
-            now_ms=now_ms,
-            daemon_url=daemon_url,
-            live_binding_from_process=live_binding_from_process,
-            visible_live_run_dir=visible_live_run_dir,
-        )
+        try:
+            dispatch = await persist_risk_reducing_intent(
+                artifacts_root=artifacts_root,
+                strategy_instance_id=strategy_instance_id,
+                desired_state=desired_state,
+                command_verb=command_verb,
+                updated_by=updated_by,
+                reason=reason,
+                idempotency_key=idempotency_key,
+                now_ms=now_ms,
+                daemon_url=daemon_url,
+                live_binding_from_process=live_binding_from_process,
+                visible_live_run_dir=visible_live_run_dir,
+            )
+        except LifecycleTransitionRefusedError as exc:
+            refused = mutation_scope.reject_not_observed(
+                outcome={
+                    "reason_code": "LIFECYCLE_TRANSITION_REFUSED",
+                    "refusal_code": str(exc),
+                },
+            )
+            raise RiskReducingIntentRefusedError(
+                refusal_code=str(exc),
+                mutation_attempt_id=refused.mutation_attempt_id,
+                dispatch_state=refused.dispatch_state,
+            ) from exc
         mutation_scope.stage = "receipt_assembly"
         receipt, warnings = await rung_receipts(dispatch.daemon_process)
         confirmed = mutation_scope.confirm(

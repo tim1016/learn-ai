@@ -308,6 +308,7 @@ from app.services.resume_guard_state import (
     resolve_guard_state_from_paths,
 )
 from app.services.risk_reducing_lifecycle_intent import (
+    RiskReducingIntentRefusedError,
     persist_risk_reducing_intent,
     persist_risk_reducing_intent_response,
 )
@@ -2907,27 +2908,38 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> SetInstanceDesir
     presented = require_presented_lifecycle_action(
         root.parent, "" if account_id is None else account_id, sid, run_id, "stop", body.presented_action
     )
-    response = await persist_risk_reducing_intent_response(
-        mutation_scope=_operator_mutation_scope(root, instance_id=sid, action="stop", run_id=run_id),
-        rung_receipts=lambda daemon: _mutation_rung_receipts_from_process(
-            sid,
-            root,
-            settings,
-            daemon,
-            mutation_key="stop",
-        ),
-        artifacts_root=root.parent,
-        strategy_instance_id=sid,
-        desired_state=DesiredState.STOPPED,
-        command_verb=CommandVerb.STOP,
-        updated_by="operator",
-        reason="stop-run",
-        idempotency_key=None if presented is None else presented.idempotency_key,
-        now_ms=_now_ms,
-        daemon_url=settings.live_runner_daemon_url,
-        live_binding_from_process=lambda daemon: _interpret_daemon_process(daemon, root)[1],
-        visible_live_run_dir=lambda live_binding: _visible_live_run_dir(root, live_binding),
-    )
+    try:
+        response = await persist_risk_reducing_intent_response(
+            mutation_scope=_operator_mutation_scope(root, instance_id=sid, action="stop", run_id=run_id),
+            rung_receipts=lambda daemon: _mutation_rung_receipts_from_process(
+                sid,
+                root,
+                settings,
+                daemon,
+                mutation_key="stop",
+            ),
+            artifacts_root=root.parent,
+            strategy_instance_id=sid,
+            desired_state=DesiredState.STOPPED,
+            command_verb=CommandVerb.STOP,
+            updated_by="operator",
+            reason="stop-run",
+            idempotency_key=None if presented is None else presented.idempotency_key,
+            now_ms=_now_ms,
+            daemon_url=settings.live_runner_daemon_url,
+            live_binding_from_process=lambda daemon: _interpret_daemon_process(daemon, root)[1],
+            visible_live_run_dir=lambda live_binding: _visible_live_run_dir(root, live_binding),
+        )
+    except RiskReducingIntentRefusedError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "LIFECYCLE_TRANSITION_REFUSED",
+                "refusal_code": exc.refusal_code,
+                "mutation_attempt_id": exc.mutation_attempt_id,
+                "mutation_dispatch_state": exc.dispatch_state,
+            },
+        ) from exc
     await _ensure_surface_hub_started(sid)
     return response
 
@@ -4892,34 +4904,45 @@ async def set_instance_desired_state(
         root.parent, "" if account_id is None else account_id, sid, None, action_name, body.presented_action
     )
     if action_name in {"pause", "stop"}:
-        response = await persist_risk_reducing_intent_response(
-            mutation_scope=_operator_mutation_scope(
-                root,
-                instance_id=sid,
-                action=action_name,
-                run_id=None,
-            ),
-            rung_receipts=lambda daemon: _mutation_rung_receipts_from_process(
-                sid,
-                root,
-                settings,
-                daemon,
-                mutation_key=action_name,
-            ),
-            artifacts_root=artifacts_root,
-            strategy_instance_id=sid,
-            desired_state=_ACTION_TO_STATE[body.action],
-            command_verb=_ACTION_TO_VERB[body.action],
-            updated_by=body.updated_by,
-            reason=body.reason,
-            idempotency_key=(
-                None if body.presented_action is None else body.presented_action.idempotency_key
-            ),
-            now_ms=_now_ms,
-            daemon_url=settings.live_runner_daemon_url,
-            live_binding_from_process=lambda daemon: _interpret_daemon_process(daemon, root)[1],
-            visible_live_run_dir=lambda live_binding: _visible_live_run_dir(root, live_binding),
-        )
+        try:
+            response = await persist_risk_reducing_intent_response(
+                mutation_scope=_operator_mutation_scope(
+                    root,
+                    instance_id=sid,
+                    action=action_name,
+                    run_id=None,
+                ),
+                rung_receipts=lambda daemon: _mutation_rung_receipts_from_process(
+                    sid,
+                    root,
+                    settings,
+                    daemon,
+                    mutation_key=action_name,
+                ),
+                artifacts_root=artifacts_root,
+                strategy_instance_id=sid,
+                desired_state=_ACTION_TO_STATE[body.action],
+                command_verb=_ACTION_TO_VERB[body.action],
+                updated_by=body.updated_by,
+                reason=body.reason,
+                idempotency_key=(
+                    None if body.presented_action is None else body.presented_action.idempotency_key
+                ),
+                now_ms=_now_ms,
+                daemon_url=settings.live_runner_daemon_url,
+                live_binding_from_process=lambda daemon: _interpret_daemon_process(daemon, root)[1],
+                visible_live_run_dir=lambda live_binding: _visible_live_run_dir(root, live_binding),
+            )
+        except RiskReducingIntentRefusedError as exc:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "LIFECYCLE_TRANSITION_REFUSED",
+                    "refusal_code": exc.refusal_code,
+                    "mutation_attempt_id": exc.mutation_attempt_id,
+                    "mutation_dispatch_state": exc.dispatch_state,
+                },
+            ) from exc
         await _ensure_surface_hub_started(sid)
         return response
 

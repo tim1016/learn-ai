@@ -410,7 +410,8 @@ describe('BotControlPageComponent', () => {
       updated_by: 'operator',
       presented_action: expect.objectContaining({ action_id: 'stop' }),
     }));
-    expect(element.textContent).toContain('Intent accepted: PAUSED.');
+    expect(element.textContent).toContain('Intent accepted: Paused.');
+    expect(element.textContent).not.toContain('Intent accepted: PAUSED.');
     expect(element.textContent).toContain('Command accepted.');
   });
 
@@ -430,7 +431,8 @@ describe('BotControlPageComponent', () => {
       force: false,
       presented_action: expect.objectContaining({ action_id: 'end_day' }),
     });
-    expect(element.textContent).toContain('Intent accepted: PAUSED.');
+    expect(element.textContent).toContain('Intent accepted: Paused.');
+    expect(element.textContent).not.toContain('Intent accepted: PAUSED.');
     expect(element.textContent).toContain('Command accepted.');
   });
 

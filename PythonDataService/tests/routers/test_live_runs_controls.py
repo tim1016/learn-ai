@@ -217,7 +217,7 @@ async def test_command_summary_in_status(live_runs_root):
     assert cs["latest_verb"] == "FLATTEN"
 
 
-@pytest.mark.parametrize("verb", ["PAUSE", "RESUME", "STOP"])
+@pytest.mark.parametrize("verb", ["PAUSE", "RESUME", "STOP", "CLOCK_OUT"])
 async def test_enqueue_command_rejects_legacy_durable_controls(live_runs_root, verb: str):
     _make_run(live_runs_root, _RID, sid="inst-cmd")
     async with _client() as client:
