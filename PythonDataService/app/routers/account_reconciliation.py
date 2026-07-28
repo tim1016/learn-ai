@@ -827,7 +827,6 @@ def _presented_action_response(
 async def execute_presented_recovery_action_endpoint(
     account_id: str,
     request: PresentedOperatorActionInvocation,
-    client: ConnectedIbkrClient,
     reconciliation: Annotated[AccountReconciliationService, Depends(get_account_reconciliation_service)],
     snapshot_service: Annotated[AccountSafetySnapshotService, Depends(get_account_safety_snapshot_service)],
     action_service: Annotated[
@@ -868,6 +867,9 @@ async def execute_presented_recovery_action_endpoint(
         None,
     )
     if action is None:
+        pending_result = action_service.settle_pending_without_current_presentation(request)
+        if pending_result is not None:
+            return _presented_action_response(pending_result)
         raise _presented_action_rejection_http_error(
             reason_code="ACTION_NOT_PRESENTED",
             message="This action is no longer presented for current account safety evidence.",
@@ -875,17 +877,20 @@ async def execute_presented_recovery_action_endpoint(
         )
 
     async def invoke() -> PresentedRecoveryActionOutcome:
+        async def reconcile_after_effect() -> AccountReconciliationReceipt:
+            return await _reconcile_account(
+                canonical_account_id,
+                require_connected_client(),
+                reconciliation,
+            )
+
         return await dispatch_presented_recovery_action(
             action=action,
             account_id=canonical_account_id,
             reconciliation=reconciliation,
             snapshot_service=snapshot_service,
             artifacts_root=artifacts_root,
-            reconcile_after_effect=lambda: _reconcile_account(
-                canonical_account_id,
-                client,
-                reconciliation,
-            ),
+            reconcile_after_effect=reconcile_after_effect,
         )
 
     try:
@@ -1040,7 +1045,14 @@ async def journal_cure_preview_endpoint(
 @router.post(
     "/{account_id}/operator-recovery-flatten",
     deprecated=True,
+    status_code=status.HTTP_410_GONE,
     response_model=None,
+    responses={
+        status.HTTP_410_GONE: {
+            "model": PresentedOperatorActionRejectionResponse,
+            "description": "Raw recovery writes are retired; use a presented action.",
+        },
+    },
 )
 async def operator_recovery_flatten_endpoint(
     account_id: str,
@@ -1064,7 +1076,14 @@ async def operator_recovery_flatten_endpoint(
 @router.post(
     "/{account_id}/emergency-flatten",
     deprecated=True,
+    status_code=status.HTTP_410_GONE,
     response_model=None,
+    responses={
+        status.HTTP_410_GONE: {
+            "model": PresentedOperatorActionRejectionResponse,
+            "description": "Raw emergency writes are retired; use a presented action.",
+        },
+    },
 )
 async def emergency_flatten_account_endpoint(
     account_id: str,

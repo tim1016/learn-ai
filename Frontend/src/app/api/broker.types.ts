@@ -24175,13 +24175,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Raw emergency writes are retired; use a presented action. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24647,13 +24647,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Raw recovery writes are retired; use a presented action. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
                 };
             };
             /** @description Validation Error */

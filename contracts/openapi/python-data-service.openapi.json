@@ -41591,13 +41591,15 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "410": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "Raw emergency writes are retired; use a presented action."
           },
           "422": {
             "content": {
@@ -42550,13 +42552,15 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "410": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "Raw recovery writes are retired; use a presented action."
           },
           "422": {
             "content": {

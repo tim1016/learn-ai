@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Sequence
 
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.live.account_clerk_journal_models import AccountClerkCustodyStatus
@@ -36,8 +36,8 @@ def present_recovery_actions(
     verdict: str,
     evidence_refs: tuple[AccountReconciliationEvidenceRef, ...],
     reconciliation_receipt: AccountReconciliationReceipt | None,
-    custody_statuses: Iterable[AccountClerkCustodyStatus],
-    recovery_candidates: Iterable[AccountRecoveryFlattenCandidate],
+    custody_statuses: Sequence[AccountClerkCustodyStatus],
+    recovery_candidates: Sequence[AccountRecoveryFlattenCandidate],
     emergency_confirmation: OperatorConfirmationCopy | None,
 ) -> tuple[PresentedOperatorAction, ...]:
     """Return only closed actions whose identity exists in durable evidence."""
@@ -135,8 +135,8 @@ def present_recovery_actions(
 
 def recovery_action_semantic_material(
     *,
-    custody_statuses: Iterable[AccountClerkCustodyStatus],
-    recovery_candidates: Iterable[AccountRecoveryFlattenCandidate],
+    custody_statuses: Sequence[AccountClerkCustodyStatus],
+    recovery_candidates: Sequence[AccountRecoveryFlattenCandidate],
     emergency_confirmation: OperatorConfirmationCopy | None,
 ) -> dict[str, object]:
     """Return stable action-driving facts for the snapshot semantic hash."""
@@ -173,7 +173,7 @@ def _present_pending_cancels(
     snapshot_id: str,
     generated_at_ms: int,
     evidence_refs: tuple[AccountReconciliationEvidenceRef, ...],
-    custody_statuses: Iterable[AccountClerkCustodyStatus],
+    custody_statuses: Sequence[AccountClerkCustodyStatus],
     signing_available: bool,
 ) -> tuple[PresentedOperatorAction, ...]:
     actions: list[PresentedOperatorAction] = []
@@ -286,7 +286,7 @@ def _present_exact_recovery_flattens(
     generated_at_ms: int,
     evidence_refs: tuple[AccountReconciliationEvidenceRef, ...],
     receipt: AccountReconciliationReceipt | None,
-    candidates: Iterable[AccountRecoveryFlattenCandidate],
+    candidates: Sequence[AccountRecoveryFlattenCandidate],
     signing_available: bool,
 ) -> tuple[PresentedOperatorAction, ...]:
     if receipt is None or receipt.expires_at_ms <= generated_at_ms:

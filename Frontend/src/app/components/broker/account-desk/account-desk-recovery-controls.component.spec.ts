@@ -9,7 +9,7 @@ import { AccountDeskDirectoryStore } from './account-desk-directory-store.servic
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
 import { AccountDeskRecoveryControlsComponent } from './account-desk-recovery-controls.component';
-import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
+import { AccountDeskRecoveryStore, type AccountDeskRecoverySuccess } from './account-desk-recovery-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 
 describe('AccountDeskRecoveryControlsComponent', () => {
@@ -190,13 +190,35 @@ describe('AccountDeskRecoveryControlsComponent', () => {
       success: {
         kind: 'recovery_flatten',
         receipt: {
-          recovery_flatten: {
-            recorded: { intent_id: 'intent:opaque/1', order_ref: 'order-ref:opaque/1' },
-            broker_acked: { order_id: 7, recorded_at_ms: 1_780_000_000_000 },
+          action_attempt_id: 'attempt:opaque/1',
+          action_id: 'flatten',
+          effect_receipt: {
+            account_id: 'DU1234567',
+            clerk_journal_seq: 7,
+            intent_id: 'intent:opaque/1',
+            kind: 'RECOVERY_FLATTEN_SUBMITTED',
+            operation_id: 'operation:opaque/1',
+            order_ref: 'order-ref:opaque/1',
+            recorded_at_ms: 1_780_000_000_000,
           },
+          finished_copy: 'Recovery flatten was submitted.',
+          reconciliation_receipt: null,
+          refreshed_snapshot_id: 'snapshot:opaque/1',
+          replayed: false,
+          state: 'ACCEPTED',
         },
-      },
-      values: ['intent:opaque/1', 'order-ref:opaque/1', '7', formatTimestampDisplay(1_780_000_000_000, { mode: 'local' })],
+      } satisfies AccountDeskRecoverySuccess,
+      values: [
+        'Recovery flatten was submitted.',
+        'Flatten',
+        'Accepted',
+        'Recovery Flatten Submitted',
+        'DU1234567',
+        'intent:opaque/1',
+        'order-ref:opaque/1',
+        '7',
+        formatTimestampDisplay(1_780_000_000_000, { mode: 'local' }),
+      ],
     },
     {
       name: 'journal recovery',

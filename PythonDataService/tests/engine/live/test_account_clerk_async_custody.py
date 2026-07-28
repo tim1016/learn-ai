@@ -319,6 +319,51 @@ async def test_operator_cancel_of_a0_only_custody_is_local_and_terminal(
 
 
 @pytest.mark.asyncio
+async def test_operator_cancel_of_retiring_a0_custody_remains_local_and_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retirement must not block cancellation of its own unsubmitted A0 row."""
+
+    _bind(tmp_path, "bot-a")
+    broker = _ImmediateBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        async_custody_config=AccountClerkAsyncCustodyConfig(entry_capacity=1, risk_reducing_capacity=1),
+    )
+    monkeypatch.setattr(clerk, "_enqueue_async_custody", lambda *_args, **_kwargs: False)
+    await clerk.start_async_custody()
+    intent = _intent("bot-a", "cancel-retiring-a0")
+    try:
+        _, queued = await clerk.submit_async_custody(intent)
+        assert queued.lifecycle_state == "queued"
+        write_account_instance_binding(
+            tmp_path,
+            AccountInstanceBinding(
+                account_id=ACCOUNT,
+                strategy_instance_id="bot-a",
+                run_id="run-bot-a",
+                bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+                lifecycle_state="RETIRED",
+                recorded_at_ms=START_MS + 1,
+                source="test.retire",
+            ),
+        )
+
+        receipt = await clerk.cancel_pending_a0(intent)
+        status = await clerk.async_custody_status(intent)
+
+        assert receipt.recorded.intent_id == intent.intent_id
+        assert status is not None
+        assert status.lifecycle_state == "cancelled_before_submit"
+        assert broker.calls == []
+    finally:
+        await clerk.stop_async_custody()
+
+
+@pytest.mark.asyncio
 async def test_async_custody_shutdown_does_not_wait_for_uncooperative_observer(tmp_path: Path) -> None:
     _bind(tmp_path, "bot-a")
     clerk = AccountClerk(

@@ -76,15 +76,24 @@ class PresentedOperatorActionEffectReceipt(BaseModel):
     @model_validator(mode="after")
     def validate_receipt_identity(self) -> PresentedOperatorActionEffectReceipt:
         if self.kind == "FLATTEN_INTENTION_RECORDED":
-            if self.intent_id is not None or self.order_ref is not None or self.clerk_journal_seq is not None:
+            if (
+                self.intent_id is not None
+                or self.order_ref is not None
+                or self.clerk_journal_seq is not None
+                or self.operation_id is not None
+            ):
                 raise ValueError("flatten intention receipt must not claim a Clerk broker write")
             return self
         if self.kind == "ACCOUNT_FLATTEN_OBSERVED":
             if self.operation_id is None:
                 raise ValueError("account flatten receipt requires operation identity")
+            if self.intent_id is not None or self.order_ref is not None or self.clerk_journal_seq is not None:
+                raise ValueError("account flatten receipt must not claim one intent identity")
             return self
         if self.intent_id is None or self.order_ref is None or self.clerk_journal_seq is None:
             raise ValueError("Clerk action receipt requires durable intent identity")
+        if self.operation_id is not None:
+            raise ValueError("Clerk action receipt must not claim account-wide operation identity")
         return self
 
 
@@ -149,6 +158,8 @@ class PresentedOperatorActionTarget(BaseModel):
             if any(value is not None for value in (self.target_order_id, self.target_order_ref, self.recovery_intent_id, self.recovery_order_ref, self.target_con_id, self.expected_signed_quantity)):
                 raise ValueError("A0_INTENT target only accepts one local custody identity")
             return self
+        if self.kind != "RECOVERY_NAMESPACE":
+            raise ValueError(f"unhandled presented action target kind: {self.kind}")
         if (
             self.recovery_intent_id is None
             or self.recovery_order_ref is None

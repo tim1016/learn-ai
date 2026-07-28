@@ -1331,7 +1331,12 @@ class AccountClerk:
         if self._async_custody_config is None:
             self._reject(intent, "CLERK_ASYNC_CUSTODY_DISABLED")
         async with self._broker_write_lock, self._async_custody_admission_lock, self._intake_lock:
-            await asyncio.to_thread(self._validate_intent_identity, intent)
+            # This is a Clerk management operation, not a new order-intake
+            # request.  The exact durable row below authenticates the intent;
+            # retirement and active-binding admission checks must not prevent
+            # cancelling the last still-queued A0 from that retiring owner.
+            if intent.account_id != self._account_id:
+                self._reject(intent, "CLERK_A0_CANCEL_TARGET_NOT_CURRENT")
             status = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
             if status is None:
                 self._reject(intent, "CLERK_A0_CANCEL_TARGET_NOT_CURRENT")

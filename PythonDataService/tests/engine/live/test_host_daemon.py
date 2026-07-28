@@ -1355,6 +1355,45 @@ async def test_operator_recovery_flatten_maps_clerk_start_os_error_to_typed_503(
     assert response.json()["detail"]["reason_code"] == "ACCOUNT_CLERK_START_FAILED"
 
 
+@pytest.mark.parametrize("path", ["operator-pending-cancel", "operator-exact-cancel"])
+async def test_operator_cancel_endpoints_map_clerk_start_os_error_to_typed_503(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
+
+    manager, _ = daemon_context
+
+    def unavailable_clerk(_account_id: str, **_kwargs: object) -> None:
+        raise OSError("Clerk host process unavailable")
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", unavailable_clerk)
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-cancel",
+        account_id="DU123",
+        strategy_instance_id="retired-bot",
+        run_id="retired-run",
+        bot_order_namespace="learn-ai/retired-bot/v1",
+        intent_id="cancel-1",
+        order_ref="learn-ai/retired-bot/v1:cancel-1",
+        intent_kind="RECOVERY_FLATTEN",
+        order_spec={},
+        owner_generation=3,
+        created_at_ms=100,
+    )
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            f"/accounts/DU123/clerk/{path}",
+            json={"intent": intent.model_dump(mode="json")},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_CLERK_START_FAILED"
+
+
 async def test_emergency_authorization_endpoint_forwards_to_host_local_clerk(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,

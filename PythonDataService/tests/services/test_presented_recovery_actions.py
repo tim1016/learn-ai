@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import settings
 from app.schemas.account_safety_snapshot import PresentedOperatorAction
@@ -313,6 +314,75 @@ async def test_crashed_pending_attempt_retries_through_the_same_clerk_identity(
     assert resumed_calls == 1
     assert resumed.state == "PENDING_PROOF"
     assert resumed.replayed is False
+
+
+async def test_abandoned_pending_attempt_becomes_outcome_unknown_when_its_action_vanishes(
+    tmp_path: Path,
+) -> None:
+    action = _action()
+    service = PresentedRecoveryActionService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
+
+    async def crash_after_claim() -> PresentedRecoveryActionOutcome:
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.execute(action=action, invocation=_invocation(action), invoke=crash_after_claim)
+
+    result = service.settle_pending_without_current_presentation(_invocation(action))
+
+    assert result is not None
+    assert result.state == "OUTCOME_UNKNOWN"
+    assert result.replayed is False
+
+
+@pytest.mark.parametrize(
+    ("kind", "fields"),
+    [
+        ("FLATTEN_INTENTION_RECORDED", {"operation_id": "operation-1"}),
+        (
+            "ACCOUNT_FLATTEN_OBSERVED",
+            {"operation_id": "operation-1", "intent_id": "intent-1"},
+        ),
+        (
+            "A0_CANCELLED",
+            {
+                "intent_id": "intent-1",
+                "order_ref": "order-ref-1",
+                "clerk_journal_seq": 1,
+                "operation_id": "operation-1",
+            },
+        ),
+        (
+            "EXACT_CANCEL_CONFIRMED",
+            {
+                "intent_id": "intent-1",
+                "order_ref": "order-ref-1",
+                "clerk_journal_seq": 1,
+                "operation_id": "operation-1",
+            },
+        ),
+        (
+            "RECOVERY_FLATTEN_SUBMITTED",
+            {
+                "intent_id": "intent-1",
+                "order_ref": "order-ref-1",
+                "clerk_journal_seq": 1,
+                "operation_id": "operation-1",
+            },
+        ),
+    ],
+)
+def test_effect_receipt_rejects_cross_lane_identity(
+    kind: str,
+    fields: dict[str, str | int],
+) -> None:
+    with pytest.raises(ValidationError):
+        PresentedOperatorActionEffectReceipt(
+            kind=kind,  # type: ignore[arg-type]
+            account_id=_ACCOUNT_ID,
+            recorded_at_ms=_NOW_MS,
+            **fields,
+        )
 
 
 async def test_live_dispatch_cannot_be_reclaimed_after_thirty_seconds(

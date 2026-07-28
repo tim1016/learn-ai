@@ -18,7 +18,7 @@ import type { PresentedOperatorAction, PresentedOperatorActionResult } from '../
 import type { AccountClerkRestoreReceipt, JournalRecoveryReceipt } from '../../../api/account-cockpit.types';
 import type { OperatorConfirmationCopy } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
-import { extractServerMessage } from '../operation-error';
+import { extractServerMessage, extractServerReasonCode } from '../operation-error';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
@@ -345,6 +345,21 @@ export class AccountDeskRecoveryStore {
       success = await this.execute(confirmation);
     } catch (error) {
       if (this.isCurrent(confirmation.accountId, generation)) {
+        const refreshPresentedAction = confirmation.presentedAction !== null && extractServerReasonCode(error) !== null;
+        if (refreshPresentedAction) {
+          this.confirmationState.set(null);
+          try {
+            await this.refreshDeskEvidence(confirmation.accountId, generation);
+          } catch {
+            if (!this.isCurrent(confirmation.accountId, generation)) return;
+            this.errorMessageState.set(
+              'The recovery action was refused and fresh desk evidence is unavailable. Retry the desk refresh before trying again.',
+            );
+            this.busyState.set(false);
+            return;
+          }
+          if (!this.isCurrent(confirmation.accountId, generation)) return;
+        }
         this.errorMessageState.set(
           recoveryErrorMessage(error, 'Account recovery was not accepted. Review the current proof and try again.'),
         );
@@ -356,13 +371,7 @@ export class AccountDeskRecoveryStore {
     this.successState.set(success);
     this.confirmationState.set(null);
     try {
-      await Promise.all([
-        this.surface.load(confirmation.accountId),
-        this.accountSafety.refresh(confirmation.accountId),
-        this.events.load(confirmation.accountId),
-        this.directory.loadServiceStatus(confirmation.accountId),
-        this.loadLegacyCandidates(confirmation.accountId, generation),
-      ]);
+      await this.refreshDeskEvidence(confirmation.accountId, generation);
     } catch {
       if (!this.isCurrent(confirmation.accountId, generation)) return;
       this.errorMessageState.set('Account recovery was accepted, but fresh desk evidence is unavailable. Retry to refresh it.');
@@ -522,6 +531,16 @@ export class AccountDeskRecoveryStore {
     } finally {
       if (this.isCurrent(accountId, generation)) this.legacyLoadingState.set(false);
     }
+  }
+
+  private async refreshDeskEvidence(accountId: string, generation: number): Promise<void> {
+    await Promise.all([
+      this.surface.load(accountId),
+      this.accountSafety.refresh(accountId),
+      this.events.load(accountId),
+      this.directory.loadServiceStatus(accountId),
+      this.loadLegacyCandidates(accountId, generation),
+    ]);
   }
 
   private isCurrent(accountId: string, generation: number): boolean {

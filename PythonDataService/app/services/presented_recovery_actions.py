@@ -182,6 +182,46 @@ class PresentedRecoveryActionService:
                     return None
         return self._replay(existing, request_sha256)
 
+    def settle_pending_without_current_presentation(
+        self,
+        invocation: PresentedOperatorActionInvocation,
+    ) -> PresentedOperatorActionResult | None:
+        """Surface a free abandoned claim before rejecting a vanished action.
+
+        A fresh snapshot may correctly remove an action after its Clerk effect
+        completed.  Without the original dispatch plan, retrying that claim
+        would be unsafe; record the uncertainty instead of leaving the attempt
+        permanently PENDING or reporting that no action was ever presented.
+        """
+
+        if not has_valid_presented_operator_action_token(invocation):
+            raise PresentedActionRejectedError(
+                "ACTION_ENVELOPE_MISMATCH",
+                "The action envelope does not match the server presentation.",
+            )
+        path = self._path_for(invocation.target.account_id, invocation.idempotency_key)
+        existing = self._read_existing(path)
+        if existing is None:
+            return None
+        request_sha256 = _request_sha256(invocation)
+        self._validate_replay_request(existing, request_sha256)
+        if existing.state != "PENDING":
+            return self._replay(existing, request_sha256)
+        with try_advisory_file_lock(path) as owns_dispatch:
+            if not owns_dispatch:
+                return self._replay(existing, request_sha256)
+            existing = self._read_existing(path)
+            if existing is None:
+                return None
+            self._validate_replay_request(existing, request_sha256)
+            if existing.state != "PENDING":
+                return self._replay(existing, request_sha256)
+            unknown = existing.model_copy(
+                update={"state": "OUTCOME_UNKNOWN", "completed_at_ms": self._now_ms()}
+            )
+            atomic_write_pydantic_artifact(path, unknown)
+            return self._result(unknown, replayed=False)
+
     def _resume_after_owner_exit(
         self,
         *,
