@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.exposure import verify_flatten
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.leg_identity import Clock, LegIdentity, default_clock, leg_error
 from app.broker.alpaca.clerk.models import (
+    STREAM_HEALTH_HOLD_CODE,
     UNEXPLAINED_ORDER_HOLD_CODE,
     ClerkEntryKind,
     ClerkStatus,
@@ -39,6 +40,7 @@ from app.broker.alpaca.clerk.models import (
     OrderSubmitResult,
     ReconciliationVerdict,
 )
+from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.errors import (
     BrokerError,
@@ -69,14 +71,6 @@ logger = logging.getLogger(__name__)
 # failure; a later recovery/sweep may do so only after this bounded grace window.
 UNCERTAIN_SUBMIT_GRACE_MS = 30_000
 
-# Reconciliation only considers orders that can still create exposure. Filled,
-# canceled, expired, rejected, and replaced orders belong to historical audit;
-# their settled exposure is represented by the broker positions snapshot.
-_RECONCILIATION_TERMINAL_ORDER_STATUSES = frozenset(
-    {"filled", "canceled", "expired", "rejected", "replaced"}
-)
-
-
 class AlpacaClerk:
     """Single-writer order-submission facade for one Alpaca account.
 
@@ -93,10 +87,12 @@ class AlpacaClerk:
         read: BrokerReadPort,
         trade: BrokerTradePort,
         clock: Clock = default_clock,
+        stream_health: StreamHealthGate | None = None,
     ) -> None:
         self._read = read
         self._trade = trade
         self._clock = clock
+        self._stream_health = stream_health
         self._intake_lock = asyncio.Lock()
         self.activity_recovery = AlpacaActivityRecovery(
             intake_lock=self._intake_lock, ensure_journal=self._ensure_journal, clock=clock
@@ -106,9 +102,8 @@ class AlpacaClerk:
         self._recovery_lock = asyncio.Lock()
         self._account_id: str | None = None
         self._journal: OrderJournal | None = None
-        # S4 observable counter: unexplained (foreign/absent-coid) lifecycle
-        # events. S6 reads this (and the UNEXPLAINED_ORDER lines) to raise the
-        # exposure hold; S4 only counts.
+        # Observable counter: unexplained (foreign/absent-coid) lifecycle
+        # events; the hold path reads the UNEXPLAINED_ORDER lines themselves.
         self._unexplained_order_count = 0
 
     async def _ensure_journal(self) -> tuple[str, OrderJournal]:
@@ -126,13 +121,11 @@ class AlpacaClerk:
     async def submit(self, request: BrokerOrderRequest) -> OrderSubmitResult:
         """Submit legs serially, stopping before any later leg after uncertainty.
 
-        The exposure hold (S6) is checked FIRST, under the intake lock, BEFORE
-        any intent is minted or journaled — capture-before-submit means a refused
-        submit records NO intent. When held, a ``BrokerSubmissionHeld`` (409,
-        ``UNEXPLAINED_ORDER_HOLD``) propagates to the router. Cancel is a separate
-        path and is never held (reducing exposure is always allowed). A
-        definitive rejection is independent; an ``uncertain`` result means the
-        previous leg may have landed, so remaining request legs stay unsent.
+        The holds are checked FIRST, under the intake lock, BEFORE any intent
+        is minted or journaled — a refused submit records NO intent and raises
+        ``BrokerSubmissionHeld`` (409). Cancel is a separate, never-held path.
+        An ``uncertain`` leg outcome stops the batch (the previous leg may have
+        landed); a definitive rejection does not.
         """
         return await self._submit_batch(
             operator=request.operator, namespace=None, legs=request.legs
@@ -143,11 +136,9 @@ class AlpacaClerk:
     ) -> OrderSubmitResult:
         """Submit legs under the bot-namespace scheme (S3, #1261 / ADR 0008).
 
-        The minted refs are ``learn-ai/{strategy_instance_id}/v1:{intent_id}``,
-        a peer of the ``manual/{operator}/v1`` scheme — ``order_ref`` remains
-        the ``client_order_id``. Same capture-first, fail-closed discipline and
-        exposure-hold gate as :meth:`submit`. A bad ``strategy_instance_id``
-        raises ``ValueError`` at this boundary before anything is journaled.
+        Refs are ``learn-ai/{strategy_instance_id}/v1:{intent_id}``, a peer of
+        ``manual/{operator}/v1``; same capture-first, hold-gated discipline as
+        :meth:`submit`. A bad sid raises ``ValueError`` before any journaling.
         """
         namespace = build_bot_order_namespace(strategy_instance_id)
         return await self._submit_batch(
@@ -179,6 +170,23 @@ class AlpacaClerk:
                     reason_code=hold.reason_code or UNEXPLAINED_ORDER_HOLD_CODE,
                     broker=self.broker_id,
                     detail=hold.reason,
+                )
+            # S4 dual-health gate: either stream unhealthy -> durable hold +
+            # typed refusal naming the broken stream. Never auto-cleared.
+            refusal = stream_health_refusal(self._stream_health)
+            if refusal is not None:
+                reason, detail = refusal
+                await self._set_hold(
+                    journal,
+                    account_id=account_id,
+                    reason_code=STREAM_HEALTH_HOLD_CODE,
+                    reason=f"{reason} {detail}",
+                )
+                raise BrokerSubmissionHeld(
+                    reason,
+                    reason_code=STREAM_HEALTH_HOLD_CODE,
+                    broker=self.broker_id,
+                    detail=detail,
                 )
             results: list[OrderLegResult] = []
             for leg in legs:
@@ -244,11 +252,10 @@ class AlpacaClerk:
         """Cancel one working order by its broker-assigned id.
 
         This is a **first-class path, deliberately NOT routed through ``submit``
-        or its per-leg gating.** A later slice (S6) adds an exposure hold that
-        blocks *new exposure* — i.e. submission — but canceling a working order
-        *reduces* exposure and must never be blocked by that hold. Keeping cancel
-        off the submit path means S6 can add the hold to submit alone, and cancel
-        stays reachable while a hold is active. (The hold does not exist yet; do
+        or its per-leg gating.** The holds (unexplained-order, stream-health)
+        block *new exposure* — submission — but canceling a working order
+        *reduces* exposure and must never be blocked by them; cancel therefore
+        stays reachable while any hold is active. (The hold does not exist yet; do
         not add it here — this comment records the intended seam.)
 
         Flow, sharing the intake lock (so a cancel and a submit never interleave)
@@ -344,10 +351,7 @@ class AlpacaClerk:
         an ``UNEXPLAINED_ORDER`` line plus the observable
         :pyattr:`unexplained_order_count` counter.
 
-        **S6 seam:** the exposure hold that blocks *new submits* on an
-        unexplained order is NOT implemented here — S4 only records the
-        observation. S6 reads these ``UNEXPLAINED_ORDER`` lines (and/or the
-        counter) to raise the hold on ``submit``. Do not couple this to submit.
+        An unexplained observation also raises the exposure hold (S6, below).
         Returns the kind journaled (test/observability seam).
         """
         async with self._intake_lock:
@@ -473,11 +477,10 @@ class AlpacaClerk:
             return self._status_from(account_id, journal.read_entries())
 
     async def clear_hold(self, *, operator: str, reason: str) -> ClerkStatus:
-        """Clear the exposure hold (operator exit); journal ``HOLD_CLEARED``.
+        """Clear the active hold (operator exit); journal ``HOLD_CLEARED``.
 
-        Idempotent and benign when not held — a clear against no active hold is a
-        NO-OP with no journal write, so a double-click never litters the ledger.
-        Returns the updated status so the caller renders it in one round-trip.
+        Idempotent: clearing with no active hold is a journal-free NO-OP.
+        Returns the updated status for a one-round-trip render.
         """
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
@@ -521,6 +524,11 @@ class AlpacaClerk:
             account_id=account_id,
             outstanding_intents=len(derive.unresolved_intents(entries)),
             observed_at_ms=self._clock(),
+            channel_healths=(
+                list(self._stream_health.snapshot())
+                if self._stream_health is not None
+                else None
+            ),
         )
 
     async def _set_hold(
@@ -531,11 +539,10 @@ class AlpacaClerk:
         reason_code: str,
         reason: str,
     ) -> None:
-        """Raise the exposure hold; idempotent (never double-journal HOLD_SET).
+        """Raise the hold; idempotent (never double-journal ``HOLD_SET``).
 
-        Callers already hold the intake lock (the S4 lifecycle path and the sweep
-        both wrap this). A ``HOLD_SET`` is journaled only when no hold is already
-        active, so a repeated unexplained observation does not litter the ledger.
+        Callers already hold the intake lock; a ``HOLD_SET`` is appended only
+        when no explicit hold receipt is already active.
         """
         last_explicit_hold: ClerkEntryKind | None = None
         for entry in journal.read_entries():
@@ -685,16 +692,11 @@ class AlpacaClerk:
     async def recover(self) -> None:
         """Replay the journal and resolve every unfinished intent (S5).
 
-        Called on startup BEFORE the platform accepts new submits: an intent left
-        at ``intent_recorded`` or ``submit_uncertain`` (a crash between the
-        durable intent and its terminal outcome) is finished by the same
-        ``client_order_id`` resolution the write path uses. Idempotent — safe to
-        call repeatedly; an already-terminal intent is a NO-OP.
-
-        A fresh install (no journal yet) resolves nothing and returns cleanly.
-        Each unresolved intent is resolved independently; one leg that stays
-        uncertain (the lookup is itself unreachable) does not block the others,
-        and is left for a later replay / sweep.
+        Runs on startup BEFORE new submits: intents left at ``intent_recorded``
+        / ``submit_uncertain`` are finished by the same ``client_order_id``
+        resolution the write path uses. Idempotent; a fresh install resolves
+        nothing; each intent resolves independently (one stuck lookup does not
+        block the others — it stays uncertain for a later replay / sweep).
         """
         async with self._recovery_lock:
             # Protect only the journal snapshot with the intake lock. The remote
@@ -925,7 +927,7 @@ class AlpacaClerk:
         working_orders = [
             order
             for order in orders
-            if order.status.lower() not in _RECONCILIATION_TERMINAL_ORDER_STATUSES
+            if order.status.lower() not in reconcile.RECONCILIATION_TERMINAL_ORDER_STATUSES
         ]
         async with self._intake_lock:
             _, journal = await self._ensure_journal()

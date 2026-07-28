@@ -10092,6 +10092,40 @@
         "title": "CalculateIndicatorsResponse",
         "type": "object"
       },
+      "ChannelHealth": {
+        "additionalProperties": false,
+        "description": "One submission-affecting stream's health fact, with its age (P7).\n\n``observed_at_ms`` is mandatory: no health fact is rendered without an\nobservation time. ``reason`` is empty when healthy.",
+        "properties": {
+          "healthy": {
+            "title": "Healthy",
+            "type": "boolean"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "stream": {
+            "enum": [
+              "market_data",
+              "execution"
+            ],
+            "title": "Stream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stream",
+          "healthy",
+          "observed_at_ms"
+        ],
+        "title": "ChannelHealth",
+        "type": "object"
+      },
       "ChartDataRequest": {
         "description": "Request for chart data with resampled bars and indicators.",
         "properties": {
@@ -10496,6 +10530,20 @@
           "broker": {
             "title": "Broker",
             "type": "string"
+          },
+          "channel_healths": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChannelHealth"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Healths"
           },
           "hold": {
             "$ref": "#/components/schemas/HoldState"

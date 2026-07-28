@@ -170,8 +170,17 @@ async def lifespan(app: FastAPI):
     from app.broker.alpaca.clerk import AlpacaClerk, get_clerk_settings, set_alpaca_clerk
 
     if _alpaca_clerk_configuration_is_valid():
+        from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
+
         alpaca_broker = AlpacaBroker()
-        alpaca_clerk = AlpacaClerk(read=alpaca_broker, trade=alpaca_broker)
+        # S4 (#1262): the dual-health submission gate — market-data feed (S1)
+        # AND trade_updates execution channel must both be healthy for a new
+        # submit; either broken -> durable STREAM_HEALTH_HOLD, clear-only exit.
+        alpaca_clerk = AlpacaClerk(
+            read=alpaca_broker,
+            trade=alpaca_broker,
+            stream_health=build_default_stream_health_gate(),
+        )
 
         # Alpaca crash-safety recovery (phase 2, S5) — replay the order journal
         # and resolve every intent left uncertain by a timeout or a restart

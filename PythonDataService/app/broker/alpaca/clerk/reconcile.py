@@ -28,6 +28,14 @@ from app.broker.alpaca.clerk.models import (
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from app.engine.live.order_identity import order_ref_namespace_matches
 
+# Reconciliation only considers orders that can still create exposure. Filled,
+# canceled, expired, rejected, and replaced orders belong to historical audit;
+# their settled exposure is represented by the broker positions snapshot.
+RECONCILIATION_TERMINAL_ORDER_STATUSES = frozenset(
+    {"filled", "canceled", "expired", "rejected", "replaced"}
+)
+
+
 
 @dataclass
 class ReconcilePlan:

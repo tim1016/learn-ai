@@ -98,6 +98,7 @@ class _FakeBroker:
 
     def __init__(self) -> None:
         self.submit_calls: list[tuple[BrokerOrderLeg, str]] = []
+        self.cancel_calls: list[str] = []
         # A pre-existing account-net position the hydration path must NEVER
         # adopt (AC4 / 07-27 wave-one defect).
         self.account_net_positions: list[dict[str, Any]] = [
@@ -115,6 +116,10 @@ class _FakeBroker:
     async def list_positions(self) -> list[dict[str, Any]]:
         self.list_positions_calls += 1
         return self.account_net_positions
+
+    async def cancel(self, order_id: str) -> None:
+        self.cancel_calls.append(order_id)
+        return None
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         return _accepted_order(client_order_id)

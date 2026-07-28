@@ -33,6 +33,8 @@ from app.broker.alpaca.clerk.exposure import (
 )
 from app.broker.alpaca.clerk.journal import get_clerk_settings
 from app.broker.alpaca.clerk.models import (
+    STREAM_HEALTH_HOLD_CODE,
+    ChannelHealth,
     ClerkEntryKind,
     ClerkStatus,
     HoldState,
@@ -43,6 +45,13 @@ from app.broker.alpaca.clerk.models import (
     OrderSubmitResult,
     ReconciliationSummary,
 )
+from app.broker.alpaca.clerk.stream_health import (
+    StreamHealthGate,
+    build_default_stream_health_gate,
+    execution_channel_health,
+    market_data_channel_health,
+    stream_health_refusal,
+)
 from app.broker.alpaca.clerk.sweep import (
     ReconciliationSweep,
     get_reconciliation_sweep,
@@ -51,7 +60,9 @@ from app.broker.alpaca.clerk.sweep import (
 )
 
 __all__ = [
+    "STREAM_HEALTH_HOLD_CODE",
     "AlpacaClerk",
+    "ChannelHealth",
     "ClerkEntryKind",
     "ClerkStatus",
     "FlattenRefusedError",
@@ -64,9 +75,13 @@ __all__ = [
     "OrderSubmitResult",
     "ReconciliationSummary",
     "ReconciliationSweep",
+    "StreamHealthGate",
+    "build_default_stream_health_gate",
+    "execution_channel_health",
     "get_alpaca_clerk",
     "get_clerk_settings",
     "get_reconciliation_sweep",
+    "market_data_channel_health",
     "project_instance_exposure",
     "project_instance_timeline",
     "reset_alpaca_clerk_for_testing",
@@ -74,5 +89,6 @@ __all__ = [
     "set_alpaca_clerk",
     "set_reconciliation_sweep",
     "strategy_instance_id_for_namespace",
+    "stream_health_refusal",
     "verify_flatten",
 ]
