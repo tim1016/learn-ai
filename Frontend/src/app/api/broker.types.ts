@@ -18997,7 +18997,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "ACCEPTED" | "OUTCOME_UNKNOWN";
+            state: "ACCEPTED" | "IN_PROGRESS" | "OUTCOME_UNKNOWN";
         };
         /**
          * PresentedOperatorActionTarget

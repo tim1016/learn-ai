@@ -30602,6 +30602,7 @@
           "state": {
             "enum": [
               "ACCEPTED",
+              "IN_PROGRESS",
               "OUTCOME_UNKNOWN"
             ],
             "title": "State",
