@@ -22,6 +22,7 @@ from app.engine.live.account_artifacts import account_artifact_file_path
 from app.engine.live.account_clerk_journal import ACCOUNT_CLERK_JOURNAL_FILENAME
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalEntry
 from app.schemas.clerk_transaction_projection import (
+    ClerkCustodyWindowSummary,
     ClerkOrderInstruction,
     ClerkTransactionEventRow,
     ClerkTransactionHistoryResponse,
@@ -42,6 +43,29 @@ logger = logging.getLogger(__name__)
 MAX_PROJECTION_READ_BYTES = 1_048_576
 MAX_RECOVERY_BATCHES = 64
 MAX_JOURNAL_TAIL_RECORDS = 500
+
+_CUSTODY_STAGE_BY_LIFECYCLE: dict[str, str] = {
+    "recorded": "a0",
+    "queued": "a0",
+    "custody_accepted": "a0",
+    "submission_hold": "a0",
+    "submitting": "a1",
+    "broker_write_started": "a1",
+    "broker_known": "a2",
+    # Both IBKR's durable broker_acked receipt and Alpaca's SUBMIT_ACKED
+    # projection present as submitted. That is broker-known, not an unknown
+    # client-side guess; callbacks may still arrive later or out of order.
+    "submitted": "a2",
+    "acknowledged": "a2",
+    "partial_fill": "a2",
+    "partially_filled": "a2",
+    "economic_terminal": "a3",
+    "expired_before_submit": "a3",
+    "filled": "a3",
+    "cancelled": "a3",
+    "rejected": "a3",
+    "error": "a3",
+}
 
 if TYPE_CHECKING:
     from app.services.clerk_transaction_projection_store import PostgresClerkTransactionProjectionStore
@@ -895,8 +919,32 @@ async def transaction_history(
             status_lag if status_lag is not None or feed_state in {"rebuilding", "reconnecting"} else lag
         ),
         lag_is_lower_bound=lag_is_lower_bound,
+        custody_summary=custody_window_summary(rows),
         rows=rows,
         next_cursor=next_cursor,
+    )
+
+
+def custody_window_summary(
+    rows: list[ClerkTransactionSummaryRow],
+) -> ClerkCustodyWindowSummary:
+    """Fold only backend-projected lifecycle vocabulary into bounded counts.
+
+    This intentionally leaves unsupported or ambiguous vocabulary uncertain
+    rather than guessing a more advanced custody stage in the browser.
+    """
+
+    counts = {"a0": 0, "a1": 0, "a2": 0, "a3": 0, "uncertain": 0}
+    for row in rows:
+        stage = _CUSTODY_STAGE_BY_LIFECYCLE.get(row.lifecycle_state, "uncertain")
+        counts[stage] += 1
+    return ClerkCustodyWindowSummary(
+        record_count=len(rows),
+        a0_custody_accepted_count=counts["a0"],
+        a1_broker_write_started_count=counts["a1"],
+        a2_broker_known_count=counts["a2"],
+        a3_economic_terminal_count=counts["a3"],
+        uncertain_count=counts["uncertain"],
     )
 
 
@@ -938,6 +986,7 @@ __all__ = [
     "PostgresClerkTransactionProjectionStore",
     "alpaca_clerk_journal_path",
     "clerk_journal_path",
+    "custody_window_summary",
     "fold_lifecycle_state",
     "project_account_journal_best_effort",
     "project_alpaca_journal_best_effort",

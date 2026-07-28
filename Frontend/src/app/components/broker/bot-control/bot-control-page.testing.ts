@@ -28,6 +28,7 @@ import type {
   HostRunnerHealth,
   ReconcileAckResponse,
 } from '../../../api/live-runs.types';
+import type { ClerkTransactionHistoryResponse } from '../../../api/clerk-transaction-history.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -109,6 +110,31 @@ export class FakeLiveRunsService {
 export class FakeBrokerService {
   reconcileAccount = vi.fn<(accountId: string) => Promise<unknown>>();
   accountSafetySnapshot = vi.fn<BrokerService['accountSafetySnapshot']>();
+  accountTransactions = vi.fn<BrokerService['accountTransactions']>();
+  accountTransaction = vi.fn<BrokerService['accountTransaction']>();
+}
+
+function emptyCustodyHistory(): ClerkTransactionHistoryResponse {
+  return {
+    projection_available: true,
+    canonical_fallback_required: false,
+    feed_state: 'live',
+    feed_headline: 'Projected evidence available.',
+    feed_detail: 'No matching receipts are currently projected.',
+    high_water_journal_seq: 0,
+    lag_records: 0,
+    lag_is_lower_bound: false,
+    custody_summary: {
+      record_count: 0,
+      a0_custody_accepted_count: 0,
+      a1_broker_write_started_count: 0,
+      a2_broker_known_count: 0,
+      a3_economic_terminal_count: 0,
+      uncertain_count: 0,
+    },
+    rows: [],
+    next_cursor: null,
+  };
 }
 
 export class FakeBotSurfaceStore {
@@ -454,6 +480,8 @@ export async function setupBotControlPage(
   broker.accountSafetySnapshot.mockImplementation((accountId) =>
     Promise.resolve(makeAccountSafetySnapshot({ account_id: accountId })),
   );
+  broker.accountTransactions.mockResolvedValue(emptyCustodyHistory());
+  broker.accountTransaction.mockRejectedValue(new Error('No receipt selected.'));
   const surface = new FakeBotSurfaceStore();
   surface.configure(
     routeId,
@@ -497,6 +525,12 @@ export async function setupBotControlSidebarHost(
 ): Promise<BotControlSidebarHostHarness> {
   const routeId = options.routeId ?? 'sid-x';
   const liveRuns = makeFailClosedLiveRuns(options);
+  const broker = new FakeBrokerService();
+  broker.accountSafetySnapshot.mockImplementation((accountId) =>
+    Promise.resolve(makeAccountSafetySnapshot({ account_id: accountId })),
+  );
+  broker.accountTransactions.mockResolvedValue(emptyCustodyHistory());
+  broker.accountTransaction.mockRejectedValue(new Error('No receipt selected.'));
   const surface = new FakeBotSurfaceStore();
   surface.configure(
     routeId,
@@ -519,6 +553,7 @@ export async function setupBotControlSidebarHost(
         },
       },
       { provide: LiveRunsService, useValue: liveRuns },
+      { provide: BrokerService, useValue: broker },
       { provide: BotSurfaceStore, useValue: surface },
     ],
   });

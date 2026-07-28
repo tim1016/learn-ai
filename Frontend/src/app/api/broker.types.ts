@@ -10083,6 +10083,27 @@ export interface components {
             intent_created_at_ms?: number | null;
         };
         /**
+         * ClerkCustodyWindowSummary
+         * @description Server-folded custody stages for one bounded projected evidence window.
+         *
+         *     Counts describe only the response's immutable receipt window; they never
+         *     claim to be account-wide truth and are not a permission or safety verdict.
+         */
+        ClerkCustodyWindowSummary: {
+            /** A0 Custody Accepted Count */
+            a0_custody_accepted_count: number;
+            /** A1 Broker Write Started Count */
+            a1_broker_write_started_count: number;
+            /** A2 Broker Known Count */
+            a2_broker_known_count: number;
+            /** A3 Economic Terminal Count */
+            a3_economic_terminal_count: number;
+            /** Record Count */
+            record_count: number;
+            /** Uncertain Count */
+            uncertain_count: number;
+        };
+        /**
          * ClerkOrderInstruction
          * @description Typed, receipt-supplied order fields; never a client-side inference.
          */
@@ -10169,6 +10190,7 @@ export interface components {
         ClerkTransactionHistoryResponse: {
             /** Canonical Fallback Required */
             canonical_fallback_required: boolean;
+            custody_summary: components["schemas"]["ClerkCustodyWindowSummary"];
             /** Feed Detail */
             feed_detail: string;
             /** Feed Headline */

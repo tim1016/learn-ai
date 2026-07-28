@@ -45,6 +45,7 @@ import { toOperationError, type OperationKind } from '../operation-error';
 import { BotSurfaceStore } from './bot-surface-store.service';
 import { AccountTruthSpineComponent } from '../account-safety/account-truth-spine.component';
 import { AccountSafetySnapshotStore } from '../account-safety/account-safety-snapshot.store';
+import { BotCustodyRibbonComponent } from './reused/bot-custody-ribbon/bot-custody-ribbon.component';
 
 const MISSING_CONFIRMATION_COPY_ERROR =
   'Backend confirmation copy is unavailable; refusing unsafe action.';
@@ -70,6 +71,7 @@ interface StartReadyCapability {
     TraderViewComponent,
     TypedHaltConfirmComponent,
     AccountTruthSpineComponent,
+    BotCustodyRibbonComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-control-page.component.html',
@@ -115,6 +117,7 @@ export class BotControlPageComponent {
       this.boundAccountId() !== null,
   );
   readonly accountSafetyState = computed(() => this.accountSafety.stateFor(this.boundAccountId()));
+  readonly custodyAccountId = computed(() => this.boundAccountId());
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly crashRecoveryConfirmOpen = signal<boolean>(false);

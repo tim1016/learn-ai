@@ -145,6 +145,23 @@ class ClerkTransactionSummaryRow(BaseModel):
     event_count: int = Field(ge=1)
 
 
+class ClerkCustodyWindowSummary(BaseModel):
+    """Server-folded custody stages for one bounded projected evidence window.
+
+    Counts describe only the response's immutable receipt window; they never
+    claim to be account-wide truth and are not a permission or safety verdict.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    record_count: int = Field(ge=0)
+    a0_custody_accepted_count: int = Field(ge=0)
+    a1_broker_write_started_count: int = Field(ge=0)
+    a2_broker_known_count: int = Field(ge=0)
+    a3_economic_terminal_count: int = Field(ge=0)
+    uncertain_count: int = Field(ge=0)
+
+
 class ClerkTransactionHistoryResponse(BaseModel):
     """One bounded keyset page, with backend-owned projection status."""
 
@@ -158,5 +175,6 @@ class ClerkTransactionHistoryResponse(BaseModel):
     high_water_journal_seq: int | None = Field(default=None, ge=0)
     lag_records: int | None = Field(default=None, ge=0)
     lag_is_lower_bound: bool = False
+    custody_summary: ClerkCustodyWindowSummary
     rows: list[ClerkTransactionSummaryRow]
     next_cursor: str | None = None

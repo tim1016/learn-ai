@@ -6,11 +6,10 @@ import { BrokerService } from '../../../services/broker.service';
 import { AccountDeskTransactionHistoryStore } from './account-desk-transaction-history-store.service';
 
 describe('AccountDeskTransactionHistoryStore', () => {
-  const broker = { accountTransactions: vi.fn(), accountTransaction: vi.fn() };
+  const broker = { accountTransactions: vi.fn() };
 
   beforeEach(() => {
     broker.accountTransactions.mockReset();
-    broker.accountTransaction.mockReset();
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
@@ -22,17 +21,14 @@ describe('AccountDeskTransactionHistoryStore', () => {
 
   afterEach(() => TestBed.resetTestingModule());
 
-  it('requests a 25-row summary page and reads only a selected detail receipt', async () => {
+  it('requests a 25-row summary page', async () => {
     broker.accountTransactions.mockResolvedValue(historyPage());
-    broker.accountTransaction.mockResolvedValue({ transaction_id: 'ctxn_1', receipt: {}, events: [] });
     const store = TestBed.inject(AccountDeskTransactionHistoryStore);
 
     await store.load('DU1234567');
-    await store.transactionDetail('ctxn_1');
 
     expect(broker.accountTransactions).toHaveBeenCalledTimes(1);
     expect(broker.accountTransactions).toHaveBeenCalledWith('DU1234567', null, 25, {});
-    expect(broker.accountTransaction).toHaveBeenCalledWith('DU1234567', 'ctxn_1');
   });
 
   it('replaces an in-flight page with a server-filtered bounded request', async () => {
@@ -63,6 +59,15 @@ function historyPage() {
     feed_detail: 'Current',
     high_water_journal_seq: 1,
     lag_records: 0,
+    lag_is_lower_bound: false,
+    custody_summary: {
+      record_count: 0,
+      a0_custody_accepted_count: 0,
+      a1_broker_write_started_count: 0,
+      a2_broker_known_count: 0,
+      a3_economic_terminal_count: 0,
+      uncertain_count: 0,
+    },
     rows: [],
     next_cursor: null,
   };

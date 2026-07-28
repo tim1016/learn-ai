@@ -63,6 +63,11 @@
     </header>
 
     <app-account-truth-spine [accountState]="accountSafetyState()" />
+    <app-bot-custody-ribbon
+      [accountId]="custodyAccountId()"
+      [strategyInstanceId]="s.strategy_instance_id"
+      [accountSafetyState]="accountSafetyState()"
+    />
 
     @if (activeLens() === 'trader') {
       <app-trader-view

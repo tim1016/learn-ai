@@ -11287,6 +11287,52 @@
         "title": "ClerkCustodyTimeline",
         "type": "object"
       },
+      "ClerkCustodyWindowSummary": {
+        "additionalProperties": false,
+        "description": "Server-folded custody stages for one bounded projected evidence window.\n\nCounts describe only the response's immutable receipt window; they never\nclaim to be account-wide truth and are not a permission or safety verdict.",
+        "properties": {
+          "a0_custody_accepted_count": {
+            "minimum": 0.0,
+            "title": "A0 Custody Accepted Count",
+            "type": "integer"
+          },
+          "a1_broker_write_started_count": {
+            "minimum": 0.0,
+            "title": "A1 Broker Write Started Count",
+            "type": "integer"
+          },
+          "a2_broker_known_count": {
+            "minimum": 0.0,
+            "title": "A2 Broker Known Count",
+            "type": "integer"
+          },
+          "a3_economic_terminal_count": {
+            "minimum": 0.0,
+            "title": "A3 Economic Terminal Count",
+            "type": "integer"
+          },
+          "record_count": {
+            "minimum": 0.0,
+            "title": "Record Count",
+            "type": "integer"
+          },
+          "uncertain_count": {
+            "minimum": 0.0,
+            "title": "Uncertain Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "record_count",
+          "a0_custody_accepted_count",
+          "a1_broker_write_started_count",
+          "a2_broker_known_count",
+          "a3_economic_terminal_count",
+          "uncertain_count"
+        ],
+        "title": "ClerkCustodyWindowSummary",
+        "type": "object"
+      },
       "ClerkOrderInstruction": {
         "additionalProperties": false,
         "description": "Typed, receipt-supplied order fields; never a client-side inference.",
@@ -11547,6 +11593,9 @@
             "title": "Canonical Fallback Required",
             "type": "boolean"
           },
+          "custody_summary": {
+            "$ref": "#/components/schemas/ClerkCustodyWindowSummary"
+          },
           "feed_detail": {
             "maxLength": 512,
             "minLength": 1,
@@ -11630,6 +11679,7 @@
           "feed_state",
           "feed_headline",
           "feed_detail",
+          "custody_summary",
           "rows"
         ],
         "title": "ClerkTransactionHistoryResponse",
