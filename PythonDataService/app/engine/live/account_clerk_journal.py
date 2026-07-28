@@ -994,6 +994,8 @@ def read_account_clerk_durability_spine(
 
     inbox_path = account_clerk_inbox_path(artifacts_root, account_id)
     journal_path = account_clerk_journal_path(artifacts_root, account_id)
+    if not journal_path.exists() and not inbox_path.exists():
+        return []
     with _file_lock(journal_path):
         return read_account_clerk_durability_spine_locked(inbox_path, journal_path)
 
@@ -1016,12 +1018,42 @@ def read_account_clerk_durability_spine_locked(
     """Strictly validate both Clerk durability artifacts under their writer lock."""
 
     journal_entries = _read_journal_jsonl(journal_path)
-    _validate_inbox_replayable(
+    inbox_entries = _validate_inbox_replayable(
         _read_jsonl(inbox_path, AccountClerkInboxEntry),
         journal_entries,
         journal_path,
     )
-    return journal_entries
+    entries_by_seq = {entry.seq: entry for entry in journal_entries}
+    for inbox_entry in inbox_entries:
+        entries_by_seq.setdefault(
+            inbox_entry.seq,
+            AccountClerkJournalEntry(
+                seq=inbox_entry.seq,
+                recorded_at_ms=inbox_entry.received_at_ms,
+                intent=inbox_entry.intent,
+                clerk_request_received_at_ms=inbox_entry.clerk_request_received_at_ms,
+                async_custody_lane=inbox_entry.async_custody_lane,
+                effect_evidence=inbox_entry.effect_evidence,
+            ),
+        )
+    return [entries_by_seq[seq] for seq in sorted(entries_by_seq)]
+
+
+def fold_account_clerk_custody_statuses(
+    entries: list[AccountClerkJournalEntry],
+) -> tuple[AccountClerkCustodyStatus, ...]:
+    """Purely fold bounded custody stages from a validated durability spine."""
+
+    by_intent_id: dict[str, list[AccountClerkJournalEntry]] = {}
+    for entry in entries:
+        if entry.intent is not None:
+            by_intent_id.setdefault(entry.intent.intent_id, []).append(entry)
+    statuses = [
+        status
+        for intent_entries in by_intent_id.values()
+        if (status := _custody_status_for_entries(intent_entries)) is not None
+    ]
+    return tuple(sorted(statuses, key=lambda status: status.intent_id))
 
 
 def seed_account_clerk_broker_evidence_baseline(
@@ -1566,6 +1598,7 @@ __all__ = [
     "AccountClerkRecoveryFlattenReceipt",
     "account_clerk_inbox_path",
     "account_clerk_journal_path",
+    "fold_account_clerk_custody_statuses",
     "is_economic_terminal_broker_event",
     "normalize_broker_event",
     "read_account_clerk_durability_spine",

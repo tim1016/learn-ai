@@ -65,6 +65,7 @@ from app.schemas.account_reconciliation import (
     StaleBindingRetirementReceipt,
     StaleBindingRetirementRequest,
 )
+from app.schemas.account_safety_snapshot import AccountSafetySnapshot
 from app.schemas.journal_cures import (
     JournalCurePreview,
     JournalCureReceipt,
@@ -89,6 +90,7 @@ from app.services.account_event_journal import AccountEventJournalError, Account
 from app.services.account_gate_policy import AccountGatePolicyService
 from app.services.account_gate_promotion import AccountGatePromotionError
 from app.services.account_reconciliation import AccountReconciliationService
+from app.services.account_safety_snapshot import AccountSafetySnapshotService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
 from app.services.journal_cures import JournalCureService
 from app.services.journal_recovery import JournalRecoveryError, JournalRecoveryService
@@ -170,6 +172,15 @@ def get_account_directory_service(
     )
 
 
+def get_account_safety_snapshot_service(
+    artifacts_root: AccountArtifactsRoot,
+    directory: Annotated[AccountDirectoryService, Depends(get_account_directory_service)],
+) -> AccountSafetySnapshotService:
+    """Compose existing account authorities without refreshing broker evidence."""
+
+    return AccountSafetySnapshotService(artifacts_root=artifacts_root, directory=directory)
+
+
 def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
     return LegacyStaleClaimRetirementService(artifacts_root=get_account_artifacts_root())
 
@@ -242,6 +253,21 @@ async def account_service_status_endpoint(
 
     try:
         return service.service_status(account_id=_canonical_account_id(account_id))
+    except UnknownAccountError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
+    except AccountDirectoryError as exc:
+        raise _account_directory_http_error(exc) from exc
+
+
+@router.get("/{account_id}/safety-snapshot", response_model=AccountSafetySnapshot)
+async def account_safety_snapshot_endpoint(
+    account_id: str,
+    service: Annotated[AccountSafetySnapshotService, Depends(get_account_safety_snapshot_service)],
+) -> AccountSafetySnapshot:
+    """Return the broker-free, versioned account safety composition."""
+
+    try:
+        return service.snapshot(account_id=_canonical_account_id(account_id))
     except UnknownAccountError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
     except AccountDirectoryError as exc:
