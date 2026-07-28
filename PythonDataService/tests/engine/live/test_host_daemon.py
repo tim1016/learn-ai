@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 from contextlib import contextmanager
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -71,6 +72,7 @@ from app.schemas.bot_events import (
 )
 from app.schemas.broker_session import GatewaySocketRow
 from app.schemas.live_runs import (
+    AccountClerkHealth,
     AccountEmergencyFlattenResponse,
     ExitReason,
     HostRunnerActionResponse,
@@ -1272,6 +1274,85 @@ async def test_operator_recovery_flatten_endpoint_forwards_to_host_local_clerk(
     assert response.json()["recovery_flatten"]["broker_acked"]["order_id"] == 42
 
 
+async def test_operator_recovery_flatten_rejects_invalid_path_account_before_clerk_start(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
+
+    manager, _ = daemon_context
+
+    def clerk_must_not_start(_account_id: str, **_kwargs: object) -> None:
+        raise AssertionError("invalid account path must not reach Clerk supervision")
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", clerk_must_not_start)
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-recovery",
+        account_id="DU123",
+        strategy_instance_id="retired-bot",
+        run_id="retired-run",
+        bot_order_namespace="learn-ai/retired-bot/v1",
+        intent_id="recovery-1",
+        order_ref="learn-ai/retired-bot/v1:recovery-1",
+        intent_kind="RECOVERY_FLATTEN",
+        order_spec={},
+        owner_generation=3,
+        created_at_ms=100,
+    )
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU-123/clerk/operator-recovery-flatten",
+            json={
+                "intent": intent.model_dump(mode="json"),
+                "request_provenance": "account-monitor/recovery",
+            },
+        )
+
+    assert response.status_code == 400
+
+
+async def test_operator_recovery_flatten_maps_clerk_start_os_error_to_typed_503(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
+
+    manager, _ = daemon_context
+
+    def unavailable_clerk(_account_id: str, **_kwargs: object) -> None:
+        raise OSError("Clerk host process unavailable")
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", unavailable_clerk)
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-recovery",
+        account_id="DU123",
+        strategy_instance_id="retired-bot",
+        run_id="retired-run",
+        bot_order_namespace="learn-ai/retired-bot/v1",
+        intent_id="recovery-1",
+        order_ref="learn-ai/retired-bot/v1:recovery-1",
+        intent_kind="RECOVERY_FLATTEN",
+        order_spec={},
+        owner_generation=3,
+        created_at_ms=100,
+    )
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU123/clerk/operator-recovery-flatten",
+            json={
+                "intent": intent.model_dump(mode="json"),
+                "request_provenance": "account-monitor/recovery",
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_CLERK_START_FAILED"
+
+
 async def test_emergency_authorization_endpoint_forwards_to_host_local_clerk(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -1318,6 +1399,31 @@ async def test_emergency_authorization_endpoint_forwards_to_host_local_clerk(
 
     assert response.status_code == 200
     assert response.json()["authorization_id"] == "a" * 16
+
+
+async def test_emergency_authorization_maps_clerk_start_os_error_to_typed_503(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _ = daemon_context
+
+    def unavailable_clerk(_account_id: str, **_kwargs: object) -> None:
+        raise OSError("Clerk host process unavailable")
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", unavailable_clerk)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU123/clerk/authorize-emergency-flatten",
+            json={
+                "operation_id": "emergency-1",
+                "reconciliation_evidence_version": "reconciliation-1",
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_CLERK_START_FAILED"
 
 
 async def test_retire_stale_binding_endpoint_retires_deployed_binding(
@@ -1470,6 +1576,22 @@ async def test_broker_sockets_endpoint_returns_gateway_socket_rows(
         ]
 
     monkeypatch.setattr(broker_socket_probe.LsofSocketEnumerator, "enumerate", fake_enumerate)
+    monkeypatch.setattr(
+        manager,
+        "_clerk_health",
+        lambda: [
+            AccountClerkHealth(
+                account_id="DU123",
+                generation=3,
+                pid=4242,
+                status="RUNNING",
+                started_at_ms=100,
+                renewed_at_ms=200,
+                valid_until_ms=300,
+                lease_valid=True,
+            )
+        ],
+    )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.get("/broker/sockets?gateway_port=4002")
@@ -1479,6 +1601,45 @@ async def test_broker_sockets_endpoint_returns_gateway_socket_rows(
     assert body["gateway_port"] == 4002
     assert body["sockets"][0]["pid"] == 21760
     assert body["sockets"][0]["run_dir"].endswith(RUN_ID)
+    assert body["account_clerks"][0]["pid"] == 4242
+
+
+def test_clerk_health_does_not_attest_a_lease_with_a_different_pid(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    """A stale lease must not reclassify a second Clerk-shaped process as current."""
+
+    from app.engine.live.account_clerk_supervisor import ManagedClerk
+
+    manager, _ = daemon_context
+    process = FakeProcess()
+    manager._clerk_supervisor._clerks["DU123"] = ManagedClerk(
+        account_id="DU123",
+        generation=3,
+        ibkr_client_id=80,
+        process=process,
+        started_at_ms=100,
+        log_handle=StringIO(),
+    )
+    write_account_clerk_lease(
+        manager.artifacts_root,
+        AccountClerkLease(
+            account_id="DU123",
+            generation=3,
+            pid=9999,
+            ibkr_client_id=80,
+            status="RUNNING",
+            started_at_ms=100,
+            renewed_at_ms=200,
+            valid_until_ms=10_000_000_000_000,
+        ),
+    )
+
+    health = manager._clerk_health()
+
+    assert health[0].pid == process.pid
+    assert health[0].status == "UNAVAILABLE"
+    assert health[0].lease_valid is False
 
 
 @requires_git

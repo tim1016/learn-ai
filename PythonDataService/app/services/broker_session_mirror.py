@@ -126,6 +126,7 @@ class BrokerSessionMirrorService:
             runtime_index=runtime_index,
             data_plane_health=data_plane_health,
             as_of_ms=as_of_ms,
+            account_clerks=socket_snapshot.account_clerks if socket_snapshot is not None else [],
             socket_probe_available=socket_snapshot is not None,
         )
         rows = reconciliation.rows

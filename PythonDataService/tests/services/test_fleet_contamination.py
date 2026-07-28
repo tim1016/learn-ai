@@ -67,6 +67,32 @@ def test_instance_broker_uses_clerk_positions_not_stale_sidecar(
     assert broker.pending_order_count == 0
 
 
+def test_instance_broker_treats_stale_sidecar_as_unknown_when_ledger_is_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broken ledger cannot authorize attribution from a local sidecar."""
+
+    envelope = SimpleNamespace(
+        run_id="run-a",
+        bot_order_namespace="learn-ai/bot-a/v1",
+        expected_position_by_symbol={"QQQ": 1},
+        pending_intents=[],
+    )
+    monkeypatch.setattr(
+        fleet_contamination,
+        "read_instance_live_state",
+        lambda _root, _sid: envelope,
+    )
+
+    def unreadable_ledger(_path: Path):
+        raise OSError("run ledger unavailable")
+
+    monkeypatch.setattr(fleet_contamination, "read_ledger", unreadable_ledger)
+
+    assert instance_broker(tmp_path / "live_runs", "bot-a") is None
+
+
 def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:
     account = "DU123456"
     sid = "bot-a"

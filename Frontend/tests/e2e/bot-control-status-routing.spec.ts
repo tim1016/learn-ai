@@ -205,7 +205,7 @@ test.describe('Bot Control route and page shell', () => {
     await expect(page.locator('.verdict-card')).toHaveCount(1);
     await expect(page.locator('.verdict-card')).toHaveAttribute('data-state', 'On duty');
     await expect(page.locator('.vc-state')).toHaveText('On duty');
-    await expect(page.getByTestId('verdict-verb')).toHaveText('End day now');
+    await expect(page.getByTestId('verdict-verb')).toHaveText('Reconcile now');
     await expect(page.getByLabel('Bot vitals')).toContainText('Position');
     await expect(page.getByTestId('activity-tab')).toBeVisible();
     await expect(page.getByTestId('bot-control-dominant-notice')).toHaveCount(0);

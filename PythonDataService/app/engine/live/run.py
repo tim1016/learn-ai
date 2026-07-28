@@ -1247,6 +1247,9 @@ def _build_owned_position_quantities_provider(
 ):
     """Read this instance's canonical Clerk-journal position projection."""
 
+    if not account_id:
+        return lambda: {}
+
     from app.engine.live.account_clerk import read_account_clerk_journal
     from app.engine.live.journal_exposure import project_journal_exposure
 
@@ -2258,10 +2261,14 @@ def cmd_start(args: argparse.Namespace) -> int:
         current_owner_generation_provider=(
             _current_account_owner_generation_provider if account_owner is not None else None
         ),
-        owned_position_quantities_provider=_build_owned_position_quantities_provider(
-            artifacts_root=_artifacts_root,
-            account_id=ledger.account_id,
-            strategy_instance_id=strategy_instance_id,
+        owned_position_quantities_provider=(
+            _build_owned_position_quantities_provider(
+                artifacts_root=_artifacts_root,
+                account_id=ledger.account_id,
+                strategy_instance_id=strategy_instance_id,
+            )
+            if ledger.account_id
+            else None
         ),
     )
     broker_recovery_engine_ref["engine"] = engine

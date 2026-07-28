@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -1047,6 +1048,8 @@ async def test_submit_pending_orders_logs_observation_lease_shadow_divergence_wi
 ) -> None:
     broker = FakeBroker()
     comparisons: list[tuple[GateResult, GateResult]] = []
+    observation_started = asyncio.Event()
+    allow_observation_to_finish = asyncio.Event()
     truth_gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
     lease_gate = GateResult(
         gate_id="account.observation_lease",
@@ -1056,13 +1059,17 @@ async def test_submit_pending_orders_logs_observation_lease_shadow_divergence_wi
         operator_next_step="RECONCILE_NOW",
         evidence_at_ms=_NOW_MS,
     )
+
+    async def observe_comparison(truth: GateResult, lease: GateResult) -> None:
+        observation_started.set()
+        await allow_observation_to_finish.wait()
+        comparisons.append((truth, lease))
+
     portfolio = LivePortfolio(
         broker,
         account_truth_gate_provider=lambda: truth_gate,
         account_observation_lease_gate_provider=lambda: lease_gate,
-        account_observation_lease_shadow_comparison_observer=lambda truth, lease: comparisons.append(
-            (truth, lease)
-        ),
+        account_observation_lease_shadow_comparison_observer=observe_comparison,
     )
     portfolio.net_liquidation = Decimal("100000")
     portfolio.update_reference_price("SPY", Decimal("500"))
@@ -1072,6 +1079,9 @@ async def test_submit_pending_orders_logs_observation_lease_shadow_divergence_wi
 
     assert len(acks) == 1
     assert "account observation lease shadow divergence" in caplog.text
+    await asyncio.wait_for(observation_started.wait(), timeout=0.1)
+    allow_observation_to_finish.set()
+    await asyncio.sleep(0)
     assert comparisons == [(truth_gate, lease_gate)]
 
 

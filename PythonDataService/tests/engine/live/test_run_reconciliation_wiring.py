@@ -46,12 +46,25 @@ from app.engine.live.reconciliation_classifier import (
 from app.engine.live.reconciliation_orchestrator import reconcile
 from app.engine.live.run import (
     _build_broker_snapshot_from_ibkr,
+    _build_owned_position_quantities_provider,
     _resolve_prior_run_dir,
 )
 from app.schemas.live_runs import ReconciliationReceipt
 
 NS = build_bot_order_namespace("inst-x")
 SID = "inst-x"
+
+
+def test_owned_position_provider_is_empty_without_an_account_identity(tmp_path: Path) -> None:
+    """A non-account run must never query or fabricate Clerk-owned exposure."""
+
+    provider = _build_owned_position_quantities_provider(
+        artifacts_root=tmp_path,
+        account_id="",
+        strategy_instance_id=SID,
+    )
+
+    assert provider() == {}
 
 
 def _open_order(

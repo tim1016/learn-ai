@@ -984,11 +984,12 @@ class LiveEngine:
                 )
                 return account_observation_lease_gate_result(assessment)
 
-            def account_observation_lease_shadow_comparison_observer(
+            async def account_observation_lease_shadow_comparison_observer(
                 truth_gate,
                 lease_gate,
             ):
-                append_account_event(
+                await asyncio.to_thread(
+                    append_account_event,
                     self._artifacts_root,
                     self._account_id,
                     {

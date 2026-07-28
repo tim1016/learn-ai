@@ -10,6 +10,7 @@ existing IBKR paper-order boundary asynchronously.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -81,6 +82,17 @@ def _describe_policy_value(policy: object) -> str:
 
 logger = logging.getLogger(__name__)
 ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES: Counter[str] = Counter()
+
+
+def _log_shadow_comparison_observation_failure(task: asyncio.Future[object]) -> None:
+    """Surface a best-effort shadow write failure without delaying submit."""
+
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        logger.exception("account observation lease shadow comparison write failed")
 
 
 class LiveBrokerEventStreamError(RuntimeError):
@@ -813,7 +825,7 @@ class LivePortfolio:
     # paired shadow comparison at an actual submit boundary so parity evidence
     # survives child-process restarts without introducing a second scheduler.
     account_observation_lease_shadow_comparison_observer: (
-        Callable[[GateResult, GateResult], object] | None
+        Callable[[GateResult, GateResult], Awaitable[object] | object] | None
     ) = None
     # S5: one account-level live-session verdict gates all normal broker
     # actions, including liquidation because it ultimately drains through this
@@ -1302,10 +1314,18 @@ class LivePortfolio:
             and self.account_observation_lease_shadow_comparison_observer is not None
         ):
             try:
-                self.account_observation_lease_shadow_comparison_observer(
+                comparison_observation = self.account_observation_lease_shadow_comparison_observer(
                     account_truth_gate,
                     lease_gate,
                 )
+                if inspect.isawaitable(comparison_observation):
+                    # Shadow parity is an observable migration signal, never a
+                    # broker-submit prerequisite. Its durable writer can wait
+                    # on the cross-runtime mutex, so keep that wait off the
+                    # submit path and surface any later failure through logs.
+                    asyncio.ensure_future(comparison_observation).add_done_callback(
+                        _log_shadow_comparison_observation_failure
+                    )
             except Exception:
                 logger.exception("account observation lease shadow comparison write failed")
         if (
