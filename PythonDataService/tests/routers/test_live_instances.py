@@ -806,8 +806,15 @@ def _write_execution(run_dir: Path, *, ts_ms: int, exec_id: str = "exec-repair-1
 
 @pytest.fixture
 def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from app.config import settings as app_settings
+
     root = tmp_path / "live_runs"
     root.mkdir()
+    # This module's default ASGI fixture exercises operator-surface behavior,
+    # not transport authentication. Dedicated coverage below sets a secret and
+    # supplies the corresponding header explicitly.
+    monkeypatch.setattr(app_settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(app_settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
@@ -1011,7 +1018,7 @@ async def test_surface_assembler_matches_pre_extraction_payload_golden(
 
 async def test_instance_status_running_exposes_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
-    _write_ledger(root, "run-live-aaa", "spy_ema_paper", 100)
+    _write_ledger(root, "run-live-aaa", "spy_ema_paper", 100, clerk_readable=True)
     _set_daemon(
         monkeypatch,
         process={"state": "running", "run_id": "run-live-aaa", "pid": 99, "started_at_ms": 100},
@@ -1036,7 +1043,7 @@ async def test_instance_status_does_not_fetch_broker_positions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, root = app_with_root
-    _write_ledger(root, "run-status", "spy_ema_paper", 100)
+    _write_ledger(root, "run-status", "spy_ema_paper", 100, clerk_readable=True)
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-status"})
     _forbid_broker_position_fetch(monkeypatch)
     _forbid_account_truth_refresh(monkeypatch)
@@ -1052,7 +1059,7 @@ async def test_surface_producer_does_not_fetch_broker_positions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _app, root = app_with_root
-    _write_ledger(root, "run-producer", "spy_ema_paper", 100)
+    _write_ledger(root, "run-producer", "spy_ema_paper", 100, clerk_readable=True)
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-producer"})
     _forbid_broker_position_fetch(monkeypatch)
     _forbid_account_truth_refresh(monkeypatch)
