@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import NoReturn
 
 import pytest
 
@@ -40,6 +40,7 @@ def test_instance_broker_uses_clerk_positions_not_stale_sidecar(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     envelope = SimpleNamespace(
+        strategy_instance_id="bot-a",
         run_id="run-a",
         bot_order_namespace="learn-ai/bot-a/v1",
         expected_position_by_symbol={"QQQ": 1},
@@ -52,8 +53,8 @@ def test_instance_broker_uses_clerk_positions_not_stale_sidecar(
     )
     monkeypatch.setattr(
         fleet_contamination,
-        "read_ledger",
-        lambda _path: SimpleNamespace(account_id="DU123456"),
+        "_account_id_for_run",
+        lambda _root, _run_id: "DU123456",
     )
     monkeypatch.setattr(
         fleet_contamination,
@@ -75,6 +76,7 @@ def test_instance_broker_treats_stale_sidecar_as_unknown_when_ledger_is_unreadab
     """A broken ledger cannot authorize attribution from a local sidecar."""
 
     envelope = SimpleNamespace(
+        strategy_instance_id="bot-a",
         run_id="run-a",
         bot_order_namespace="learn-ai/bot-a/v1",
         expected_position_by_symbol={"QQQ": 1},
@@ -86,12 +88,50 @@ def test_instance_broker_treats_stale_sidecar_as_unknown_when_ledger_is_unreadab
         lambda _root, _sid: envelope,
     )
 
-    def unreadable_ledger(_path: Path) -> NoReturn:
-        raise OSError("run ledger unavailable")
-
-    monkeypatch.setattr(fleet_contamination, "read_ledger", unreadable_ledger)
+    monkeypatch.setattr(fleet_contamination, "_account_id_for_run", lambda _root, _run_id: None)
 
     assert instance_broker(tmp_path / "live_runs", "bot-a") is None
+
+
+@pytest.mark.parametrize("run_id", ("../other-run", "run-a/../other-run"))
+def test_instance_broker_rejects_sidecar_run_id_outside_live_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_id: str,
+) -> None:
+    envelope = SimpleNamespace(
+        strategy_instance_id="bot-a",
+        run_id=run_id,
+        bot_order_namespace="learn-ai/bot-a/v1",
+        expected_position_by_symbol={"QQQ": 1},
+        pending_intents=[],
+    )
+    monkeypatch.setattr(fleet_contamination, "read_instance_live_state", lambda _root, _sid: envelope)
+
+    assert instance_broker(tmp_path / "live_runs", "bot-a") is None
+
+
+def test_instance_broker_rejects_mismatched_legacy_ledger_run_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "live_runs"
+    run_dir = root / "run-a"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": "other-run", "account_id": "DU123456"}),
+        encoding="utf-8",
+    )
+    envelope = SimpleNamespace(
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        bot_order_namespace="learn-ai/bot-a/v1",
+        expected_position_by_symbol={"QQQ": 1},
+        pending_intents=[],
+    )
+    monkeypatch.setattr(fleet_contamination, "read_instance_live_state", lambda _root, _sid: envelope)
+
+    assert instance_broker(root, "bot-a") is None
 
 
 def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:

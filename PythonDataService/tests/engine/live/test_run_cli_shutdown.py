@@ -204,8 +204,8 @@ class _LifecycleClient:
         return self._connected
 
 
-def test_cmd_start_shutdown_event_path_flattens_and_returns_zero(tmp_path: Path) -> None:
-    """End-to-end: SIGINT-equivalent event fires → engine flattens → cmd_start returns 0."""
+def test_cmd_start_shutdown_event_preserves_unattributed_account_exposure(tmp_path: Path) -> None:
+    """A shutdown cannot liquidate account exposure the run does not own."""
     run_dir = _build_run_dir(tmp_path)
 
     broker = FakeBroker()
@@ -247,11 +247,11 @@ def test_cmd_start_shutdown_event_path_flattens_and_returns_zero(tmp_path: Path)
 
     assert rc == 0
 
-    # Flatten was submitted via the broker.
+    # The account snapshot is not Clerk-attributed to this legacy run. The
+    # shutdown path must not treat a same-symbol account-net position as its
+    # own, since that could liquidate a sibling's exposure.
     sell_orders = [o for o in broker.orders if o.action == "SELL"]
-    assert len(sell_orders) == 1, f"expected 1 SELL liquidation, got {broker.orders!r}"
-    assert sell_orders[0].symbol == "SPY"
-    assert sell_orders[0].quantity == 100
+    assert sell_orders == []
 
     # The run-dir is the live-engine's output_dir; log + artifact writers
     # should have produced a live.log file via configure_run_logging.

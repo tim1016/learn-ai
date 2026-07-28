@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.engine.live.account_clerk import read_account_clerk_journal
+from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.live_state_sidecar import (
@@ -17,7 +18,7 @@ from app.engine.live.live_state_sidecar import (
     LiveStateSidecarRepo,
     stable_live_state_path,
 )
-from app.engine.live.run_ledger import read_ledger
+from app.engine.live.run_lookup import account_id_from_run_ledger
 from app.schemas.live_runs import FleetContamination, InstanceBrokerView
 from app.services.account_journal_authority import (
     account_journal_authority_is_active,
@@ -72,9 +73,12 @@ def read_instance_live_state(root: Path, sid: str) -> LiveStateEnvelope | None:
     except ValueError:
         return None
     try:
-        return LiveStateSidecarRepo(
+        envelope = LiveStateSidecarRepo(
             sidecar_path, trusted_root=artifacts_root / "live_state"
         ).read()
+        if envelope is None or envelope.strategy_instance_id != sid:
+            return None
+        return envelope
     except (LiveStateSidecarCorruptError, OSError):
         return None
 
@@ -103,15 +107,12 @@ def instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
     envelope = read_instance_live_state(root, sid)
     if envelope is None:
         return None
-    try:
-        ledger = read_ledger(root / envelope.run_id / "run_ledger.json")
-    except (OSError, ValueError):
-        return None
-    if not ledger.account_id:
+    account_id = _account_id_for_run(root, envelope.run_id)
+    if account_id is None:
         return None
     journal_positions = _collect_journal_position_explanations(
         root,
-        account_id=ledger.account_id,
+        account_id=account_id,
     )
     owned_positions = (
         journal_positions.get(sid, {})
@@ -252,11 +253,8 @@ def _collect_legacy_fleet_position_explanations(
         envelope = read_instance_live_state(root, sid)
         if envelope is not None and envelope.expected_position_by_symbol:
             if account_id is not None:
-                try:
-                    ledger = read_ledger(root / envelope.run_id / "run_ledger.json")
-                except (OSError, ValueError):
-                    continue
-                if ledger.account_id != account_id:
+                ledger_account_id = _account_id_for_run(root, envelope.run_id)
+                if ledger_account_id != account_id:
                     continue
             retired = _retired_claim_keys_for_run(
                 artifacts_root=root.parent, run_id=envelope.run_id, cache=retired_by_account
@@ -284,13 +282,9 @@ def _retired_claim_keys_for_run(
     must never hide managed exposure from the contamination sum.
     """
 
-    try:
-        ledger = read_ledger(artifacts_root / "live_runs" / run_id / "run_ledger.json")
-    except (OSError, ValueError):
+    account_id = _account_id_for_run(artifacts_root / "live_runs", run_id)
+    if account_id is None:
         logger.debug("legacy retirement filter: no readable ledger for run %s; claims stay visible", run_id)
-        return frozenset()
-    account_id = ledger.account_id
-    if not account_id:
         return frozenset()
     if account_id not in cache:
         try:
@@ -303,6 +297,27 @@ def _retired_claim_keys_for_run(
             )
             cache[account_id] = frozenset()
     return cache[account_id]
+
+
+def _account_id_for_run(live_runs_root: Path, run_id: str) -> str | None:
+    """Read a legacy ledger only after proving its run-directory identity."""
+
+    if not run_id or Path(run_id).name != run_id:
+        return None
+    try:
+        root = live_runs_root.resolve()
+        run_dir = (root / run_id).resolve()
+    except OSError:
+        return None
+    if run_dir.parent != root:
+        return None
+    raw_account_id = account_id_from_run_ledger(run_dir, expected_run_id=run_id)
+    if raw_account_id is None:
+        return None
+    try:
+        return normalize_account_id(raw_account_id)
+    except InvalidAccountIdError:
+        return None
 
 
 async def fetch_net_positions(account_id: str | None = None) -> dict[str, int] | None:

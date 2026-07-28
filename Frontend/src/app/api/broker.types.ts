@@ -5568,12 +5568,16 @@ export interface components {
             intent_id: string;
             /** Journal Seq */
             journal_seq: number;
+            observed_epoch?: components["schemas"]["AccountEpoch"] | null;
             /** Order Id */
             order_id: number;
             /** Order Ref */
             order_ref: string;
+            origin_epoch?: components["schemas"]["AccountEpoch"] | null;
             /** Perm Id */
             perm_id?: number | null;
+            /** Reconciliation Id */
+            reconciliation_id?: string | null;
             /** Recorded At Ms */
             recorded_at_ms: number;
             /** Run Id */
@@ -5630,8 +5634,12 @@ export interface components {
             intent_id: string;
             /** Journal Seq */
             journal_seq: number;
+            observed_epoch?: components["schemas"]["AccountEpoch"] | null;
             /** Order Ref */
             order_ref: string;
+            origin_epoch?: components["schemas"]["AccountEpoch"] | null;
+            /** Reconciliation Id */
+            reconciliation_id?: string | null;
             /** Recorded At Ms */
             recorded_at_ms: number;
             /** Run Id */
@@ -5824,6 +5832,27 @@ export interface components {
             title: string;
         };
         /**
+         * AccountEffectPurpose
+         * @description The limited target shapes a caller may ask the server to verify.
+         * @enum {string}
+         */
+        AccountEffectPurpose: "EXACT_CANCEL" | "EXACT_CLOSE";
+        /**
+         * AccountEffectRequest
+         * @description Untrusted requested target; never itself proves a safe effect.
+         */
+        AccountEffectRequest: {
+            /** Expected Signed Quantity */
+            expected_signed_quantity?: number | null;
+            purpose: components["schemas"]["AccountEffectPurpose"];
+            /** Target Con Id */
+            target_con_id?: number | null;
+            /** Target Order Id */
+            target_order_id?: number | null;
+            /** Target Order Ref */
+            target_order_ref?: string | null;
+        };
+        /**
          * AccountEmergencyFlattenResponse
          * @description Receipt returned after the Clerk re-observes the account flat.
          */
@@ -5843,6 +5872,16 @@ export interface components {
              * @default false
              */
             idempotency_replayed?: boolean;
+        };
+        /**
+         * AccountEpoch
+         * @description The Clerk boot and monotonic proof sequence behind one fact.
+         */
+        AccountEpoch: {
+            /** Clerk Boot Id */
+            clerk_boot_id: string;
+            /** Epoch Seq */
+            epoch_seq: number;
         };
         /**
          * AccountEventEvidenceRef
@@ -6040,13 +6079,43 @@ export interface components {
          * AccountOwnerSubmitIntent
          * @description Durable runner intent accepted by AccountOwner intake.
          */
-        AccountOwnerSubmitIntent: {
+        "AccountOwnerSubmitIntent-Input": {
             /** Account Id */
             account_id: string;
             /** Bot Order Namespace */
             bot_order_namespace: string;
             /** Created At Ms */
             created_at_ms: number;
+            effect_request?: components["schemas"]["AccountEffectRequest"] | null;
+            /** Intent Id */
+            intent_id: string;
+            /** Intent Kind */
+            intent_kind: string;
+            /** Order Ref */
+            order_ref: string;
+            /** Order Spec */
+            order_spec: Record<string, never>;
+            /** Owner Generation */
+            owner_generation: number;
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Trace Id */
+            trace_id: string;
+        };
+        /**
+         * AccountOwnerSubmitIntent
+         * @description Durable runner intent accepted by AccountOwner intake.
+         */
+        "AccountOwnerSubmitIntent-Output": {
+            /** Account Id */
+            account_id: string;
+            /** Bot Order Namespace */
+            bot_order_namespace: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            effect_request?: components["schemas"]["AccountEffectRequest"] | null;
             /** Intent Id */
             intent_id: string;
             /** Intent Kind */
@@ -6169,7 +6238,7 @@ export interface components {
          */
         AccountRecoveryFlattenCandidate: {
             confirmation: components["schemas"]["OperatorConfirmationCopy"];
-            intent: components["schemas"]["AccountOwnerSubmitIntent"];
+            intent: components["schemas"]["AccountOwnerSubmitIntent-Output"];
         };
         /**
          * AccountRosterRow
@@ -13610,6 +13679,11 @@ export interface components {
              */
             client_order_id?: string | null;
             /**
+             * Con Id
+             * @description Optional IBKR contract identifier. Clerk exact-close recovery requires this to match the server-proved current position so the broker execution cannot resolve a same-symbol contract.
+             */
+            con_id?: number | null;
+            /**
              * Confirm Paper
              * @description Required True. Defense-in-depth on top of IBKR_MODE and the DU account-id sentinel.
              */
@@ -17108,7 +17182,7 @@ export interface components {
          * @description Provenance-bearing request for the Clerk's existing operator flatten lane.
          */
         OperatorRecoveryFlattenRequest: {
-            intent: components["schemas"]["AccountOwnerSubmitIntent"];
+            intent: components["schemas"]["AccountOwnerSubmitIntent-Input"];
             /** Request Provenance */
             request_provenance: string;
         };
