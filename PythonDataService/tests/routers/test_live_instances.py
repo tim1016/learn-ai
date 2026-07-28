@@ -173,6 +173,7 @@ def _write_ledger(
     strategy_key: str | None = None,
     start_defaults: dict | None = None,
     live_config: dict | None = None,
+    clerk_readable: bool = False,
 ) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
@@ -187,6 +188,19 @@ def _write_ledger(
         payload["start_defaults"] = start_defaults
     if live_config is not None:
         payload["live_config"] = live_config
+    if clerk_readable:
+        payload.update(
+            {
+                "code_sha": "test-code-sha",
+                "strategy_spec_path": "/test/spec.json",
+                "strategy_spec_sha256": "test-spec-sha",
+                "qc_audit_copy_path": "/test/qc_audit.py",
+                "qc_audit_copy_sha256": "test-audit-sha",
+                "qc_cloud_backtest_id": "test-backtest",
+                "start_date_ms": created_at_ms,
+                "live_config": live_config or {},
+            }
+        )
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -3136,7 +3150,7 @@ async def test_list_instances_merges_daemon_and_disk(app_with_root, monkeypatch:
 
 async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
-    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
+    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100, clerk_readable=True)
     _write_live_state(root, "spy_ema_paper", "run-ema-1", {"SPY": 5})
     _set_daemon(
         monkeypatch,
@@ -4038,7 +4052,7 @@ async def test_status_includes_namespace_attributed_broker_slice(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
-    _write_ledger(root, "run-brk", "spy_ema_paper", 100)
+    _write_ledger(root, "run-brk", "spy_ema_paper", 100, clerk_readable=True)
     live_state_dir = root.parent / "live_state" / "spy_ema_paper"
     live_state_dir.mkdir(parents=True)
     (live_state_dir / "live_state.json").write_text(
@@ -4832,34 +4846,30 @@ async def test_deploy_and_start_rejects_fleet_contamination_preflight(
 
 
 def _write_identity_source_run(root: Path, sid: str, symbol: str) -> None:
-    run_dir = root / f"run-{symbol.lower()}"
-    run_dir.mkdir(parents=True)
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps(
-            {
-                "run_id": run_dir.name,
-                "strategy_instance_id": sid,
-                "created_at_ms": 1_700_000_000_000,
-                "live_config": {
-                    "symbol": "SPY",
-                    "sizing": {"kind": "FixedShares", "value": 1},
-                    "action": {
-                        "on_enter": [
-                            {
-                                "leg_id": "leg_1",
-                                "instrument": {"kind": "stock", "underlying": symbol},
-                                "position": "long",
-                                "qty_ratio": 1,
-                            }
-                        ],
-                        "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
+    run_id = f"run-{symbol.lower()}"
+    _write_ledger(
+        root,
+        run_id,
+        sid,
+        1_700_000_000_000,
+        live_config={
+            "symbol": "SPY",
+            "sizing": {"kind": "FixedShares", "value": 1},
+            "action": {
+                "on_enter": [
+                    {
+                        "leg_id": "leg_1",
+                        "instrument": {"kind": "stock", "underlying": symbol},
+                        "position": "long",
+                        "qty_ratio": 1,
+                    }
+                ],
+                "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
+            },
+        },
+        clerk_readable=True,
     )
-    _write_live_state(root, sid, run_dir.name, {})
+    _write_live_state(root, sid, run_id, {})
 
 
 async def test_deploy_and_start_rejects_unconfirmed_identity_incoherence(
@@ -4987,7 +4997,7 @@ async def test_deploy_and_start_rejects_unconfirmed_nonflat_exposure(
 ) -> None:
     app, root = app_with_root
     _set_connected_broker_account(monkeypatch, "DU111")
-    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000, clerk_readable=True)
     _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": 5})
     called = False
 
@@ -5024,7 +5034,7 @@ async def test_deploy_and_start_allows_confirmed_nonflat_exposure(
     app, root = app_with_root
     _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
-    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000, clerk_readable=True)
     _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": -3})
     captured: dict = {}
 
@@ -5085,7 +5095,7 @@ async def test_deploy_and_start_allows_flat_existing_exposure(app_with_root, mon
     app, root = app_with_root
     _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
-    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000, clerk_readable=True)
     _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": 0})
 
     async def fake_deploy(_base_url: str, _payload: dict) -> dict:

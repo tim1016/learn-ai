@@ -36,8 +36,16 @@ from unittest.mock import patch
 
 import pytest
 
-from app.broker.ibkr.models import IbkrPosition, IbkrPositionsSnapshot
+from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec, IbkrPosition, IbkrPositionsSnapshot
 from app.engine.data.trade_bar import TradeBar
+from app.engine.live.account_clerk import AccountClerk
+from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
+    bot_order_namespace_for_instance,
+    write_account_instance_binding,
+)
+from app.engine.live.order_identity import build_order_ref
 from app.engine.live.run import cmd_start
 from app.engine.live.run_ledger import build_ledger, write_ledger
 from tests.engine.live.fixtures.fake_broker import FakeBroker
@@ -104,6 +112,71 @@ def _make_args(
     )
 
 
+def _record_clerk_owned_position(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    strategy_instance_id: str,
+    run_id: str,
+    symbol: str,
+    quantity: int,
+) -> None:
+    """Seed a Clerk-proven position for an engine flatten test."""
+
+    namespace = bot_order_namespace_for_instance(strategy_instance_id)
+    intent_id = "seeded-position"
+    order_ref = build_order_ref(namespace, intent_id)
+    write_account_instance_binding(
+        artifacts_root,
+        AccountInstanceBinding(
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            bot_order_namespace=namespace,
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=1,
+            source="test",
+        ),
+    )
+    intent = AccountOwnerSubmitIntent(
+        trace_id="shutdown-flatten-test",
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+        run_id=run_id,
+        bot_order_namespace=namespace,
+        intent_id=intent_id,
+        order_ref=order_ref,
+        intent_kind="STRATEGY",
+        order_spec=IbkrOrderSpec(
+            symbol=symbol,
+            sec_type="STK",
+            action="BUY",
+            quantity=quantity,
+            order_type="MKT",
+            confirm_paper=True,
+            order_ref=order_ref,
+        ).model_dump(),
+        owner_generation=1,
+        created_at_ms=1,
+    )
+    clerk = AccountClerk(artifacts_root=artifacts_root, account_id=account_id)
+    asyncio.run(clerk.record_intent(intent))
+    clerk.append_broker_event(
+        intent,
+        IbkrOrderEvent(
+            account_id=account_id,
+            order_id=1,
+            event_type="fill",
+            order_ref=order_ref,
+            symbol=symbol,
+            side="BUY",
+            fill_quantity=quantity,
+            exec_id="seeded-fill",
+            ts_ms=2,
+        ),
+    )
+
+
 class _LifecycleClient:
     """Stub IbkrClient that records connect/disconnect calls so tests can
     pin lifecycle invariants without spinning up a real broker session.
@@ -154,6 +227,14 @@ def test_cmd_start_shutdown_event_path_flattens_and_returns_zero(tmp_path: Path)
     )
 
     args = _make_args(run_dir, broker, [_spy_bar(m) for m in range(30, 35)])
+    _record_clerk_owned_position(
+        args.artifacts_root,
+        account_id="DU123",
+        strategy_instance_id="spy_ema_crossover",
+        run_id=run_dir.name,
+        symbol="SPY",
+        quantity=100,
+    )
 
     # Patch the signal-handler installer to set shutdown_event
     # immediately. The engine's top-of-iteration check then trips on

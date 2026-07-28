@@ -435,7 +435,7 @@ export interface paths {
         put?: never;
         /**
          * Operator Recovery Flatten Endpoint
-         * @description Run the existing retired-namespace flatten lane after Clerk readiness proof.
+         * @description Run a retired-namespace flatten through the host-local Clerk lane.
          */
         post: operations["operator_recovery_flatten_endpoint_api_accounts__account_id__operator_recovery_flatten_post"];
         delete?: never;
