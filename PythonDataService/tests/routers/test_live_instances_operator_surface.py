@@ -66,8 +66,12 @@ def _write_ledger(
 
 @pytest.fixture
 def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from app.config import settings as app_settings
+
     root = tmp_path / "live_runs"
     root.mkdir()
+    monkeypatch.setattr(app_settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(app_settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",

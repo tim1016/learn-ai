@@ -26,8 +26,12 @@ from app.main import app
 @pytest.fixture
 def live_runs_root(tmp_path, monkeypatch):
     """Temp live_runs root with IbkrSettings + router caches reset."""
+    from app.config import settings as app_settings
+
     root = tmp_path / "live_runs"
     root.mkdir(parents=True)
+    monkeypatch.setattr(app_settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(app_settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
 
     from app.broker.ibkr import config as ibkr_config
 
