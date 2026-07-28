@@ -40,6 +40,7 @@ from app.engine.live.account_clerk_journal_models import (
     AccountClerkRecoveryFlattenReceipt,
     _require_entry_intent,
 )
+from app.engine.live.account_epoch import AccountEpoch
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
 from app.engine.live.journal_recovery_state import (
@@ -103,6 +104,9 @@ class AccountClerkJournal:
         clerk_request_received_at_ms: int | None = None,
         clerk_intake_admitted_at_ms: int | None = None,
         async_custody_lane: Literal["entry", "risk_reducing"] | None = None,
+        origin_epoch: AccountEpoch | None = None,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
     ) -> AccountClerkRecordedReceipt:
         inbox_path, journal_path = self._paths()
         journal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,6 +139,9 @@ class AccountClerkJournal:
                 # than presenting a synthesized fsync clock.
                 inbox_fsynced_at_ms=inbox_fsynced_at_ms,
                 async_custody_lane=inbox_entry.async_custody_lane,
+                origin_epoch=origin_epoch,
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
             )
             self._append_entry_locked(journal_path, entries, journal_entry)
             self.register_attribution(intent)
@@ -303,6 +310,8 @@ class AccountClerkJournal:
         intent: AccountOwnerSubmitIntent,
         *,
         reason: str,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
     ) -> None:
         """Hold an A0 intent when a post-admission policy fence closes before A1."""
 
@@ -331,10 +340,20 @@ class AccountClerkJournal:
                     intent=intent,
                     custody_lane=lane,
                     broker_error=reason,
+                    origin_epoch=recorded.origin_epoch,
+                    observed_epoch=observed_epoch,
+                    reconciliation_id=reconciliation_id,
                 ),
             )
 
-    def append_broker_ack(self, intent: AccountOwnerSubmitIntent, ack: Any) -> AccountClerkBrokerAckReceipt:
+    def append_broker_ack(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        ack: Any,
+        *,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+    ) -> AccountClerkBrokerAckReceipt:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
             entries = self._load_tail_locked(inbox_path, journal_path)
@@ -347,18 +366,41 @@ class AccountClerkJournal:
                 perm_id=_try_int(getattr(ack, "perm_id", None)),
                 exec_id=getattr(ack, "exec_id", None),
                 broker_ack=ack if isinstance(ack, IbkrOrderAck) else None,
+                origin_epoch=_origin_epoch_for_intent(entries, intent),
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
             )
             self._append_entry_locked(journal_path, entries, entry)
             return AccountClerkBrokerAckReceipt.from_journal_entry(entry)
 
-    def append_broker_submitting(self, intent: AccountOwnerSubmitIntent) -> None:
-        self._append_broker_transition(intent, entry_kind="broker_submitting")
+    def append_broker_submitting(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+    ) -> None:
+        self._append_broker_transition(
+            intent,
+            entry_kind="broker_submitting",
+            observed_epoch=observed_epoch,
+            reconciliation_id=reconciliation_id,
+        )
 
-    def append_broker_uncertain(self, intent: AccountOwnerSubmitIntent, error: Exception) -> None:
+    def append_broker_uncertain(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        error: Exception,
+        *,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+    ) -> None:
         self._append_broker_transition(
             intent,
             entry_kind="broker_uncertain",
             broker_error=f"{type(error).__name__}: {error}",
+            observed_epoch=observed_epoch,
+            reconciliation_id=reconciliation_id,
         )
 
     def _append_broker_transition(
@@ -367,6 +409,8 @@ class AccountClerkJournal:
         *,
         entry_kind: Literal["broker_submitting", "broker_uncertain"],
         broker_error: str | None = None,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
     ) -> None:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
@@ -377,6 +421,9 @@ class AccountClerkJournal:
                 recorded_at_ms=self._now_ms(),
                 intent=intent,
                 broker_error=broker_error,
+                origin_epoch=_origin_epoch_for_intent(entries, intent),
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
             )
             self._append_entry_locked(journal_path, entries, entry)
 
@@ -606,7 +653,13 @@ class AccountClerkJournal:
             cancelled_order_ids=confirmation.cancelled_order_ids or (),
         )
 
-    def record_broker_event(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
+    def record_broker_event(
+        self,
+        event: IbkrOrderEvent,
+        *,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+    ) -> AccountClerkBrokerEventReceipt:
         """Append one deduplicated callback after durable attribution lookup."""
 
         inbox_path, journal_path = self._paths()
@@ -632,6 +685,9 @@ class AccountClerkJournal:
                 broker_event=event.model_dump(mode="json"),
                 event_account_id=event.account_id,
                 broker_callback_idempotency_key=callback_key,
+                origin_epoch=_origin_epoch_for_intent(entries, intent) if intent is not None else None,
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
             )
             self._append_entry_locked(journal_path, entries, entry)
             return AccountClerkBrokerEventReceipt(
@@ -647,6 +703,8 @@ class AccountClerkJournal:
         *,
         verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"],
         reason: str,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
     ) -> None:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
@@ -659,6 +717,9 @@ class AccountClerkJournal:
                 intent=intent,
                 reconciliation_verdict=verdict,
                 reconciliation_reason=reason,
+                origin_epoch=_origin_epoch_for_intent(entries, intent),
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
             )
             self._append_entry_locked(journal_path, entries, entry)
 
@@ -1231,6 +1292,23 @@ def _broker_callback_entry_for_key(
     return None
 
 
+def _origin_epoch_for_intent(
+    entries: list[AccountClerkJournalEntry],
+    intent: AccountOwnerSubmitIntent,
+) -> AccountEpoch | None:
+    """Return durable A0 epoch provenance, preserving legacy unknowns."""
+
+    recorded = next(
+        (
+            entry
+            for entry in entries
+            if entry.entry_kind == "recorded" and entry.intent == intent
+        ),
+        None,
+    )
+    return recorded.origin_epoch if recorded is not None else None
+
+
 def normalize_broker_event(
     event: IbkrOrderEvent | Mapping[str, object],
 ) -> IbkrOrderEvent | None:
@@ -1281,7 +1359,7 @@ def _custody_status_for_entries(
     legacy_queued = next((entry for entry in entries if entry.entry_kind == "custody_queued"), None)
     broker_acked = next((entry for entry in entries if entry.entry_kind == "broker_acked"), None)
     is_terminal = any(
-        entry.entry_kind == "broker_event" and _is_economic_terminal_event(entry.broker_event)
+        entry.entry_kind == "broker_event" and is_economic_terminal_broker_event(entry.broker_event)
         for entry in entries
     )
     updated_at_ms = max(entry.recorded_at_ms for entry in entries)
@@ -1387,7 +1465,7 @@ def _custody_status_for_entries(
     )
 
 
-def _is_economic_terminal_event(event: dict[str, object] | None) -> bool:
+def is_economic_terminal_broker_event(event: dict[str, object] | None) -> bool:
     if event is None:
         return False
     status = event.get("status")
@@ -1460,6 +1538,7 @@ __all__ = [
     "AccountClerkRecoveryFlattenReceipt",
     "account_clerk_inbox_path",
     "account_clerk_journal_path",
+    "is_economic_terminal_broker_event",
     "normalize_broker_event",
     "read_account_clerk_durability_spine",
     "read_account_clerk_durability_spine_locked",

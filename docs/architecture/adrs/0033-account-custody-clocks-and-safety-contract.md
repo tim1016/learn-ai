@@ -121,3 +121,27 @@ namespace-matching fill and derives the minimum metadata required to project
 that fill. The canonical Clerk journal and the bot callback WAL remain the
 durable records. A duplicate local strategy entry while the earlier one is in
 custody is a nonterminal suppression, not a broker-uncertainty halt.
+
+## Shadow account-epoch amendment (2026-07-27, #1246)
+
+The account-rooted Clerk persists `account_epoch = (clerk_boot_id, epoch_seq)`
+beside its generation and lease. It is a proof horizon, not a broker-session
+boolean: each Clerk journal fact may retain its immutable `origin_epoch`, its
+later `observed_epoch`, and the `reconciliation_id` under which it was
+recorded. Older journal rows deliberately retain these fields as unknown;
+their sequence number or write time cannot be backfilled as epoch proof.
+
+Socket loss, IBKR 1100, 1101, 1102, critical callback-stream silence, a failed
+active poll while nonterminal work exists, Clerk replacement, and generation
+fencing produce idempotent account-epoch receipts. The first trigger advances
+the proof sequence and sets an observable shadow `would_block_reason`; later
+distinct triggers attach evidence to that same invalid epoch. 1101 requires a
+full later reconciliation while 1102 is an incremental candidate, but both
+are new-epoch candidates and neither restores entry authority by itself.
+
+Slice 4 does not block a write. The Clerk health RPC exposes the current state
+and proposed block reason so an operator can compare shadow disagreement with
+the unchanged production admission path. A stale Clerk generation is forbidden
+from advancing or rewriting epoch state; a successor boot records its own
+epoch and starts invalid until the later enforcement/reconciliation slice mints
+an explicitly clean or adopted successor.

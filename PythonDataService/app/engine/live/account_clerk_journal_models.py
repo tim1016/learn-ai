@@ -17,6 +17,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent
+from app.engine.live.account_epoch import AccountEpoch
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 
 _MAX_INT64 = 9_223_372_036_854_775_807
@@ -228,6 +229,12 @@ class AccountClerkJournalEntry(BaseModel):
     clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
     clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
     inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    # Epoch provenance is optional for the durable migration boundary. A
+    # missing value means this legacy fact's proof horizon is explicitly
+    # unknown; readers must never synthesize it from journal sequence/order.
+    origin_epoch: AccountEpoch | None = None
+    observed_epoch: AccountEpoch | None = None
+    reconciliation_id: str | None = Field(default=None, min_length=1, max_length=128)
     # An asynchronous A0 owns an intent from the same single, fsynced
     # ``recorded`` row. It is intentionally not represented by a second
     # receipt: a crash between two writes would otherwise erase which restart
@@ -361,6 +368,9 @@ class AccountClerkRecordedReceipt(BaseModel):
     clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
     clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
     inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    origin_epoch: AccountEpoch | None = None
+    observed_epoch: AccountEpoch | None = None
+    reconciliation_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @classmethod
     def from_journal_entry(cls, entry: AccountClerkJournalEntry) -> AccountClerkRecordedReceipt:
@@ -378,6 +388,9 @@ class AccountClerkRecordedReceipt(BaseModel):
             clerk_request_received_at_ms=entry.clerk_request_received_at_ms,
             clerk_intake_admitted_at_ms=entry.clerk_intake_admitted_at_ms,
             inbox_fsynced_at_ms=entry.inbox_fsynced_at_ms,
+            origin_epoch=entry.origin_epoch,
+            observed_epoch=entry.observed_epoch,
+            reconciliation_id=entry.reconciliation_id,
         )
 
 

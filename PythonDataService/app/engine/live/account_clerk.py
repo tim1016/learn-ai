@@ -28,6 +28,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
+from uuid import uuid4
 
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
@@ -76,6 +77,17 @@ from app.engine.live.account_clerk_operations import (
     AccountClerkOperationCoordinator,
     AccountClerkOperationDependencies,
     AccountClerkReconciliationOutcome,
+)
+from app.engine.live.account_epoch import (
+    AccountEpochAuthority,
+    AccountEpochState,
+    EpochInvalidationTrigger,
+)
+from app.engine.live.account_epoch_observer import (
+    handle_epoch_signal_supervisor_completion as _handle_epoch_signal_supervisor_completion,
+)
+from app.engine.live.account_epoch_observer import (
+    supervise_account_epoch_signals as _supervise_account_epoch_signals,
 )
 from app.engine.live.account_owner import (
     MANUAL_OPERATOR_RUN_ID,
@@ -130,6 +142,7 @@ _BROKER_SUBMIT_TIMEOUT_S = 25.0
 # ledger capacity and never becomes a second source of backpressure.
 _ASYNC_CUSTODY_NOTIFICATION_QUEUE_CAPACITY = 256
 _ASYNC_CUSTODY_NOTIFICATION_TIMEOUT_S = 1.0
+_CRITICAL_BROKER_STREAM_SILENCE_MS = 30_000
 # Production defaults deliberately bound account-wide unacknowledged work.
 # The per-strategy-instance admission fence below is stricter for normal
 # entries; this is the account-level backpressure limit that protects the
@@ -174,6 +187,7 @@ class AccountClerk:
         now_ms: Callable[[], int] | None = None,
         host_binding_capability: str | None = None,
         async_custody_config: AccountClerkAsyncCustodyConfig | None = None,
+        epoch_authority: AccountEpochAuthority | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
@@ -225,16 +239,20 @@ class AccountClerk:
                     self._place_under_clerk_grant(spec, wait_for_perm_id=wait_for_perm_id)
                 ),
                 retry_recorded_intent_locked=self._retry_recorded_intent_locked,
+                epoch_transition_provenance=self._epoch_transition_provenance,
                 now_ms=self._now_ms,
             )
         )
         self._rpc_write_intake_closed = False
         self._event_stream_down_recorded = False
+        self._last_broker_callback_recorded_at_ms: int | None = None
+        self._critical_stream_silence_recorded = False
         self._projection_task: asyncio.Task[None] | None = None
         self._projection_requested = False
         # The asynchronous path is an explicit, disabled-by-default shadow
         # capability. Existing callers keep the synchronous submit operation.
         self._async_custody_config = async_custody_config
+        self._epoch_authority = epoch_authority
         self._async_custody_admission_lock = asyncio.Lock()
         self._async_custody_queues: dict[str, asyncio.Queue[AccountOwnerSubmitIntent]] = (
             {
@@ -368,6 +386,53 @@ class AccountClerk:
             risk_reducing_depth=self._async_custody_queues["risk_reducing"].qsize(),
             risk_reducing_capacity=self._async_custody_config.risk_reducing_capacity,
         )
+
+    def epoch_health(self) -> AccountEpochState | None:
+        """Expose Clerk-owned shadow gate evidence without enforcing it yet."""
+
+        return self._epoch_authority.read() if self._epoch_authority is not None else None
+
+    async def observe_epoch_invalidation(self, trigger: EpochInvalidationTrigger) -> None:
+        """Persist one account-root invalidation receipt before later journal facts.
+
+        The Clerk intake lock is the serialization boundary shared by all
+        callback/lifecycle journal writes.  Taking it here prevents an epoch
+        observer from advancing the proof horizon between a transition's
+        provenance read and its fsynced append.
+        """
+
+        if self._epoch_authority is None:
+            return
+        async with self._intake_lock:
+            await asyncio.to_thread(self._epoch_authority.invalidate, trigger)
+
+    def mark_broker_event_stream_live(self) -> None:
+        """Start the silence clock only after the Clerk owns the live stream."""
+
+        self._last_broker_callback_recorded_at_ms = self._now_ms()
+        self._critical_stream_silence_recorded = False
+
+    async def observe_critical_stream_silence(
+        self,
+        *,
+        now_ms: int,
+        has_nonterminal_work: bool,
+        threshold_ms: int = _CRITICAL_BROKER_STREAM_SILENCE_MS,
+    ) -> None:
+        """Invalidate once when a live stream stays silent during live work."""
+
+        if self._epoch_authority is None or not has_nonterminal_work:
+            return
+        async with self._intake_lock:
+            last_observed_at_ms = self._last_broker_callback_recorded_at_ms
+            if (
+                self._critical_stream_silence_recorded
+                or last_observed_at_ms is None
+                or now_ms - last_observed_at_ms < threshold_ms
+            ):
+                return
+            self._critical_stream_silence_recorded = True
+            await asyncio.to_thread(self._epoch_authority.invalidate, "CRITICAL_STREAM_SILENCE")
 
     async def submit_async_custody(
         self,
@@ -534,15 +599,31 @@ class AccountClerk:
                 spec = IbkrOrderSpec.model_validate(intent.order_spec)
                 # This durable A1 receipt is written before the broker call and
                 # after the durable A0 row that the caller can query by identity.
-                await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+                await asyncio.to_thread(
+                    self._journal.append_broker_submitting,
+                    intent,
+                    **self._epoch_transition_provenance(),
+                )
             self._schedule_custody_notification(intent)
             try:
                 ack = await self._place_under_clerk_grant(spec)
             except Exception as exc:
-                await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
+                async with self._intake_lock:
+                    await asyncio.to_thread(
+                        self._journal.append_broker_uncertain,
+                        intent,
+                        exc,
+                        **self._epoch_transition_provenance(),
+                    )
                 self._schedule_custody_notification(intent)
                 return
-            receipt = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+            async with self._intake_lock:
+                receipt = await asyncio.to_thread(
+                    self._journal.append_broker_ack,
+                    intent,
+                    ack,
+                    **self._epoch_transition_provenance(),
+                )
             await self._publish_manual_order_ack_event(intent, receipt)
             self._schedule_custody_notification(intent)
 
@@ -555,11 +636,13 @@ class AccountClerk:
         """Persist a visible A0 hold when dynamic policy blocks the worker."""
 
         try:
-            await asyncio.to_thread(
-                self._journal.append_custody_submission_hold,
-                intent,
-                reason=reason,
-            )
+            async with self._intake_lock:
+                await asyncio.to_thread(
+                    self._journal.append_custody_submission_hold,
+                    intent,
+                    reason=reason,
+                    **self._epoch_transition_provenance(),
+                )
         except Exception:
             logger.exception(
                 "failed to persist asynchronous custody pre-submit hold",
@@ -837,13 +920,27 @@ class AccountClerk:
                 await self._require_normal_submit_intake(intent)
                 self._require_paper_broker()
                 spec = IbkrOrderSpec.model_validate(intent.order_spec)
-                await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+                await asyncio.to_thread(
+                    self._journal.append_broker_submitting,
+                    intent,
+                    **self._epoch_transition_provenance(),
+                )
                 try:
                     ack = await self._place_under_clerk_grant(spec)
                 except Exception as exc:
-                    await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
+                    await asyncio.to_thread(
+                        self._journal.append_broker_uncertain,
+                        intent,
+                        exc,
+                        **self._epoch_transition_provenance(),
+                    )
                     raise
-                broker_ack = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+                broker_ack = await asyncio.to_thread(
+                    self._journal.append_broker_ack,
+                    intent,
+                    ack,
+                    **self._epoch_transition_provenance(),
+                )
                 await self._publish_manual_order_ack_event(intent, broker_ack)
                 return recorded, broker_ack
 
@@ -969,13 +1066,19 @@ class AccountClerk:
         """
 
         async with self._intake_lock:
-            receipt = await asyncio.to_thread(self._journal.record_broker_event, event)
+            receipt = await asyncio.to_thread(
+                self._journal.record_broker_event,
+                event,
+                **self._epoch_transition_provenance(),
+            )
             if receipt.intent is None:
                 await asyncio.to_thread(
                     self._assert_unattributed_broker_event_guardrail,
                     event,
                     broker_callback_idempotency_key(event),
                 )
+            self._last_broker_callback_recorded_at_ms = self._now_ms()
+            self._critical_stream_silence_recorded = False
         if receipt.intent is not None:
             self._schedule_custody_notification(receipt.intent)
         # The callback receipt is durable before this best-effort rebuildable
@@ -1007,6 +1110,7 @@ class AccountClerk:
         # Set before the fsync so concurrent submit callers fail closed
         # immediately, rather than racing an alarm write.
         self._normal_submit_intake_reason = "CLERK_EVENT_STREAM_DOWN"
+        await self.observe_epoch_invalidation("CRITICAL_STREAM_SILENCE")
         async with self._intake_lock:
             if self._event_stream_down_recorded:
                 return
@@ -1116,13 +1220,40 @@ class AccountClerk:
         if intent.account_id != self._account_id:
             self._reject(intent, "CLERK_ACCOUNT_MISMATCH")
 
+        provenance = self._epoch_transition_provenance()
         return self._journal.record_intent(
             intent,
             validate_intent=self._validate_intent_identity,
             clerk_request_received_at_ms=clerk_request_received_at_ms,
             clerk_intake_admitted_at_ms=clerk_intake_admitted_at_ms,
             async_custody_lane=async_custody_lane,
+            origin_epoch=provenance.get("observed_epoch"),
+            observed_epoch=provenance.get("observed_epoch"),
+            reconciliation_id=provenance.get("reconciliation_id"),
         )
+
+    def _epoch_transition_provenance(self) -> dict[str, object]:
+        """Read the current Clerk proof horizon without changing S4 admission.
+
+        Epoch persistence is observability in this slice.  A damaged optional
+        epoch artifact must therefore be surfaced through health/recovery, not
+        turn a previously accepted legacy submit path into a new failure mode.
+        """
+
+        if self._epoch_authority is None:
+            return {}
+        try:
+            state = self._epoch_authority.read()
+        except Exception:
+            logger.exception(
+                "could not read account epoch while recording Clerk evidence",
+                extra={"account_id": self._account_id},
+            )
+            return {}
+        return {
+            "observed_epoch": state.current_epoch,
+            "reconciliation_id": state.reconciliation_id,
+        }
 
     def append_broker_event(self, intent: AccountOwnerSubmitIntent, event: IbkrOrderEvent) -> None:
         """Compatibility helper for synchronous test-only callback injection.
@@ -1134,7 +1265,7 @@ class AccountClerk:
         """
 
         self._journal.register_attribution(intent)
-        receipt = self._journal.record_broker_event(event)
+        receipt = self._journal.record_broker_event(event, **self._epoch_transition_provenance())
         if receipt.intent is None:
             self._assert_unattributed_broker_event_guardrail(
                 event,
@@ -1215,6 +1346,7 @@ class AccountClerk:
                 intent,
                 verdict=verdict,
                 reason=reason,
+                **self._epoch_transition_provenance(),
             )
             return True
 
@@ -1255,13 +1387,27 @@ class AccountClerk:
 
         await asyncio.to_thread(self._journal.register_attribution, intent)
         spec = IbkrOrderSpec.model_validate(intent.order_spec)
-        await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+        await asyncio.to_thread(
+            self._journal.append_broker_submitting,
+            intent,
+            **self._epoch_transition_provenance(),
+        )
         try:
             ack = await self._place_under_clerk_grant(spec)
         except Exception as exc:
-            await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
+            await asyncio.to_thread(
+                self._journal.append_broker_uncertain,
+                intent,
+                exc,
+                **self._epoch_transition_provenance(),
+            )
             raise
-        receipt = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+        receipt = await asyncio.to_thread(
+            self._journal.append_broker_ack,
+            intent,
+            ack,
+            **self._epoch_transition_provenance(),
+        )
         await self._publish_manual_order_ack_event(intent, receipt)
         return receipt
 
@@ -1626,6 +1772,10 @@ class AccountClerk:
         )
 
     def _fence_stale_generation(self) -> None:
+        # A fenced generation must not write *any* new epoch evidence. The
+        # successor detects the durable generation change during initialize
+        # and atomically records both CLERK_DEATH and GENERATION_FENCED on the
+        # successor epoch before it serves work.
         if self._on_generation_fenced is not None:
             self._on_generation_fenced()
 
@@ -1722,6 +1872,15 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
         await client.connect()
         broker = IbkrBrokerAdapter(client)
         broker.require_account_owner_write_fence(durable_generation_provider)
+        epoch_authority = AccountEpochAuthority(
+            artifacts_root=artifacts_root,
+            account_id=args.account_id,
+            clerk_generation=args.generation,
+            clerk_boot_id=uuid4().hex,
+            now_ms=_now_ms,
+            durable_generation_provider=durable_generation_provider,
+        )
+        epoch_authority.initialize()
         clerk = AccountClerk(
             artifacts_root=artifacts_root,
             account_id=args.account_id,
@@ -1734,6 +1893,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
                 entry_capacity=_PRODUCTION_ASYNC_CUSTODY_ENTRY_CAPACITY,
                 risk_reducing_capacity=_PRODUCTION_ASYNC_CUSTODY_RISK_REDUCING_CAPACITY,
             ),
+            epoch_authority=epoch_authority,
         )
 
         def on_callback_persistence_failure(_failure: BaseException) -> None:
@@ -1761,10 +1921,12 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
         )
         event_stream_started = False
         event_stream_supervisor: asyncio.Task[None] | None = None
+        epoch_signal_supervisor: asyncio.Task[None] | None = None
         try:
             await server.start()
             await broker.start_event_stream()
             event_stream_started = True
+            clerk.mark_broker_event_stream_live()
             await asyncio.to_thread(
                 append_account_event,
                 artifacts_root,
@@ -1786,12 +1948,29 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
                 ),
                 name="account-clerk-broker-event-stream-supervisor",
             )
+            epoch_signal_supervisor = asyncio.create_task(
+                _supervise_account_epoch_signals(client=client, clerk=clerk, stop=stop),
+                name="account-clerk-epoch-signal-supervisor",
+            )
+            epoch_signal_supervisor.add_done_callback(
+                lambda task: _handle_epoch_signal_supervisor_completion(
+                    task,
+                    artifacts_root=artifacts_root,
+                    account_id=args.account_id,
+                    stop=stop,
+                    stream_failed=stream_failed,
+                )
+            )
             await reconciler.start()
             while not stop.is_set():
                 await asyncio.to_thread(writer.renew)
                 with suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=1)
         finally:
+            if epoch_signal_supervisor is not None:
+                epoch_signal_supervisor.cancel()
+                with suppress(asyncio.CancelledError):
+                    await epoch_signal_supervisor
             if event_stream_supervisor is not None:
                 event_stream_supervisor.cancel()
                 with suppress(asyncio.CancelledError):

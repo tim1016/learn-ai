@@ -75,6 +75,7 @@ from app.engine.live.account_clerk_rpc_protocol import (
 from app.engine.live.account_clerk_rpc_protocol import (
     WRITE_OPERATIONS as _WRITE_OPERATIONS,
 )
+from app.engine.live.account_epoch import AccountEpochState
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
@@ -231,6 +232,20 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="custody_health_v2",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def epoch_health_v1(self) -> AccountEpochState | None:
+        """Read the Clerk-owned shadow account epoch and would-block reason."""
+
+        request = {"operation": "epoch_health_v1"}
+        payload = await self._request(request)
+        try:
+            value = payload["epoch_health"]
+            return AccountEpochState.model_validate(value) if value is not None else None
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="epoch_health_v1",
                 request_identity=request_identity(request),
             ) from exc
 
@@ -817,6 +832,11 @@ class AccountClerkRpcServer:
         if operation == "custody_health_v2":
             return AccountClerkRpcSuccessEnvelope(
                 payload={"custody_health": self._clerk.async_custody_health().model_dump(mode="json")}
+            )
+        if operation == "epoch_health_v1":
+            health = self._clerk.epoch_health()
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"epoch_health": health.model_dump(mode="json") if health is not None else None}
             )
         if operation == "emergency_flatten_account":
             receipt = await self._clerk.emergency_flatten_account(
