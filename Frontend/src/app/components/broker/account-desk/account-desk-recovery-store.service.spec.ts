@@ -369,7 +369,7 @@ describe('AccountDeskRecoveryStore', () => {
     broker.executePresentedRecoveryAction.mockRejectedValue({
       error: { detail: { reason_code: 'ACTION_EXPIRED', message: 'The action presentation expired.' } },
     });
-    const refresh = promise<void>();
+    const refresh = promise<undefined>();
     accountSafety.refresh.mockReturnValue(refresh.promise);
     const store = TestBed.inject(AccountDeskRecoveryStore);
     store.load('DU1234567');
