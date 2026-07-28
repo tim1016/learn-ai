@@ -64,7 +64,10 @@ _CUSTODY_STAGE_BY_LIFECYCLE: dict[str, str] = {
     "filled": "a3",
     "cancelled": "a3",
     "rejected": "a3",
-    "error": "a3",
+    # An IBKR error is not terminal unless the callback itself proves rejection.
+    # The projector preserves that distinction as ``error``; show it as uncertain
+    # rather than claiming the economic lifecycle is complete.
+    "error": "uncertain",
 }
 
 if TYPE_CHECKING:

@@ -32,6 +32,11 @@ interface TimelineClock {
   readonly value: number | null;
 }
 
+interface ReceiptSelection {
+  readonly accountId: string;
+  readonly transactionId: string;
+}
+
 /** Shared, on-demand reader for one immutable projected Clerk receipt. */
 @Component({
   selector: 'app-clerk-transaction-evidence-drawer',
@@ -44,7 +49,7 @@ export class ClerkTransactionEvidenceDrawerComponent {
   private readonly broker = inject(BrokerService);
   private readonly drawer = viewChild<ElementRef<HTMLDialogElement>>('drawer');
   private readonly requestGeneration = signal(0);
-  private activeKey: string | null = null;
+  private activeSelection: ReceiptSelection | null = null;
   private restoreTarget: HTMLElement | null = null;
 
   readonly accountId = input<string | null>(null);
@@ -63,11 +68,14 @@ export class ClerkTransactionEvidenceDrawerComponent {
     effect(() => {
       const accountId = this.accountId();
       const transaction = this.transaction();
-      const nextKey = accountId !== null && transaction !== null
-        ? `${accountId}:${transaction.transaction_id}`
+      const nextSelection = accountId !== null && transaction !== null
+        ? { accountId, transactionId: transaction.transaction_id }
         : null;
-      if (nextKey === this.activeKey) return;
-      this.activeKey = nextKey;
+      if (
+        nextSelection?.accountId === this.activeSelection?.accountId
+        && nextSelection?.transactionId === this.activeSelection?.transactionId
+      ) return;
+      this.activeSelection = nextSelection;
       untracked(() => void this.load(accountId, transaction));
     });
   }
@@ -83,8 +91,8 @@ export class ClerkTransactionEvidenceDrawerComponent {
       .join(' ');
   }
 
-  eventReceiptJson(event: ClerkTransactionDetail['events'][number]): string {
-    return JSON.stringify(event.receipt, null, 2);
+  eventReceiptEntries(event: ClerkTransactionDetail['events'][number]): readonly ReceiptEntry[] {
+    return receiptEntries(event.receipt);
   }
 
   close(): void {
@@ -174,22 +182,23 @@ interface EpochProvenance {
 function epochProvenance(detail: ClerkTransactionDetail | null): EpochProvenance {
   const receipts = detail === null ? [] : [detail.receipt, ...detail.events.map((event) => event.receipt)];
   return {
-    origin: firstEpoch(receipts, 'origin_epoch'),
-    observed: firstEpoch(receipts, 'observed_epoch'),
+    origin: recordedEpochs(receipts, 'origin_epoch'),
+    observed: recordedEpochs(receipts, 'observed_epoch'),
   };
 }
 
-function firstEpoch(receipts: readonly Record<string, unknown>[], key: string): string {
+function recordedEpochs(receipts: readonly Record<string, unknown>[], key: string): string {
+  const epochs = new Set<string>();
   for (const receipt of receipts) {
     const value = receipt[key];
     if (!isReceiptRecord(value)) continue;
     const bootId = value['clerk_boot_id'];
     const epochSeq = value['epoch_seq'];
     if (typeof bootId === 'string' && typeof epochSeq === 'number') {
-      return `${bootId} / ${epochSeq}`;
+      epochs.add(`${bootId} / ${epochSeq}`);
     }
   }
-  return 'Unknown (not recorded)';
+  return Array.from(epochs).join(', ') || 'Unknown (not recorded)';
 }
 
 function receiptEntries(receipt: Record<string, unknown>): readonly ReceiptEntry[] {

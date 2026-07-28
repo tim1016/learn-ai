@@ -43,7 +43,14 @@
             <strong>{{ event.event_kind | receiptLabel }}</strong>
             <span>{{ event.lifecycle_state | receiptLabel }}</span>
             <code>{{ event.callback_identity }}</code>
-            <details><summary>Raw event evidence</summary><pre>{{ eventReceiptJson(event) }}</pre></details>
+            <details>
+              <summary>Event evidence</summary>
+              <dl class="event-receipt">
+                @for (entry of eventReceiptEntries(event); track trackReceipt($index, entry)) {
+                  <div><dt>{{ entry.label | receiptLabel }}</dt><dd><code>{{ entry.value }}</code></dd></div>
+                }
+              </dl>
+            </details>
           </li>
         }
       </ol>

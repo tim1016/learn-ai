@@ -198,6 +198,6 @@ async def test_custody_window_summary_preserves_server_folded_terminal_state_aft
         "a0_custody_accepted_count": 1,
         "a1_broker_write_started_count": 1,
         "a2_broker_known_count": 2,
-        "a3_economic_terminal_count": 2,
-        "uncertain_count": 1,
+        "a3_economic_terminal_count": 1,
+        "uncertain_count": 2,
     }
