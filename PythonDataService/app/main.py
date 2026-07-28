@@ -26,6 +26,7 @@ from app.routers import (
     bot_events,
     broker,
     broker_account_truth,
+    broker_bots,
     broker_capability,
     broker_session,
     brokers,
@@ -397,6 +398,21 @@ async def lifespan(app: FastAPI):
             "daemon connectivity monitor not started."
         )
 
+    # ── Alpaca Bot Control v2, S2 (#1260) — in-container bot runner ────
+    # The task registry is installed regardless of broker_enabled so the
+    # /api/brokers/{broker}/bots routes answer honestly: without the shared
+    # MarketDataFeed a deploy fails with a typed 503, and the artifact-derived
+    # list stays readable. No host daemon anywhere in this path (L1/P10).
+    from app.marketdata.ibkr_feed import get_market_data_feed
+    from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+
+    bot_task_registry = BotTaskRegistry(
+        artifacts_root=Path(ibkr_settings.live_runs_root).parent,
+        feed_resolver=get_market_data_feed,
+    )
+    set_bot_task_registry(bot_task_registry)
+    logger.info("In-container bot runner installed (task registry, daemon-free).")
+
     # ADR-0028 Stage 2 — each visible bot gets one producer-owned status
     # snapshot before the API begins serving normal reads. The producer owns
     # broker-activity bootstrap and periodic assembly; status GET only reads
@@ -406,6 +422,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Stop the in-container bot tasks first — they consume the shared
+        # MarketDataFeed, which is torn down later in this block. Operator
+        # desired-state is preserved; outcomes record SERVICE_SHUTDOWN.
+        await bot_task_registry.stop_all()
+        set_bot_task_registry(None)
         # Stop the Alpaca reconciliation sweep + live-lifecycle consumer first —
         # cancel their background tasks (and the consumer's socket) cleanly,
         # independent of the IBKR teardown.
@@ -586,6 +607,13 @@ app.include_router(broker_session.router, dependencies=PROTECTED_DATA_PLANE_READ
 # data, so every v2 read requires the always-on data-plane control secret.
 app.include_router(
     brokers.router,
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+)
+# Broker-parameterized bot runner (Alpaca Bot Control v2, S2 — #1260).
+# Deploy/stop/list for in-container log-only bots; broker-tagged bindings.
+# Control actions on live broker state — always-on data-plane secret.
+app.include_router(
+    broker_bots.router,
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
