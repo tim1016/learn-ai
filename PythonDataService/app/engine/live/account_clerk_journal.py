@@ -8,6 +8,8 @@ the durable recorded-intent rows.
 
 from __future__ import annotations
 
+import contextlib
+import sys
 import time
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -971,8 +973,16 @@ def read_account_clerk_inbox(
 
     path = account_clerk_inbox_path(artifacts_root, account_id)
     journal_path = account_clerk_journal_path(artifacts_root, account_id)
-    with _file_lock(journal_path):
-        return _read_jsonl(path, AccountClerkInboxEntry)
+    with _read_only_journal_lock(journal_path) as coordinated:
+        before = _observation_identity(path, journal_path)
+        entries = _read_jsonl(path, AccountClerkInboxEntry)
+        _assert_unchanged_uncoordinated_observation(
+            coordinated,
+            before,
+            path,
+            journal_path,
+        )
+        return entries
 
 
 def read_account_clerk_journal(
@@ -982,8 +992,11 @@ def read_account_clerk_journal(
     """Read the strict, serial receipt-#1 ledger for an account."""
 
     path = account_clerk_journal_path(artifacts_root, account_id)
-    with _file_lock(path):
-        return _read_journal_jsonl(path)
+    with _read_only_journal_lock(path) as coordinated:
+        before = _observation_identity(path)
+        entries = _read_journal_jsonl(path)
+        _assert_unchanged_uncoordinated_observation(coordinated, before, path)
+        return entries
 
 
 def read_account_clerk_durability_spine(
@@ -996,8 +1009,16 @@ def read_account_clerk_durability_spine(
     journal_path = account_clerk_journal_path(artifacts_root, account_id)
     if not journal_path.exists() and not inbox_path.exists():
         return []
-    with _file_lock(journal_path):
-        return read_account_clerk_durability_spine_locked(inbox_path, journal_path)
+    with _read_only_journal_lock(journal_path) as coordinated:
+        before = _observation_identity(inbox_path, journal_path)
+        entries = read_account_clerk_durability_spine_locked(inbox_path, journal_path)
+        _assert_unchanged_uncoordinated_observation(
+            coordinated,
+            before,
+            inbox_path,
+            journal_path,
+        )
+        return entries
 
 
 def read_account_clerk_journal_locked(path: Path) -> list[AccountClerkJournalEntry]:
@@ -1118,8 +1139,16 @@ def inspect_account_clerk_journal(
     # The sibling lock already exists for an established journal; taking it
     # keeps this observational projection from parsing a partially appended
     # JSONL row while still avoiding directory creation for unseen accounts.
-    with _file_lock(journal_path):
-        return read_account_clerk_durability_spine_locked(inbox_path, journal_path)
+    with _read_only_journal_lock(journal_path) as coordinated:
+        before = _observation_identity(inbox_path, journal_path)
+        entries = read_account_clerk_durability_spine_locked(inbox_path, journal_path)
+        _assert_unchanged_uncoordinated_observation(
+            coordinated,
+            before,
+            inbox_path,
+            journal_path,
+        )
+        return entries
 
 
 def recovery_operation_started_for_namespace(
@@ -1538,6 +1567,47 @@ def is_economic_terminal_broker_event(event: dict[str, object] | None) -> bool:
     }:
         return True
     return event.get("event_type") == "cancel"
+
+
+@contextlib.contextmanager
+def _read_only_journal_lock(journal_path: Path) -> Iterator[bool]:
+    """Coordinate an observational read without ever creating a lock artifact."""
+
+    lock_path = journal_path.with_suffix(journal_path.suffix + ".lock")
+    try:
+        handle = open(lock_path, "rb")  # noqa: SIM115
+    except FileNotFoundError:
+        yield False
+        return
+    try:
+        if sys.platform == "win32":
+            yield False
+            return
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _observation_identity(*paths: Path) -> tuple[tuple[int, int, int, int] | None, ...]:
+    return tuple(_journal_file_identity(path) for path in paths)
+
+
+def _assert_unchanged_uncoordinated_observation(
+    coordinated: bool,
+    before: tuple[tuple[int, int, int, int] | None, ...],
+    *paths: Path,
+) -> None:
+    if not coordinated and before != _observation_identity(*paths):
+        raise AccountClerkJournalCorruptError(
+            paths[-1],
+            "Clerk durability artifacts changed during an uncoordinated read",
+        )
 
 
 def _journal_file_identity(path: Path) -> tuple[int, int, int, int] | None:

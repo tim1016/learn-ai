@@ -90,6 +90,11 @@ def _write_clean_authorities(tmp_path: Path, *, now_ms: int) -> None:
         artifacts_root=tmp_path, account_id=_ACCOUNT_ID, clerk_generation=generation.generation,
         clerk_boot_id="test-boot", now_ms=lambda: now_ms - 100,
     ).initialize()
+    AccountSafetyAuthority(
+        artifacts_root=tmp_path,
+        account_id=_ACCOUNT_ID,
+        now_ms=lambda: now_ms - 10,
+    ).observe_broker_retired_owner_custody((), observed_at_ms=now_ms - 10)
     AccountObservationLeaseRepo(tmp_path).renew(
         account_id=_ACCOUNT_ID, observed_at_ms=now_ms - 10, now_ms=now_ms,
         clerk_generation=generation.generation,
@@ -123,6 +128,17 @@ def test_snapshot_unavailable_critical_evidence_is_never_clean_and_has_stable_se
         "observation_lease",
         "clerk",
     }.issubset({source.source for source in first.sources})
+    safety = next(source for source in first.sources if source.source == "account_safety")
+    assert safety.state == "UNAVAILABLE"
+    assert safety.as_of_ms is None
+
+
+def test_first_snapshot_does_not_create_any_account_artifact(tmp_path: Path) -> None:
+    get_account_truth_snapshot_provider().clear()
+
+    _service(tmp_path, now_ms=1_780_000_000_000).snapshot(account_id=_ACCOUNT_ID)
+
+    assert list(tmp_path.rglob("*")) == []
 
 
 def test_snapshot_clean_then_epoch_invalid_and_truth_stale_advance_semantic_version(
@@ -404,10 +420,12 @@ def test_snapshot_observes_a_replayable_inbox_without_replaying_or_rewriting_it(
         encoding="utf-8",
     )
     before = inbox.read_bytes()
+    before_tree = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
     journal = account_clerk_journal_path(tmp_path, _ACCOUNT_ID)
 
     snapshot = _service(tmp_path, now_ms=now_ms).snapshot(account_id=_ACCOUNT_ID)
 
     assert inbox.read_bytes() == before
     assert not journal.exists()
+    assert {path.relative_to(tmp_path) for path in tmp_path.rglob("*")} == before_tree
     assert snapshot.custody.a0_custody_accepted_count == 1

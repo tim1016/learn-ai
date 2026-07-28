@@ -2163,6 +2163,384 @@
         "title": "AccountRosterVerdictSummary",
         "type": "object"
       },
+      "AccountSafetySnapshot": {
+        "additionalProperties": false,
+        "description": "Read-only safety spine shared by Deploy, Bot Control, and Account Desk.",
+        "properties": {
+          "account_epoch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEpoch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "actions": {
+            "default": [],
+            "maxItems": 0,
+            "minItems": 0,
+            "title": "Actions",
+            "type": "array"
+          },
+          "blockers": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OperatorBlocker"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "custody": {
+            "$ref": "#/components/schemas/AccountSafetySnapshotCustody"
+          },
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AccountReconciliationEvidenceRef"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "exposure": {
+            "$ref": "#/components/schemas/AccountSafetySnapshotExposure"
+          },
+          "generated_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Generated At Ms",
+            "type": "integer"
+          },
+          "outage_diff": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outage Diff"
+          },
+          "posture": {
+            "enum": [
+              "PAPER_EXECUTION",
+              "UNSAFE",
+              "UNKNOWN"
+            ],
+            "title": "Posture",
+            "type": "string"
+          },
+          "reason_code": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reconciliation_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Id"
+          },
+          "reconciliation_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "CLEAN",
+                  "NOT_PROVEN"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation State"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          },
+          "snapshot_id": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "snapshot_version": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Version",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/AccountSafetySnapshotSource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "verdict": {
+            "enum": [
+              "CLEAN",
+              "RECONCILING",
+              "SUSPENDED",
+              "CONTAMINATED",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          },
+          "verdict_reason": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Verdict Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "snapshot_version",
+          "snapshot_id",
+          "generated_at_ms",
+          "account_id",
+          "posture",
+          "verdict",
+          "reason_code",
+          "verdict_reason",
+          "sources",
+          "custody",
+          "exposure"
+        ],
+        "title": "AccountSafetySnapshot",
+        "type": "object"
+      },
+      "AccountSafetySnapshotCustody": {
+        "additionalProperties": false,
+        "properties": {
+          "a0_custody_accepted_count": {
+            "minimum": 0.0,
+            "title": "A0 Custody Accepted Count",
+            "type": "integer"
+          },
+          "a1_broker_write_started_count": {
+            "minimum": 0.0,
+            "title": "A1 Broker Write Started Count",
+            "type": "integer"
+          },
+          "a2_broker_known_count": {
+            "minimum": 0.0,
+            "title": "A2 Broker Known Count",
+            "type": "integer"
+          },
+          "a3_economic_terminal_count": {
+            "minimum": 0.0,
+            "title": "A3 Economic Terminal Count",
+            "type": "integer"
+          },
+          "clerk_journal_last_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Journal Last Seq"
+          },
+          "retired_owner_custody_count": {
+            "minimum": 0.0,
+            "title": "Retired Owner Custody Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "retired_owner_custody_count",
+          "a0_custody_accepted_count",
+          "a1_broker_write_started_count",
+          "a2_broker_known_count",
+          "a3_economic_terminal_count"
+        ],
+        "title": "AccountSafetySnapshotCustody",
+        "type": "object"
+      },
+      "AccountSafetySnapshotExposure": {
+        "additionalProperties": false,
+        "properties": {
+          "execution_count": {
+            "minimum": 0.0,
+            "title": "Execution Count",
+            "type": "integer"
+          },
+          "open_order_count": {
+            "minimum": 0.0,
+            "title": "Open Order Count",
+            "type": "integer"
+          },
+          "position_count": {
+            "minimum": 0.0,
+            "title": "Position Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "open_order_count",
+          "execution_count",
+          "position_count"
+        ],
+        "title": "AccountSafetySnapshotExposure",
+        "type": "object"
+      },
+      "AccountSafetySnapshotSource": {
+        "additionalProperties": false,
+        "description": "One independently ageing source; assembly never restamps it.",
+        "properties": {
+          "age_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Ms"
+          },
+          "as_of_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Ms"
+          },
+          "critical": {
+            "default": true,
+            "title": "Critical",
+            "type": "boolean"
+          },
+          "epoch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEpoch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epoch_relation": {
+            "default": "UNATTESTED",
+            "enum": [
+              "CURRENT",
+              "PRE_EPOCH",
+              "UNATTESTED",
+              "MISMATCH"
+            ],
+            "title": "Epoch Relation",
+            "type": "string"
+          },
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AccountReconciliationEvidenceRef"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "hard_ttl_ms": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Ttl Ms"
+          },
+          "reason_code": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reconciliation_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Id"
+          },
+          "reconciliation_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "CLEAN",
+                  "NOT_PROVEN"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation State"
+          },
+          "source": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "FRESH",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "state",
+          "reason_code"
+        ],
+        "title": "AccountSafetySnapshotSource",
+        "type": "object"
+      },
       "AccountServiceBinding": {
         "description": "Backend-owned attachment decision; the client never derives it from lease fields.",
         "properties": {
@@ -41902,6 +42280,65 @@
           }
         },
         "summary": "Backfill False Crash Registry Rows Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/safety-snapshot": {
+      "get": {
+        "description": "Return the broker-free, versioned account safety composition.",
+        "operationId": "account_safety_snapshot_endpoint_api_accounts__account_id__safety_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSafetySnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Account Safety Snapshot Endpoint",
         "tags": [
           "accounts"
         ]

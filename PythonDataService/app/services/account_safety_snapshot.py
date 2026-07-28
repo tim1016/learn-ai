@@ -223,13 +223,10 @@ class AccountSafetySnapshotService:
         now_ms: int,
     ) -> tuple[AccountSafetyState | None, AccountSafetySnapshotSource]:
         if not account_safety_path(self._artifacts_root, account_id).is_file():
-            state = AccountSafetyAuthority(
-                artifacts_root=self._artifacts_root, account_id=account_id, now_ms=lambda: now_ms
-            ).read()
-            return state, AccountSafetySnapshotSource(
+            return None, AccountSafetySnapshotSource(
                 source="account_safety",
-                state="FRESH",
-                reason_code="ACCOUNT_SAFETY_CLEAN_DEFAULT",
+                state="UNAVAILABLE",
+                reason_code="ACCOUNT_SAFETY_NOT_AVAILABLE",
             )
         try:
             state = AccountSafetyAuthority(
@@ -425,15 +422,11 @@ class AccountSafetySnapshotService:
     ) -> AccountSafetySnapshotSource:
         if safety is None:
             return source
-        relation = (
-            "CURRENT"
-            if source.reason_code == "ACCOUNT_SAFETY_CLEAN_DEFAULT"
-            else AccountSafetySnapshotService._clock_epoch_relation(
-                safety.updated_at_ms,
-                account_id=account_id,
-                epoch=epoch,
-                identity_matches=safety.account_id == account_id,
-            )
+        relation = AccountSafetySnapshotService._clock_epoch_relation(
+            safety.updated_at_ms,
+            account_id=account_id,
+            epoch=epoch,
+            identity_matches=safety.account_id == account_id,
         )
         return source.model_copy(update={"epoch_relation": relation})
 
@@ -512,19 +505,21 @@ class AccountSafetySnapshotService:
                 ),
             )
         elif source.source == "account_truth":
+            observed_at = source.as_of_ms if source.as_of_ms is not None else "unavailable"
             refs = (
                 AccountReconciliationEvidenceRef(
                     source="account_truth_cache",
-                    ref=f"account_truth_cache:{account_id}:{source.as_of_ms or 'unavailable'}",
+                    ref=f"account_truth_cache:{account_id}:{observed_at}",
                     detail=source.reason_code,
                 ),
             )
         else:
             source_name = source.source.removeprefix("account_truth.")
+            observed_at = source.as_of_ms if source.as_of_ms is not None else "unavailable"
             refs = (
                 AccountReconciliationEvidenceRef(
                     source=f"account_truth_{source_name}",
-                    ref=f"account_truth_source:{source_name}:{source.as_of_ms or 'unavailable'}",
+                    ref=f"account_truth_source:{source_name}:{observed_at}",
                     detail=source.reason_code,
                 ),
             )
