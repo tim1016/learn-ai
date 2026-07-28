@@ -26,9 +26,10 @@ import pytest
 
 from app.broker.alpaca.clerk import derive
 from app.broker.alpaca.clerk import journal as journal_module
-from app.broker.alpaca.clerk.clerk import UNCERTAIN_SUBMIT_GRACE_MS, AlpacaClerk
+from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.exposure import project_instance_exposure
 from app.broker.alpaca.clerk.models import ClerkEntryKind
+from app.broker.alpaca.clerk.recovery import UNCERTAIN_SUBMIT_GRACE_MS
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from app.engine.live.order_identity import build_bot_order_namespace
