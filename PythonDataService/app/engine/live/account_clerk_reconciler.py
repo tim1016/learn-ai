@@ -23,6 +23,7 @@ from app.engine.live.account_clerk import (
     AccountClerkGenerationFencedError,
     AccountClerkJournalEntry,
 )
+from app.engine.live.account_clerk_journal_models import async_custody_reconciliation_is_held
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.submit_state_machine import BrokerProbe, SubmitVerdict
@@ -369,6 +370,7 @@ def _unresolved_intents(
     retries: dict[str, int] = defaultdict(int)
     submitting_at: dict[str, tuple[int, int]] = {}
     uncertainty_at: dict[str, tuple[int, int]] = {}
+    entries_by_intent_id: dict[str, list[AccountClerkJournalEntry]] = defaultdict(list)
     for entry in entries:
         # A callback with no durable Clerk intent is deliberately retained as
         # account truth, but it is never an intent-reconciliation candidate.
@@ -376,6 +378,7 @@ def _unresolved_intents(
         if entry.intent is None:
             continue
         intent_id = entry.intent.intent_id
+        entries_by_intent_id[intent_id].append(entry)
         if entry.entry_kind == "recorded":
             recorded[intent_id] = entry.intent
         elif entry.entry_kind == "broker_submitting":
@@ -392,6 +395,11 @@ def _unresolved_intents(
     candidates: dict[str, tuple[AccountOwnerSubmitIntent, int]] = {}
     for intent_id, intent in recorded.items():
         if intent_id in terminal:
+            continue
+        if async_custody_reconciliation_is_held(entries_by_intent_id[intent_id]):
+            # A0-only work belongs to the bounded async lane; expired and
+            # explicit-hold receipts require a later operator workflow. The
+            # legacy reconciler resumes only after durable A1 evidence.
             continue
         if intent.intent_kind == "EMERGENCY_FLATTEN":
             # Emergency flatten writes through its own poisoned-run escape

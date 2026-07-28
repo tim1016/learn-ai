@@ -61,7 +61,12 @@ from app.engine.live.account_clerk_journal import (
     read_account_clerk_inbox,
     read_account_clerk_journal,
 )
-from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
+from app.engine.live.account_clerk_journal_models import (
+    AccountClerkAsyncCustodyConfig,
+    AccountClerkAsyncCustodyHealth,
+    AccountClerkCustodyStatus,
+    AccountClerkEmergencyAuthorization,
+)
 from app.engine.live.account_clerk_lease import AccountClerkLeaseWriter
 from app.engine.live.account_clerk_operations import (
     ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S,
@@ -120,6 +125,11 @@ ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME = "clerk_authority"
 # budget expires.  A timed-out broker write is ambiguous, so its durable
 # ``broker_uncertain`` row is deliberately left for reconciliation.
 _BROKER_SUBMIT_TIMEOUT_S = 25.0
+# At most two custody lanes can each admit 256 durable A0 intents. Notification
+# delivery is best-effort, so it is deliberately bounded below that retained
+# ledger capacity and never becomes a second source of backpressure.
+_ASYNC_CUSTODY_NOTIFICATION_QUEUE_CAPACITY = 256
+_ASYNC_CUSTODY_NOTIFICATION_TIMEOUT_S = 1.0
 logger = logging.getLogger(__name__)
 
 
@@ -157,6 +167,7 @@ class AccountClerk:
         on_generation_fenced: Callable[[], None] | None = None,
         now_ms: Callable[[], int] | None = None,
         host_binding_capability: str | None = None,
+        async_custody_config: AccountClerkAsyncCustodyConfig | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
@@ -167,6 +178,7 @@ class AccountClerk:
         self._now_ms = now_ms if now_ms is not None else _now_ms
         self._host_binding_capability = host_binding_capability
         self._intake_lock = asyncio.Lock()
+        self._broker_write_lock = asyncio.Lock()
         self._journal = AccountClerkJournal(
             artifacts_root=artifacts_root,
             account_id=account_id,
@@ -214,6 +226,29 @@ class AccountClerk:
         self._event_stream_down_recorded = False
         self._projection_task: asyncio.Task[None] | None = None
         self._projection_requested = False
+        # The asynchronous path is an explicit, disabled-by-default shadow
+        # capability. Existing callers keep the synchronous submit operation.
+        self._async_custody_config = async_custody_config
+        self._async_custody_admission_lock = asyncio.Lock()
+        self._async_custody_queues: dict[str, asyncio.Queue[AccountOwnerSubmitIntent]] = (
+            {
+                "entry": asyncio.Queue(maxsize=async_custody_config.entry_capacity),
+                "risk_reducing": asyncio.Queue(maxsize=async_custody_config.risk_reducing_capacity),
+            }
+            if async_custody_config is not None
+            else {}
+        )
+        self._async_custody_workers: list[asyncio.Task[None]] = []
+        self._async_custody_enqueued_ids: set[str] = set()
+        self._async_custody_started = False
+        self._async_custody_stopping = False
+        self._custody_notification_sink: Callable[[AccountClerkCustodyStatus], Awaitable[None]] | None = None
+        self._custody_notification_queue: asyncio.Queue[AccountOwnerSubmitIntent] = asyncio.Queue(
+            maxsize=_ASYNC_CUSTODY_NOTIFICATION_QUEUE_CAPACITY
+        )
+        self._custody_notification_pending_ids: set[str] = set()
+        self._custody_notification_worker: asyncio.Task[None] | None = None
+        self._custody_notification_observer: asyncio.Task[None] | None = None
 
     @property
     def recovery_flatten_in_progress(self) -> bool:
@@ -230,6 +265,382 @@ class AccountClerk:
         """
 
         self._callback_drain = drain
+
+    def set_custody_notification_sink(
+        self,
+        sink: Callable[[AccountClerkCustodyStatus], Awaitable[None]],
+    ) -> None:
+        """Install the optional originator-notification seam for A0–A3 folds.
+
+        The journal remains authoritative if a consumer is disconnected or its
+        notification handler fails; Slice 3 will attach bot-side replay to this
+        seam rather than create another ledger.
+        """
+
+        self._custody_notification_sink = sink
+        self._ensure_custody_notification_worker()
+
+    @property
+    def async_custody_enabled(self) -> bool:
+        return self._async_custody_config is not None
+
+    async def start_async_custody(self) -> None:
+        """Start disabled-by-default A0 workers after Clerk recovery completes."""
+
+        if self._async_custody_config is None or self._async_custody_started:
+            return
+        self._async_custody_started = True
+        self._async_custody_stopping = False
+        self._ensure_custody_notification_worker()
+        # A process restart is an explicit recovery boundary. Entry work that
+        # never crossed A1 cannot silently resume; risk-reducing work stays
+        # visible for an explicit policy decision instead of being auto-voided.
+        pending = await asyncio.to_thread(self._journal.queued_async_custody_intents)
+        for intent, lane in pending:
+            if lane == "entry":
+                await asyncio.to_thread(
+                    self._journal.append_custody_expired_before_submit,
+                    intent,
+                )
+            else:
+                await asyncio.to_thread(
+                    self._journal.append_custody_recovery_action_required,
+                    intent,
+                )
+            self._schedule_custody_notification(intent)
+        self._async_custody_workers = [
+            asyncio.create_task(
+                self._run_async_custody_lane("entry"),
+                name="account-clerk-async-custody-entry",
+            ),
+            asyncio.create_task(
+                self._run_async_custody_lane("risk_reducing"),
+                name="account-clerk-async-custody-risk-reducing",
+            ),
+        ]
+
+    async def stop_async_custody(self) -> None:
+        """Stop workers only after A1 work is resolved or durably uncertain."""
+
+        if self._async_custody_workers:
+            self._async_custody_stopping = True
+            # A worker may be in a bounded broker await. Let it finish under
+            # the Clerk grant before cancellation can touch a queued-only job.
+            async with self._broker_write_lock:
+                pass
+            for worker in self._async_custody_workers:
+                worker.cancel()
+            for worker in self._async_custody_workers:
+                with suppress(asyncio.CancelledError):
+                    await worker
+            self._async_custody_workers = []
+        if self._custody_notification_worker is not None:
+            self._custody_notification_worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._custody_notification_worker
+            self._custody_notification_worker = None
+        if self._custody_notification_observer is not None:
+            # An observer is not part of the Clerk authority path. Its task
+            # may ignore cancellation, so never let it block account shutdown.
+            self._custody_notification_observer.cancel()
+
+    def async_custody_health(self) -> AccountClerkAsyncCustodyHealth:
+        """Return the bounded lane depths exposed by the versioned read API."""
+
+        if self._async_custody_config is None:
+            return AccountClerkAsyncCustodyHealth(
+                enabled=False,
+                entry_depth=0,
+                entry_capacity=0,
+                risk_reducing_depth=0,
+                risk_reducing_capacity=0,
+            )
+        return AccountClerkAsyncCustodyHealth(
+            enabled=True,
+            entry_depth=self._async_custody_queues["entry"].qsize(),
+            entry_capacity=self._async_custody_config.entry_capacity,
+            risk_reducing_depth=self._async_custody_queues["risk_reducing"].qsize(),
+            risk_reducing_capacity=self._async_custody_config.risk_reducing_capacity,
+        )
+
+    async def submit_async_custody(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        clerk_request_received_at_ms: int | None = None,
+        lane: Literal["entry", "risk_reducing"] = "entry",
+    ) -> tuple[AccountClerkRecordedReceipt, AccountClerkCustodyStatus]:
+        """Transfer custody at A0 and resolve broker work in a Clerk task.
+
+        ``lane`` exists for trusted Clerk-owned callers only. The public RPC
+        always admits the entry lane until Slice 7 supplies server-derived
+        effect classification for risk-reducing requests.
+        """
+
+        if self._async_custody_config is None:
+            self._reject(intent, "CLERK_ASYNC_CUSTODY_DISABLED")
+        if not self._async_custody_started or self._async_custody_stopping:
+            self._reject(intent, "CLERK_ASYNC_CUSTODY_UNAVAILABLE")
+        if self._broker is None:
+            raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        if intent.intent_kind in {"RECOVERY_FLATTEN", "CANCEL_NAMESPACE"}:
+            self._reject(intent, "CLERK_ASYNC_CUSTODY_INTENT_KIND_UNSUPPORTED")
+        try:
+            self._require_paper_broker()
+            IbkrOrderSpec.model_validate(intent.order_spec)
+        except (RuntimeError, ValueError) as exc:
+            # Specification and paper-mode checks are deterministic. They
+            # must fail before durable A0, never strand an accepted request in
+            # a worker queue with no possible broker write.
+            self._reject(intent, f"CLERK_ASYNC_CUSTODY_QUALIFICATION_FAILED:{type(exc).__name__}")
+
+        async with self._async_custody_admission_lock, self._intake_lock:
+            await self._require_normal_submit_intake(intent)
+            existing_identity = await asyncio.to_thread(self._journal.intent_for_id, intent.intent_id)
+            if existing_identity is not None and existing_identity != intent:
+                self._reject(intent, "CLERK_INTENT_ID_COLLISION")
+            existing = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
+            if existing is None and existing_identity is not None:
+                # An ordinary synchronous receipt cannot be retroactively
+                # converted into async custody: its original A0 did not carry
+                # a lane or the corresponding restart policy.
+                self._reject(intent, "CLERK_ASYNC_CUSTODY_REQUIRES_NEW_INTENT")
+            is_existing_queued = existing is not None and existing.lifecycle_state == "queued"
+            if existing is None:
+                self._require_async_custody_capacity(intent, lane)
+                intake_admitted_at_ms = self._now_ms()
+                recorded = await asyncio.to_thread(
+                    self._record_intent_locked,
+                    intent,
+                    clerk_request_received_at_ms=clerk_request_received_at_ms,
+                    clerk_intake_admitted_at_ms=intake_admitted_at_ms,
+                    async_custody_lane=lane,
+                )
+            else:
+                recorded = existing.recorded
+                if existing.lifecycle_state == "recorded":
+                    self._reject(intent, "CLERK_ASYNC_CUSTODY_REQUIRES_NEW_INTENT")
+                elif existing.lifecycle_state != "queued":
+                    return recorded, existing
+                else:
+                    assert existing.lane is not None
+                    lane = existing.lane
+
+            status = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
+            if status is None:
+                raise RuntimeError("CLERK_ASYNC_CUSTODY_STATUS_MISSING")
+            if status.lifecycle_state == "queued":
+                self._enqueue_async_custody(intent, lane, reject_if_full=not is_existing_queued)
+        self._schedule_custody_notification(intent)
+        return recorded, status
+
+    async def async_custody_status(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCustodyStatus | None:
+        """Read one idempotent durable custody fold by immutable intent identity."""
+
+        return await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
+
+    def _require_async_custody_capacity(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        lane: Literal["entry", "risk_reducing"],
+    ) -> None:
+        queue = self._async_custody_queues[lane]
+        if not queue.full():
+            return
+        reason = "CLERK_ASYNC_ENTRY_QUEUE_FULL" if lane == "entry" else "CLERK_ASYNC_RISK_QUEUE_FULL"
+        self._reject(intent, reason)
+
+    def _enqueue_async_custody(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        lane: Literal["entry", "risk_reducing"],
+        *,
+        reject_if_full: bool,
+    ) -> bool:
+        if intent.intent_id in self._async_custody_enqueued_ids:
+            return True
+        if self._async_custody_queues[lane].full():
+            if reject_if_full:
+                self._require_async_custody_capacity(intent, lane)
+            return False
+        self._async_custody_queues[lane].put_nowait(intent)
+        self._async_custody_enqueued_ids.add(intent.intent_id)
+        return True
+
+    async def _run_async_custody_lane(self, lane: Literal["entry", "risk_reducing"]) -> None:
+        queue = self._async_custody_queues[lane]
+        while True:
+            intent = await queue.get()
+            try:
+                if not self._async_custody_stopping:
+                    await self._advance_async_custody_intent(intent)
+            except asyncio.CancelledError:
+                raise
+            except AccountClerkIntentRejected as exc:
+                await self._hold_async_custody_before_a1(intent, reason=exc.reason)
+                logger.info(
+                    "asynchronous custody work durably held before broker write",
+                    extra={
+                        "account_id": intent.account_id,
+                        "intent_id": intent.intent_id,
+                        "reason": exc.reason,
+                    },
+                )
+            except Exception as exc:
+                await self._hold_async_custody_before_a1(
+                    intent,
+                    reason=f"ASYNC_CUSTODY_PRE_A1_FAILURE:{type(exc).__name__}",
+                )
+                logger.exception(
+                    "asynchronous custody worker failed before advancing an intent",
+                    extra={"account_id": intent.account_id, "intent_id": intent.intent_id},
+                )
+            finally:
+                self._async_custody_enqueued_ids.discard(intent.intent_id)
+                queue.task_done()
+
+    async def _advance_async_custody_intent(self, intent: AccountOwnerSubmitIntent) -> None:
+        """Cross A1 under the Clerk grant, then retain uncertainty durably."""
+
+        async with self._broker_write_lock:
+            async with self._intake_lock:
+                await self._require_normal_submit_intake(intent)
+                status = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
+                if status is None or status.lifecycle_state != "queued":
+                    return
+                self._require_paper_broker()
+                spec = IbkrOrderSpec.model_validate(intent.order_spec)
+                # This durable A1 receipt is written before the broker call and
+                # after the durable A0 row that the caller can query by identity.
+                await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+            self._schedule_custody_notification(intent)
+            try:
+                ack = await self._place_under_clerk_grant(spec)
+            except Exception as exc:
+                await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
+                self._schedule_custody_notification(intent)
+                return
+            receipt = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+            await self._publish_manual_order_ack_event(intent, receipt)
+            self._schedule_custody_notification(intent)
+
+    async def _hold_async_custody_before_a1(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        reason: str,
+    ) -> None:
+        """Persist a visible A0 hold when dynamic policy blocks the worker."""
+
+        try:
+            await asyncio.to_thread(
+                self._journal.append_custody_submission_hold,
+                intent,
+                reason=reason,
+            )
+        except Exception:
+            logger.exception(
+                "failed to persist asynchronous custody pre-submit hold",
+                extra={"account_id": intent.account_id, "intent_id": intent.intent_id},
+            )
+            raise
+        self._schedule_custody_notification(intent)
+
+    def _schedule_custody_notification(self, intent: AccountOwnerSubmitIntent) -> None:
+        """Coalesce best-effort observer work without delaying Clerk custody."""
+
+        if self._custody_notification_sink is None:
+            return
+        self._ensure_custody_notification_worker()
+        if intent.intent_id in self._custody_notification_pending_ids:
+            return
+        try:
+            self._custody_notification_queue.put_nowait(intent)
+        except asyncio.QueueFull:
+            logger.warning(
+                "asynchronous custody notification queue is full; durable status remains queryable",
+                extra={"account_id": intent.account_id, "intent_id": intent.intent_id},
+            )
+            return
+        self._custody_notification_pending_ids.add(intent.intent_id)
+
+    def _ensure_custody_notification_worker(self) -> None:
+        """Start the single bounded observer worker only for active custody."""
+
+        if (
+            self._custody_notification_sink is None
+            or not self._async_custody_started
+            or self._custody_notification_stopping()
+            or self._custody_notification_worker is not None
+        ):
+            return
+        self._custody_notification_worker = asyncio.create_task(
+            self._run_custody_notification_worker(),
+            name="account-clerk-custody-notification",
+        )
+
+    def _custody_notification_stopping(self) -> bool:
+        return self._async_custody_stopping
+
+    async def _run_custody_notification_worker(self) -> None:
+        """Deliver one coalesced durable fold at a time with a strict budget."""
+
+        while True:
+            intent = await self._custody_notification_queue.get()
+            try:
+                await self._notify_custody_status(intent)
+            finally:
+                self._custody_notification_pending_ids.discard(intent.intent_id)
+                self._custody_notification_queue.task_done()
+
+    async def _notify_custody_status(self, intent: AccountOwnerSubmitIntent) -> None:
+        """Best-effort observer delivery after durable state is already available."""
+
+        if self._custody_notification_sink is None or self._custody_notification_observer is not None:
+            return
+        status = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
+        if status is None:
+            return
+        observer = asyncio.create_task(
+            self._custody_notification_sink(status),
+            name=f"account-clerk-custody-observer:{intent.intent_id}",
+        )
+        self._custody_notification_observer = observer
+        observer.add_done_callback(self._complete_custody_notification_observer)
+        done, _ = await asyncio.wait({observer}, timeout=_ASYNC_CUSTODY_NOTIFICATION_TIMEOUT_S)
+        if observer not in done:
+            logger.warning(
+                "asynchronous custody observer exceeded its delivery budget; durable status remains queryable",
+                extra={"account_id": intent.account_id, "intent_id": intent.intent_id},
+            )
+            return
+        try:
+            observer.result()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "asynchronous custody notification sink failed",
+                extra={"account_id": intent.account_id, "intent_id": intent.intent_id},
+            )
+
+    def _complete_custody_notification_observer(self, task: asyncio.Task[None]) -> None:
+        """Release the single observer slot and consume detached task failures."""
+
+        if self._custody_notification_observer is task:
+            self._custody_notification_observer = None
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            # The awaited path logs immediate failures. This branch consumes an
+            # observer detached after the strict timeout without duplicating
+            # operator noise on an optional notification channel.
+            logger.debug("detached asynchronous custody observer completed with an error", exc_info=True)
 
     async def record_intent(
         self,
@@ -375,7 +786,7 @@ class AccountClerk:
                 diagnostics={"intent_id": intent.intent_id, "order_ref": intent.order_ref},
             )
         await self._require_normal_submit_intake(intent)
-        async with self._intake_lock:
+        async with self._broker_write_lock, self._intake_lock:
             # The fence spans identity validation, journal admission, and the
             # broker write. A retirement cannot turn PENDING between those
             # steps and let an already-admitted bot place one more order.
@@ -546,6 +957,8 @@ class AccountClerk:
                     event,
                     broker_callback_idempotency_key(event),
                 )
+        if receipt.intent is not None:
+            self._schedule_custody_notification(receipt.intent)
         # The callback receipt is durable before this best-effort rebuildable
         # projection starts; never stall the callback relay on Postgres.
         self._schedule_transaction_projection()
@@ -595,7 +1008,7 @@ class AccountClerk:
         # the broker, but retain this operation lock.  Preserve that acquisition
         # order so shutdown cannot return while an admitted cancel is still able
         # to write to the broker or enqueue a callback.
-        async with self._cancel_operation_lock, self._intake_lock:
+        async with self._broker_write_lock, self._cancel_operation_lock, self._intake_lock:
             return
 
     async def recover_inbox(self) -> list[AccountClerkRecordedReceipt]:
@@ -679,6 +1092,7 @@ class AccountClerk:
         *,
         clerk_request_received_at_ms: int | None = None,
         clerk_intake_admitted_at_ms: int | None = None,
+        async_custody_lane: Literal["entry", "risk_reducing"] | None = None,
     ) -> AccountClerkRecordedReceipt:
         if intent.account_id != self._account_id:
             self._reject(intent, "CLERK_ACCOUNT_MISMATCH")
@@ -688,6 +1102,7 @@ class AccountClerk:
             validate_intent=self._validate_intent_identity,
             clerk_request_received_at_ms=clerk_request_received_at_ms,
             clerk_intake_admitted_at_ms=clerk_intake_admitted_at_ms,
+            async_custody_lane=async_custody_lane,
         )
 
     def append_broker_event(self, intent: AccountOwnerSubmitIntent, event: IbkrOrderEvent) -> None:

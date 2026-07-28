@@ -9,6 +9,7 @@ prevents the coordinator from becoming a second, sprawling API surface.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -51,6 +52,10 @@ class AccountClerkInboxEntry(BaseModel):
     # Clerk callers intentionally leave it absent rather than relabelling the
     # intent creation time as transport evidence.
     clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    # This mode is part of the durable A0 receipt, not a follow-up queue
+    # marker. Keeping it in the inbox also preserves it across the inbox-to-
+    # journal crash boundary.
+    async_custody_lane: Literal["entry", "risk_reducing"] | None = None
     intent: AccountOwnerSubmitIntent
 
 
@@ -183,6 +188,10 @@ class AccountClerkJournalEntry(BaseModel):
     seq: int = Field(ge=1)
     entry_kind: Literal[
         "recorded",
+        "custody_queued",
+        "custody_expired_before_submit",
+        "custody_recovery_action_required",
+        "custody_submission_hold",
         "broker_submitting",
         "broker_uncertain",
         "recovery_cancelling",
@@ -219,6 +228,12 @@ class AccountClerkJournalEntry(BaseModel):
     clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
     clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
     inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    # An asynchronous A0 owns an intent from the same single, fsynced
+    # ``recorded`` row. It is intentionally not represented by a second
+    # receipt: a crash between two writes would otherwise erase which restart
+    # policy owns the accepted intent.
+    async_custody_lane: Literal["entry", "risk_reducing"] | None = None
+    custody_lane: Literal["entry", "risk_reducing"] | None = None
     event_account_id: str | None = Field(default=None, min_length=1)
     broker_callback_idempotency_key: str | None = Field(default=None, min_length=1)
     operator_adjustment: AccountClerkOperatorAdjustment | None = None
@@ -228,6 +243,23 @@ class AccountClerkJournalEntry(BaseModel):
     @model_validator(mode="after")
     def validate_attribution_shape(self) -> AccountClerkJournalEntry:
         """Keep attributed rows readable while forbidding guessed ownership."""
+
+        if self.entry_kind == "recorded":
+            if self.custody_lane is not None:
+                raise ValueError("custody_lane is invalid on recorded rows")
+        elif self.async_custody_lane is not None:
+            raise ValueError("async_custody_lane is only valid on recorded rows")
+
+        if self.entry_kind in {
+            "custody_queued",
+            "custody_expired_before_submit",
+            "custody_recovery_action_required",
+            "custody_submission_hold",
+        }:
+            if self.custody_lane is None:
+                raise ValueError("custody queue rows require custody_lane")
+        elif self.custody_lane is not None:
+            raise ValueError("custody_lane is only valid on custody queue rows")
 
         if self.entry_kind == "operator_adjustment":
             if self.intent is not None or self.operator_adjustment is None:
@@ -372,6 +404,58 @@ class AccountClerkBrokerAckReceipt(AccountClerkRecordedReceipt):
         )
 
 
+class AccountClerkAsyncCustodyConfig(BaseModel):
+    """Explicit bounded capacity for the disabled asynchronous custody path."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    entry_capacity: int = Field(ge=1, le=256)
+    risk_reducing_capacity: int = Field(ge=1, le=256)
+
+
+class AccountClerkAsyncCustodyHealth(BaseModel):
+    """Read-only bounded-queue evidence; no caller infers it from latency."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool
+    entry_depth: int = Field(ge=0)
+    entry_capacity: int = Field(ge=0)
+    risk_reducing_depth: int = Field(ge=0)
+    risk_reducing_capacity: int = Field(ge=0)
+
+
+class AccountClerkCustodyStatus(BaseModel):
+    """One durable lifecycle fold for the versioned asynchronous custody API."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: str = Field(min_length=1)
+    intent_id: str = Field(min_length=1)
+    order_ref: str = Field(min_length=1)
+    custody_stage: Literal[
+        "A0_CUSTODY_ACCEPTED",
+        "A1_BROKER_WRITE_STARTED",
+        "A2_BROKER_KNOWN",
+        "A3_ECONOMIC_TERMINAL",
+    ]
+    lifecycle_state: Literal[
+        "recorded",
+        "queued",
+        "submitting",
+        "broker_known",
+        "economic_terminal",
+        "expired_before_submit",
+        "recovery_action_required",
+        "submission_hold",
+        "uncertain_requires_reconciliation",
+    ]
+    lane: Literal["entry", "risk_reducing"] | None = None
+    recorded: AccountClerkRecordedReceipt
+    broker_acked: AccountClerkBrokerAckReceipt | None = None
+    updated_at_ms: int = Field(ge=0, le=_MAX_INT64)
+
+
 class AccountClerkRecoveryFlattenReceipt(BaseModel):
     """Durable outcome of one Clerk-owned recovery liquidation."""
 
@@ -422,11 +506,50 @@ def _require_entry_intent(entry: AccountClerkJournalEntry) -> AccountOwnerSubmit
     return entry.intent
 
 
+def async_custody_reconciliation_is_held(entries: Sequence[AccountClerkJournalEntry]) -> bool:
+    """Whether a durable async A0 remains outside the legacy reconciler.
+
+    A0-only custody is owned exclusively by the bounded Clerk lane. Explicit
+    expiry, policy hold, and recovery-action rows are also non-retryable until
+    a later operator workflow creates a new intent. Once A1 is durable, the
+    established reconciler resumes responsibility for ambiguity.
+    """
+
+    recorded = next((entry for entry in entries if entry.entry_kind == "recorded"), None)
+    if recorded is None:
+        return False
+    # Read the short-lived legacy queue marker as well: an interrupted shadow
+    # rollout must not reopen its already-accepted A0 work through the generic
+    # reconciler merely because it predates the atomic recorded-row marker.
+    has_async_lane = recorded.async_custody_lane is not None or any(
+        entry.entry_kind == "custody_queued" and entry.custody_lane is not None for entry in entries
+    )
+    if not has_async_lane:
+        return False
+    if any(
+        entry.entry_kind
+        in {
+            "custody_expired_before_submit",
+            "custody_recovery_action_required",
+            "custody_submission_hold",
+        }
+        for entry in entries
+    ):
+        return True
+    return not any(
+        entry.entry_kind in {"broker_submitting", "broker_uncertain", "broker_acked", "broker_event"}
+        for entry in entries
+    )
+
+
 __all__ = [
+    "AccountClerkAsyncCustodyConfig",
+    "AccountClerkAsyncCustodyHealth",
     "AccountClerkBrokerAckReceipt",
     "AccountClerkBrokerEventReceipt",
     "AccountClerkBrokerEvidenceBaseline",
     "AccountClerkCancelNamespaceReceipt",
+    "AccountClerkCustodyStatus",
     "AccountClerkEmergencyAuthorization",
     "AccountClerkEmergencyFlattenReceipt",
     "AccountClerkEmergencyOperationEvent",
@@ -439,4 +562,5 @@ __all__ = [
     "AccountClerkPositionEvidence",
     "AccountClerkRecordedReceipt",
     "AccountClerkRecoveryFlattenReceipt",
+    "async_custody_reconciliation_is_held",
 ]

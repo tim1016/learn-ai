@@ -22,9 +22,16 @@ ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S: Final = 120.0
 # Keep the end-to-end caller budget large enough to cover that queue plus its
 # own write without turning a delayed acknowledgement into a false timeout.
 ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S: Final = 240.0
+# This limits how long a caller waits for an unambiguous A0 response. It is
+# deliberately not a claim that a filesystem fsync can be preempted by the
+# server: a timeout is identity-scoped ambiguity, followed by ``read_custody``.
+ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S: Final = 10.0
 
 AccountClerkRpcOperation = Literal[
     "submit",
+    "submit_custody_v2",
+    "read_custody_v2",
+    "custody_health_v2",
     "authorize_emergency_flatten",
     "emergency_flatten_account",
     "prepare_emergency_flatten",
@@ -41,6 +48,7 @@ AccountClerkRpcOperation = Literal[
 WRITE_OPERATIONS = frozenset(
     {
         "submit",
+        "submit_custody_v2",
         "authorize_emergency_flatten",
         "emergency_flatten_account",
         "prepare_emergency_flatten",
@@ -137,7 +145,7 @@ class AccountClerkRpcUnavailableError(AccountClerkRpcError):
 
 
 class AccountClerkRpcTimeoutError(AccountClerkRpcUnavailableError):
-    """The bounded Clerk request expired; its intent identity remains available."""
+    """The caller deadline expired; its intent identity remains available for recovery."""
 
     def __init__(self, *, operation: str, request_identity: AccountClerkRpcRequestIdentity) -> None:
         super().__init__(
@@ -248,6 +256,9 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
     operation = request.get("operation")
     if operation not in (
         "submit",
+        "submit_custody_v2",
+        "read_custody_v2",
+        "custody_health_v2",
         "authorize_emergency_flatten",
         "emergency_flatten_account",
         "prepare_emergency_flatten",
@@ -268,6 +279,8 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
 def request_timeout_s(operation: AccountClerkRpcOperation) -> float:
     if operation == "submit":
         return ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S
+    if operation == "submit_custody_v2":
+        return ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S
     if operation in (
         "authorize_emergency_flatten",
         "emergency_flatten_account",

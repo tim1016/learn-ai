@@ -28,6 +28,7 @@ from app.engine.live.account_clerk_cursor import (
     AccountClerkEventCursorRepo,
 )
 from app.engine.live.account_clerk_rpc import (
+    ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S,
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
@@ -1172,6 +1173,17 @@ async def test_drain_events_rejects_a_broker_event_outside_the_canonical_shape(t
             {"operation": "submit", "intent": _intent().model_dump(mode="json")},
             ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S,
             AccountClerkRpcRequestIdentity(intent_id="intent-1040", order_ref=_intent().order_ref),
+        ),
+        (
+            {
+                "operation": "submit_custody_v2",
+                "intent": _intent("custody-timeout-1040").model_dump(mode="json"),
+            },
+            ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S,
+            AccountClerkRpcRequestIdentity(
+                intent_id="custody-timeout-1040",
+                order_ref=_intent("custody-timeout-1040").order_ref,
+            ),
         ),
         (
             {"operation": "drain_events", "bot_order_namespace": "learn-ai/bot-a/v1"},
