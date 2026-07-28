@@ -42,6 +42,7 @@ from app.routers import (
     iv_recorder,
     jobs,
     lean_sidecar,
+    market_data_feed,
     market_monitor,
     monte_carlo,
     options,
@@ -345,6 +346,15 @@ async def lifespan(app: FastAPI):
             account_service_ensurer=_ensure_connected_account_service,
         )
         account_truth_refresh_loop.start()
+
+        # Shared MarketDataFeed — installed after the IBKR client is created
+        # so it references the same process-local client the rest of the broker
+        # stack uses. The feed is read-only (no orders); it is the one sanctioned
+        # cross-broker surface (phase-3 design §4, #1258 L2).
+        from app.marketdata.ibkr_feed import IbkrMarketDataFeed, set_market_data_feed
+
+        set_market_data_feed(IbkrMarketDataFeed(ibkr_client))
+        logger.info("Shared MarketDataFeed installed (ibkr, in-process fan-out).")
     else:
         set_client(None)
         set_monitor(None)
@@ -445,6 +455,10 @@ async def lifespan(app: FastAPI):
         if ibkr_client is not None and ibkr_client.is_connected():
             await ibkr_client.disconnect()
         set_client(None)
+        # Clear the shared MarketDataFeed after the IBKR client is down.
+        from app.marketdata.ibkr_feed import set_market_data_feed as _clear_feed
+
+        _clear_feed(None)
         logger.info("Shutting down Polygon Data Service")
 
 
@@ -548,6 +562,14 @@ app.include_router(iv_recorder.router)
 # /research/data-divergence/* — dashboard + matrix endpoints. The router
 # carries its own prefix so we mount it bare.
 app.include_router(research_divergence.router)
+# Shared MarketDataFeed diagnostic surface — read-only feed health + fan-out
+# subscription count. Gated behind the data-plane control secret because it
+# exposes live broker state (connection status, last bar watermark).
+app.include_router(
+    market_data_feed.router,
+    prefix="/api/market-data-feed",
+    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+)
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.
 app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
