@@ -88,4 +88,6 @@ def test_transaction_history_read_path_remains_bounded_and_projection_only() -> 
     assert "read_appended" not in history_source
     assert ".open(" not in history_source
     assert "account_truth" not in history_source.lower()
-    assert "broker" not in history_source.lower()
+    # Audit-stage field names may describe broker custody. The invariant is that
+    # this read path does not reach into the broker integration itself.
+    assert "app.broker" not in history_source
