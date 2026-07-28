@@ -3,7 +3,8 @@
 Formula: Sharpe = mean(daily_returns)/stddev(daily_returns) · √252; MaxDrawdown = max_t(running_peak_t - equity_t); per-trade win rate, profit factor, expected value, average winning/losing trade duration. All annualized with TRADING_DAYS_PER_YEAR=252.
 Reference: Sharpe (1994) "The Sharpe Ratio", Journal of Portfolio Management 21(1) §IV; Bacon, *Practical Portfolio Performance Measurement* (2e), §8.2 for max drawdown; standard portfolio statistics.
 Canonical implementation: this file. The .NET duplicates `Backend/Services/Implementation/BacktestService.cs::CalculateSharpeRatio` and `CalculateMaxDrawdown` are pending-migration (Phase 3.2). The .NET `SnapshotService.cs::ComputeMetrics` is legacy-ok-pending-parity (live-portfolio path; finding F-0011).
-Validated against: backtest engine test suite (`PythonDataService/tests/test_strategy_engine.py`) covers the integrated path; per-statistic golden fixture is owed (registry: pending-migration row).
+Validated against: `PythonDataService/tests/test_statistics.py::TestMaxDrawdown` and
+`PythonDataService/tests/fixtures/test_engine_stats_extended_fixtures.py::TestENG002MaxDrawdown`.
 
 Computes per-trade and per-period metrics from a trade log. Kept
 independent from the core engine loop so the same module can be reused
@@ -24,7 +25,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import Protocol, TypedDict
 
 TRADING_DAYS_PER_YEAR = 252
 
@@ -39,6 +40,14 @@ class EquityPoint:
 class ValidationError:
     code: str
     message: str
+
+
+class MaxDrawdownResult(TypedDict):
+    """Maximum-drawdown value and the timestamps that define it."""
+
+    max_drawdown: float
+    peak_timestamp: int | None
+    trough_timestamp: int | None
 
 
 class _TradeLike(Protocol):
@@ -163,20 +172,77 @@ def _equity_curve_from_trades(initial_equity: float, trades: Sequence[_TradeLike
     return curve
 
 
+def max_drawdown(points: Sequence[tuple[int, float | None]]) -> MaxDrawdownResult:
+    """Return maximum drawdown and the historical peak-to-trough timestamps.
+
+    Formula: MaxDrawdown = max_t((running_peak_t - equity_t) / running_peak_t).
+    Reference: Bacon, *Practical Portfolio Performance Measurement* (2e), §8.2.
+    Canonical implementation: this function; ``_max_drawdown`` is a
+      compatibility wrapper for callers that have no timestamps.
+    Validated against: `PythonDataService/tests/test_statistics.py::TestMaxDrawdown`.
+
+    Duplicate timestamps are resolved before validation, so the final occurrence
+    in the caller's input is authoritative.  A zero result has no peak/trough
+    pair because no positive drawdown occurred.
+    """
+    latest_equity_by_timestamp: dict[int, float | None] = {}
+    for timestamp, equity in points:
+        latest_equity_by_timestamp[timestamp] = equity
+
+    valid_observations = 0
+    peak_equity = 0.0
+    peak_timestamp: int | None = None
+    worst_drawdown = 0.0
+    worst_peak_timestamp: int | None = None
+    worst_trough_timestamp: int | None = None
+
+    for timestamp, raw_equity in sorted(latest_equity_by_timestamp.items()):
+        if raw_equity is None:
+            continue
+
+        equity = float(raw_equity)
+        if not math.isfinite(equity):
+            continue
+        if equity <= 0:
+            raise ValueError(f"equity at timestamp {timestamp} must be greater than zero")
+
+        valid_observations += 1
+        if peak_timestamp is None or equity > peak_equity:
+            peak_equity = equity
+            peak_timestamp = timestamp
+            continue
+
+        drawdown = (peak_equity - equity) / peak_equity
+        is_worse = drawdown > worst_drawdown
+        is_earlier_tie = (
+            drawdown == worst_drawdown
+            and drawdown > 0.0
+            and worst_peak_timestamp is not None
+            and worst_trough_timestamp is not None
+            and (peak_timestamp, timestamp) < (worst_peak_timestamp, worst_trough_timestamp)
+        )
+        if is_worse or is_earlier_tie:
+            worst_drawdown = drawdown
+            worst_peak_timestamp = peak_timestamp
+            worst_trough_timestamp = timestamp
+
+    if valid_observations < 2:
+        return {
+            "max_drawdown": 0.0,
+            "peak_timestamp": None,
+            "trough_timestamp": None,
+        }
+
+    return {
+        "max_drawdown": worst_drawdown,
+        "peak_timestamp": worst_peak_timestamp,
+        "trough_timestamp": worst_trough_timestamp,
+    }
+
+
 def _max_drawdown(curve: Sequence[float]) -> float:
     """Return max drawdown as a positive fraction (e.g. 0.18 = 18% DD)."""
-    if not curve:
-        return 0.0
-    peak = curve[0]
-    max_dd = 0.0
-    for value in curve:
-        if value > peak:
-            peak = value
-        if peak > 0:
-            dd = (peak - value) / peak
-            if dd > max_dd:
-                max_dd = dd
-    return max_dd
+    return max_drawdown(list(enumerate(curve)))["max_drawdown"]
 
 
 def _returns_from_curve(curve: Sequence[float]) -> list[float]:
