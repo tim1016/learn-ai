@@ -985,9 +985,9 @@ class LiveEngine:
                 return account_observation_lease_gate_result(assessment)
 
             async def account_observation_lease_shadow_comparison_observer(
-                truth_gate,
-                lease_gate,
-            ):
+                truth_gate: GateResult,
+                lease_gate: GateResult,
+            ) -> None:
                 await asyncio.to_thread(
                     append_account_event,
                     self._artifacts_root,
@@ -1775,6 +1775,7 @@ class LiveEngine:
                 self._reconcile_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._reconcile_task
+            await portfolio.drain_shadow_comparisons()
             # NEW: indicator-state checkpoint at graceful shutdown.
             if last_bar is not None:
                 try:

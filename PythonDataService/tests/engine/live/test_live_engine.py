@@ -312,6 +312,7 @@ async def test_live_engine_seeds_only_clerk_owned_positions_from_account_snapsho
     )
 
     assert result.open_positions == {"SPY": 1}
+    assert result.final_equity == Decimal("104700")
     assert broker.orders == []
 
 

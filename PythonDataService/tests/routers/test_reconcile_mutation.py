@@ -211,6 +211,7 @@ async def test_reconcile_classifies_flatten_with_no_positions(
                 "run_id": "run-1",
                 "code_sha": "test-code-sha",
                 "strategy_instance_id": "spy_ema_paper",
+                "created_at_ms": 1_700_000_000_000,
                 "strategy_spec_path": "/test/spec.json",
                 "strategy_spec_sha256": "test-spec-sha",
                 "qc_audit_copy_path": "/test/qc_audit.py",

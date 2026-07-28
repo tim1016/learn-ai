@@ -192,7 +192,7 @@ def _write_ledger(
         payload.update(
             {
                 "code_sha": "test-code-sha",
-                "strategy_spec_path": "/test/spec.json",
+                "strategy_spec_path": str(spec_path) if spec_path is not None else "/test/spec.json",
                 "strategy_spec_sha256": "test-spec-sha",
                 "qc_audit_copy_path": "/test/qc_audit.py",
                 "qc_audit_copy_sha256": "test-audit-sha",
@@ -202,6 +202,25 @@ def _write_ledger(
             }
         )
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_write_ledger_preserves_explicit_spec_path_when_clerk_readable(tmp_path: Path) -> None:
+    root = tmp_path / "live_runs"
+    spec_path = tmp_path / "explicit.spec.json"
+
+    _write_ledger(
+        root,
+        "run-1",
+        "spy_ema_paper",
+        1_700_000_000_000,
+        spec_path=spec_path,
+        clerk_readable=True,
+    )
+
+    payload = json.loads(
+        (root / "run-1" / "run_ledger.json").read_text(encoding="utf-8")
+    )
+    assert payload["strategy_spec_path"] == str(spec_path)
 
 
 def _write_roll_call_offer(

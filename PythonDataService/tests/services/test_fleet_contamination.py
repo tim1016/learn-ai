@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NoReturn
 
 import pytest
 
@@ -85,7 +86,7 @@ def test_instance_broker_treats_stale_sidecar_as_unknown_when_ledger_is_unreadab
         lambda _root, _sid: envelope,
     )
 
-    def unreadable_ledger(_path: Path):
+    def unreadable_ledger(_path: Path) -> NoReturn:
         raise OSError("run ledger unavailable")
 
     monkeypatch.setattr(fleet_contamination, "read_ledger", unreadable_ledger)

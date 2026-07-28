@@ -84,15 +84,15 @@ logger = logging.getLogger(__name__)
 ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES: Counter[str] = Counter()
 
 
-def _log_shadow_comparison_observation_failure(task: asyncio.Future[object]) -> None:
-    """Surface a best-effort shadow write failure without delaying submit."""
+def _log_shadow_comparison_writer_failure(task: asyncio.Task[None]) -> None:
+    """Surface a detached bounded writer failure without blocking shutdown."""
 
     if task.cancelled():
         return
     try:
         task.result()
     except Exception:
-        logger.exception("account observation lease shadow comparison write failed")
+        logger.exception("account observation lease shadow comparison writer failed")
 
 
 class LiveBrokerEventStreamError(RuntimeError):
@@ -742,9 +742,12 @@ class LivePortfolio:
     """Portfolio-shaped live state with broker-backed account snapshots."""
 
     broker: BrokerAdapter
+    SHADOW_COMPARISON_QUEUE_CAPACITY: ClassVar[int] = 64
+    SHADOW_COMPARISON_DRAIN_TIMEOUT_S: ClassVar[float] = 1.0
     cash: Decimal = Decimal(0)
     net_liquidation: Decimal = Decimal(0)
     positions: dict[str, Position] = field(default_factory=dict)
+    account_net_positions: dict[str, Position] = field(default_factory=dict)
     pending_orders: list[Order] = field(default_factory=list)
     reference_price: dict[str, Decimal] = field(default_factory=dict)
     total_fees: Decimal = Decimal(0)
@@ -821,12 +824,18 @@ class LivePortfolio:
     account_gate_authority_provider: (
         Callable[[], Literal["account_truth", "observation_lease"]] | None
     ) = None
-    # Durable account-event writer owned by the engine. It records every
-    # paired shadow comparison at an actual submit boundary so parity evidence
-    # survives child-process restarts without introducing a second scheduler.
+    # Durable account-event writer owned by the engine. It records paired
+    # shadow comparisons at actual submit boundaries through the bounded
+    # local writer below, so its wait never delays a broker submit.
     account_observation_lease_shadow_comparison_observer: (
-        Callable[[GateResult, GateResult], Awaitable[object] | object] | None
+        Callable[[GateResult, GateResult], Awaitable[None] | None] | None
     ) = None
+    _shadow_comparison_queue: asyncio.Queue[tuple[GateResult, GateResult]] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _shadow_comparison_writer: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     # S5: one account-level live-session verdict gates all normal broker
     # actions, including liquidation because it ultimately drains through this
     # same submit path.  It intentionally has no bot-specific override.
@@ -930,7 +939,15 @@ class LivePortfolio:
                 quantity=int(pos.quantity),
                 average_price=Decimal(str(pos.avg_cost)),
             )
-        self.positions = refreshed
+        self.account_net_positions = refreshed
+        self.positions = {
+            symbol: Position(
+                symbol=position.symbol,
+                quantity=position.quantity,
+                average_price=position.average_price,
+            )
+            for symbol, position in refreshed.items()
+        }
 
     def retain_owned_position_quantities(
         self,
@@ -954,7 +971,7 @@ class LivePortfolio:
         owns the same symbol; the Clerk quantity remains authoritative.
         """
 
-        account_net_positions = self.positions
+        account_net_positions = self.account_net_positions
         owned: dict[str, Position] = {}
         for raw_symbol, raw_quantity in owned_position_quantities.items():
             symbol = raw_symbol.upper()
@@ -983,14 +1000,87 @@ class LivePortfolio:
         return self.positions[sym]
 
     def total_value(self) -> Decimal:
-        has_open_positions = any(pos.quantity != 0 for pos in self.positions.values())
+        valuation_positions = self.account_net_positions or self.positions
+        has_open_positions = any(pos.quantity != 0 for pos in valuation_positions.values())
         if self.net_liquidation and (not has_open_positions or not self.reference_price):
             return self.net_liquidation
         value = self.cash
-        for sym, pos in self.positions.items():
+        for sym, pos in valuation_positions.items():
             price = self.reference_price.get(sym, pos.average_price)
             value += pos.market_value(price)
         return value
+
+    def _enqueue_shadow_comparison(self, truth_gate: GateResult, lease_gate: GateResult) -> None:
+        if self.account_observation_lease_shadow_comparison_observer is None:
+            return
+        if self._shadow_comparison_queue is None:
+            self._shadow_comparison_queue = asyncio.Queue(maxsize=self.SHADOW_COMPARISON_QUEUE_CAPACITY)
+            self._shadow_comparison_writer = asyncio.create_task(
+                self._write_shadow_comparisons(),
+                name="observation-lease-shadow-comparison-writer",
+            )
+        try:
+            self._shadow_comparison_queue.put_nowait((truth_gate, lease_gate))
+        except asyncio.QueueFull:
+            logger.error(
+                "account observation lease shadow comparison queue is full; observation dropped",
+                extra={"capacity": self._shadow_comparison_queue.maxsize},
+            )
+
+    async def _write_shadow_comparisons(self) -> None:
+        assert self._shadow_comparison_queue is not None
+        assert self.account_observation_lease_shadow_comparison_observer is not None
+        queue = self._shadow_comparison_queue
+        while True:
+            truth_gate, lease_gate = await queue.get()
+            try:
+                observation = self.account_observation_lease_shadow_comparison_observer(
+                    truth_gate,
+                    lease_gate,
+                )
+                if inspect.isawaitable(observation):
+                    await observation
+            except Exception:
+                logger.exception("account observation lease shadow comparison write failed")
+            finally:
+                queue.task_done()
+            if (current_task := asyncio.current_task()) is not None and current_task.cancelling():
+                raise asyncio.CancelledError
+
+    async def drain_shadow_comparisons(self) -> None:
+        """Bound shutdown on the non-authoritative parity writer."""
+
+        if self._shadow_comparison_queue is None or self._shadow_comparison_writer is None:
+            return
+        queue = self._shadow_comparison_queue
+        writer = self._shadow_comparison_writer
+        try:
+            await asyncio.wait_for(
+                queue.join(),
+                timeout=self.SHADOW_COMPARISON_DRAIN_TIMEOUT_S,
+            )
+        except TimeoutError:
+            logger.error(
+                "account observation lease shadow comparison drain timed out; pending observations dropped",
+                extra={"pending": queue.qsize()},
+            )
+        finally:
+            writer.cancel()
+            try:
+                completed, _ = await asyncio.wait(
+                    {writer},
+                    timeout=self.SHADOW_COMPARISON_DRAIN_TIMEOUT_S,
+                )
+                if writer not in completed:
+                    logger.error(
+                        "account observation lease shadow comparison writer did not cancel before shutdown",
+                    )
+                    writer.add_done_callback(_log_shadow_comparison_writer_failure)
+                else:
+                    _log_shadow_comparison_writer_failure(writer)
+            finally:
+                self._shadow_comparison_writer = None
+                self._shadow_comparison_queue = None
 
     def _next_id(self) -> int:
         self._next_order_id += 1
@@ -1193,7 +1283,19 @@ class LivePortfolio:
 
     def record_broker_fill(self, event: OrderEvent) -> None:
         """Update the local cache from a broker-reported fill event."""
-        pos = self.get_position(event.symbol)
+        self._record_fill_on_position(self.get_position(event.symbol), event)
+        account_position = self.account_net_positions.setdefault(
+            event.symbol.upper(),
+            Position(symbol=event.symbol.upper()),
+        )
+        self._record_fill_on_position(account_position, event)
+        self.cash -= Decimal(event.fill_quantity) * event.fill_price
+        self.cash -= event.fee
+        self.net_liquidation = Decimal(0)
+        self.total_fees += event.fee
+
+    @staticmethod
+    def _record_fill_on_position(pos: Position, event: OrderEvent) -> None:
         new_qty = pos.quantity + event.fill_quantity
         if pos.quantity == 0 or (pos.quantity > 0) == (event.fill_quantity > 0):
             if new_qty != 0:
@@ -1205,10 +1307,6 @@ class LivePortfolio:
         pos.quantity = new_qty
         if pos.quantity == 0:
             pos.average_price = Decimal(0)
-        self.cash -= Decimal(event.fill_quantity) * event.fill_price
-        self.cash -= event.fee
-        self.net_liquidation = Decimal(0)
-        self.total_fees += event.fee
 
     async def submit_pending_orders(self) -> list[IbkrOrderAck]:
         """Submit all locally queued orders through the paper-order boundary.
@@ -1314,18 +1412,7 @@ class LivePortfolio:
             and self.account_observation_lease_shadow_comparison_observer is not None
         ):
             try:
-                comparison_observation = self.account_observation_lease_shadow_comparison_observer(
-                    account_truth_gate,
-                    lease_gate,
-                )
-                if inspect.isawaitable(comparison_observation):
-                    # Shadow parity is an observable migration signal, never a
-                    # broker-submit prerequisite. Its durable writer can wait
-                    # on the cross-runtime mutex, so keep that wait off the
-                    # submit path and surface any later failure through logs.
-                    asyncio.ensure_future(comparison_observation).add_done_callback(
-                        _log_shadow_comparison_observation_failure
-                    )
+                self._enqueue_shadow_comparison(account_truth_gate, lease_gate)
             except Exception:
                 logger.exception("account observation lease shadow comparison write failed")
         if (
