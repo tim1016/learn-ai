@@ -36,8 +36,9 @@ import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationSummary } from '../../../services/strategy-validation.types';
-import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/broker-connectivity-strip.component';
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
+import { AccountTruthSpineComponent } from '../account-safety/account-truth-spine.component';
+import { AccountSafetySnapshotStore } from '../account-safety/account-safety-snapshot.store';
 import { type OperationError, toOperationError } from '../operation-error';
 import {
   deployPrefillParamsFromQuery,
@@ -118,7 +119,7 @@ interface SettledDeployPreflight {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterLink,
-    BrokerConnectivityStripComponent,
+    AccountTruthSpineComponent,
     BrokerOperationResultComponent,
     ActionPlanPickerComponent,
     ButtonModule,
@@ -136,6 +137,7 @@ interface SettledDeployPreflight {
 export class BrokerDeployFormComponent {
   private readonly svc = inject(LiveRunsService);
   private readonly broker = inject(BrokerService);
+  private readonly accountSafety = inject(AccountSafetySnapshotStore);
   private readonly strategyValidation = inject(StrategyValidationService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -336,6 +338,7 @@ export class BrokerDeployFormComponent {
   private readonly brokerAccountId = computed<string>(
     () => (this.account.hasValue() ? (this.account.value()?.account_id ?? '') : ''),
   );
+  readonly accountSafetyState = computed(() => this.accountSafety.stateFor(this.brokerAccountId()));
 
   readonly readonlyFlag = computed<boolean>(() => this.executionMode() === 'read_only');
   readonly executionCapability = computed<ExecutionMode>(() => this.executionMode());
@@ -567,6 +570,10 @@ export class BrokerDeployFormComponent {
 
     effect(() => {
       this.accountId.set(this.brokerAccountId());
+    });
+    effect(() => {
+      const accountId = this.brokerAccountId();
+      if (accountId !== '') void this.accountSafety.refresh(accountId);
     });
     // ADR 0009 § 3: Reference parity cannot silently downgrade.
     effect(() => {

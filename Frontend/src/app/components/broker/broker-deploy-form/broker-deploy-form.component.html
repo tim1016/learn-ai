@@ -10,7 +10,7 @@
     </nav>
   </header>
 
-  <app-broker-connectivity-strip />
+  <app-account-truth-spine [accountState]="accountSafetyState()" />
 
   @if (deployed(); as deployment) {
     <section class="deployed" role="status" aria-live="polite">

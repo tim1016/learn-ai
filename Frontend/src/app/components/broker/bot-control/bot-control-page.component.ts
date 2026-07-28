@@ -43,6 +43,8 @@ import {
 } from './lib/suggested-action-renderer';
 import { toOperationError, type OperationKind } from '../operation-error';
 import { BotSurfaceStore } from './bot-surface-store.service';
+import { AccountTruthSpineComponent } from '../account-safety/account-truth-spine.component';
+import { AccountSafetySnapshotStore } from '../account-safety/account-safety-snapshot.store';
 
 const MISSING_CONFIRMATION_COPY_ERROR =
   'Backend confirmation copy is unavailable; refusing unsafe action.';
@@ -67,6 +69,7 @@ interface StartReadyCapability {
     TraderGuidancePaneComponent,
     TraderViewComponent,
     TypedHaltConfirmComponent,
+    AccountTruthSpineComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-control-page.component.html',
@@ -79,6 +82,7 @@ export class BotControlPageComponent {
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private readonly activeBotSidebarNotice = inject(ActiveBotSidebarNoticeService);
+  private readonly accountSafety = inject(AccountSafetySnapshotStore);
 
   readonly instanceId = this.surface.instanceId;
   readonly status = this.surface.status;
@@ -110,6 +114,7 @@ export class BotControlPageComponent {
       this.accountStartGate()?.status === 'block' &&
       this.boundAccountId() !== null,
   );
+  readonly accountSafetyState = computed(() => this.accountSafety.stateFor(this.boundAccountId()));
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly crashRecoveryConfirmOpen = signal<boolean>(false);
@@ -255,6 +260,10 @@ export class BotControlPageComponent {
   );
 
   constructor() {
+    effect(() => {
+      const accountId = this.boundAccountId();
+      if (accountId !== null) void this.accountSafety.refresh(accountId);
+    });
     effect(() => {
       const id = this.instanceId();
       const notice = this.hostRunnerNotice();

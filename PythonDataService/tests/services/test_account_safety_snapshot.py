@@ -31,7 +31,16 @@ from app.engine.live.account_observation_lease import AccountObservationLeaseRep
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_safety import AccountSafetyAuthority, AccountSafetyVerdict, RetiredOwnerCustody
 from app.schemas.account_safety_snapshot import AccountSafetySnapshotSource
-from app.schemas.account_truth import AccountTruthResponse
+from app.schemas.account_truth import (
+    AccountTruthEvidenceTier,
+    AccountTruthFactOwner,
+    AccountTruthOrderCancelAction,
+    AccountTruthOrderRow,
+    AccountTruthOwnerBindingState,
+    AccountTruthOwnerClass,
+    AccountTruthPositionRow,
+    AccountTruthResponse,
+)
 from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydantic_artifact
 from app.services.account_directory import AccountDirectoryService, CurrentBrokerAccount
 from app.services.account_reconciliation import AccountReconciliationService
@@ -198,6 +207,72 @@ def test_snapshot_suspended_state_wins_over_missing_other_sources(tmp_path: Path
 
     assert snapshot.verdict == "SUSPENDED"
     assert snapshot.custody.retired_owner_custody_count == 1
+
+
+def test_snapshot_exposure_counts_only_current_bot_custody_as_managed(tmp_path: Path) -> None:
+    now_ms = 1_780_000_000_000
+    provider = get_account_truth_snapshot_provider()
+    provider.clear()
+    _write_clean_authorities(tmp_path, now_ms=now_ms)
+    def owner(
+        owner_class: AccountTruthOwnerClass,
+        binding_state: AccountTruthOwnerBindingState,
+    ) -> AccountTruthFactOwner:
+        evidence_by_class: dict[AccountTruthOwnerClass, AccountTruthEvidenceTier] = {
+            "bot": "bot_order_ref",
+            "manual": "app_minted_manual",
+            "mixed_known": "mixed_known",
+            "foreign_or_unclaimed": "foreign_or_unclaimed",
+        }
+        return AccountTruthFactOwner(
+            owner_class=owner_class,
+            owner_key=f"{owner_class}:{binding_state}",
+            owner_label=f"{owner_class} {binding_state}",
+            evidence_tier=evidence_by_class[owner_class],
+            evidence_label="Test ownership evidence",
+            owner_binding_state=binding_state,
+            severity="ok" if owner_class == "bot" and binding_state == "ACTIVE" else "warning",
+        )
+
+    def position(con_id: int, fact_owner: AccountTruthFactOwner) -> AccountTruthPositionRow:
+        return AccountTruthPositionRow(
+            account_id=_ACCOUNT_ID, con_id=con_id, symbol="AMD", sec_type="STK", quantity=1.0,
+            avg_cost=100.0, owner=fact_owner, headline="Position", detail="Current position.", fetched_at_ms=now_ms,
+        )
+
+    def open_order(order_id: int, fact_owner: AccountTruthFactOwner) -> AccountTruthOrderRow:
+        return AccountTruthOrderRow(
+            fact_kind="open_order", lifecycle_id=f"order:{order_id}", lifecycle="submitted",
+            account_id=_ACCOUNT_ID, order_id=order_id, client_id=7, con_id=order_id, symbol="AMD",
+            sec_type="STK", action="BUY", quantity=1.0, order_type="LMT", limit_price=100.0,
+            status="Submitted", cumulative_filled=0.0, remaining=1.0, owner=fact_owner,
+            cancel_action=AccountTruthOrderCancelAction(
+                visible=False, enabled=False, label="Cancel unavailable", detail="Not relevant to count.",
+            ),
+            headline="Open order", detail="Current order.", fetched_at_ms=now_ms,
+        )
+
+    truth = _truth(now_ms).model_copy(
+        update={
+            "orders": [
+                open_order(1, owner("bot", "RETIRED")),
+                open_order(2, owner("manual", "UNKNOWN")),
+                open_order(3, owner("foreign_or_unclaimed", "UNKNOWN")),
+            ],
+            "positions": [
+                position(101, owner("bot", "ACTIVE")),
+                position(102, owner("bot", "UNKNOWN")),
+                position(103, owner("mixed_known", "ACTIVE")),
+            ],
+        }
+    )
+    provider.remember(truth, cached_at_ms=now_ms)
+
+    snapshot = _service(tmp_path, now_ms=now_ms).snapshot(account_id=_ACCOUNT_ID)
+
+    assert snapshot.exposure.open_order_count == 3
+    assert snapshot.exposure.position_count == 3
+    assert snapshot.exposure.unmanaged_or_unknown_count == 5
 
 
 @pytest.mark.parametrize(

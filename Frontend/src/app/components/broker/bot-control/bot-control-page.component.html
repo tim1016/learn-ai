@@ -62,6 +62,8 @@
       </div>
     </header>
 
+    <app-account-truth-spine [accountState]="accountSafetyState()" />
+
     @if (activeLens() === 'trader') {
       <app-trader-view
         [status]="s"

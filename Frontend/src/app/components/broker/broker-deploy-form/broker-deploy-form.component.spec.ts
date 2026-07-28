@@ -13,6 +13,7 @@ import type { StrategyValidationCatalog } from '../../../services/strategy-valid
 import type { ActionPlan } from '../../../api/action-plan.types';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 import { operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
+import { makeAccountSafetySnapshot } from '../../../../testing/account-safety-snapshot-fixtures';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
 
@@ -197,6 +198,9 @@ function setup(
     positions: vi
       .fn()
       .mockResolvedValue({ positions: opts.positions ?? [] }),
+    accountSafetySnapshot: vi.fn().mockImplementation((accountId: string) =>
+      Promise.resolve(makeAccountSafetySnapshot({ account_id: accountId })),
+    ),
   };
   const connectivity = {
     links: () => [],
@@ -363,6 +367,17 @@ afterEach(() => {
 });
 
 describe('BrokerDeployFormComponent', () => {
+  it('renders the shared server-owned account safety snapshot for the selected account', async () => {
+    const { fixture } = setup();
+    await settleResource(fixture);
+
+    const truthSpine = fixture.nativeElement.querySelector('app-account-truth-spine');
+    expect(truthSpine?.textContent).toContain('Reconciling');
+    expect(truthSpine?.textContent).toContain(
+      'Fresh reconciliation is required before new entry risk can proceed.',
+    );
+  });
+
   it('lists only validated strategies and binds their deploy receipt without rendering receipt inputs', async () => {
     const { fixture, component } = setup();
     await flush();

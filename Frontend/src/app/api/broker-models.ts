@@ -18,6 +18,7 @@ import type { OperatorBlocker } from './operator-blocker.types';
 // ── REST-shaped models (sourced from OpenAPI) ─────────────────────────
 
 export type IbkrAccountSummary = components['schemas']['IbkrAccountSummary'];
+export type AccountSafetySnapshot = components['schemas']['AccountSafetySnapshot'];
 export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth'];
 export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &
   IbkrOrderEvidenceFields &

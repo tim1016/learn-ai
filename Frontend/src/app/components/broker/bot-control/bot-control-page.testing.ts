@@ -32,6 +32,7 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
+import { makeAccountSafetySnapshot } from '../../../../testing/account-safety-snapshot-fixtures';
 import { ActivityTabComponent } from './tabs/activity-tab.component';
 import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
 import { BotControlPageComponent } from './bot-control-page.component';
@@ -107,6 +108,7 @@ export class FakeLiveRunsService {
 
 export class FakeBrokerService {
   reconcileAccount = vi.fn<(accountId: string) => Promise<unknown>>();
+  accountSafetySnapshot = vi.fn<BrokerService['accountSafetySnapshot']>();
 }
 
 export class FakeBotSurfaceStore {
@@ -448,6 +450,9 @@ export async function setupBotControlPage(
   const broker = new FakeBrokerService();
   broker.reconcileAccount.mockRejectedValue(
     unexpectedMutation('BrokerService.reconcileAccount'),
+  );
+  broker.accountSafetySnapshot.mockImplementation((accountId) =>
+    Promise.resolve(makeAccountSafetySnapshot({ account_id: accountId })),
   );
   const surface = new FakeBotSurfaceStore();
   surface.configure(

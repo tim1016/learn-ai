@@ -64,6 +64,7 @@ class AccountSafetySnapshotExposure(BaseModel):
     open_order_count: int = Field(ge=0)
     execution_count: int = Field(ge=0)
     position_count: int = Field(ge=0)
+    unmanaged_or_unknown_count: int = Field(ge=0)
 
 
 class AccountSafetySnapshot(BaseModel):

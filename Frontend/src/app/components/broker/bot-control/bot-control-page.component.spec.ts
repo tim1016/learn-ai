@@ -278,6 +278,18 @@ describe('BotControlPageComponent', () => {
     window.localStorage.clear();
   });
 
+  it('renders the shared server-owned account safety snapshot for the bot account', async () => {
+    const { fixture, element } = await setupBotControlPage({
+      status: observationLeaseBlockedStatus(),
+    });
+    await flush(fixture);
+
+    expect(element.querySelector('app-account-truth-spine')?.textContent).toContain('Reconciling');
+    expect(element.querySelector('app-account-truth-spine')?.textContent).toContain(
+      'Fresh reconciliation is required before new entry risk can proceed.',
+    );
+  });
+
   it('opens in the trader lens and preserves the operator cockpit behind the lens switch', async () => {
     const { fixture, element } = await setupBotControlPage({
       status: startableReadyStatus(),

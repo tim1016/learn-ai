@@ -12,18 +12,7 @@
 </app-page-header>
 
 <main class="account-desk" aria-label="Account desk">
-  <app-account-desk-verdict
-    [triage]="triage()"
-    [loading]="loading()"
-    [error]="error()"
-    [showingStaleLastGood]="showingStaleLastGood()"
-    [headlineMetrics]="headlineMetrics()"
-    [freshnessCountdown]="freshnessCountdown()"
-    [lens]="lens()"
-    [operatorAttentionCount]="guidance.operatorAttentionCount()"
-    (retryRequested)="retry()"
-    (primaryMoveFollowed)="followPrimaryMove($event)"
-  />
+  <app-account-truth-spine [accountState]="accountSafetyState()" />
 
   <app-account-desk-lens-select
     [options]="lensOptions"

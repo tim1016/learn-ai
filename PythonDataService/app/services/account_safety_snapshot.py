@@ -183,6 +183,7 @@ class AccountSafetySnapshotService:
                 "open_order_count": 0 if truth is None else len(truth.orders),
                 "execution_count": 0 if truth is None else len(truth.executions),
                 "position_count": 0 if truth is None else len(truth.positions),
+                "unmanaged_or_unknown_count": self._unmanaged_or_unknown_exposure_count(truth),
             },
             "blockers": [blocker.model_dump(mode="json") for blocker in (truth.operator_blockers if truth else [])],
             "outage_diff": None if epoch is None else epoch.outage_diff,
@@ -211,6 +212,7 @@ class AccountSafetySnapshotService:
                 open_order_count=0 if truth is None else len(truth.orders),
                 execution_count=0 if truth is None else len(truth.executions),
                 position_count=0 if truth is None else len(truth.positions),
+                unmanaged_or_unknown_count=self._unmanaged_or_unknown_exposure_count(truth),
             ),
             blockers=() if truth is None else tuple(truth.operator_blockers),
             outage_diff=None if epoch is None else epoch.outage_diff,
@@ -396,6 +398,24 @@ class AccountSafetySnapshotService:
             truth is not None
             and truth.account_id == account_id
             and truth.health.account_id == account_id
+        )
+
+    @staticmethod
+    def _unmanaged_or_unknown_exposure_count(truth: AccountTruthResponse | None) -> int:
+        """Count current Account Truth facts that are not bot-owned.
+
+        This is an authority projection, not an estimate. Current Bot custody
+        requires both a Bot owner and an ACTIVE or DEPLOYED binding. Manual,
+        mixed, foreign/unclaimed, retired, and unproven bindings are all
+        outside current custody and remain visible as unmanaged or unknown.
+        """
+        if truth is None:
+            return 0
+        facts = (*truth.orders, *truth.executions, *truth.positions)
+        return sum(
+            fact.owner.owner_class != "bot"
+            or fact.owner.owner_binding_state not in {"ACTIVE", "DEPLOYED"}
+            for fact in facts
         )
 
     @staticmethod

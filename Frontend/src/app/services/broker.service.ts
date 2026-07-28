@@ -38,6 +38,7 @@ import type {
 } from '../api/clerk-transaction-history.types';
 import type {
   AccountTruthResponse,
+  AccountSafetySnapshot,
   DataPlaneHealth,
   DiagnosticReport,
   ExpirationsResponse,
@@ -147,6 +148,14 @@ export class BrokerService {
   accountTruth(): Promise<AccountTruthResponse> {
     return firstValueFrom(
       this.http.get<AccountTruthResponse>(`${this.base}/account-truth`),
+    );
+  }
+
+  accountSafetySnapshot(accountId: string): Promise<AccountSafetySnapshot> {
+    return firstValueFrom(
+      this.http.get<AccountSafetySnapshot>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/safety-snapshot`,
+      ),
     );
   }
 

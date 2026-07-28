@@ -2399,12 +2399,18 @@
             "minimum": 0.0,
             "title": "Position Count",
             "type": "integer"
+          },
+          "unmanaged_or_unknown_count": {
+            "minimum": 0.0,
+            "title": "Unmanaged Or Unknown Count",
+            "type": "integer"
           }
         },
         "required": [
           "open_order_count",
           "execution_count",
-          "position_count"
+          "position_count",
+          "unmanaged_or_unknown_count"
         ],
         "title": "AccountSafetySnapshotExposure",
         "type": "object"

@@ -6381,6 +6381,8 @@ export interface components {
             open_order_count: number;
             /** Position Count */
             position_count: number;
+            /** Unmanaged Or Unknown Count */
+            unmanaged_or_unknown_count: number;
         };
         /**
          * AccountSafetySnapshotSource
