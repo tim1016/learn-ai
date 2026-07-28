@@ -5556,8 +5556,14 @@ export interface components {
             /** Bot Order Namespace */
             bot_order_namespace: string;
             broker_ack?: components["schemas"]["IbkrOrderAck"] | null;
+            /** Clerk Intake Admitted At Ms */
+            clerk_intake_admitted_at_ms?: number | null;
+            /** Clerk Request Received At Ms */
+            clerk_request_received_at_ms?: number | null;
             /** Exec Id */
             exec_id?: string | null;
+            /** Inbox Fsynced At Ms */
+            inbox_fsynced_at_ms?: number | null;
             /** Intent Id */
             intent_id: string;
             /** Journal Seq */
@@ -5614,6 +5620,12 @@ export interface components {
             account_id: string;
             /** Bot Order Namespace */
             bot_order_namespace: string;
+            /** Clerk Intake Admitted At Ms */
+            clerk_intake_admitted_at_ms?: number | null;
+            /** Clerk Request Received At Ms */
+            clerk_request_received_at_ms?: number | null;
+            /** Inbox Fsynced At Ms */
+            inbox_fsynced_at_ms?: number | null;
             /** Intent Id */
             intent_id: string;
             /** Journal Seq */
@@ -9805,6 +9817,55 @@ export interface components {
             reason?: string;
         };
         /**
+         * ClerkCustodyDurations
+         * @description Measured same-clock durations for one Clerk-owned intent.
+         */
+        ClerkCustodyDurations: {
+            /** A0 To Broker Write Ms */
+            a0_to_broker_write_ms?: number | null;
+            /** Broker Return To First Callback Ms */
+            broker_return_to_first_callback_ms?: number | null;
+            /** Broker Write To Return Ms */
+            broker_write_to_return_ms?: number | null;
+            /** Intake To A0 Ms */
+            intake_to_a0_ms?: number | null;
+            /** Request To Intake Ms */
+            request_to_intake_ms?: number | null;
+            /** Terminal Age Ms */
+            terminal_age_ms?: number | null;
+        };
+        /**
+         * ClerkCustodyTimeline
+         * @description Distinct source, arrival, and durable clocks for one intent lifecycle.
+         */
+        ClerkCustodyTimeline: {
+            /** A0 Custody Accepted At Ms */
+            a0_custody_accepted_at_ms?: number | null;
+            /** Broker Ack Recorded At Ms */
+            broker_ack_recorded_at_ms?: number | null;
+            /** Broker Call Returned At Ms */
+            broker_call_returned_at_ms?: number | null;
+            /** Broker Write Started At Ms */
+            broker_write_started_at_ms?: number | null;
+            /** Clerk Intake Admitted At Ms */
+            clerk_intake_admitted_at_ms?: number | null;
+            /** Clerk Request Received At Ms */
+            clerk_request_received_at_ms?: number | null;
+            durations?: components["schemas"]["ClerkCustodyDurations"];
+            /** Earliest Broker Source At Ms */
+            earliest_broker_source_at_ms?: number | null;
+            /** Economic Terminal Recorded At Ms */
+            economic_terminal_recorded_at_ms?: number | null;
+            /** First Callback Arrived At Ms */
+            first_callback_arrived_at_ms?: number | null;
+            /** First Callback Recorded At Ms */
+            first_callback_recorded_at_ms?: number | null;
+            /** Inbox Fsynced At Ms */
+            inbox_fsynced_at_ms?: number | null;
+            /** Intent Created At Ms */
+            intent_created_at_ms?: number | null;
+        };
+        /**
          * ClerkOrderInstruction
          * @description Typed, receipt-supplied order fields; never a client-side inference.
          */
@@ -9935,6 +9996,7 @@ export interface components {
              * @enum {string}
              */
             commission_status?: "unknown" | "reported";
+            custody_timeline?: components["schemas"]["ClerkCustodyTimeline"] | null;
             /** Events */
             events?: components["schemas"]["ClerkTransactionEventRow"][];
             /** Exec Id */

@@ -10572,6 +10572,18 @@
           "durations": {
             "$ref": "#/components/schemas/ClerkCustodyDurations"
           },
+          "earliest_broker_source_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest Broker Source At Ms"
+          },
           "economic_terminal_recorded_at_ms": {
             "anyOf": [
               {
@@ -10607,18 +10619,6 @@
               }
             ],
             "title": "First Callback Recorded At Ms"
-          },
-          "first_callback_source_at_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "First Callback Source At Ms"
           },
           "inbox_fsynced_at_ms": {
             "anyOf": [
