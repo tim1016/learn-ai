@@ -12,6 +12,7 @@ import pytest
 import app.services.fleet_contamination as fleet_contamination
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
+    ACCOUNT_EVENTS_FILENAME,
     AccountFreezeEvidence,
     append_account_event,
     read_account_events,
@@ -27,7 +28,16 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.order_identity import build_order_ref
-from app.services.account_journal_authority import _has_requalification_window, _qualification_alarm_is_active
+from app.services.account_journal_authority import (
+    _AccountJournalAuthorityState,
+    _has_requalification_window,
+    _JournalParityObservation,
+    _qualification_alarm_is_active,
+    _read_authority_state,
+    _write_authority_state,
+    account_journal_authority_is_active,
+    record_account_journal_stream_state,
+)
 from app.services.fleet_contamination import (
     collect_fleet_position_explanations,
     instance_broker,
@@ -333,6 +343,17 @@ def test_explicit_parity_observer_writes_only_for_requested_account(tmp_path: Pa
     assert event["event_type"] == "account_clerk_sidecar_journal_parity"
 
 
+def test_forward_producer_display_event_cannot_qualify_journal_authority(tmp_path: Path) -> None:
+    account = "DU123456"
+    append_account_event(
+        tmp_path,
+        account,
+        {"event_type": "account_clerk_journal_authority_requalified", "ts_ms": 1},
+    )
+
+    assert account_journal_authority_is_active(tmp_path, account) is False
+
+
 def test_legacy_shadow_comparator_drops_zero_position_sidecars(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -359,10 +380,16 @@ def test_legacy_cutover_is_invalidated_once_before_new_shadow_observations(tmp_p
     account = "DU123456"
     (tmp_path / "accounts" / account).mkdir(parents=True)
     (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
-    append_account_event(
-        tmp_path,
-        account,
-        {"event_type": "account_clerk_journal_authority_cutover", "ts_ms": 1},
+    (tmp_path / "accounts" / account / "account_events.jsonl").write_text(
+        json.dumps(
+            {
+                "account_id": account,
+                "event_type": "account_clerk_journal_authority_cutover",
+                "ts_ms": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
     )
     monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {})
     monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root, **_kw: {})
@@ -437,15 +464,14 @@ def test_post_cutover_drift_creates_an_account_operator_condition(tmp_path: Path
     account = "DU123456"
     (tmp_path / "accounts" / account).mkdir(parents=True)
     (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
-    append_account_event(
+    _write_authority_state(
         tmp_path,
-        account,
-        {"event_type": "account_clerk_journal_authority_requalified", "ts_ms": 1},
+        _AccountJournalAuthorityState(account_id=account, qualified_at_ms=1),
     )
     monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}})
     monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root, **_kw: {})
 
-    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is True
+    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is False
 
     event_types = [event["event_type"] for event in read_account_events(tmp_path, account)]
     assert "account_clerk_journal_authority_drift_detected" in event_types
@@ -461,10 +487,9 @@ def test_post_cutover_state_change_bypasses_background_parity_cadence(
     account = "DU123456"
     (tmp_path / "accounts" / account).mkdir(parents=True)
     (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
-    append_account_event(
+    _write_authority_state(
         tmp_path,
-        account,
-        {"event_type": "account_clerk_journal_authority_requalified", "ts_ms": 1},
+        _AccountJournalAuthorityState(account_id=account, qualified_at_ms=1),
     )
     clock = {"ms": 1_700_000_000_000}
     monkeypatch.setattr(fleet_contamination.time, "time_ns", lambda: clock["ms"] * 1_000_000)
@@ -491,7 +516,7 @@ def test_post_cutover_state_change_bypasses_background_parity_cadence(
         ),
     )
 
-    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is True
+    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is False
     parity = [
         event
         for event in read_account_events(tmp_path, account)
@@ -504,59 +529,76 @@ def test_post_cutover_state_change_bypasses_background_parity_cadence(
 
 
 def test_cleared_alarm_still_restarts_the_requalification_window() -> None:
-    events: list[dict] = [
-        {"seq": 1, "event_type": "account_clerk_journal_authority_requalification_required"},
-        *[
-            {
-                "seq": sequence,
-                "event_type": "account_clerk_sidecar_journal_parity",
-                "status": "clean",
-                "ts_ms": 1_000_000 + (sequence * 100_000),
-                "journal_nonzero": sequence == 2,
-            }
-            for sequence in range(2, 6)
-        ],
-        {"seq": 6, "event_type": "account_freeze_recorded"},
-        {"seq": 7, "event_type": "account_freeze_cleared"},
-    ]
-    events.extend(
-        {
-            "seq": sequence,
-            "event_type": "account_clerk_sidecar_journal_parity",
-            "status": "clean",
-            "ts_ms": 2_000_000 + ((sequence - 8) * 100_000),
-            "journal_nonzero": sequence == 8,
-        }
-        for sequence in range(8, 17)
+    observations = tuple(
+        _JournalParityObservation(
+            observed_at_ms=2_000_000 + (offset * 100_000),
+            status="clean",
+            reason="SIDECAR_JOURNAL_EXPOSURE_MATCH",
+            fingerprint=f"clean-{offset}",
+            journal_nonzero=offset == 0,
+        )
+        for offset in range(9)
     )
-    assert _has_requalification_window(events) is False
+    authority = _AccountJournalAuthorityState(
+        account_id="DU123456",
+        requalification_required_at_ms=1_900_000,
+        observations=observations,
+    )
+    assert _has_requalification_window(authority) is False
 
-    events.append(
-        {
-            "seq": 17,
-            "event_type": "account_clerk_sidecar_journal_parity",
-            "status": "clean",
-            "ts_ms": 2_900_000,
-            "journal_nonzero": False,
+    authority = authority.model_copy(
+        update={
+            "observations": (
+                *authority.observations,
+                _JournalParityObservation(
+                    observed_at_ms=2_900_000,
+                    status="clean",
+                    reason="SIDECAR_JOURNAL_EXPOSURE_MATCH",
+                    fingerprint="clean-9",
+                    journal_nonzero=False,
+                ),
+            )
         }
     )
-    assert _has_requalification_window(events) is True
+    assert _has_requalification_window(authority) is True
 
 
 def test_recovered_event_stream_no_longer_blocks_requalification(tmp_path: Path) -> None:
     account = "DU123456"
-    append_account_event(
+    record_account_journal_stream_state(
         tmp_path,
         account,
-        {"event_type": "account_clerk_event_stream_down", "ts_ms": 1},
+        state="down",
+        changed_at_ms=1,
     )
-    down_events = read_account_events(tmp_path, account)
-    assert _qualification_alarm_is_active(tmp_path, account, down_events) is True
+    assert _qualification_alarm_is_active(tmp_path, account, _read_authority_state(tmp_path, account)) is True
 
-    append_account_event(
+    record_account_journal_stream_state(
         tmp_path,
         account,
-        {"event_type": "account_clerk_event_stream_recovered", "ts_ms": 2},
+        state="recovered",
+        changed_at_ms=2,
     )
 
-    assert _qualification_alarm_is_active(tmp_path, account, read_account_events(tmp_path, account)) is False
+    assert _qualification_alarm_is_active(tmp_path, account, _read_authority_state(tmp_path, account)) is False
+
+
+def test_legacy_journal_authority_is_snapshotted_once_before_a_live_decision(tmp_path: Path) -> None:
+    account = "DU123456"
+    legacy_path = tmp_path / "accounts" / account / ACCOUNT_EVENTS_FILENAME
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "event_type": "account_clerk_journal_authority_requalified",
+                "ts_ms": 1_700_000_000_000,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert account_journal_authority_is_active(tmp_path, account) is True
+    legacy_path.write_text("{truncated", encoding="utf-8")
+
+    assert account_journal_authority_is_active(tmp_path, account) is True

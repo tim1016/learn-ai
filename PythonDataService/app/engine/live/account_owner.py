@@ -15,10 +15,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.broker.ibkr.client import IbkrClientIdInUseError
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.live.account_artifacts import (
+    AccountArtifactError,
     AccountOwnerGeneration,
+    account_artifact_file_path,
     append_account_event,
-    read_account_events,
     read_account_freeze,
+    read_legacy_account_events,
     write_account_owner_generation,
 )
 from app.engine.live.account_classifier import AccountClassifierDecision
@@ -28,6 +30,8 @@ from app.engine.live.account_owner_fence import (
     account_owner_write_grant,
 )
 from app.engine.live.account_registry import evaluate_account_instance_binding
+from app.engine.live.live_state_sidecar import _file_lock
+from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.live_runs import GateResult
 
 AccountOwnerRuntimePhase = Literal["accepting", "reconnecting", "draining", "frozen"]
@@ -55,6 +59,7 @@ CustodyLifecycleState = Literal[
 MANUAL_ORDER_INTENT_KIND = "MANUAL_ORDER"
 MANUAL_OPERATOR_STRATEGY_INSTANCE_ID = "manual-operator"
 MANUAL_OPERATOR_RUN_ID = "manual-ticket"
+ACCOUNT_OWNER_INFLIGHT_FILENAME = "account_owner_inflight.json"
 
 
 class AccountOwnerSubmitIntent(BaseModel):
@@ -83,6 +88,27 @@ class AccountOwnerSubmitIntent(BaseModel):
         if self.order_ref != expected:
             raise ValueError(f"order_ref {self.order_ref!r} != {expected!r}")
         return self
+
+
+class _AccountOwnerInflightSubmission(BaseModel):
+    """Typed pre-broker record used only by AccountOwner reconnect recovery."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    order_ref: str = Field(min_length=1, max_length=256)
+    diagnostics: dict
+    order_spec: dict
+    prepared_at_ms: int = Field(ge=0)
+
+
+class _AccountOwnerInflightState(BaseModel):
+    """One producer-local safety artifact, never an Account Desk authority."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    submissions: tuple[_AccountOwnerInflightSubmission, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -311,6 +337,10 @@ class AccountOwner:
         self._set_phase("draining")
         for prepared in self._prepared_without_terminal():
             outcome = await _maybe_await(classify_inflight(prepared))
+            if outcome == "accepted":
+                order_ref = (prepared.get("diagnostics") or {}).get("order_ref")
+                if isinstance(order_ref, str) and order_ref:
+                    self._clear_prepared_submission(order_ref=order_ref)
             append_account_event(
                 self._artifacts_root,
                 self._account_id,
@@ -351,13 +381,18 @@ class AccountOwner:
 
     async def record_prepared_for_test(self, intent: AccountOwnerSubmitIntent) -> None:
         spec = IbkrOrderSpec.model_validate(intent.order_spec)
+        diagnostics = self._diagnostics(intent)
+        self._record_prepared_submission(
+            diagnostics=diagnostics,
+            order_spec=spec.model_dump(),
+        )
         append_account_event(
             self._artifacts_root,
             intent.account_id,
             {
                 "event_type": "account_owner_submit_prepared",
                 "created_at_ms": intent.created_at_ms,
-                "diagnostics": self._diagnostics(intent),
+                "diagnostics": diagnostics,
                 "order_spec": spec.model_dump(),
             },
         )
@@ -396,6 +431,10 @@ class AccountOwner:
         if spec.order_ref != intent.order_ref:
             self._reject(intent, "ORDER_SPEC_REF_MISMATCH", diagnostics)
 
+        self._record_prepared_submission(
+            diagnostics=diagnostics,
+            order_spec=spec.model_dump(),
+        )
         append_account_event(
             self._artifacts_root,
             intent.account_id,
@@ -441,6 +480,7 @@ class AccountOwner:
                 "diagnostics": diagnostics,
             }
             append_account_event(self._artifacts_root, intent.account_id, payload)
+            self._clear_prepared_submission(order_ref=intent.order_ref)
             return self._result(intent, "uncertain", reason=reason, diagnostics=diagnostics)
 
         terminal_diagnostics = diagnostics | {
@@ -457,6 +497,7 @@ class AccountOwner:
                 "diagnostics": terminal_diagnostics,
             },
         )
+        self._clear_prepared_submission(order_ref=intent.order_ref)
         return self._result(
             intent,
             "accepted",
@@ -482,6 +523,7 @@ class AccountOwner:
                 "diagnostics": diagnostics,
             },
         )
+        self._clear_prepared_submission(order_ref=intent.order_ref)
         raise AccountOwnerSubmitRejected(reason=reason, diagnostics=diagnostics)
 
     def _ensure_current_generation(
@@ -559,20 +601,121 @@ class AccountOwner:
         )
         return generation
 
+    def _inflight_path(self) -> Path:
+        return account_artifact_file_path(
+            self._artifacts_root,
+            self._account_id,
+            ACCOUNT_OWNER_INFLIGHT_FILENAME,
+        )
+
+    def _read_inflight_state(self) -> _AccountOwnerInflightState:
+        path = self._inflight_path()
+        if not path.exists():
+            return _AccountOwnerInflightState(account_id=self._account_id)
+        try:
+            state = _AccountOwnerInflightState.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise AccountArtifactError("AccountOwner inflight recovery artifact is unreadable") from exc
+        if state.account_id != self._account_id:
+            raise AccountArtifactError("AccountOwner inflight recovery artifact belongs to another account")
+        return state
+
+    def _record_prepared_submission(self, *, diagnostics: dict, order_spec: dict) -> None:
+        order_ref = diagnostics.get("order_ref")
+        if not isinstance(order_ref, str) or not order_ref:
+            raise AccountArtifactError("AccountOwner prepared submission is missing order_ref")
+        path = self._inflight_path()
+        with _file_lock(path):
+            current = self._read_or_migrate_inflight_state_locked(path)
+            replacement = _AccountOwnerInflightSubmission(
+                order_ref=order_ref,
+                diagnostics=diagnostics,
+                order_spec=order_spec,
+                prepared_at_ms=time.time_ns() // 1_000_000,
+            )
+            submissions = {
+                item.order_ref: item
+                for item in current.submissions
+            }
+            submissions[order_ref] = replacement
+            atomic_write_pydantic_artifact(
+                path,
+                _AccountOwnerInflightState(
+                    account_id=self._account_id,
+                    submissions=tuple(submissions[key] for key in sorted(submissions)),
+                ),
+            )
+
+    def _clear_prepared_submission(self, *, order_ref: str) -> None:
+        path = self._inflight_path()
+        with _file_lock(path):
+            current = self._read_or_migrate_inflight_state_locked(path)
+            remaining = tuple(
+                item for item in current.submissions if item.order_ref != order_ref
+            )
+            if remaining == current.submissions:
+                return
+            atomic_write_pydantic_artifact(
+                path,
+                _AccountOwnerInflightState(account_id=self._account_id, submissions=remaining),
+            )
+
     def _prepared_without_terminal(self) -> list[dict]:
-        events = read_account_events(self._artifacts_root, self._account_id)
+        path = self._inflight_path()
+        with _file_lock(path):
+            state = self._read_or_migrate_inflight_state_locked(path)
+        return [
+            {
+                "event_type": "account_owner_submit_prepared",
+                "diagnostics": item.diagnostics,
+                "order_spec": item.order_spec,
+                "recorded_at_ms": item.prepared_at_ms,
+            }
+            for item in state.submissions
+        ]
+
+    def _read_or_migrate_inflight_state_locked(self, path: Path) -> _AccountOwnerInflightState:
+        """Seed immutable pre-split recovery rows once under the artifact lock."""
+
+        if path.exists():
+            return self._read_inflight_state()
+        events = read_legacy_account_events(self._artifacts_root, self._account_id)
         terminal_refs = {
             (event.get("diagnostics") or {}).get("order_ref")
             for event in events
             if str(event.get("event_type") or "").startswith("account_owner_submit_")
             and event.get("event_type") != "account_owner_submit_prepared"
         }
-        return [
-            event
-            for event in events
-            if event.get("event_type") == "account_owner_submit_prepared"
-            and (event.get("diagnostics") or {}).get("order_ref") not in terminal_refs
-        ]
+        submissions: dict[str, _AccountOwnerInflightSubmission] = {}
+        for event in events:
+            if event.get("event_type") != "account_owner_submit_prepared":
+                continue
+            diagnostics = event.get("diagnostics")
+            order_spec = event.get("order_spec")
+            prepared_at_ms = event.get("recorded_at_ms", event.get("created_at_ms"))
+            order_ref = diagnostics.get("order_ref") if isinstance(diagnostics, dict) else None
+            if (
+                not isinstance(order_ref, str)
+                or not order_ref
+                or order_ref in terminal_refs
+                or not isinstance(order_spec, dict)
+                or not isinstance(prepared_at_ms, int)
+                or isinstance(prepared_at_ms, bool)
+                or prepared_at_ms < 0
+            ):
+                continue
+            submissions[order_ref] = _AccountOwnerInflightSubmission(
+                order_ref=order_ref,
+                diagnostics=diagnostics,
+                order_spec=order_spec,
+                prepared_at_ms=prepared_at_ms,
+            )
+        state = _AccountOwnerInflightState(
+            account_id=self._account_id,
+            submissions=tuple(submissions[key] for key in sorted(submissions)),
+        )
+        atomic_write_pydantic_artifact(path, state)
+        return state
 
     def _result(
         self,

@@ -915,10 +915,36 @@
         "type": "object"
       },
       "AccountEventRow": {
-        "description": "One backend-classified journal event for a desk view.",
+        "description": "One backend-classified operational-history row for a desk view.",
         "properties": {
+          "arrived_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arrived At Ms"
+          },
+          "event_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event At Ms"
+          },
           "event_id": {
-            "maxLength": 256,
+            "maxLength": 512,
             "minLength": 1,
             "title": "Event Id",
             "type": "string"
@@ -963,6 +989,49 @@
                 "type": "null"
               }
             ]
+          },
+          "producer": {
+            "default": "legacy_account_events",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Producer",
+            "type": "string"
+          },
+          "producer_boot_id": {
+            "default": "historical",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Producer Boot Id",
+            "type": "string"
+          },
+          "producer_seq": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Producer Seq",
+            "type": "integer"
+          },
+          "provenance": {
+            "default": "legacy_account_events",
+            "enum": [
+              "legacy_account_events",
+              "producer_operational_log",
+              "clerk_journal"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded At Ms"
           },
           "schema_version": {
             "const": 1,
@@ -1037,7 +1106,7 @@
         "type": "object"
       },
       "AccountEventsResponse": {
-        "description": "Cursor page from the immutable account event journal.",
+        "description": "Cursor page from a merged operational history projection.",
         "properties": {
           "account_id": {
             "maxLength": 64,

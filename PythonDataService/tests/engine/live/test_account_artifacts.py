@@ -28,6 +28,7 @@ from app.engine.live.account_artifacts import (
     read_account_events,
     read_account_events_tolerant,
     read_account_freeze,
+    read_legacy_account_events,
     repair_account_event_sequence,
     require_active_account_clerk_generation,
     write_account_clerk_lease,
@@ -37,6 +38,7 @@ from app.engine.live.account_registry import (
     AccountInstanceBinding,
     write_account_instance_binding,
 )
+from app.engine.live.producer_operational_log import read_producer_operational_events
 from app.schemas.live_runs import GateResult
 
 
@@ -114,6 +116,79 @@ def test_account_clerk_generation_and_lease_are_account_rooted(tmp_path: Path) -
     assert stale_generation.generation == 2
 
 
+def test_control_artifact_account_identity_mismatches_fail_closed(tmp_path: Path) -> None:
+    account_id = "DU123456"
+    foreign_account_id = "DU765432"
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        account_id,
+        phase="accepting",
+        recorded_at_ms=1_700_000_000_000,
+        source="test",
+    )
+    lease = AccountClerkLease(
+        account_id=account_id,
+        generation=generation.generation,
+        pid=123,
+        ibkr_client_id=80,
+        started_at_ms=1_700_000_000_000,
+        renewed_at_ms=1_700_000_000_000,
+        valid_until_ms=1_700_000_060_000,
+    )
+    write_account_clerk_lease(tmp_path, lease)
+    root = account_artifacts_root(tmp_path, account_id)
+
+    (root / account_artifacts.ACCOUNT_CLERK_GENERATION_FILENAME).write_text(
+        generation.model_copy(update={"account_id": foreign_account_id}).model_dump_json(),
+        encoding="utf-8",
+    )
+    with pytest.raises(AccountArtifactError, match="clerk generation belongs to another account"):
+        require_active_account_clerk_generation(tmp_path, account_id, now_ms=1_700_000_000_100)
+
+    (root / account_artifacts.ACCOUNT_CLERK_GENERATION_FILENAME).write_text(
+        generation.model_dump_json(),
+        encoding="utf-8",
+    )
+    (root / account_artifacts.ACCOUNT_CLERK_LEASE_FILENAME).write_text(
+        lease.model_copy(update={"account_id": foreign_account_id}).model_dump_json(),
+        encoding="utf-8",
+    )
+    with pytest.raises(AccountArtifactError, match="clerk lease belongs to another account"):
+        require_active_account_clerk_generation(tmp_path, account_id, now_ms=1_700_000_000_100)
+
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id=account_id,
+            reason="test.freeze",
+            source="test",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="RECONCILE",
+        ),
+    )
+    freeze_path = root / account_artifacts.ACCOUNT_FREEZE_FILENAME
+    frozen = AccountFreezeEvidence.model_validate_json(freeze_path.read_text(encoding="utf-8"))
+    freeze_path.write_text(
+        frozen.model_copy(update={"account_id": foreign_account_id}).model_dump_json(),
+        encoding="utf-8",
+    )
+    with pytest.raises(AccountArtifactError, match="freeze evidence belongs to another account"):
+        read_account_freeze(tmp_path, account_id)
+
+    (root / account_artifacts.ACCOUNT_OWNER_GENERATION_FILENAME).write_text(
+        account_artifacts.AccountOwnerGeneration(
+            account_id=foreign_account_id,
+            generation=1,
+            phase="accepting",
+            recorded_at_ms=1_700_000_000_000,
+            source="test",
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    with pytest.raises(AccountArtifactError, match="owner generation belongs to another account"):
+        account_artifacts.read_account_owner_generation(tmp_path, account_id)
+
+
 @pytest.mark.parametrize(
     "account_id",
     [
@@ -171,17 +246,18 @@ def test_account_artifacts_root_rejects_sibling_prefix_symlink_escape(tmp_path: 
         account_artifacts_root(tmp_path, "DU123456")
 
 
-def test_append_account_event_rejects_symlinked_event_file(tmp_path: Path) -> None:
+def test_append_account_event_rejects_symlinked_producer_log_directory(tmp_path: Path) -> None:
     root = account_artifacts_root(tmp_path, "DU123456")
     root.mkdir(parents=True)
-    outside = tmp_path / "outside-events.jsonl"
-    event_path = root / account_artifacts.ACCOUNT_EVENTS_FILENAME
+    outside = tmp_path / "outside-producer-logs"
+    outside.mkdir()
+    event_path = root / "producer_operational_logs"
     try:
         event_path.symlink_to(outside)
     except OSError as exc:
         pytest.skip(f"symlinks unavailable in this test environment: {exc}")
 
-    with pytest.raises(AccountArtifactError, match="artifact path traversal"):
+    with pytest.raises(AccountArtifactError, match="producer operational log path escapes account artifacts"):
         account_artifacts.append_account_event(
             tmp_path,
             "DU123456",
@@ -191,7 +267,7 @@ def test_append_account_event_rejects_symlinked_event_file(tmp_path: Path) -> No
             },
         )
 
-    assert not outside.exists()
+    assert list(outside.iterdir()) == []
 
 
 def test_read_account_events_rejects_symlinked_event_file(tmp_path: Path) -> None:
@@ -235,7 +311,7 @@ def test_account_artifact_reads_reject_symlinked_static_file(
         reader(tmp_path, "DU123456")
 
 
-def test_account_event_seq_tolerates_malformed_legacy_rows(tmp_path: Path) -> None:
+def test_append_account_event_does_not_rewrite_malformed_legacy_rows(tmp_path: Path) -> None:
     root = account_artifacts_root(tmp_path, "DU123456")
     root.mkdir(parents=True)
     path = root / account_artifacts.ACCOUNT_EVENTS_FILENAME
@@ -250,27 +326,26 @@ def test_account_event_seq_tolerates_malformed_legacy_rows(tmp_path: Path) -> No
         },
     )
 
-    appended = json.loads(path.read_text(encoding="utf-8").splitlines()[-1])
-    assert appended["seq"] == 6
-    assert appended["ts_ms"] == 1_700_000_020_000
+    assert path.read_text(encoding="utf-8") == '{"seq":5,"event_type":"legacy"}\nnot-json\n[]\n'
+    with pytest.raises(AccountArtifactError, match="malformed account event row"):
+        read_account_events(tmp_path, "DU123456")
 
 
-def test_account_event_counter_recovers_missing_behind_and_ahead_without_skipping(tmp_path: Path) -> None:
+def test_forward_account_events_use_producer_local_sequence_without_legacy_counter(tmp_path: Path) -> None:
     account_id = "DU123456"
     payload = {"event_type": "account_owner_generation_recorded", "recorded_at_ms": 1_700_000_020_000}
     account_artifacts.append_account_event(tmp_path, account_id, payload)
-    root = account_artifacts_root(tmp_path, account_id)
-    counter = root / account_artifacts.ACCOUNT_EVENTS_SEQUENCE_FILENAME
-
-    counter.unlink()  # Crash after ledger fsync, before counter write.
-    account_artifacts.append_account_event(tmp_path, account_id, payload)
-    counter.write_text('{"last_seq":0}', encoding="utf-8")  # Counter behind durable tail.
-    account_artifacts.append_account_event(tmp_path, account_id, payload)
-    counter.write_text('{"last_seq":999}', encoding="utf-8")  # Counter ahead of durable tail.
-    account_artifacts.append_account_event(tmp_path, account_id, payload)
+    for offset in range(1, 4):
+        account_artifacts.append_account_event(
+            tmp_path,
+            account_id,
+            {**payload, "recorded_at_ms": payload["recorded_at_ms"] + offset},
+        )
 
     assert [event["seq"] for event in read_account_events(tmp_path, account_id)] == [1, 2, 3, 4]
-    assert json.loads(counter.read_text(encoding="utf-8")) == {"last_seq": 4}
+    root = account_artifacts_root(tmp_path, account_id)
+    assert not (root / account_artifacts.ACCOUNT_EVENTS_FILENAME).exists()
+    assert not (root / account_artifacts.ACCOUNT_EVENTS_SEQUENCE_FILENAME).exists()
 
 
 def test_repair_account_event_sequence_resequences_without_discarding_rows(tmp_path: Path) -> None:
@@ -292,10 +367,12 @@ def test_repair_account_event_sequence_resequences_without_discarding_rows(tmp_p
             "source": "third-writer",
         },
     ]
-    for payload in payloads:
-        account_artifacts.append_account_event(tmp_path, account_id, payload)
     path = account_artifacts_root(tmp_path, account_id) / account_artifacts.ACCOUNT_EVENTS_FILENAME
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    path.parent.mkdir(parents=True)
+    rows = [
+        {**payload, "account_id": account_id, "seq": index, "ts_ms": payload["recorded_at_ms"]}
+        for index, payload in enumerate(payloads, start=1)
+    ]
     rows[2]["seq"] = 2
     path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
     malformed_bytes = path.read_bytes()
@@ -306,13 +383,12 @@ def test_repair_account_event_sequence_resequences_without_discarding_rows(tmp_p
     assert receipt.rewritten_rows == 3
     assert receipt.backup_path is not None
     assert receipt.backup_path.read_bytes() == malformed_bytes
-    repaired_rows = read_account_events(tmp_path, account_id)
+    repaired_rows = read_legacy_account_events(tmp_path, account_id)
     assert [event["seq"] for event in repaired_rows] == [1, 2, 3]
     assert [{key: value for key, value in event.items() if key != "seq"} for event in repaired_rows] == [
         {key: value for key, value in row.items() if key != "seq"} for row in rows
     ]
-    account_artifacts.append_account_event(tmp_path, account_id, payloads[-1])
-    assert [event["seq"] for event in read_account_events(tmp_path, account_id)] == [1, 2, 3, 4]
+    assert [event["seq"] for event in repaired_rows] == [1, 2, 3]
 
 
 def test_account_event_steady_state_append_does_not_rescan_ledger(
@@ -355,6 +431,31 @@ def test_append_account_event_authors_typed_int64_ms_record(
     assert isinstance(event["ts_ms"], int)
 
 
+def test_compatibility_event_does_not_mislabel_intent_creation_as_durable_record_time(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(account_artifacts.time, "time_ns", lambda: 9_000_000_000)
+
+    account_artifacts.append_account_event(
+        tmp_path,
+        "DU123456",
+        {
+            "event_type": "account_owner_submit_accepted",
+            "created_at_ms": 100,
+        },
+    )
+
+    [record] = read_producer_operational_events(tmp_path, account_id="DU123456")
+    [event] = read_account_events(tmp_path, "DU123456")
+    assert record.event_at_ms is None
+    assert record.arrived_at_ms is None
+    assert record.recorded_at_ms == 9_000
+    assert event["recorded_at_ms"] == 9_000
+    assert event["ts_ms"] == 9_000
+    assert event["created_at_ms"] == 100
+
+
 def test_append_account_event_rejects_bad_explicit_timestamp(tmp_path: Path) -> None:
     with pytest.raises(AccountArtifactError, match="ts_ms"):
         account_artifacts.append_account_event(
@@ -378,6 +479,25 @@ def test_append_account_event_rejects_bad_timestamp_extra(tmp_path: Path) -> Non
                 "event_type": "account_owner_reconnect_resumed",
                 "created_at_ms": "2026-06-30T12:00:00Z",
             },
+        )
+
+    assert read_account_events(tmp_path, "DU123456") == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("event_at_ms", "not-a-clock"), ("arrived_at_ms", -1), ("arrived_at_ms", True)),
+)
+def test_append_account_event_rejects_invalid_explicit_producer_clocks(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    with pytest.raises(AccountArtifactError, match=field):
+        account_artifacts.append_account_event(
+            tmp_path,
+            "DU123456",
+            {"event_type": "account_owner_reconnect_resumed", field: value},
         )
 
     assert read_account_events(tmp_path, "DU123456") == []

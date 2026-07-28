@@ -7,10 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.live import account_artifacts
 from app.engine.live.account_artifacts import (
+    ACCOUNT_RECOVERY_CLEARANCE_FILENAME,
     AccountArtifactError,
+    AccountRecoveryClearance,
+    AccountRecoveryProof,
     account_artifacts_root,
+    record_account_recovery_clearance,
 )
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -24,6 +27,7 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
     write_account_instance_binding,
 )
+from app.schemas.live_runs import GateResult
 
 
 def _binding(
@@ -313,14 +317,23 @@ def test_crash_retired_restart_recovery_allows_after_later_proof(tmp_path: Path)
         }
     )
     write_account_instance_binding(tmp_path, retired)
-    account_artifacts.append_account_event(
+    record_account_recovery_clearance(
         tmp_path,
-        "DU123456",
-        {
-            "event_type": "account_recovery_proof_recorded",
-            "recorded_at_ms": 1_700_000_010_001,
-            "recovery_id": "proof-1",
-        },
+        recovery_proof=AccountRecoveryProof(
+            account_id="DU123456",
+            recovery_id="proof-1",
+            requested_by="operator",
+            reconciliation_result="clean",
+            final_gate_result=GateResult(
+                gate_id="account.reconciliation",
+                status="pass",
+                source="test",
+                operator_reason="CLEAN",
+                operator_next_step=None,
+                evidence_at_ms=1_700_000_010_001,
+            ),
+            recorded_at_ms=1_700_000_010_001,
+        ),
     )
 
     blocking_binding = crash_retired_restart_blocking_binding(
@@ -330,6 +343,30 @@ def test_crash_retired_restart_recovery_allows_after_later_proof(tmp_path: Path)
     )
 
     assert blocking_binding is None
+
+
+def test_wrong_account_recovery_clearance_cannot_release_a_crash_retired_binding(tmp_path: Path) -> None:
+    retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
+        update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
+    )
+    write_account_instance_binding(tmp_path, retired)
+    clearance_path = account_artifacts_root(tmp_path, "DU123456") / ACCOUNT_RECOVERY_CLEARANCE_FILENAME
+    clearance_path.write_text(
+        AccountRecoveryClearance(
+            account_id="DU765432",
+            source="account_recovery_proof",
+            evidence_id="wrong-account-proof",
+            cleared_at_ms=1_700_000_010_001,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AccountArtifactError, match="belongs to another account"):
+        crash_retired_restart_blocking_binding(
+            tmp_path,
+            account_id="DU123456",
+            strategy_instance_id="spy-ema-paper-1",
+        )
 
 
 def test_crash_retired_restart_recovery_allows_non_crash_retirement(tmp_path: Path) -> None:

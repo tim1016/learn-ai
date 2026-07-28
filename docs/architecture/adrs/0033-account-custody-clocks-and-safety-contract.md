@@ -181,3 +181,88 @@ calls IBKR; a reused reference cannot cancel a sibling order. It is not yet an
 operator-UI action: Slice 13 must bind it to the later snapshot/action envelope.
 The legacy internal risk queue remains available while an account is clean, but
 does not gain a suspension exception and still uses the ordinary epoch gate.
+
+## Producer-log split and deletion ledger (2026-07-28, #1256)
+
+`account_events.jsonl` is now read-only historical evidence.  It is no longer
+a forward writer, shared sequence allocator, or cross-producer mutex.  Forward
+operational observations are appended under
+`accounts/<account>/producer_operational_logs/<producer>/<boot>.jsonl`; each
+row has a schema version, producer boot ID, producer-local sequence,
+idempotency identity, and distinct event/arrival/record clocks.  A repeated
+receipt replay is idempotent; a receipt-less observation is deliberately a new
+fact even when its payload and local test clock happen to match another one.
+
+The Account Desk merges legacy and producer rows with a deterministic display
+sort.  This establishes repeatable pagination only.  It does **not** claim a
+global sequence, callback causality, broker-time ordering, or permission to
+derive an order/exposure verdict.  A corrupt producer stream fails its selected
+display scope honestly; it does not modify or invalidate the Clerk journal.
+
+The one exception to a producer-only display merge is a deliberately direct,
+read-only projection of a manual-order acknowledgement from
+`clerk_journal.jsonl`.  The former `account_clerk_manual_order_acked` sidecar
+write and the unattributed-callback sidecar mirror were removed.  Consequently,
+the Account Desk can show an operator order receipt only when it is backed by
+a canonical Clerk receipt; a producer record with identical-looking order
+fields is intentionally non-authoritative and cannot produce a trader outcome
+or operator receipt.
+
+### Removed legacy writers
+
+All former forward writers now enter the one compatibility shim in
+`account_artifacts.py`, which routes to the indicated producer log.  No caller
+appends to `account_events.jsonl` or allocates `account_events.seq`.
+
+| Former writer locations | Event family | Producer log | Authority after split |
+| --- | --- | --- | --- |
+| `account_registry.py`, `host_daemon.py` | binding, retirement, daemon lifecycle | `daemon` | Binding ledger / host daemon artifacts; history is display-only |
+| `account_clerk.py`, `account_clerk_reconciler.py`, `account_epoch.py`, `account_epoch_observer.py`, `account_owner.py` | supervisor, reconnect, stream, reconciliation, epoch observations | `clerk_supervisor` | Clerk journal and fenced epoch/lease artifacts; history is display-only |
+| `account_artifacts.py` | freezes, recovery proof, audited override, generation, restart intensity | `data_plane` or `clerk_supervisor` by event family | Their typed account artifacts; history is display-only |
+| `account_reconciliation.py`, `account_journal_authority.py`, `account_crash_recovery.py`, `account_gate_promotion.py`, `journal_recovery.py`, `legacy_stale_claim_retirement.py` | reconciliation, policy, recovery and compatibility evidence | `data_plane` | Typed reconciliation/recovery artifacts and Clerk journal where applicable |
+| `routers/account_reconciliation.py` | Clerk restore presentation evidence | `data_plane` | Host/Clerk restore receipt, not the display row |
+| `live_engine.py` | observation-lease shadow comparisons | `bot` | Account Truth and observation-lease artifacts |
+
+The legacy `AccountOwner` rows remain compatibility diagnostics only.  They
+cannot become Clerk order/exposure authority, and the current production Clerk
+continues to be the only actor allowed to submit through the canonical journal.
+
+### Compatibility-reader ledger
+
+| Reader or endpoint | Retained purpose | Boundary |
+| --- | --- | --- |
+| `read_legacy_account_events` and tolerant legacy reader | forensic access to pre-split rows | historical evidence only; no rewrite |
+| `repair_account_event_sequence` and its recovery endpoint | explicit repair of a pre-split malformed sequence | legacy-only operator ceremony; never a forward writer |
+| `read_account_events` / `read_account_events_with_snapshot` | legacy-call-site display compatibility | merged display rows and virtual bytes; never a causal or authority source |
+| `AccountEventJournalService` | Account Desk cursor projection | explicit provenance and clocks; manual receipts read directly from Clerk journal |
+| `AccountEventRecord` / `TolerantAccountEventRecord` | parse and repair historical envelopes | no forward use |
+
+The deletion tripwires cover concurrent Clerk-supervisor and daemon appends,
+same-boot replay, restart duplicates, a corrupt/truncated producer stream,
+legacy dual-read, and a forged operational manual-order row.  The latter may
+remain inspectable as an operational row, but cannot become an order receipt;
+only the canonical Clerk projection can do so.
+
+### Narrow control artifacts, not a replacement journal
+
+Some safety transitions need a current, typed decision that cannot be rebuilt
+from a display sort. They use account-local artifacts with one named owner;
+they are not a second event ledger and never own orders, fills, positions, or
+custody. The operator history mirrors their transitions only after the typed
+write succeeds.
+
+| Artifact | Sole decision it owns | Display history may not decide it |
+| --- | --- | --- |
+| `account_recovery_clearance.json` | a typed recovery proof or audited override can release a crash-retired restart block | a recovery-looking desk event cannot restart a bot |
+| `account_reconciliation_invalidation.json` | an execution invalidates a prior reconciliation receipt | a late display row cannot make an old receipt valid or invalid |
+| `account_owner_inflight.json` | an A0-prepared owner submission still needs recovery | an owner-history projection cannot suppress a recovery action |
+| `account_journal_authority.json` | account-local Clerk-journal parity qualification and stream revocation | producer events cannot qualify or requalify the Clerk journal |
+| `account_clerk_restart_smoke.json` | the active Clerk generation has an operator-recorded restart smoke | a historical smoke display row cannot authorize a replacement generation |
+| `legacy_stale_claim_retirements.json` | a legacy sidecar claim has been retired | an operational mirror cannot hide a claim from fleet safety |
+| `account_observation_lease_shadow_history.json` | submit-boundary no-weaker shadow parity for gate promotion | a delayed producer callback cannot promote the lease path |
+
+Each artifact is atomically replaced under its own account-local lock and is
+validated on read. A corrupt artifact fails the corresponding safety decision
+closed; it does not fall back to producer history. The sole migration exception
+is an absent artifact seeding once from immutable pre-split
+`account_events.jsonl`; forward producer rows are excluded from that seed.

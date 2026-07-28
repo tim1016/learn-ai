@@ -1,0 +1,39 @@
+<details class="event-provenance">
+  <summary>History source and clocks</summary>
+  @let row = event();
+  <p class="event-provenance__notice">
+    This is deterministic display ordering, not a causal sequence.
+  </p>
+  <dl>
+    <div>
+      <dt>Source</dt>
+      <dd>{{ row.provenance | receiptLabel }}</dd>
+    </div>
+    <div>
+      <dt>Producer</dt>
+      <dd>{{ row.producer | receiptLabel }}</dd>
+    </div>
+    <div>
+      <dt>Boot / local sequence</dt>
+      <dd><code>{{ row.producer_boot_id }}</code> / {{ row.producer_seq }}</dd>
+    </div>
+    @if (row.event_at_ms !== null) {
+      <div>
+        <dt>Source event</dt>
+        <dd><app-timestamp-display [value]="row.event_at_ms" mode="local" /></dd>
+      </div>
+    }
+    @if (row.arrived_at_ms !== null) {
+      <div>
+        <dt>Arrived locally</dt>
+        <dd><app-timestamp-display [value]="row.arrived_at_ms" mode="local" /></dd>
+      </div>
+    }
+    @if (row.recorded_at_ms !== null) {
+      <div>
+        <dt>Recorded durably</dt>
+        <dd><app-timestamp-display [value]="row.recorded_at_ms" mode="local" /></dd>
+      </div>
+    }
+  </dl>
+</details>

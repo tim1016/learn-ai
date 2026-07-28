@@ -5862,9 +5862,13 @@ export interface components {
         };
         /**
          * AccountEventRow
-         * @description One backend-classified journal event for a desk view.
+         * @description One backend-classified operational-history row for a desk view.
          */
         AccountEventRow: {
+            /** Arrived At Ms */
+            arrived_at_ms?: number | null;
+            /** Event At Ms */
+            event_at_ms?: number | null;
             /** Event Id */
             event_id: string;
             /** Evidence Refs */
@@ -5879,6 +5883,29 @@ export interface components {
             /** Operator Detail */
             operator_detail: string;
             operator_order_receipt?: components["schemas"]["AccountEventOperatorOrderReceipt"] | null;
+            /**
+             * Producer
+             * @default legacy_account_events
+             */
+            producer?: string;
+            /**
+             * Producer Boot Id
+             * @default historical
+             */
+            producer_boot_id?: string;
+            /**
+             * Producer Seq
+             * @default 1
+             */
+            producer_seq?: number;
+            /**
+             * Provenance
+             * @default legacy_account_events
+             * @enum {string}
+             */
+            provenance?: "legacy_account_events" | "producer_operational_log" | "clerk_journal";
+            /** Recorded At Ms */
+            recorded_at_ms?: number | null;
             /**
              * Schema Version
              * @default 1
@@ -5913,7 +5940,7 @@ export interface components {
         };
         /**
          * AccountEventsResponse
-         * @description Cursor page from the immutable account event journal.
+         * @description Cursor page from a merged operational history projection.
          */
         AccountEventsResponse: {
             /** Account Id */

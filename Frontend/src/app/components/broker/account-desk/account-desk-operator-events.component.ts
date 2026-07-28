@@ -11,6 +11,7 @@ import type {
 import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
 import { TimestampDisplayComponent } from "../../../shared/timestamp";
 import { AccountDeskGuidanceComponent } from "./account-desk-guidance.component";
+import { AccountDeskEventProvenanceComponent } from "./account-desk-event-provenance.component";
 import { AccountDeskEventsStore } from "./account-desk-events-store.service";
 
 const EVENT_KINDS: readonly AccountEventKind[] = [
@@ -33,6 +34,7 @@ interface AccountTimelineRow {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AccountDeskGuidanceComponent,
+    AccountDeskEventProvenanceComponent,
     ButtonModule,
     PanelModule,
     ReceiptLabelPipe,

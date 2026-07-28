@@ -1023,6 +1023,7 @@ class LiveEngine:
             from app.services.observation_lease_parity import (
                 OBSERVATION_LEASE_GENERATION_AUTHORITY,
                 OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+                record_observation_lease_shadow_comparison,
             )
             from app.utils.timestamps import now_ms_utc
 
@@ -1038,31 +1039,36 @@ class LiveEngine:
                 truth_gate: GateResult,
                 lease_gate: GateResult,
             ) -> None:
+                payload = {
+                    "event_type": "account_observation_lease_shadow_comparison",
+                    "comparison_schema_version": (
+                        OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION
+                    ),
+                    "recorded_at_ms": now_ms_utc(),
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "run_id": self._run_id,
+                    "truth_gate_id": truth_gate.gate_id,
+                    "truth_source": truth_gate.source,
+                    "truth_status": truth_gate.status,
+                    "truth_reason_code": truth_gate.operator_reason,
+                    "lease_gate_id": lease_gate.gate_id,
+                    "lease_source": lease_gate.source,
+                    "lease_status": lease_gate.status,
+                    "lease_reason_code": lease_gate.operator_reason,
+                    "lease_schema_version": ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION,
+                    "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
+                }
+                await asyncio.to_thread(
+                    record_observation_lease_shadow_comparison,
+                    self._artifacts_root,
+                    self._account_id,
+                    payload,
+                )
                 await asyncio.to_thread(
                     append_account_event,
                     self._artifacts_root,
                     self._account_id,
-                    {
-                        "event_type": "account_observation_lease_shadow_comparison",
-                        "comparison_schema_version": (
-                            OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION
-                        ),
-                        "recorded_at_ms": now_ms_utc(),
-                        "strategy_instance_id": self._strategy_instance_id,
-                        "run_id": self._run_id,
-                        "truth_gate_id": truth_gate.gate_id,
-                        "truth_source": truth_gate.source,
-                        "truth_status": truth_gate.status,
-                        "truth_reason_code": truth_gate.operator_reason,
-                        "lease_gate_id": lease_gate.gate_id,
-                        "lease_source": lease_gate.source,
-                        "lease_status": lease_gate.status,
-                        "lease_reason_code": lease_gate.operator_reason,
-                        "lease_schema_version": ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION,
-                        "lease_generation_authority": (
-                            OBSERVATION_LEASE_GENERATION_AUTHORITY
-                        ),
-                    },
+                    payload,
                 )
 
         account_live_session_gate_provider = None

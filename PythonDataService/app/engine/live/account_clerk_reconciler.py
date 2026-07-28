@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     append_account_event,
-    read_account_events,
     read_account_freeze,
+    read_account_freeze_evidence,
     write_account_freeze,
 )
 from app.engine.live.account_clerk import (
@@ -133,8 +133,11 @@ class AccountClerkReconciler:
         halt = _latest_unresolved_halt(entries)
         if halt is None:
             return
-        events = read_account_events(self._clerk._artifacts_root, self._clerk._account_id)
-        if _halt_freeze_was_cleared(events, halt):
+        freeze_evidence = read_account_freeze_evidence(
+            self._clerk._artifacts_root,
+            self._clerk._account_id,
+        )
+        if _halt_freeze_was_cleared(freeze_evidence, halt):
             return
         self._write_halt_freeze()
 
@@ -342,18 +345,17 @@ def _latest_unresolved_halt(
 
 
 def _halt_freeze_was_cleared(
-    account_events: list[dict],
+    freeze_evidence: AccountFreezeEvidence | None,
     halt: AccountClerkJournalEntry,
 ) -> bool:
     """A later audited clear is not the crash window this repair owns."""
 
-    return any(
-        event.get("event_type") == "account_freeze_cleared"
-        and event.get("source") == "account_clerk_reconciler"
-        and event.get("reason") == "ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE"
-        and isinstance(event.get("cleared_at_ms"), int)
-        and event["cleared_at_ms"] >= halt.recorded_at_ms
-        for event in account_events
+    return (
+        freeze_evidence is not None
+        and freeze_evidence.source == "account_clerk_reconciler"
+        and freeze_evidence.reason == "ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE"
+        and freeze_evidence.cleared_at_ms is not None
+        and freeze_evidence.cleared_at_ms >= halt.recorded_at_ms
     )
 
 

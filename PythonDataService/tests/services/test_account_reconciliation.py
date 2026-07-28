@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import get_args
 
@@ -17,6 +18,7 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
+from app.engine.live import producer_operational_log as producer_operational_log_module
 from app.engine.live.account_artifacts import (
     RESTART_INTENSITY_SOURCE,
     AccountArtifactError,
@@ -24,9 +26,10 @@ from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     AccountInstanceBinding,
     AccountOwnerGeneration,
+    AccountRecoveryProof,
     account_artifacts_root,
     advance_account_clerk_generation,
-    append_account_event,
+    clear_account_freeze,
     read_account_events,
     read_account_freeze,
     write_account_clerk_lease,
@@ -38,6 +41,7 @@ from app.engine.live.account_clerk_journal import AccountClerkJournal
 from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_safety import AccountSafetyAuthority, AccountSafetyVerdict
+from app.engine.live.producer_operational_log import read_producer_operational_events
 from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
 from app.schemas.account_truth import (
     AccountTruthEvidenceGap,
@@ -45,6 +49,7 @@ from app.schemas.account_truth import (
     AccountTruthFactOwner,
     AccountTruthOwnerClass,
 )
+from app.schemas.live_runs import GateResult
 from app.services import account_reconciliation as account_reconciliation_module
 from app.services.account_reconciliation import AccountReconciliationService
 
@@ -671,6 +676,38 @@ def test_account_service_enables_and_silently_renews_quiet_flat_account_proof(
     ) == 1
 
 
+def test_reconciliation_receipt_retry_is_exactly_once_across_producer_boots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    receipt = service.compose_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        generated_at_ms=1_780_000_002_000,
+    )
+
+    monkeypatch.setattr(
+        producer_operational_log_module,
+        "process_producer_boot_id",
+        lambda: "data-plane-boot-a",
+    )
+    service._persist_receipt(receipt, record_event=True)
+    monkeypatch.setattr(
+        producer_operational_log_module,
+        "process_producer_boot_id",
+        lambda: "data-plane-boot-b",
+    )
+    service._persist_receipt(receipt, record_event=True)
+
+    receipt_rows = [
+        row
+        for row in read_producer_operational_events(tmp_path, account_id="DU1234567")
+        if row.event_type == "account_reconciliation_receipt_recorded"
+    ]
+    assert [row.idempotency_key for row in receipt_rows] == [f"receipt:{receipt.receipt_id}"]
+
+
 def test_account_service_does_not_overwrite_explicit_automation_choice(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
     disabled = service.update_automation_policy(
@@ -751,6 +788,86 @@ def test_enabling_auto_reconcile_retries_an_invalidated_bot_execution(tmp_path: 
         account_id="DU1234567",
         now_ms=1_780_000_004_500,
     ).overall_gate_result.status == "pass"
+
+
+def test_wrong_account_invalidation_fails_closed_without_changing_reconciliation(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    original = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    service.invalidation_path("DU1234567").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "account_id": "DU7654321",
+                "recorded_at_ms": 1_780_000_003_000,
+                "execution_ids": ["foreign-execution"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AccountArtifactError, match="belongs to another account"):
+        service.triage(account_id="DU1234567", now_ms=1_780_000_004_000)
+
+    assert service.read_latest_receipt("DU1234567") == original
+
+
+def test_wrong_account_receipt_cannot_clear_a_frozen_account(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="test.freeze",
+            source="test",
+            recorded_at_ms=1_780_000_001_000,
+            operator_next_step="RECONCILE",
+        ),
+    )
+    service.receipt_path("DU1234567").write_text(
+        receipt.model_copy(
+            update={"account_id": "DU7654321", "requested_account_id": "DU7654321"}
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AccountArtifactError, match="receipt belongs to another account"):
+        service.clear_freeze_from_latest_receipt(
+            account_id="DU1234567",
+            requested_by="test.operator",
+            now_ms=1_780_000_003_000,
+        )
+
+    assert read_account_freeze(tmp_path, "DU1234567") is not None
+
+
+def test_wrong_account_automation_policy_fails_closed(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    policy_path = service.automation_policy_path("DU1234567")
+    policy_path.parent.mkdir(parents=True)
+    policy_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "account_id": "DU7654321",
+                "enabled": True,
+                "updated_at_ms": 1_780_000_003_000,
+                "updated_by": "wrong-account",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AccountArtifactError, match="policy belongs to another account"):
+        service.read_automation_policy("DU1234567")
 
 
 def test_automation_policy_is_durable_and_defaults_disabled(tmp_path: Path) -> None:
@@ -1307,14 +1424,34 @@ def test_triage_closes_terminal_retired_conditions_after_recovery_evidence(
             recorded_at_ms=1_780_000_002_600,
         ),
     )
-    append_account_event(
+    write_account_freeze(
         tmp_path,
-        "DU1234567",
-        {
-            "event_type": "account_recovery_proof_recorded",
-            "recovery_id": "acct-recovery-DU1234567",
-            "recorded_at_ms": 1_780_000_002_700,
-        },
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="recovery-required",
+            source="test",
+            recorded_at_ms=1_780_000_002_700,
+            operator_next_step="RECONCILE",
+        ),
+    )
+    clear_account_freeze(
+        tmp_path,
+        recovery_proof=AccountRecoveryProof(
+            account_id="DU1234567",
+            recovery_id="acct-recovery-DU1234567",
+            requested_action="reconcile",
+            requested_by="test",
+            reconciliation_result="clean",
+            final_gate_result=GateResult(
+                gate_id="test",
+                status="pass",
+                source="test",
+                operator_reason="clean",
+                operator_next_step="GATE_PASSING",
+                evidence_at_ms=1_780_000_002_800,
+            ),
+            recorded_at_ms=1_780_000_002_800,
+        ),
     )
 
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)

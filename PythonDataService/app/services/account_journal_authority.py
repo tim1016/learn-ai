@@ -6,13 +6,19 @@ import json
 import logging
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from app.engine.live.account_artifacts import (
+    AccountArtifactError,
     AccountFreezeEvidence,
+    account_artifact_file_path,
     append_account_event,
-    read_account_events,
     read_account_freeze,
+    read_legacy_account_events,
     write_account_freeze,
 )
+from app.engine.live.live_state_sidecar import _file_lock
+from app.schemas.artifact_io import atomic_write_pydantic_artifact
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +33,73 @@ REQUALIFIED_EVENT_TYPE = "account_clerk_journal_authority_requalified"
 DRIFT_EVENT_TYPE = "account_clerk_journal_authority_drift_detected"
 EVENT_STREAM_DOWN_EVENT_TYPE = "account_clerk_event_stream_down"
 EVENT_STREAM_RECOVERED_EVENT_TYPE = "account_clerk_event_stream_recovered"
+ACCOUNT_JOURNAL_AUTHORITY_FILENAME = "account_journal_authority.json"
+
+
+class _JournalParityObservation(BaseModel):
+    """One typed comparison used solely by the authority requalification gate."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    observed_at_ms: int = Field(ge=0)
+    status: str = Field(min_length=1, max_length=16)
+    reason: str = Field(min_length=1, max_length=128)
+    fingerprint: str = Field(min_length=1, max_length=4096)
+    journal_nonzero: bool
+
+
+class _AccountJournalAuthorityState(BaseModel):
+    """Dedicated Clerk-qualification state, not an operator-history fold."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    qualified_at_ms: int | None = Field(default=None, ge=0)
+    requalification_required_at_ms: int | None = Field(default=None, ge=0)
+    event_stream_state: str = Field(default="unknown", pattern="^(unknown|down|recovered)$")
+    event_stream_changed_at_ms: int | None = Field(default=None, ge=0)
+    observations: tuple[_JournalParityObservation, ...] = ()
 
 
 def account_journal_authority_is_active(artifacts_root: Path, account_id: str) -> bool:
-    """Return whether this account earned the current qualification contract."""
+    """Return whether the typed Clerk-qualification artifact is active."""
 
-    return any(
-        event.get("event_type") == REQUALIFIED_EVENT_TYPE
-        for event in read_account_events(artifacts_root, account_id)
-    )
+    return _read_or_migrate_authority_state(artifacts_root, account_id).qualified_at_ms is not None
+
+
+def record_account_journal_stream_state(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    state: str,
+    changed_at_ms: int,
+) -> None:
+    """Record a Clerk stream transition in the authority artifact.
+
+    A callback stream death immediately revokes previously earned journal
+    qualification; it must not wait for an operator-history projection or a
+    later parity sample to notice it.
+    """
+
+    if state not in {"down", "recovered"}:
+        raise ValueError("account journal stream state must be down or recovered")
+    path = _authority_path(artifacts_root, account_id)
+    with _file_lock(path):
+        current = _read_or_migrate_authority_state_locked(artifacts_root, account_id, path)
+        _write_authority_state_locked(
+            path,
+            current.model_copy(
+                update={
+                    "qualified_at_ms": None if state == "down" else current.qualified_at_ms,
+                    "requalification_required_at_ms": (
+                        changed_at_ms if state == "down" else current.requalification_required_at_ms
+                    ),
+                    "event_stream_state": state,
+                    "event_stream_changed_at_ms": changed_at_ms,
+                }
+            ),
+        )
 
 
 def observe_account_journal_parity(
@@ -53,8 +117,36 @@ def observe_account_journal_parity(
     authority until a new, account-local evidence window is complete.
     """
 
-    events = read_account_events(artifacts_root, account_id)
-    if _legacy_cutover_requires_requalification(events):
+    path = _authority_path(artifacts_root, account_id)
+    with _file_lock(path):
+        _observe_account_journal_parity_locked(
+            artifacts_root,
+            account_id,
+            journal=journal,
+            legacy=legacy,
+            now_ms=now_ms,
+            authority=_read_or_migrate_authority_state_locked(artifacts_root, account_id, path),
+            path=path,
+        )
+
+
+def _observe_account_journal_parity_locked(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    journal: dict[str, dict[str, int]],
+    legacy: dict[str, dict[str, int]],
+    now_ms: int,
+    authority: _AccountJournalAuthorityState,
+    path: Path,
+) -> None:
+    """Advance a parity state while its account-local authority lock is held."""
+
+    if authority.requalification_required_at_ms == 0 and not authority.observations:
+        _write_authority_state_locked(
+            path,
+            authority.model_copy(update={"requalification_required_at_ms": now_ms}),
+        )
         append_account_event(
             artifacts_root,
             account_id,
@@ -66,15 +158,15 @@ def observe_account_journal_parity(
         )
         return
 
-    active = account_journal_authority_is_active(artifacts_root, account_id)
-    latest = _latest_parity_observation(events)
+    active = authority.qualified_at_ms is not None
+    latest = authority.observations[-1] if authority.observations else None
     interval_ms = (
         JOURNAL_PARITY_POST_CUTOVER_INTERVAL_MS
         if active
         else JOURNAL_PARITY_PRE_CUTOVER_INTERVAL_MS
     )
     fingerprint = _parity_fingerprint(journal=journal, legacy=legacy)
-    alarm_active = _qualification_alarm_is_active(artifacts_root, account_id, events)
+    alarm_active = _qualification_alarm_is_active(artifacts_root, account_id, authority)
     clean = journal == legacy and not alarm_active
     reason = _parity_reason(journal_matches=journal == legacy, alarm_active=alarm_active)
     # The cadence constrains unchanged background sampling only.  A newly
@@ -82,42 +174,80 @@ def observe_account_journal_parity(
     # sample we may defer for up to fifteen minutes after cutover.
     state_changed = (
         latest is None
-        or latest.get("fingerprint") != fingerprint
-        or latest.get("status") != ("clean" if clean else "drift")
-        or latest.get("reason") != reason
+        or latest.fingerprint != fingerprint
+        or latest.status != ("clean" if clean else "drift")
+        or latest.reason != reason
     )
     if (
         latest is not None
         and not state_changed
-        and now_ms - _event_ts_ms(latest) < interval_ms
+        and now_ms - latest.observed_at_ms < interval_ms
     ):
         return
 
-    append_account_event(
-        artifacts_root,
-        account_id,
-        {
-            "event_type": PARITY_EVENT_TYPE,
-            "ts_ms": now_ms,
-            "status": "clean" if clean else "drift",
-            "reason": reason,
-            "trigger": _parity_trigger(latest, state_changed=state_changed),
-            "fingerprint": fingerprint,
-            "journal_nonzero": _has_nonzero_exposure(journal),
-            "journal": journal,
-            "sidecar": legacy,
-        },
+    observation = _JournalParityObservation(
+        observed_at_ms=now_ms,
+        status="clean" if clean else "drift",
+        reason=reason,
+        fingerprint=fingerprint,
+        journal_nonzero=_has_nonzero_exposure(journal),
+    )
+    next_authority = authority.model_copy(
+        update={
+            "observations": (*authority.observations[-127:], observation),
+            "qualified_at_ms": authority.qualified_at_ms if clean else None,
+            "requalification_required_at_ms": (
+                authority.requalification_required_at_ms if clean else now_ms
+            ),
+        }
     )
     if active:
         if not clean:
+            _write_authority_state_locked(path, next_authority)
+            _append_parity_event(
+                artifacts_root,
+                account_id,
+                now_ms=now_ms,
+                latest=latest,
+                state_changed=state_changed,
+                observation=observation,
+                journal=journal,
+                legacy=legacy,
+            )
             _record_post_cutover_drift(
                 artifacts_root,
                 account_id,
                 now_ms=now_ms,
                 reason="ACCOUNT_CLERK_JOURNAL_PARITY_DRIFT",
             )
+        else:
+            _write_authority_state_locked(path, next_authority)
+            _append_parity_event(
+                artifacts_root,
+                account_id,
+                now_ms=now_ms,
+                latest=latest,
+                state_changed=state_changed,
+                observation=observation,
+                journal=journal,
+                legacy=legacy,
+            )
         return
-    if clean and _has_requalification_window(read_account_events(artifacts_root, account_id)):
+    if clean and _has_requalification_window(next_authority):
+        next_authority = next_authority.model_copy(
+            update={"qualified_at_ms": now_ms, "requalification_required_at_ms": None}
+        )
+        _write_authority_state_locked(path, next_authority)
+        _append_parity_event(
+            artifacts_root,
+            account_id,
+            now_ms=now_ms,
+            latest=latest,
+            state_changed=state_changed,
+            observation=observation,
+            journal=journal,
+            legacy=legacy,
+        )
         append_account_event(
             artifacts_root,
             account_id,
@@ -128,33 +258,134 @@ def observe_account_journal_parity(
                 "parity_observations": JOURNAL_REQUALIFICATION_MIN_OBSERVATIONS,
             },
         )
+        return
+    _write_authority_state_locked(path, next_authority)
+    _append_parity_event(
+        artifacts_root,
+        account_id,
+        now_ms=now_ms,
+        latest=latest,
+        state_changed=state_changed,
+        observation=observation,
+        journal=journal,
+        legacy=legacy,
+    )
 
 
-def _legacy_cutover_requires_requalification(events: list[dict]) -> bool:
-    return (
-        any(event.get("event_type") == LEGACY_CUTOVER_EVENT_TYPE for event in events)
-        and not any(
-            event.get("event_type") in {REQUALIFICATION_REQUIRED_EVENT_TYPE, REQUALIFIED_EVENT_TYPE}
-            for event in events
+def _append_parity_event(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    now_ms: int,
+    latest: _JournalParityObservation | None,
+    state_changed: bool,
+    observation: _JournalParityObservation,
+    journal: dict[str, dict[str, int]],
+    legacy: dict[str, dict[str, int]],
+) -> None:
+    """Mirror an already-persisted parity state for the operator timeline."""
+
+    append_account_event(
+        artifacts_root,
+        account_id,
+        {
+            "event_type": PARITY_EVENT_TYPE,
+            "ts_ms": now_ms,
+            "status": observation.status,
+            "reason": observation.reason,
+            "trigger": _parity_trigger(latest, state_changed=state_changed),
+            "fingerprint": observation.fingerprint,
+            "journal_nonzero": observation.journal_nonzero,
+            "journal": journal,
+            "sidecar": legacy,
+        },
+    )
+
+
+def _authority_path(artifacts_root: Path, account_id: str) -> Path:
+    return account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_JOURNAL_AUTHORITY_FILENAME,
+    )
+
+
+def _read_authority_state(artifacts_root: Path, account_id: str) -> _AccountJournalAuthorityState:
+    path = _authority_path(artifacts_root, account_id)
+    try:
+        state = _AccountJournalAuthorityState.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise AccountArtifactError("account journal authority artifact is unreadable") from exc
+    if state.account_id != account_id:
+        raise AccountArtifactError("account journal authority artifact belongs to another account")
+    return state
+
+
+def _seed_authority_state_from_legacy(
+    artifacts_root: Path,
+    account_id: str,
+) -> _AccountJournalAuthorityState:
+    """Build the one-time compatibility snapshot before a typed read exists."""
+
+    # The old shared journal is immutable historical evidence only.  It can
+    # seed a one-time compatibility state but is never consulted again for a
+    # forward authority decision.
+    legacy = read_legacy_account_events(artifacts_root, account_id)
+    qualified_at_ms = max(
+        (
+            _legacy_event_ts_ms(event)
+            for event in legacy
+            if event.get("event_type") == REQUALIFIED_EVENT_TYPE
+        ),
+        default=None,
+    )
+    has_cutover = any(event.get("event_type") == LEGACY_CUTOVER_EVENT_TYPE for event in legacy)
+    if has_cutover and qualified_at_ms is None:
+        return _AccountJournalAuthorityState(
+            account_id=account_id,
+            requalification_required_at_ms=0,
         )
-    )
+    return _AccountJournalAuthorityState(account_id=account_id, qualified_at_ms=qualified_at_ms)
 
 
-def _latest_parity_observation(events: list[dict]) -> dict | None:
-    return next(
-        (event for event in reversed(events) if event.get("event_type") == PARITY_EVENT_TYPE),
-        None,
-    )
+def _read_or_migrate_authority_state(
+    artifacts_root: Path,
+    account_id: str,
+) -> _AccountJournalAuthorityState:
+    """Snapshot legacy qualification once before it becomes a safety input."""
+
+    path = _authority_path(artifacts_root, account_id)
+    with _file_lock(path):
+        return _read_or_migrate_authority_state_locked(artifacts_root, account_id, path)
 
 
-def _event_ts_ms(event: dict) -> int:
+def _read_or_migrate_authority_state_locked(
+    artifacts_root: Path,
+    account_id: str,
+    path: Path,
+) -> _AccountJournalAuthorityState:
+    if path.exists():
+        return _read_authority_state(artifacts_root, account_id)
+    state = _seed_authority_state_from_legacy(artifacts_root, account_id)
+    _write_authority_state_locked(path, state)
+    return state
+
+
+def _write_authority_state(artifacts_root: Path, state: _AccountJournalAuthorityState) -> None:
+    path = _authority_path(artifacts_root, state.account_id)
+    with _file_lock(path):
+        _write_authority_state_locked(path, state)
+
+
+def _write_authority_state_locked(path: Path, state: _AccountJournalAuthorityState) -> None:
+    """Persist state while the matching artifact lock is already held."""
+
+    atomic_write_pydantic_artifact(path, state)
+
+
+def _legacy_event_ts_ms(event: dict) -> int:
     value = event.get("ts_ms")
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _event_seq(event: dict) -> int:
-    value = event.get("seq")
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
 def _parity_fingerprint(*, journal: dict[str, dict[str, int]], legacy: dict[str, dict[str, int]]) -> str:
@@ -167,7 +398,7 @@ def _parity_reason(*, journal_matches: bool, alarm_active: bool) -> str:
     return "SIDECAR_JOURNAL_EXPOSURE_MATCH" if journal_matches else "SIDECAR_JOURNAL_EXPOSURE_MISMATCH"
 
 
-def _parity_trigger(latest: dict | None, *, state_changed: bool) -> str:
+def _parity_trigger(latest: _JournalParityObservation | None, *, state_changed: bool) -> str:
     if latest is None:
         return "initial"
     return "state_change" if state_changed else "bounded_background_cadence"
@@ -177,60 +408,41 @@ def _has_nonzero_exposure(explained: dict[str, dict[str, int]]) -> bool:
     return any(quantity != 0 for positions in explained.values() for quantity in positions.values())
 
 
-def _qualification_alarm_is_active(artifacts_root: Path, account_id: str, events: list[dict]) -> bool:
+def _qualification_alarm_is_active(
+    artifacts_root: Path,
+    account_id: str,
+    authority: _AccountJournalAuthorityState,
+) -> bool:
     if read_account_freeze(artifacts_root, account_id) is not None:
         return True
     # A new Clerk must durably report that its callback stream started before
     # parity observations can earn authority after a prior stream death.
-    return _latest_event_seq(events, EVENT_STREAM_DOWN_EVENT_TYPE) > _latest_event_seq(
-        events,
-        EVENT_STREAM_RECOVERED_EVENT_TYPE,
-    )
+    return authority.event_stream_state == "down"
 
 
-def _latest_event_seq(events: list[dict], event_type: str) -> int:
-    return max(
-        (_event_seq(event) for event in events if event.get("event_type") == event_type),
-        default=0,
-    )
-
-
-def _has_requalification_window(events: list[dict]) -> bool:
+def _has_requalification_window(authority: _AccountJournalAuthorityState) -> bool:
     """Enforce duration, observations, nonzero→zero, and alarm-free interval."""
 
-    reset_seq = max(
-        (
-            _event_seq(event)
-            for event in events
-            if event.get("event_type")
-            in {
-                REQUALIFICATION_REQUIRED_EVENT_TYPE,
-                REQUALIFIED_EVENT_TYPE,
-                "account_freeze_recorded",
-                EVENT_STREAM_DOWN_EVENT_TYPE,
-            }
-        ),
-        default=0,
-    )
     observations = [
         event
-        for event in events
-        if event.get("event_type") == PARITY_EVENT_TYPE and _event_seq(event) > reset_seq
+        for event in authority.observations
+        if authority.requalification_required_at_ms is None
+        or event.observed_at_ms > authority.requalification_required_at_ms
     ]
     latest_nonclean = max(
-        (index for index, event in enumerate(observations) if event.get("status") != "clean"),
+        (index for index, event in enumerate(observations) if event.status != "clean"),
         default=-1,
     )
     clean_observations = observations[latest_nonclean + 1 :]
     if len(clean_observations) < JOURNAL_REQUALIFICATION_MIN_OBSERVATIONS:
         return False
-    first_ts = _event_ts_ms(clean_observations[0])
-    last_ts = _event_ts_ms(clean_observations[-1])
+    first_ts = clean_observations[0].observed_at_ms
+    last_ts = clean_observations[-1].observed_at_ms
     if last_ts - first_ts < JOURNAL_REQUALIFICATION_MIN_DURATION_MS:
         return False
     saw_nonzero = False
     for observation in clean_observations:
-        if observation.get("journal_nonzero") is True:
+        if observation.journal_nonzero:
             saw_nonzero = True
         elif saw_nonzero:
             return True

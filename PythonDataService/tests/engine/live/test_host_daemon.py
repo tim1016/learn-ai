@@ -22,13 +22,14 @@ from httpx import ASGITransport, AsyncClient
 
 from app.engine.live.account_artifacts import (
     AccountClerkLease,
+    AccountRecoveryProof,
     account_artifacts_root,
     advance_account_clerk_generation,
-    append_account_event,
     read_account_clerk_generation,
     read_account_clerk_lease,
     read_account_events,
     read_account_freeze,
+    record_account_recovery_clearance,
     write_account_clerk_lease,
 )
 from app.engine.live.account_registry import (
@@ -75,6 +76,7 @@ from app.schemas.live_runs import (
     AccountClerkHealth,
     AccountEmergencyFlattenResponse,
     ExitReason,
+    GateResult,
     HostRunnerActionResponse,
     HostRunnerProcessState,
     HostRunnerProcessStatus,
@@ -2748,15 +2750,23 @@ async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
     assert "reconciliation is pending" in exc_info.value.detail
 
     fold_account_binding_retirements(manager.artifacts_root, account_id="DU111")
-    append_account_event(
+    record_account_recovery_clearance(
         manager.artifacts_root,
-        "DU111",
-        {
-            "event_type": "account_recovery_proof_recorded",
-            "recorded_at_ms": fixed_ms + 2,
-            "recovery_id": "proof-1",
-            "reconciliation_result": "clean",
-        },
+        recovery_proof=AccountRecoveryProof(
+            account_id="DU111",
+            recovery_id="proof-1",
+            requested_by="test.operator",
+            reconciliation_result="clean",
+            final_gate_result=GateResult(
+                gate_id="account.reconciliation",
+                status="pass",
+                source="test",
+                operator_reason="CLEAN",
+                operator_next_step=None,
+                evidence_at_ms=fixed_ms + 2,
+            ),
+            recorded_at_ms=fixed_ms + 2,
+        ),
     )
 
     response = manager.start(RUN_ID, request=HostRunnerStartRequest())

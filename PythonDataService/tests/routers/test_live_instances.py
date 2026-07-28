@@ -80,6 +80,7 @@ from app.services.mutation_attempt import MutationAttemptRepo
 from app.services.observation_lease_parity import (
     OBSERVATION_LEASE_GENERATION_AUTHORITY,
     OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+    record_observation_lease_shadow_comparison,
 )
 from app.services.start_admission_policy import StartAdmissionDecision
 from tests._fixtures.daemon_transport import as_typed_get
@@ -322,24 +323,26 @@ def _qualify_clerk_gate_promotion(root: Path, *, account_id: str) -> int:
         ),
     )
     for recorded_at_ms in (1_704_209_400_000, 1_704_295_800_000, 1_704_382_200_000):
+        row = {
+            "event_type": "account_observation_lease_shadow_comparison",
+            "comparison_schema_version": OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+            "recorded_at_ms": recorded_at_ms,
+            "strategy_instance_id": "spy_ema_paper",
+            "run_id": "run-gate-proof",
+            "truth_gate_id": "account.account_truth",
+            "truth_source": "account_truth_snapshot",
+            "truth_status": "pass",
+            "lease_gate_id": "account.observation_lease",
+            "lease_source": "account_observation_lease",
+            "lease_status": "pass",
+            "lease_schema_version": 2,
+            "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
+        }
+        record_observation_lease_shadow_comparison(root, account_id, row)
         append_account_event(
             root,
             account_id,
-            {
-                "event_type": "account_observation_lease_shadow_comparison",
-                "comparison_schema_version": OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
-                "recorded_at_ms": recorded_at_ms,
-                "strategy_instance_id": "spy_ema_paper",
-                "run_id": "run-gate-proof",
-                "truth_gate_id": "account.account_truth",
-                "truth_source": "account_truth_snapshot",
-                "truth_status": "pass",
-                "lease_gate_id": "account.observation_lease",
-                "lease_source": "account_observation_lease",
-                "lease_status": "pass",
-                "lease_schema_version": 2,
-                "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
-            },
+            row,
         )
     record_clerk_restart_smoke(
         root,

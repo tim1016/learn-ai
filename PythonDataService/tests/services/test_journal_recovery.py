@@ -111,6 +111,27 @@ def test_quarantine_retains_torn_journal_and_rebaseline_seeds_broker_evidence_on
     assert fence.reason_code == "CLERK_BROKER_EVIDENCE_ONLY_HOLD"
 
 
+def test_max_length_recovery_keys_do_not_fail_after_quarantine_or_rebaseline_commit(
+    tmp_path: Path,
+) -> None:
+    account_id = "DU1234567"
+    journal = account_clerk_journal_path(tmp_path, account_id)
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    journal.write_bytes(b'{"seq":1\n')
+    service = JournalRecoveryService(artifacts_root=tmp_path, now_ms=lambda: 1_780_000_000_000)
+    maximum_key = "k" * 256
+
+    quarantined = service.quarantine(account_id=account_id, idempotency_key=maximum_key)
+    completed = service.rebaseline(
+        account_id=account_id,
+        idempotency_key=maximum_key,
+        snapshot=_empty_snapshot(account_id),
+    )
+
+    assert quarantined.phase == "REBASELINE_REQUIRED"
+    assert completed.phase == "COMPLETE"
+
+
 def test_recovery_steps_replay_without_deleting_quarantined_evidence(tmp_path: Path) -> None:
     account_id = "DU1234567"
     journal = account_clerk_journal_path(tmp_path, account_id)

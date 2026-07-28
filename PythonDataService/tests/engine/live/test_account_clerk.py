@@ -1371,31 +1371,10 @@ async def test_clerk_records_manual_ticket_without_requiring_a_bot_binding(tmp_p
     repeated_recorded, repeated_acked = await clerk.submit_intent(intent)
     assert repeated_recorded == recorded
     assert repeated_acked == acked
-    [history_event] = [
-        event
-        for event in read_account_events(tmp_path, ACCOUNT)
-        if event["event_type"] == "account_clerk_manual_order_acked"
-    ]
-    assert history_event == {
-        "account_id": ACCOUNT,
-        "seq": 1,
-        "event_type": "account_clerk_manual_order_acked",
-        "ts_ms": START_MS + 1,
-        "receipt_id": f"account-clerk-manual-order-ack:{intent.order_ref}",
-        "broker": "ibkr",
-        "intent_id": intent.intent_id,
-        "order_ref": intent.order_ref,
-        "order_id": 101,
-        "perm_id": 201,
-        "exec_id": None,
-        "symbol": "SPY",
-        "action": "BUY",
-        "quantity": 1.0,
-        "order_type": "MKT",
-        "limit_price": None,
-        "status": "Submitted",
-        "acknowledged_at_ms": START_MS + 1,
-    }
+    # The manual acknowledgement remains only in the canonical Clerk journal.
+    # Account Desk derives its receipt at read time; it is not mirrored through
+    # the producer-operational history path.
+    assert read_account_events(tmp_path, ACCOUNT) == []
 
 
 @pytest.mark.asyncio
@@ -2450,8 +2429,12 @@ async def test_clerk_reconciler_resolves_uncertain_receipt_with_state_machine(
 
     assert resolution.verdict.value == expected
     events = read_account_events(tmp_path, ACCOUNT)
-    assert events[-1]["event_type"] == "account_clerk_reconciliation_resolved"
-    assert events[-1]["verdict"] == expected
+    [resolved] = [
+        event
+        for event in events
+        if event["event_type"] == "account_clerk_reconciliation_resolved"
+    ]
+    assert resolved["verdict"] == expected
     if probe == "PROVABLY_ABSENT":
         assert len(broker.calls) == 1
     if probe == "NOT_PROVABLE":
@@ -3055,11 +3038,6 @@ async def test_unattributed_broker_callback_is_persisted_and_blocks_new_account_
     finally:
         await server.close()
 
-    [alarm] = [
-        event
-        for event in read_account_events(tmp_path, ACCOUNT)
-        if event["event_type"] == "account_clerk_unattributed_broker_event"
-    ]
     [broker_event] = [
         entry
         for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
@@ -3067,7 +3045,11 @@ async def test_unattributed_broker_callback_is_persisted_and_blocks_new_account_
     ]
     assert broker_event.intent is None
     assert broker_event.event_account_id == ACCOUNT
-    assert alarm["reason"] == "BROKER_EVENT_WITHOUT_DURABLE_CLERK_INTENT"
+    assert not [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_unattributed_broker_event"
+    ]
     assert read_account_freeze(tmp_path, ACCOUNT) is not None
 
 
@@ -3135,12 +3117,16 @@ async def test_unattributed_callback_reasserts_guardrail_after_alarm_crash_windo
 
     assert duplicate.newly_recorded is False
     assert read_account_freeze(tmp_path, ACCOUNT) is not None
-    alarms = [
+    assert [
+        entry
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.entry_kind == "broker_event" and entry.intent is None
+    ]
+    assert not [
         account_event
         for account_event in read_account_events(tmp_path, ACCOUNT)
         if account_event["event_type"] == "account_clerk_unattributed_broker_event"
     ]
-    assert len(alarms) == 1
 
 
 @pytest.mark.asyncio

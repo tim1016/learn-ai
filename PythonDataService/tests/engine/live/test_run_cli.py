@@ -18,7 +18,6 @@ import pytest
 
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo
 from app.engine.live.run import (
-    _account_durable_intents_from_events,
     _build_live_state_seed_envelope,
     _build_live_state_writer,
     _read_owned_perm_ids,
@@ -2338,44 +2337,6 @@ def test_cmd_start_direct_requires_recovery_before_new_active_binding(
     assert rc == 1
     assert "recovery proof required" in capsys.readouterr().err
     assert latest == retired
-
-
-def test_account_durable_intents_project_account_owner_events() -> None:
-    intents = _account_durable_intents_from_events(
-        [
-            {
-                "event_type": "account_owner_submit_prepared",
-                "created_at_ms": 1_700_000_010_000,
-                "diagnostics": {
-                    "account_id": "DU123",
-                    "strategy_instance_id": "spy_ema_paper",
-                    "run_id": "run-alpha",
-                    "intent_id": "intent-1",
-                    "order_ref": "learn-ai/spy_ema_paper/v1:intent-1",
-                    "perm_id": "90044",
-                    "exec_id": "exec-90044",
-                },
-            },
-            {
-                "event_type": "account_owner_submit_rejected",
-                "created_at_ms": 1_700_000_020_000,
-                "diagnostics": {
-                    "account_id": "DU123",
-                    "strategy_instance_id": "spy_ema_paper",
-                    "run_id": "run-alpha",
-                    "intent_id": "intent-2",
-                    "order_ref": "learn-ai/spy_ema_paper/v1:intent-2",
-                },
-            },
-        ],
-        account_id="DU123",
-    )
-
-    assert len(intents) == 1
-    assert intents[0].order_ref == "learn-ai/spy_ema_paper/v1:intent-1"
-    assert intents[0].bot_order_namespace == "learn-ai/spy_ema_paper/v1"
-    assert intents[0].perm_id == 90044
-    assert intents[0].exec_id == "exec-90044"
 
 
 @pytest.mark.asyncio

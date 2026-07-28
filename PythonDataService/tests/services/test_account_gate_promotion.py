@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from app.engine.live.account_artifacts import (
+    ACCOUNT_EVENTS_FILENAME,
     AccountClerkLease,
     advance_account_clerk_generation,
     append_account_event,
@@ -23,6 +25,7 @@ from app.services.account_gate_promotion import (
 from app.services.observation_lease_parity import (
     OBSERVATION_LEASE_GENERATION_AUTHORITY,
     OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+    record_observation_lease_shadow_comparison,
 )
 
 ACCOUNT_ID = "DU1234567"
@@ -54,24 +57,26 @@ def _write_accepting_clerk(root: Path, *, generation: int) -> None:
 
 
 def _append_clean_shadow_row(root: Path, *, recorded_at_ms: int) -> None:
+    row = {
+        "event_type": "account_observation_lease_shadow_comparison",
+        "comparison_schema_version": OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+        "recorded_at_ms": recorded_at_ms,
+        "strategy_instance_id": "bot-a",
+        "run_id": "run-a",
+        "truth_gate_id": "account.account_truth",
+        "truth_source": "account_truth_snapshot",
+        "truth_status": "pass",
+        "lease_gate_id": "account.observation_lease",
+        "lease_source": "account_observation_lease",
+        "lease_status": "pass",
+        "lease_schema_version": 2,
+        "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
+    }
+    record_observation_lease_shadow_comparison(root, ACCOUNT_ID, row)
     append_account_event(
         root,
         ACCOUNT_ID,
-        {
-            "event_type": "account_observation_lease_shadow_comparison",
-            "comparison_schema_version": OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
-            "recorded_at_ms": recorded_at_ms,
-            "strategy_instance_id": "bot-a",
-            "run_id": "run-a",
-            "truth_gate_id": "account.account_truth",
-            "truth_source": "account_truth_snapshot",
-            "truth_status": "pass",
-            "lease_gate_id": "account.observation_lease",
-            "lease_source": "account_observation_lease",
-            "lease_status": "pass",
-            "lease_schema_version": 2,
-            "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
-        },
+        row,
     )
 
 
@@ -204,6 +209,42 @@ def test_current_restart_smoke_completes_promotion_and_later_restart_invalidates
 
     assert after_restart.effective_authority == "account_truth"
     assert after_restart.state == "WAITING_FOR_CLERK_RESTART_SMOKE"
+
+
+def test_legacy_restart_smoke_is_snapshotted_once_before_promotion(tmp_path: Path) -> None:
+    _write_accepting_clerk(tmp_path, generation=1)
+    _qualify_three_sessions(tmp_path)
+    legacy_path = tmp_path / "accounts" / ACCOUNT_ID / ACCOUNT_EVENTS_FILENAME
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "event_type": "account_clerk_restart_smoke_confirmed",
+                "schema_version": 1,
+                "recorded_at_ms": NOW_MS,
+                "clerk_generation": 1,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    first = resolve_account_gate_authority(
+        tmp_path,
+        account_id=ACCOUNT_ID,
+        requested_authority="observation_lease",
+        now_ms=NOW_MS + 1,
+    )
+    legacy_path.write_text("{truncated", encoding="utf-8")
+    second = resolve_account_gate_authority(
+        tmp_path,
+        account_id=ACCOUNT_ID,
+        requested_authority="observation_lease",
+        now_ms=NOW_MS + 2,
+    )
+
+    assert first.state == "CLERK_PROOF_ACTIVE"
+    assert second.state == "CLERK_PROOF_ACTIVE"
 
 
 def test_restart_smoke_requires_exact_typed_confirmation(tmp_path: Path) -> None:

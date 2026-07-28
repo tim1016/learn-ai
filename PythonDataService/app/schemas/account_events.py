@@ -1,4 +1,4 @@
-"""Versioned read models for the Account desk event journal."""
+"""Versioned read models for deterministic Account Desk operational history."""
 
 from __future__ import annotations
 
@@ -7,6 +7,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 AccountEventView = Literal["operations"]
+AccountEventProvenance = Literal[
+    "legacy_account_events",
+    "producer_operational_log",
+    "clerk_journal",
+]
 AccountEventKind = Literal[
     "activity",
     "safety",
@@ -46,15 +51,22 @@ class AccountEventOperatorOrderReceipt(BaseModel):
 
 
 class AccountEventRow(BaseModel):
-    """One backend-classified journal event for a desk view."""
+    """One backend-classified operational-history row for a desk view."""
 
     model_config = ConfigDict(frozen=True)
 
     schema_version: Literal[1] = 1
-    event_id: str = Field(min_length=1, max_length=256)
+    event_id: str = Field(min_length=1, max_length=512)
+    provenance: AccountEventProvenance = "legacy_account_events"
     seq: int = Field(ge=1)
     kind: AccountEventKind
     occurred_at_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    event_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    arrived_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    recorded_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    producer: str = Field(default="legacy_account_events", min_length=1, max_length=128)
+    producer_boot_id: str = Field(default="historical", min_length=1, max_length=128)
+    producer_seq: int = Field(default=1, ge=1)
     trader_narration: str | None = Field(default=None, max_length=512)
     operator_detail: str = Field(min_length=1, max_length=512)
     evidence_refs: list[AccountEventEvidenceRef] = Field(default_factory=list)
@@ -64,7 +76,7 @@ class AccountEventRow(BaseModel):
 
 
 class AccountEventsResponse(BaseModel):
-    """Cursor page from the immutable account event journal."""
+    """Cursor page from a merged operational history projection."""
 
     model_config = ConfigDict(frozen=True)
 

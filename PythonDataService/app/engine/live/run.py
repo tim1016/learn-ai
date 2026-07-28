@@ -1394,44 +1394,30 @@ def _try_int(value: object) -> int | None:
         return None
 
 
-def _account_durable_intents_from_events(events: list[dict], *, account_id: str) -> tuple[object, ...]:
-    """Project AccountOwner events into the classifier's durable-intent input."""
+def _account_durable_intents_from_clerk_journal(entries: tuple[object, ...], *, account_id: str) -> tuple[object, ...]:
+    """Project submit identity exclusively from canonical Clerk receipts."""
+
     from app.engine.live.account_classifier import AccountDurableIntent
 
     intents: dict[str, AccountDurableIntent] = {}
-    durable_event_types = {
-        "account_owner_submit_prepared",
-        "account_owner_submit_accepted",
-        "account_owner_submit_uncertain",
-    }
-    for event in events:
-        if event.get("event_type") not in durable_event_types:
+    for entry in entries:
+        intent = getattr(entry, "intent", None)
+        if intent is None or getattr(intent, "account_id", None) != account_id:
             continue
-        diagnostics = event.get("diagnostics") or {}
-        if not isinstance(diagnostics, dict):
+        order_ref = getattr(intent, "order_ref", None)
+        if not isinstance(order_ref, str) or not order_ref:
             continue
-        order_ref = diagnostics.get("order_ref")
-        intent_id = diagnostics.get("intent_id")
-        strategy_instance_id = diagnostics.get("strategy_instance_id")
-        run_id = diagnostics.get("run_id")
-        if not all(isinstance(value, str) and value for value in (order_ref, intent_id, strategy_instance_id, run_id)):
-            continue
-        try:
-            namespace = str(order_ref).rsplit(":", 1)[0]
-            recorded_at_ms = int(event.get("created_at_ms") or 0)
-        except (TypeError, ValueError):
-            recorded_at_ms = 0
         intents[order_ref] = AccountDurableIntent(
             account_id=account_id,
-            strategy_instance_id=strategy_instance_id,
-            run_id=run_id,
-            bot_order_namespace=namespace,
-            intent_id=intent_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            bot_order_namespace=intent.bot_order_namespace,
+            intent_id=intent.intent_id,
             order_ref=order_ref,
-            status=str(event.get("event_type")),
-            recorded_at_ms=recorded_at_ms,
-            perm_id=_try_int(diagnostics.get("perm_id")),
-            exec_id=str(diagnostics["exec_id"]) if diagnostics.get("exec_id") else None,
+            status=f"clerk:{getattr(entry, 'entry_kind', 'recorded')}",
+            recorded_at_ms=int(getattr(entry, "recorded_at_ms", 0)),
+            perm_id=_try_int(getattr(entry, "perm_id", None)),
+            exec_id=getattr(entry, "exec_id", None),
         )
     return tuple(intents.values())
 
@@ -2125,7 +2111,6 @@ def cmd_start(args: argparse.Namespace) -> int:
             AccountClerkLeaseUnavailableError,
             AccountOwnerGeneration,
             read_account_clerk_generation,
-            read_account_events,
             require_active_account_clerk_generation,
         )
         from app.engine.live.account_classifier import (
@@ -2187,6 +2172,8 @@ def cmd_start(args: argparse.Namespace) -> int:
             require_owner_write_fence(_current_account_owner_generation_provider)
 
         async def _classify_account_for_submit(_intent):
+            from app.engine.live.account_clerk import read_account_clerk_journal
+
             open_orders = await _owner_list_open_orders(client)
             executions = await _owner_executions_for_reconnect_recovery(client)
             baseline = read_applicable_baseline(
@@ -2201,8 +2188,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                     snapshot=_build_broker_snapshot_from_ibkr(open_orders, executions),
                 ),
                 registry_bindings=tuple(read_account_instance_registry(_artifacts_root, ledger.account_id)),
-                durable_intents=_account_durable_intents_from_events(
-                    read_account_events(_artifacts_root, ledger.account_id),
+                durable_intents=_account_durable_intents_from_clerk_journal(
+                    read_account_clerk_journal(_artifacts_root, ledger.account_id),
                     account_id=ledger.account_id,
                 ),
                 baseline=_account_baseline_evidence_from_fleet_baseline(baseline),
@@ -2545,7 +2532,6 @@ def cmd_start(args: argparse.Namespace) -> int:
                     executions_for_reconnect_recovery,
                     list_open_orders,
                 )
-                from app.engine.live.account_artifacts import read_account_events
                 from app.engine.live.account_registry import compute_reconcile_namespaces
                 from app.engine.live.live_state_sidecar import (
                     LiveStateSidecarRepo,
@@ -2608,6 +2594,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                     strategy_instance_id=strategy_instance_id,
                     current_created_ms=ledger.created_at_ms,
                 )
+                from app.engine.live.account_clerk import read_account_clerk_journal
                 from app.engine.live.fleet_reset_baseline import (
                     read_applicable_baseline,
                 )
@@ -2640,8 +2627,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                         ignore_unknown_namespaces_before_ms=(
                             _baseline.baseline_at_ms if _baseline is not None else None
                         ),
-                        account_durable_intents=_account_durable_intents_from_events(
-                            read_account_events(_artifacts_root, ledger.account_id),
+                        account_durable_intents=_account_durable_intents_from_clerk_journal(
+                            read_account_clerk_journal(_artifacts_root, ledger.account_id),
                             account_id=ledger.account_id,
                         ),
                     )

@@ -13,9 +13,16 @@ function makeStore(overrides: Record<string, unknown> = {}) {
       {
         schema_version: 1 as const,
         event_id: "DU1234567:5",
+        provenance: "producer_operational_log" as const,
         seq: 5,
         kind: "reconciliation" as const,
         occurred_at_ms: 1_780_000_000_000,
+        event_at_ms: null,
+        arrived_at_ms: 1_780_000_000_000,
+        recorded_at_ms: 1_780_000_000_001,
+        producer: "data_plane",
+        producer_boot_id: "test-boot",
+        producer_seq: 5,
         trader_narration: null,
         operator_detail:
           "Account reconciliation receipt recorded in the journal.",
@@ -64,6 +71,7 @@ describe("AccountDeskOperatorEventsComponent", () => {
     expect(
       document.querySelector('[data-timestamp-mode="local"]'),
     ).not.toBeNull();
+    expect(screen.getByText("History source and clocks")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Safety" }));
     fireEvent.click(screen.getByRole("button", { name: "Load older" }));
     expect(store.toggleOperationKind).toHaveBeenCalledWith("safety");
@@ -80,9 +88,16 @@ describe("AccountDeskOperatorEventsComponent", () => {
         {
           schema_version: 1 as const,
           event_id: "DU1234567:6",
+          provenance: "clerk_journal" as const,
           seq: 6,
           kind: "activity" as const,
           occurred_at_ms: 1_780_000_000_100,
+          event_at_ms: 1_780_000_000_100,
+          arrived_at_ms: null,
+          recorded_at_ms: 1_780_000_000_101,
+          producer: "clerk_journal",
+          producer_boot_id: "canonical",
+          producer_seq: 6,
           trader_narration: "Your paper order was received by the broker.",
           operator_detail: "Account Clerk recorded a durable IBKR acknowledgement for a manual paper order.",
           evidence_refs: [],

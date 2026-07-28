@@ -142,7 +142,11 @@ export class AccountDeskEventsStore {
   private async refreshOperations(): Promise<void> {
     const accountId = this.accountKey();
     if (accountId === null || this.operationsState().loading) return;
-    await this.fetchOperations(accountId, { afterSeq: this.operationsState().latestSeq ?? undefined });
+    // Producer clocks can arrive late and place a newly learned fact before
+    // rows already shown. A positional display ``seq`` is therefore unsafe as
+    // a live cursor: ask for the bounded newest head and merge by stable
+    // backend event identity instead.
+    await this.fetchOperations(accountId, {});
   }
 
   private async fetchTrader(accountId: string): Promise<void> {
@@ -224,7 +228,9 @@ function applyPage(
     latestSeq: cursor.beforeSeq === undefined
       ? Math.max(state.latestSeq ?? 0, page.latest_seq ?? 0) || null
       : state.latestSeq,
-    nextBeforeSeq: cursor.beforeSeq === undefined ? state.nextBeforeSeq ?? page.next_before_seq : page.next_before_seq,
+    // The returned head owns its own older cursor.  Keeping an earlier cursor
+    // after a >page-size arrival burst would strand the middle window.
+    nextBeforeSeq: page.next_before_seq,
     loading: state.loading,
     errorMessage: null,
     lastGoodAtMs,
@@ -311,6 +317,10 @@ function isAccountEventRow(value: unknown): value is AccountEventRow {
     return false;
   }
   if (typeof value['event_id'] !== 'string' || typeof value['operator_detail'] !== 'string') return false;
+  if (!isAccountEventProvenance(value['provenance']) || !isNullableInt64Ms(value['event_at_ms']) ||
+    !isNullableInt64Ms(value['arrived_at_ms']) || !isNullableInt64Ms(value['recorded_at_ms']) ||
+    typeof value['producer'] !== 'string' || typeof value['producer_boot_id'] !== 'string' ||
+    !isSequence(value['producer_seq'])) return false;
   if (value['trader_narration'] !== null && typeof value['trader_narration'] !== 'string') return false;
   if (!isAccountEventKind(value['kind']) || !Array.isArray(value['evidence_refs'])) return false;
   return value['evidence_refs'].every(isEvidenceRef) && isNullableOperatorOrderReceipt(value['operator_order_receipt']);
@@ -348,6 +358,14 @@ function isNullableOperatorOrderReceipt(value: unknown): boolean {
 function isAccountEventKind(value: unknown): value is AccountEventKind {
   return value === 'activity' || value === 'safety' || value === 'reconciliation' || value === 'clerk' ||
     value === 'configuration' || value === 'other';
+}
+
+function isAccountEventProvenance(value: unknown): boolean {
+  return value === 'legacy_account_events' || value === 'producer_operational_log' || value === 'clerk_journal';
+}
+
+function isNullableInt64Ms(value: unknown): boolean {
+  return value === null || isInt64Ms(value);
 }
 
 function isNullableSequence(value: unknown): value is number | null {

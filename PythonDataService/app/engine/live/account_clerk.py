@@ -32,7 +32,6 @@ from uuid import uuid4
 
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
-    AccountArtifactError,
     AccountFreezeEvidence,
     account_artifacts_root,
     append_account_event,
@@ -127,7 +126,6 @@ from app.engine.live.account_safety import (
     repair_account_safety_admission,
     retired_owner_nonterminal_custody,
 )
-from app.engine.live.broker_callbacks import broker_callback_idempotency_key
 from app.engine.live.daemon_auth import CLERK_HOST_BINDING_CAPABILITY_ENV
 from app.engine.live.journal_recovery_state import (
     JournalRecoveryStateCorruptError,
@@ -825,7 +823,7 @@ class AccountClerk:
                 broker_write_uncertain = True
             if not broker_write_uncertain:
                 async with self._intake_lock:
-                    receipt = await asyncio.to_thread(
+                    await asyncio.to_thread(
                         self._journal.append_broker_ack,
                         intent,
                         ack,
@@ -834,7 +832,6 @@ class AccountClerk:
         if broker_write_uncertain:
             self._schedule_custody_notification(intent)
             return
-        await self._publish_manual_order_ack_event(intent, receipt)
         self._schedule_custody_notification(intent)
 
     async def _hold_async_custody_before_a1(
@@ -1142,7 +1139,6 @@ class AccountClerk:
                 existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
                 if existing_ack is not None:
                     recorded = await asyncio.to_thread(self._record_intent_locked, intent)
-                    await self._publish_manual_order_ack_event(intent, existing_ack)
                     return recorded, existing_ack
             # Acquire the cross-runtime reader before Clerk intake. A safety
             # writer may be waiting for a fill-before-ack callback, and that
@@ -1164,7 +1160,6 @@ class AccountClerk:
                 existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
                 if existing_ack is not None:
                     recorded = await asyncio.to_thread(self._record_intent_locked, intent)
-                    await self._publish_manual_order_ack_event(intent, existing_ack)
                     return recorded, existing_ack
                 await self._require_epoch_entry_admission(intent)
                 recorded = await self._record_intent_for_request(
@@ -1201,7 +1196,6 @@ class AccountClerk:
                     ack,
                     **self._epoch_transition_provenance(),
                 )
-                await self._publish_manual_order_ack_event(intent, broker_ack)
                 return recorded, broker_ack
 
     async def submit_recovery_flatten(
@@ -1403,11 +1397,9 @@ class AccountClerk:
                 "cancel_only_confirmed",
             }:
                 self._normal_submit_intake_reason = "CLERK_EMERGENCY_RECOVERY_REQUIRED"
-            for event, callback_key in unattributed_events:
+            for _event, _callback_key in unattributed_events:
                 await asyncio.to_thread(
                     self._assert_unattributed_broker_event_guardrail,
-                    event,
-                    callback_key,
                 )
 
     async def recover_account_state(self) -> None:
@@ -1454,8 +1446,6 @@ class AccountClerk:
             if receipt.intent is None:
                 await asyncio.to_thread(
                     self._assert_unattributed_broker_event_guardrail,
-                    event,
-                    broker_callback_idempotency_key(event),
                 )
             elif receipt.newly_recorded and await asyncio.to_thread(
                 self._retirement_requires_callback_suspension,
@@ -1744,42 +1734,17 @@ class AccountClerk:
         self._journal.register_attribution(intent)
         receipt = self._journal.record_broker_event(event, **self._epoch_transition_provenance())
         if receipt.intent is None:
-            self._assert_unattributed_broker_event_guardrail(
-                event,
-                broker_callback_idempotency_key(event),
-            )
+            self._assert_unattributed_broker_event_guardrail()
 
-    def _assert_unattributed_broker_event_guardrail(
-        self,
-        event: IbkrOrderEvent,
-        callback_key: str,
-    ) -> None:
+    def _assert_unattributed_broker_event_guardrail(self) -> None:
         """Make unknown broker flow visible and block further account starts.
 
         The Clerk calls this after every duplicate observation and after
         rebuilding a journal, not just on the first append. The opaque broker
-        event retains its own account/symbol/side data, while no fake bot
-        namespace or strategy id is invented for it.
+        fact remains in the canonical Clerk journal; the resulting freeze
+        carries no copied order or execution fields into an operational log.
         """
 
-        append_account_event(
-            self._artifacts_root,
-            self._account_id,
-            {
-                "event_type": "account_clerk_unattributed_broker_event",
-                "ts_ms": event.ts_ms,
-                "reason": "BROKER_EVENT_WITHOUT_DURABLE_CLERK_INTENT",
-                "status": "consumed",
-                "source": "account_clerk",
-                "receipt_id": f"account-clerk-callback:{callback_key}",
-                "order_ref": event.order_ref,
-                "order_id": event.order_id,
-                "perm_id": event.perm_id,
-                "exec_id": event.exec_id,
-                "event_account_id": event.account_id,
-            },
-            only_if_receipt_absent=True,
-        )
         if read_account_freeze(self._artifacts_root, self._account_id) is None:
             write_account_freeze(
                 self._artifacts_root,
@@ -1794,12 +1759,21 @@ class AccountClerk:
             )
 
     def _record_event_stream_down_locked(self, failure: BaseException | None) -> None:
+        changed_at_ms = self._now_ms()
+        from app.services.account_journal_authority import record_account_journal_stream_state
+
+        record_account_journal_stream_state(
+            self._artifacts_root,
+            self._account_id,
+            state="down",
+            changed_at_ms=changed_at_ms,
+        )
         append_account_event(
             self._artifacts_root,
             self._account_id,
             {
                 "event_type": "account_clerk_event_stream_down",
-                "ts_ms": self._now_ms(),
+                "ts_ms": changed_at_ms,
                 "reason": "CLERK_EVENT_STREAM_DOWN",
                 "source": "account_clerk",
                 "failure_type": type(failure).__name__ if failure is not None else "STREAM_EXITED",
@@ -1963,70 +1937,7 @@ class AccountClerk:
             ack,
             **self._epoch_transition_provenance(),
         )
-        await self._publish_manual_order_ack_event(intent, receipt)
         return receipt
-
-    async def _publish_manual_order_ack_event(
-        self,
-        intent: AccountOwnerSubmitIntent,
-        receipt: AccountClerkBrokerAckReceipt,
-    ) -> None:
-        """Mirror an already-durable manual acknowledgement into Account Desk history.
-
-        The Clerk journal is canonical. This smaller account event exists solely
-        to feed the cursor-paginated operator view, so its local write failure
-        must not change the already-known broker acknowledgement into a failed
-        order submission. A retry of the same intent attempts the idempotent
-        mirror again.
-        """
-
-        if intent.intent_kind != MANUAL_ORDER_INTENT_KIND:
-            return
-        try:
-            await asyncio.to_thread(self._append_manual_order_ack_event, intent, receipt)
-        except (AccountArtifactError, OSError) as exc:
-            logger.error(
-                "manual order receipt was durable but Account Desk history mirror failed",
-                extra={
-                    "account_id": intent.account_id,
-                    "intent_id": intent.intent_id,
-                    "order_ref": intent.order_ref,
-                    "order_id": receipt.order_id,
-                    "exception": repr(exc),
-                },
-            )
-
-    def _append_manual_order_ack_event(
-        self,
-        intent: AccountOwnerSubmitIntent,
-        receipt: AccountClerkBrokerAckReceipt,
-    ) -> None:
-        spec = IbkrOrderSpec.model_validate(intent.order_spec)
-        ack = receipt.broker_ack
-        acknowledged_at_ms = ack.placed_at_ms if ack is not None else receipt.recorded_at_ms
-        append_account_event(
-            self._artifacts_root,
-            self._account_id,
-            {
-                "event_type": "account_clerk_manual_order_acked",
-                "ts_ms": acknowledged_at_ms,
-                "receipt_id": f"account-clerk-manual-order-ack:{intent.order_ref}",
-                "broker": "ibkr",
-                "intent_id": intent.intent_id,
-                "order_ref": intent.order_ref,
-                "order_id": receipt.order_id,
-                "perm_id": receipt.perm_id,
-                "exec_id": receipt.exec_id,
-                "symbol": ack.symbol if ack is not None else spec.symbol,
-                "action": ack.action if ack is not None else spec.action,
-                "quantity": ack.quantity if ack is not None else spec.quantity,
-                "order_type": ack.order_type if ack is not None else spec.order_type,
-                "limit_price": ack.limit_price if ack is not None else spec.limit_price,
-                "status": ack.status if ack is not None else "Acknowledged",
-                "acknowledged_at_ms": acknowledged_at_ms,
-            },
-            only_if_receipt_absent=True,
-        )
 
     def _require_paper_broker(self) -> None:
         client = getattr(self._broker, "_client", None)
@@ -2760,13 +2671,23 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             await broker.start_event_stream()
             event_stream_started = True
             clerk.mark_broker_event_stream_live()
+            from app.services.account_journal_authority import record_account_journal_stream_state
+
+            event_stream_recovered_at_ms = _now_ms()
+            await asyncio.to_thread(
+                record_account_journal_stream_state,
+                artifacts_root,
+                args.account_id,
+                state="recovered",
+                changed_at_ms=event_stream_recovered_at_ms,
+            )
             await asyncio.to_thread(
                 append_account_event,
                 artifacts_root,
                 args.account_id,
                 {
                     "event_type": "account_clerk_event_stream_recovered",
-                    "ts_ms": _now_ms(),
+                    "ts_ms": event_stream_recovered_at_ms,
                     "reason": "CLERK_EVENT_STREAM_STARTED",
                     "source": "account_clerk",
                     "generation": args.generation,
