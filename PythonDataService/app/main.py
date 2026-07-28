@@ -7,6 +7,10 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.clerk import AlpacaClerk
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -108,7 +112,7 @@ def _alpaca_clerk_configuration_is_valid() -> bool:
     return True
 
 
-async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: object) -> bool:
+async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: AlpacaClerk) -> bool:
     """Run S5 recovery before enabling submits; preserve a safe disabled state.
 
     Recovery failure is not an availability-only concern: unresolved intents may
@@ -118,7 +122,7 @@ async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: object) -> bool:
     """
     try:
         await asyncio.wait_for(
-            alpaca_clerk.recover(),  # type: ignore[attr-defined]
+            alpaca_clerk.recover(),
             timeout=_ALPACA_RECOVERY_TIMEOUT_S,
         )
     except Exception as exc:
