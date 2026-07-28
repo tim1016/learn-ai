@@ -31,6 +31,7 @@ from app.schemas.account_safety_snapshot import (
     PresentedOperatorActionEffectReceipt,
 )
 from app.schemas.journal_cures import (
+    AccountRecoveryFlattenCandidate,
     OperatorExactCancelRequest,
     OperatorExactCancelResponse,
     OperatorPendingCancelResponse,
@@ -47,6 +48,7 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 _ExpectedProof = Literal["ORDER_ABSENT", "POSITION_FLAT", "ACCOUNT_FLAT"]
 _ReconcileAfterEffect = Callable[[], Awaitable[AccountReconciliationReceipt]]
+_PROVEN_NO_EFFECT_CLERK_REJECTION_CODES = frozenset({"CLERK_A0_CANCEL_TARGET_NOT_PENDING"})
 
 
 async def dispatch_presented_recovery_action(
@@ -90,7 +92,7 @@ def known_host_recovery_rejection(
     message = detail.get("message")
     if not isinstance(reason_code, str) or not isinstance(message, str):
         return None
-    if reason_code in {"ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN", "OUTCOME_UNKNOWN"}:
+    if reason_code not in _PROVEN_NO_EFFECT_CLERK_REJECTION_CODES:
         return None
     return PresentedActionRejectedError(reason_code, message)
 
@@ -300,7 +302,7 @@ def _current_recovery_candidate(
     reconciliation: AccountReconciliationService,
     account_id: str,
     action: PresentedOperatorAction,
-):
+) -> AccountRecoveryFlattenCandidate:
     target = action.target
     triage = reconciliation.triage(account_id=account_id, now_ms=now_ms_utc())
     for candidate in triage.recovery_flatten_candidates:
@@ -402,6 +404,8 @@ def _post_effect_proven(
             position.con_id == target.target_con_id and position.quantity != 0
             for position in receipt.account_truth.positions
         )
-    return not receipt.account_truth.positions and not any(
+    return not any(
+        position.quantity != 0 for position in receipt.account_truth.positions
+    ) and not any(
         order.fact_kind == "open_order" and order.remaining > 0 for order in receipt.account_truth.orders
     )

@@ -330,6 +330,61 @@ describe('AccountDeskRecoveryStore', () => {
     expect(broker.executePresentedRecoveryAction).toHaveBeenCalledWith('DU1234567', action, 'FLATTEN');
   });
 
+  it('closes an expired presented-action confirmation and refreshes fresh desk evidence', async () => {
+    const candidate = recoveryFlattenCandidate();
+    surface.triage.set(makeCleanAccountTriage({
+      accountId: 'DU1234567',
+      recoveryFlattenCandidates: [candidate],
+    }));
+    const action = presentedRecoveryAction(candidate);
+    accountSafety.stateFor.mockReturnValue({
+      state: 'fresh', snapshot: makeAccountSafetySnapshot({ actions: [action] }),
+    });
+    broker.executePresentedRecoveryAction.mockRejectedValue({
+      error: { detail: { reason_code: 'ACTION_EXPIRED', message: 'The action presentation expired.' } },
+    });
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    store.requestDeclaredMove(move('account-recovery-flatten-action', candidate.intent.intent_id));
+    store.setConfirmationToken('FLATTEN');
+
+    await store.confirm();
+
+    expect(store.confirmation()).toBeNull();
+    expect(store.errorMessage()).toBe('The action presentation expired.');
+    expect(surface.load).toHaveBeenCalledWith('DU1234567');
+    expect(accountSafety.refresh).toHaveBeenCalledWith('DU1234567');
+  });
+
+  it('does not attach a rejected presented action to an account selected during its refresh', async () => {
+    const candidate = recoveryFlattenCandidate();
+    surface.triage.set(makeCleanAccountTriage({
+      accountId: 'DU1234567',
+      recoveryFlattenCandidates: [candidate],
+    }));
+    const action = presentedRecoveryAction(candidate);
+    accountSafety.stateFor.mockReturnValue({
+      state: 'fresh', snapshot: makeAccountSafetySnapshot({ actions: [action] }),
+    });
+    broker.executePresentedRecoveryAction.mockRejectedValue({
+      error: { detail: { reason_code: 'ACTION_EXPIRED', message: 'The action presentation expired.' } },
+    });
+    const refresh = promise<void>();
+    accountSafety.refresh.mockReturnValue(refresh.promise);
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    store.requestDeclaredMove(move('account-recovery-flatten-action', candidate.intent.intent_id));
+    store.setConfirmationToken('FLATTEN');
+
+    const confirmation = store.confirm();
+    await vi.waitFor(() => expect(accountSafety.refresh).toHaveBeenCalledWith('DU1234567'));
+    store.load('DU7654321');
+    refresh.reject(new Error('new account selected'));
+    await confirmation;
+
+    expect(store.errorMessage()).toBeNull();
+  });
+
   it('submits an account emergency flatten only after typed confirmation', async () => {
     const store = TestBed.inject(AccountDeskRecoveryStore);
     const action = presentedEmergencyAction();
@@ -557,8 +612,16 @@ function receipt(): AccountReconciliationReceipt {
   };
 }
 
-function promise<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+function promise<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
   let resolve!: (value: T) => void;
-  const pending = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
-  return { promise: pending, resolve };
+  let reject!: (reason?: unknown) => void;
+  const pending = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise: pending, resolve, reject };
 }

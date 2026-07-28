@@ -9,8 +9,8 @@ from pathlib import Path
 
 
 @contextmanager
-def advisory_file_lock(target: Path) -> Iterator[None]:
-    """Serialize a transaction by a stable sibling lock file."""
+def _advisory_file_lock(target: Path, *, blocking: bool) -> Iterator[bool]:
+    """Acquire one sibling lock, or report contention for a non-blocking caller."""
 
     target.parent.mkdir(parents=True, exist_ok=True)
     lock_path = target.with_name(f".{target.name}.lock")
@@ -24,22 +24,47 @@ def advisory_file_lock(target: Path) -> Iterator[None]:
         if sys.platform == "win32":
             import msvcrt
 
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
             try:
-                yield
+                msvcrt.locking(
+                    handle.fileno(),
+                    msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK,
+                    1,
+                )
+            except OSError:
+                if blocking:
+                    raise
+                yield False
+                return
+            try:
+                yield True
             finally:
                 handle.seek(0)
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
         else:
             import fcntl
 
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            flags = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
             try:
-                yield
+                fcntl.flock(handle.fileno(), flags)
+            except OSError:
+                if blocking:
+                    raise
+                yield False
+                return
+            try:
+                yield True
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     finally:
         handle.close()
+
+
+@contextmanager
+def advisory_file_lock(target: Path) -> Iterator[None]:
+    """Serialize a transaction by a stable sibling lock file."""
+
+    with _advisory_file_lock(target, blocking=True):
+        yield
 
 
 @contextmanager
@@ -53,39 +78,5 @@ def try_advisory_file_lock(target: Path) -> Iterator[bool]:
     callback may await a slow external system.
     """
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = target.with_name(f".{target.name}.lock")
-    handle = open(lock_path, "a+b")  # noqa: SIM115
-    try:
-        handle.seek(0, 2)
-        if handle.tell() == 0:
-            handle.write(b"\0")
-            handle.flush()
-        handle.seek(0)
-        if sys.platform == "win32":
-            import msvcrt
-
-            try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError:
-                yield False
-                return
-            try:
-                yield True
-            finally:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                yield False
-                return
-            try:
-                yield True
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    finally:
-        handle.close()
+    with _advisory_file_lock(target, blocking=False) as acquired:
+        yield acquired

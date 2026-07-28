@@ -2812,6 +2812,14 @@ def create_app(
                 account_id=account_id,
             ).cancel_pending_a0(request.intent)
             return OperatorPendingCancelResponse(cancelled_before_submit=receipt)
+        except OSError as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "reason_code": "ACCOUNT_CLERK_START_FAILED",
+                    "message": str(exc),
+                },
+            ) from exc
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
         except AccountClerkRpcError as exc:
@@ -2848,6 +2856,14 @@ def create_app(
                 account_id=account_id,
             ).cancel_exact_order(request.intent)
             return OperatorExactCancelResponse(cancel_confirmed=receipt)
+        except OSError as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "reason_code": "ACCOUNT_CLERK_START_FAILED",
+                    "message": str(exc),
+                },
+            ) from exc
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
         except AccountClerkRpcError as exc:

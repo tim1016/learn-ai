@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
@@ -66,6 +67,7 @@ _CUSTODY_STAGES = (
     "A3_ECONOMIC_TERMINAL",
 )
 _PRESENTED_ACTION_TTL_MS = 60_000
+logger = logging.getLogger(__name__)
 _VERDICT_REASONS = {
     "ACCOUNT_SAFETY_CLEAN": "Current critical evidence proves the managed account state.",
     "ACCOUNT_SAFETY_CONTAMINATED": "Exposure or order attribution is foreign or cannot be safely proven.",
@@ -104,10 +106,14 @@ class AccountSafetySnapshotService:
         receipt = self._reconciliation.read_latest_receipt(account_id)
         try:
             triage = self._reconciliation.triage(account_id=account_id, now_ms=now_ms)
-        except (AccountClerkJournalCorruptError, OSError, ValueError):
+        except (AccountClerkJournalCorruptError, OSError, ValueError) as exc:
             # The snapshot remains a read-only safety surface even when the
             # optional recovery presentation cannot prove a target. It simply
             # offers no derived broker action from that unreadable evidence.
+            logger.warning(
+                "recovery triage unavailable; presenting no derived broker action",
+                extra={"account_id": account_id, "error": str(exc)},
+            )
             triage = None
         truth_evidence = get_account_truth_snapshot_provider().get(account_id)
         safety, safety_source = self._safety(account_id, now_ms)
