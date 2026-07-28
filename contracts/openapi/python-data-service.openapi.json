@@ -320,6 +320,16 @@
             "title": "Journal Seq",
             "type": "integer"
           },
+          "observed_epoch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEpoch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "order_id": {
             "minimum": 0.0,
             "title": "Order Id",
@@ -329,6 +339,16 @@
             "minLength": 1,
             "title": "Order Ref",
             "type": "string"
+          },
+          "origin_epoch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEpoch"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "perm_id": {
             "anyOf": [
@@ -341,6 +361,19 @@
               }
             ],
             "title": "Perm Id"
+          },
+          "reconciliation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Id"
           },
           "recorded_at_ms": {
             "maximum": 9.223372036854776e+18,
@@ -519,10 +552,43 @@
             "title": "Journal Seq",
             "type": "integer"
           },
+          "observed_epoch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEpoch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "order_ref": {
             "minLength": 1,
             "title": "Order Ref",
             "type": "string"
+          },
+          "origin_epoch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEpoch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reconciliation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Id"
           },
           "recorded_at_ms": {
             "maximum": 9.223372036854776e+18,
@@ -977,6 +1043,77 @@
         "title": "AccountConditionRow",
         "type": "object"
       },
+      "AccountEffectPurpose": {
+        "description": "The limited target shapes a caller may ask the server to verify.",
+        "enum": [
+          "EXACT_CANCEL",
+          "EXACT_CLOSE"
+        ],
+        "title": "AccountEffectPurpose",
+        "type": "string"
+      },
+      "AccountEffectRequest": {
+        "additionalProperties": false,
+        "description": "Untrusted requested target; never itself proves a safe effect.",
+        "properties": {
+          "expected_signed_quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Signed Quantity"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/AccountEffectPurpose"
+          },
+          "target_con_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Con Id"
+          },
+          "target_order_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Order Id"
+          },
+          "target_order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Order Ref"
+          }
+        },
+        "required": [
+          "purpose"
+        ],
+        "title": "AccountEffectRequest",
+        "type": "object"
+      },
       "AccountEmergencyFlattenResponse": {
         "additionalProperties": false,
         "description": "Receipt returned after the Clerk re-observes the account flat.",
@@ -1026,6 +1163,29 @@
           "completed_at_ms"
         ],
         "title": "AccountEmergencyFlattenResponse",
+        "type": "object"
+      },
+      "AccountEpoch": {
+        "additionalProperties": false,
+        "description": "The Clerk boot and monotonic proof sequence behind one fact.",
+        "properties": {
+          "clerk_boot_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Clerk Boot Id",
+            "type": "string"
+          },
+          "epoch_seq": {
+            "minimum": 1.0,
+            "title": "Epoch Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clerk_boot_id",
+          "epoch_seq"
+        ],
+        "title": "AccountEpoch",
         "type": "object"
       },
       "AccountEventEvidenceRef": {
@@ -1505,7 +1665,7 @@
         "title": "AccountObservationView",
         "type": "object"
       },
-      "AccountOwnerSubmitIntent": {
+      "AccountOwnerSubmitIntent-Input": {
         "additionalProperties": false,
         "description": "Durable runner intent accepted by AccountOwner intake.",
         "properties": {
@@ -1523,6 +1683,101 @@
             "minimum": 0.0,
             "title": "Created At Ms",
             "type": "integer"
+          },
+          "effect_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEffectRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intent_id": {
+            "minLength": 1,
+            "title": "Intent Id",
+            "type": "string"
+          },
+          "intent_kind": {
+            "minLength": 1,
+            "title": "Intent Kind",
+            "type": "string"
+          },
+          "order_ref": {
+            "minLength": 1,
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "order_spec": {
+            "title": "Order Spec",
+            "type": "object"
+          },
+          "owner_generation": {
+            "minimum": 0.0,
+            "title": "Owner Generation",
+            "type": "integer"
+          },
+          "run_id": {
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "trace_id": {
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "account_id",
+          "strategy_instance_id",
+          "run_id",
+          "bot_order_namespace",
+          "intent_id",
+          "order_ref",
+          "intent_kind",
+          "order_spec",
+          "owner_generation",
+          "created_at_ms"
+        ],
+        "title": "AccountOwnerSubmitIntent",
+        "type": "object"
+      },
+      "AccountOwnerSubmitIntent-Output": {
+        "additionalProperties": false,
+        "description": "Durable runner intent accepted by AccountOwner intake.",
+        "properties": {
+          "account_id": {
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "bot_order_namespace": {
+            "minLength": 1,
+            "title": "Bot Order Namespace",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "effect_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEffectRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "intent_id": {
             "minLength": 1,
@@ -1812,7 +2067,7 @@
             "$ref": "#/components/schemas/OperatorConfirmationCopy"
           },
           "intent": {
-            "$ref": "#/components/schemas/AccountOwnerSubmitIntent"
+            "$ref": "#/components/schemas/AccountOwnerSubmitIntent-Output"
           }
         },
         "required": [
@@ -18696,6 +18951,19 @@
             "description": "Optional caller-supplied UUID for idempotent retries. If a POST arrives with a client_order_id we've already seen, the original ack is returned and no second order is placed. Phase 3b feature; set None on Phase 3a callers.",
             "title": "Client Order Id"
           },
+          "con_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional IBKR contract identifier. Clerk exact-close recovery requires this to match the server-proved current position so the broker execution cannot resolve a same-symbol contract.",
+            "title": "Con Id"
+          },
           "confirm_paper": {
             "description": "Required True. Defense-in-depth on top of IBKR_MODE and the DU account-id sentinel.",
             "title": "Confirm Paper",
@@ -26441,7 +26709,7 @@
         "description": "Provenance-bearing request for the Clerk's existing operator flatten lane.",
         "properties": {
           "intent": {
-            "$ref": "#/components/schemas/AccountOwnerSubmitIntent"
+            "$ref": "#/components/schemas/AccountOwnerSubmitIntent-Input"
           },
           "request_provenance": {
             "maxLength": 256,
