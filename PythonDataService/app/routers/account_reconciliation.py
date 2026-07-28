@@ -705,7 +705,7 @@ async def execute_presented_reconcile_action_endpoint(
         replay_error = exc
         prior_result = None
     if prior_result is not None:
-        return prior_result
+        return _presented_action_response(prior_result)
     current_snapshot = snapshot_service.snapshot(account_id=canonical_account_id)
     if replay_error is not None:
         raise _presented_action_rejection_http_error(
@@ -721,12 +721,13 @@ async def execute_presented_reconcile_action_endpoint(
             snapshot=current_snapshot,
         )
     try:
-        return await action_service.execute_reconcile(
+        result = await action_service.execute_reconcile(
             action=action,
             invocation=request,
             invoke=lambda: _reconcile_account(canonical_account_id, client, reconciliation),
             refreshed_snapshot_id=lambda: snapshot_service.snapshot(account_id=canonical_account_id).snapshot_id,
         )
+        return _presented_action_response(result)
     except PresentedActionRejectedError as exc:
         raise _presented_action_rejection_http_error(
             reason_code=exc.reason_code,
@@ -734,10 +735,20 @@ async def execute_presented_reconcile_action_endpoint(
             snapshot=current_snapshot,
         ) from exc
     except PresentedActionOutcomeUnknownError as exc:
+        return _presented_action_response(exc.result)
+
+
+def _presented_action_response(
+    result: PresentedOperatorActionResult,
+) -> PresentedOperatorActionResult | JSONResponse:
+    """Use 202 for claimed work whose terminal broker result is not yet known."""
+
+    if result.state in {"IN_PROGRESS", "OUTCOME_UNKNOWN"}:
         return JSONResponse(
             status_code=status.HTTP_202_ACCEPTED,
-            content=exc.result.model_dump(mode="json"),
+            content=result.model_dump(mode="json"),
         )
+    return result
 
 
 @router.get(

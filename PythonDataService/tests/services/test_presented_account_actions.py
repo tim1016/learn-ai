@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import IbkrAccountSummary, IbkrConnectionHealth, IbkrPositionsSnapshot
 from app.config import settings
+from app.schemas.account_reconciliation import AccountReconciliationReceipt
 from app.schemas.account_safety_snapshot import (
     PresentedOperatorAction,
     PresentedOperatorActionInvocation,
@@ -110,7 +112,7 @@ def _invocation(
     )
 
 
-def _receipt(root: Path):
+def _receipt(root: Path) -> AccountReconciliationReceipt:
     truth = compose_account_truth(
         health=IbkrConnectionHealth(
             mode="paper",
@@ -178,7 +180,17 @@ def test_presentation_token_uses_the_shared_configured_secret_across_processes(
     assert has_valid_presented_operator_action_token(second_process_invocation) is True
 
 
-@pytest.mark.asyncio
+def test_missing_signing_configuration_rejects_an_envelope_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    action = _action()
+    invocation = _invocation(action)
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+
+    assert has_valid_presented_operator_action_token(invocation) is False
+
+
 async def test_valid_action_claims_once_and_replays_the_durable_receipt(tmp_path: Path) -> None:
     service = PresentedAccountActionService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
     action = _action()
@@ -211,7 +223,6 @@ async def test_valid_action_claims_once_and_replays_the_durable_receipt(tmp_path
     assert replay == first.model_copy(update={"replayed": True})
 
 
-@pytest.mark.asyncio
 async def test_renewed_presentation_of_the_same_snapshot_replays_its_one_attempt(tmp_path: Path) -> None:
     now = [_NOW_MS]
     service = PresentedAccountActionService(artifacts_root=tmp_path, now_ms=lambda: now[0])
@@ -257,7 +268,6 @@ async def test_renewed_presentation_of_the_same_snapshot_replays_its_one_attempt
     assert replay.replayed is True
 
 
-@pytest.mark.asyncio
 async def test_first_execution_accepts_the_same_snapshot_presented_milliseconds_earlier(tmp_path: Path) -> None:
     final_millisecond = 1_780_000_019_999
     service = PresentedAccountActionService(artifacts_root=tmp_path, now_ms=lambda: final_millisecond + 1)
@@ -296,7 +306,6 @@ async def test_first_execution_accepts_the_same_snapshot_presented_milliseconds_
     assert result.state == "ACCEPTED"
 
 
-@pytest.mark.asyncio
 async def test_expired_stale_or_wrong_target_action_rejects_before_effect(tmp_path: Path) -> None:
     service = PresentedAccountActionService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
     calls = 0
@@ -338,7 +347,6 @@ async def test_expired_stale_or_wrong_target_action_rejects_before_effect(tmp_pa
     assert calls == 0
 
 
-@pytest.mark.asyncio
 async def test_timeout_is_durable_outcome_unknown_and_never_replays_effect(tmp_path: Path) -> None:
     service = PresentedAccountActionService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
     action = _action()
@@ -370,3 +378,58 @@ async def test_timeout_is_durable_outcome_unknown_and_never_replays_effect(tmp_p
     assert "outcome is not proven" in unknown.value.result.finished_copy
     assert replay.state == "OUTCOME_UNKNOWN"
     assert replay.replayed is True
+
+
+async def test_replay_of_an_inflight_action_reports_in_progress(tmp_path: Path) -> None:
+    service = PresentedAccountActionService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
+    action = _action()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def invoke() -> AccountReconciliationReceipt:
+        started.set()
+        await release.wait()
+        return _receipt(tmp_path)
+
+    first = asyncio.create_task(
+        service.execute_reconcile(
+            action=action,
+            invocation=_invocation(action),
+            invoke=invoke,
+            refreshed_snapshot_id=lambda: "c" * 64,
+        )
+    )
+    await started.wait()
+    replay = await service.execute_reconcile(
+        action=action,
+        invocation=_invocation(action),
+        invoke=invoke,
+        refreshed_snapshot_id=lambda: "d" * 64,
+    )
+    release.set()
+
+    assert replay.state == "IN_PROGRESS"
+    assert replay.replayed is True
+    assert (await first).state == "ACCEPTED"
+
+
+async def test_snapshot_refresh_failure_preserves_accepted_reconciliation(tmp_path: Path) -> None:
+    service = PresentedAccountActionService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
+    action = _action()
+
+    async def invoke() -> AccountReconciliationReceipt:
+        return _receipt(tmp_path)
+
+    def refresh_fails() -> str:
+        raise OSError("snapshot unavailable")
+
+    result = await service.execute_reconcile(
+        action=action,
+        invocation=_invocation(action),
+        invoke=invoke,
+        refreshed_snapshot_id=refresh_fails,
+    )
+
+    assert result.state == "ACCEPTED"
+    assert result.reconciliation_receipt is not None
+    assert result.refreshed_snapshot_id is None

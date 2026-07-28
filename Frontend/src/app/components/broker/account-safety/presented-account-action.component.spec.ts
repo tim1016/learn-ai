@@ -115,4 +115,34 @@ describe('PresentedAccountActionComponent', () => {
     expect(screen.queryByText('Request Outcome Unavailable', { exact: false })).toBeNull();
     expect(accountSafety.refresh).toHaveBeenCalledWith(action.target.account_id);
   });
+
+  it('keeps the recorded broker result and releases the control when refresh fails', async () => {
+    const action = makePresentedReconcileAction();
+    const broker = {
+      executePresentedReconcileNow: vi.fn().mockResolvedValue({
+        action_id: 'reconcile_now',
+        action_attempt_id: action.idempotency_key,
+        state: 'ACCEPTED',
+        replayed: false,
+        finished_copy: action.finished_copy,
+        reconciliation_receipt: null,
+        refreshed_snapshot_id: null,
+      }),
+    };
+    const accountSafety = { refresh: vi.fn().mockRejectedValue(new Error('refresh unavailable')) };
+    await render(PresentedAccountActionComponent, {
+      inputs: { action },
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: AccountSafetySnapshotStore, useValue: accountSafety },
+      ],
+    });
+
+    const button = screen.getByRole('button', { name: action.confirmation.confirm_label });
+    fireEvent.click(button);
+
+    expect(await screen.findByText(action.finished_copy, { exact: false })).toBeTruthy();
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByText('could not refresh', { exact: false })).toBeTruthy();
+  });
 });

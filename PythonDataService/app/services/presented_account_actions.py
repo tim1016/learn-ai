@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal
@@ -23,6 +24,7 @@ from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydanti
 from app.utils.timestamps import now_ms_utc
 
 _ACTION_ATTEMPTS_DIRECTORY = "presented_operator_actions"
+logger = logging.getLogger(__name__)
 
 
 class PresentedActionRejectedError(ValueError):
@@ -98,12 +100,21 @@ class PresentedAccountActionService:
             raise PresentedActionOutcomeUnknownError(
                 self._result(unknown, replayed=False)
             ) from exc
+        try:
+            refreshed_snapshot = refreshed_snapshot_id()
+        except Exception as exc:
+            logger.warning(
+                "reconciliation accepted but post-dispatch snapshot refresh failed for %s: %s",
+                invocation.target.account_id,
+                exc,
+            )
+            refreshed_snapshot = None
         completed = prepared.model_copy(
             update={
                 "state": "ACCEPTED",
                 "completed_at_ms": self._now_ms(),
                 "reconciliation_receipt": receipt,
-                "refreshed_snapshot_id": refreshed_snapshot_id(),
+                "refreshed_snapshot_id": refreshed_snapshot,
             }
         )
         atomic_write_pydantic_artifact(path, completed)
@@ -196,14 +207,17 @@ class PresentedAccountActionService:
         *,
         replayed: bool,
     ) -> PresentedOperatorActionResult:
-        outcome_unknown = attempt.state != "ACCEPTED"
+        in_progress = attempt.state == "PENDING"
+        outcome_unknown = attempt.state == "OUTCOME_UNKNOWN"
         return PresentedOperatorActionResult(
             action_id=attempt.action_id,
             action_attempt_id=attempt.action_attempt_id,
-            state="OUTCOME_UNKNOWN" if outcome_unknown else "ACCEPTED",
+            state="IN_PROGRESS" if in_progress else "OUTCOME_UNKNOWN" if outcome_unknown else "ACCEPTED",
             replayed=replayed,
             finished_copy=(
-                "The reconciliation request was durably claimed, but its observed outcome is not proven. "
+                "The reconciliation request is already in progress. Refresh account safety evidence shortly."
+                if in_progress
+                else "The reconciliation request was durably claimed, but its observed outcome is not proven. "
                 "Refresh account safety evidence before taking another action."
                 if outcome_unknown
                 else attempt.finished_copy

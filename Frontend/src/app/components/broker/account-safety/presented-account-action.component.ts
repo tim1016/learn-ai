@@ -28,6 +28,7 @@ export class PresentedAccountActionComponent {
   readonly result = signal<PresentedOperatorActionResult | null>(null);
   readonly rejection = signal<PresentedOperatorActionRejection | null>(null);
   readonly transportFailed = signal(false);
+  readonly refreshFailed = signal(false);
 
   async execute(): Promise<void> {
     const action = this.action();
@@ -37,6 +38,7 @@ export class PresentedAccountActionComponent {
     this.result.set(null);
     this.rejection.set(null);
     this.transportFailed.set(false);
+    this.refreshFailed.set(false);
     try {
       const result = await this.dispatch(action);
       this.result.set(result);
@@ -48,8 +50,13 @@ export class PresentedAccountActionComponent {
         this.rejection.set(rejection);
       }
     } finally {
-      await this.accountSafety.refresh(action.target.account_id);
-      this.busy.set(false);
+      try {
+        await this.accountSafety.refresh(action.target.account_id);
+      } catch {
+        this.refreshFailed.set(true);
+      } finally {
+        this.busy.set(false);
+      }
     }
   }
 

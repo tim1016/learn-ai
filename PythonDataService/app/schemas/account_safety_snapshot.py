@@ -124,15 +124,18 @@ def has_valid_presented_operator_action_token(
 ) -> bool:
     """Verify an opaque presentation token before reading/replaying an attempt."""
 
-    expected = issue_presented_operator_action_token(
-        action_id=invocation.action_id,
-        target=invocation.target,
-        snapshot_id=invocation.snapshot_id,
-        snapshot_version=invocation.snapshot_version,
-        idempotency_key=invocation.idempotency_key,
-        issued_at_ms=invocation.issued_at_ms,
-        expires_at_ms=invocation.expires_at_ms,
-    )
+    try:
+        expected = issue_presented_operator_action_token(
+            action_id=invocation.action_id,
+            target=invocation.target,
+            snapshot_id=invocation.snapshot_id,
+            snapshot_version=invocation.snapshot_version,
+            idempotency_key=invocation.idempotency_key,
+            issued_at_ms=invocation.issued_at_ms,
+            expires_at_ms=invocation.expires_at_ms,
+        )
+    except RuntimeError:
+        return False
     return hmac.compare_digest(invocation.presentation_token, expected)
 
 
@@ -169,7 +172,7 @@ class PresentedOperatorActionResult(BaseModel):
 
     action_id: PresentedOperatorActionId
     action_attempt_id: str = Field(min_length=16, max_length=160)
-    state: Literal["ACCEPTED", "OUTCOME_UNKNOWN"]
+    state: Literal["ACCEPTED", "IN_PROGRESS", "OUTCOME_UNKNOWN"]
     replayed: bool
     finished_copy: str = Field(min_length=1, max_length=512)
     reconciliation_receipt: AccountReconciliationReceipt | None = None

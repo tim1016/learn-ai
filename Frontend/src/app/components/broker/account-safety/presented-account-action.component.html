@@ -25,4 +25,9 @@
       {{ 'REQUEST_OUTCOME_UNAVAILABLE' | receiptLabel }}
     </p>
   }
+  @if (refreshFailed()) {
+    <p class="presented-action__result" aria-live="polite">
+      The action result was recorded, but Account Safety could not refresh. Refresh before another action.
+    </p>
+  }
 </section>
