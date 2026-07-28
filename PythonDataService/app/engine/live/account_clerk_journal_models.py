@@ -17,6 +17,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent
+from app.engine.live.account_effect_models import AccountEffectEvidence
 from app.engine.live.account_epoch import AccountEpoch
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 
@@ -57,6 +58,9 @@ class AccountClerkInboxEntry(BaseModel):
     # marker. Keeping it in the inbox also preserves it across the inbox-to-
     # journal crash boundary.
     async_custody_lane: Literal["entry", "risk_reducing"] | None = None
+    # The classification is durable evidence for the narrow suspended-account
+    # lane. Legacy and ordinary entries correctly retain ``None``.
+    effect_evidence: AccountEffectEvidence | None = None
     intent: AccountOwnerSubmitIntent
 
 
@@ -241,6 +245,7 @@ class AccountClerkJournalEntry(BaseModel):
     # policy owns the accepted intent.
     async_custody_lane: Literal["entry", "risk_reducing"] | None = None
     custody_lane: Literal["entry", "risk_reducing"] | None = None
+    effect_evidence: AccountEffectEvidence | None = None
     event_account_id: str | None = Field(default=None, min_length=1)
     broker_callback_idempotency_key: str | None = Field(default=None, min_length=1)
     operator_adjustment: AccountClerkOperatorAdjustment | None = None
@@ -257,6 +262,17 @@ class AccountClerkJournalEntry(BaseModel):
         elif self.async_custody_lane is not None:
             raise ValueError("async_custody_lane is only valid on recorded rows")
 
+        if self.effect_evidence is not None:
+            if self.entry_kind not in {"recorded", "broker_submitting", "cancel_submitting"}:
+                raise ValueError("effect_evidence is only valid on an admitted broker-write row")
+            if self.intent is None:
+                raise ValueError("effect_evidence requires an intent")
+            if (
+                self.effect_evidence.account_id != self.intent.account_id
+                or self.effect_evidence.intent_id != self.intent.intent_id
+                or self.effect_evidence.order_ref != self.intent.order_ref
+            ):
+                raise ValueError("effect_evidence does not match its intent")
         if self.entry_kind in {
             "custody_queued",
             "custody_expired_before_submit",

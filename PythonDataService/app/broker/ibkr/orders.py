@@ -316,7 +316,10 @@ def _build_contract(spec: IbkrOrderSpec):
     if spec.sec_type == "STK":
         from ib_async import Stock
 
-        return Stock(symbol=spec.symbol, exchange="SMART", currency="USD")
+        contract = Stock(symbol=spec.symbol, exchange="SMART", currency="USD")
+        if spec.con_id is not None:
+            contract.conId = spec.con_id
+        return contract
 
     if spec.sec_type == "OPT":
         from ib_async import Option
@@ -325,7 +328,7 @@ def _build_contract(spec: IbkrOrderSpec):
             raise OrderRefusedError(
                 "OPT order requires expiry_ms, strike, and right."
             )
-        return Option(
+        contract = Option(
             symbol=spec.symbol,
             lastTradeDateOrContractMonth=expiry_ms_to_yyyymmdd(spec.expiry_ms),
             strike=float(spec.strike),
@@ -334,6 +337,9 @@ def _build_contract(spec: IbkrOrderSpec):
             currency="USD",
             multiplier=str(spec.multiplier),
         )
+        if spec.con_id is not None:
+            contract.conId = spec.con_id
+        return contract
 
     raise OrderRefusedError(
         f"sec_type={spec.sec_type!r} is not supported in Phase 3a (STK/OPT only)."
@@ -510,6 +516,19 @@ async def _place_and_build_ack(
             f"({spec.sec_type})."
         )
     qualified_contract = qualified[0]
+    if spec.con_id is not None:
+        try:
+            qualified_con_id = int(getattr(qualified_contract, "conId", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise BrokerError(
+                "IBKR returned an unparseable qualified contract id for "
+                f"pinned con_id={spec.con_id}. Order not placed."
+            ) from exc
+        if qualified_con_id != spec.con_id:
+            raise BrokerError(
+                "IBKR qualified contract id does not match the pinned "
+                f"con_id ({qualified_con_id} != {spec.con_id}). Order not placed."
+            )
 
     order = _build_order(spec)
     logger.info(

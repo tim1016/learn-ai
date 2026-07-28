@@ -40,6 +40,7 @@ from app.engine.live.account_clerk_journal_models import (
     AccountClerkRecoveryFlattenReceipt,
     _require_entry_intent,
 )
+from app.engine.live.account_effect_models import AccountEffectEvidence
 from app.engine.live.account_epoch import AccountEpoch
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
@@ -104,6 +105,7 @@ class AccountClerkJournal:
         clerk_request_received_at_ms: int | None = None,
         clerk_intake_admitted_at_ms: int | None = None,
         async_custody_lane: Literal["entry", "risk_reducing"] | None = None,
+        effect_evidence: AccountEffectEvidence | None = None,
         origin_epoch: AccountEpoch | None = None,
         observed_epoch: AccountEpoch | None = None,
         reconciliation_id: str | None = None,
@@ -124,6 +126,7 @@ class AccountClerkJournal:
                 received_at_ms=self._now_ms(),
                 clerk_request_received_at_ms=clerk_request_received_at_ms,
                 async_custody_lane=async_custody_lane,
+                effect_evidence=effect_evidence,
                 intent=intent,
             )
             _append_jsonl(inbox_path, inbox_entry)
@@ -139,6 +142,7 @@ class AccountClerkJournal:
                 # than presenting a synthesized fsync clock.
                 inbox_fsynced_at_ms=inbox_fsynced_at_ms,
                 async_custody_lane=inbox_entry.async_custody_lane,
+                effect_evidence=inbox_entry.effect_evidence,
                 origin_epoch=origin_epoch,
                 observed_epoch=observed_epoch,
                 reconciliation_id=reconciliation_id,
@@ -379,12 +383,14 @@ class AccountClerkJournal:
         *,
         observed_epoch: AccountEpoch | None = None,
         reconciliation_id: str | None = None,
+        effect_evidence: AccountEffectEvidence | None = None,
     ) -> None:
         self._append_broker_transition(
             intent,
             entry_kind="broker_submitting",
             observed_epoch=observed_epoch,
             reconciliation_id=reconciliation_id,
+            effect_evidence=effect_evidence,
         )
 
     def append_broker_uncertain(
@@ -394,6 +400,7 @@ class AccountClerkJournal:
         *,
         observed_epoch: AccountEpoch | None = None,
         reconciliation_id: str | None = None,
+        effect_evidence: AccountEffectEvidence | None = None,
     ) -> None:
         self._append_broker_transition(
             intent,
@@ -401,6 +408,7 @@ class AccountClerkJournal:
             broker_error=f"{type(error).__name__}: {error}",
             observed_epoch=observed_epoch,
             reconciliation_id=reconciliation_id,
+            effect_evidence=effect_evidence,
         )
 
     def _append_broker_transition(
@@ -411,6 +419,7 @@ class AccountClerkJournal:
         broker_error: str | None = None,
         observed_epoch: AccountEpoch | None = None,
         reconciliation_id: str | None = None,
+        effect_evidence: AccountEffectEvidence | None = None,
     ) -> None:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
@@ -424,6 +433,7 @@ class AccountClerkJournal:
                 origin_epoch=_origin_epoch_for_intent(entries, intent),
                 observed_epoch=observed_epoch,
                 reconciliation_id=reconciliation_id,
+                effect_evidence=effect_evidence,
             )
             self._append_entry_locked(journal_path, entries, entry)
 
@@ -514,7 +524,12 @@ class AccountClerkJournal:
             self._append_entry_locked(journal_path, entries, entry)
             return self._cancel_namespace_receipt(entries, intent, entry)
 
-    def append_cancel_submitting(self, intent: AccountOwnerSubmitIntent) -> None:
+    def append_cancel_submitting(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        effect_evidence: AccountEffectEvidence | None = None,
+    ) -> None:
         """Record the crash boundary immediately before a broker cancel."""
 
         inbox_path, journal_path = self._paths()
@@ -527,6 +542,7 @@ class AccountClerkJournal:
                 entry_kind="cancel_submitting",
                 recorded_at_ms=self._now_ms(),
                 intent=intent,
+                effect_evidence=effect_evidence,
             )
             self._append_entry_locked(journal_path, entries, entry)
 
@@ -923,6 +939,7 @@ class AccountClerkJournal:
                 intent=inbox_entry.intent,
                 clerk_request_received_at_ms=inbox_entry.clerk_request_received_at_ms,
                 async_custody_lane=inbox_entry.async_custody_lane,
+                effect_evidence=inbox_entry.effect_evidence,
             )
             _append_jsonl(journal_path, replayed)
             journal_entries.append(replayed)
@@ -1169,6 +1186,16 @@ def _validate_inbox_replayable(
                     journal_path,
                     f"inbox and journal intent differ at seq {inbox_entry.seq}",
                 )
+            if (
+                journal_entry.clerk_request_received_at_ms
+                != inbox_entry.clerk_request_received_at_ms
+                or journal_entry.async_custody_lane != inbox_entry.async_custody_lane
+                or journal_entry.effect_evidence != inbox_entry.effect_evidence
+            ):
+                raise AccountClerkJournalCorruptError(
+                    journal_path,
+                    f"inbox and journal A0 admission proof differs at seq {inbox_entry.seq}",
+                )
             continue
         if inbox_entry.seq != expected_seq:
             raise AccountClerkJournalCorruptError(
@@ -1181,6 +1208,7 @@ def _validate_inbox_replayable(
             intent=inbox_entry.intent,
             clerk_request_received_at_ms=inbox_entry.clerk_request_received_at_ms,
             async_custody_lane=inbox_entry.async_custody_lane,
+            effect_evidence=inbox_entry.effect_evidence,
         )
         expected_seq += 1
     return unique_inbox_entries

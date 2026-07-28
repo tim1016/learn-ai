@@ -61,6 +61,7 @@ from app.engine.live.account_clerk_rpc import (
     AccountClerkCallbackPersistenceError,
     AccountClerkHostRpcClient,
 )
+from app.engine.live.account_effect_models import AccountEffectClass, AccountEffectEvidence
 from app.engine.live.account_owner import (
     MANUAL_OPERATOR_RUN_ID,
     MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
@@ -3314,6 +3315,54 @@ async def test_recover_inbox_rejects_conflicting_journal_row_without_broker_cont
     assert [entry.intent.intent_id for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [
         conflicting_intent.intent_id
     ]
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_rejects_conflicting_a0_effect_proof_without_broker_contact(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    intent = _intent("bot-a", "run-a", "effect-proof-intent")
+    evidence = AccountEffectEvidence(
+        classification_id="a" * 64,
+        effect_class=AccountEffectClass.EXACT_CLOSE,
+        reason_code="EXACT_CURRENT_POSITION_CLOSE",
+        account_id=ACCOUNT,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        projection_receipt_id="receipt-1",
+        projection_observed_at_ms=START_MS,
+        target_con_id=12345,
+        target_signed_quantity=1.0,
+        requested_quantity=1.0,
+        evaluated_at_ms=START_MS,
+    )
+    account_clerk_journal_module._append_jsonl(
+        journal_path,
+        AccountClerkJournalEntry(
+            seq=1,
+            recorded_at_ms=START_MS,
+            intent=intent,
+            async_custody_lane="risk_reducing",
+            effect_evidence=evidence,
+        ),
+    )
+    account_clerk_journal_module._append_jsonl(
+        inbox_path,
+        AccountClerkInboxEntry(
+            seq=1,
+            received_at_ms=START_MS,
+            intent=intent,
+            async_custody_lane="entry",
+        ),
+    )
+
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    with pytest.raises(AccountClerkJournalCorruptError, match="A0 admission proof differs"):
+        await clerk.recover_inbox()
+
     assert broker.calls == []
 
 

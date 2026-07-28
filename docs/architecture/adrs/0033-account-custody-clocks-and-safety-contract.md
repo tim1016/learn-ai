@@ -145,3 +145,39 @@ the unchanged production admission path. A stale Clerk generation is forbidden
 from advancing or rewriting epoch state; a successor boot records its own
 epoch and starts invalid until the later enforcement/reconciliation slice mints
 an explicitly clean or adopted successor.
+
+## Suspended-account effect amendment (2026-07-27, #1249)
+
+`risk_reducing` is a server-derived effect class, never a client flag. A
+caller may name only an exact order identity for cancellation or an exact stock
+position identity plus its observed signed quantity for closing. The Python
+classifier derives `ENTRY`, `EXACT_CANCEL`, `EXACT_CLOSE`, `AMBIGUOUS`, or
+`ACCOUNT_EMERGENCY` from the latest durable reconciliation projection and the
+current Clerk epoch. Missing, stale, pre-epoch, symbol-only, reused, or changed
+evidence is `AMBIGUOUS` and cannot reach a broker write.
+
+When account safety is `SUSPENDED`, only server-proved exact effects can cross
+the final Clerk fence. The public asynchronous order lane admits neither
+`EXACT_CLOSE` nor `EXACT_CANCEL`: the latter remains internal until Slice 13
+binds it to a snapshot/action envelope, and the former is explicitly blocked
+as `BROKER_ATOMIC_REDUCE_ONLY_UNAVAILABLE`. Native IBKR stock orders do not
+have an atomic reduce-only guard, so even a final position read could race a
+late fill and flip through zero. The classifier continues to derive an exact
+stock close for an operator-visible, machine-readable blocker, but it cannot
+create A0 or reach IBKR until a broker-side guarded-close protocol exists.
+
+For any future guarded close, the contract is already constrained to the
+opposite side, no larger than the current signed position, and matching the
+IBKR `con_id` in the execution spec; it cannot resolve a same-symbol contract.
+A reconciliation receipt is eligible only when it is strictly later than the
+current epoch observation: equal millisecond timestamps do not prove callback
+ordering and fail closed. Every durable order spec must carry the immutable
+intent's exact `order_ref`, so the receipt's attribution token is also the one
+IBKR receives.
+
+The internal exact-cancel primitive accepts both broker `order_id` and echoed
+`order_ref`, and the adapter re-resolves that exact pair immediately before it
+calls IBKR; a reused reference cannot cancel a sibling order. It is not yet an
+operator-UI action: Slice 13 must bind it to the later snapshot/action envelope.
+The legacy internal risk queue remains available while an account is clean, but
+does not gain a suspension exception and still uses the ordinary epoch gate.

@@ -22,6 +22,7 @@ from app.engine.live.account_artifacts import (
     write_account_owner_generation,
 )
 from app.engine.live.account_classifier import AccountClassifierDecision
+from app.engine.live.account_effect_models import AccountEffectRequest
 from app.engine.live.account_owner_fence import (
     AccountOwnerWriteFenceError,
     account_owner_write_grant,
@@ -70,6 +71,9 @@ class AccountOwnerSubmitIntent(BaseModel):
     order_ref: str = Field(min_length=1)
     intent_kind: str = Field(min_length=1)
     order_spec: dict
+    # This is only an untrusted request shape. AccountEffectClassifier derives
+    # the actual effect from durable account evidence at both write boundaries.
+    effect_request: AccountEffectRequest | None = None
     owner_generation: int = Field(ge=0)
     created_at_ms: int = Field(ge=0)
 

@@ -22,6 +22,7 @@ from app.broker.ibkr.models import IbkrOrderSpec
 from app.broker.ibkr.orders import (
     OrderNotFoundError,
     OrderRefusedError,
+    _build_contract,
     _enforce_paper_safety,
     _idempotency_clear_for_testing,
     cancel_paper_order,
@@ -102,6 +103,12 @@ def _owner_grant(
         yield
 
 
+def test_build_contract_pins_an_explicit_contract_id() -> None:
+    contract = _build_contract(_spec(con_id=756733))
+
+    assert contract.conId == 756733
+
+
 # ── safety layers ──────────────────────────────────────────────────────
 
 
@@ -167,6 +174,17 @@ async def test_place_paper_order_market_buy_returns_ack() -> None:
     assert ack.ibkr_evidence.order_status is not None
     assert ack.ibkr_evidence.order_status.fields["status"] == "PendingSubmit"
     client.ib.placeOrder.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_refuses_qualified_contract_mismatch_for_pinned_con_id() -> None:
+    client = _client()
+    client.ib.qualifyContractsAsync = AsyncMock(return_value=[SimpleNamespace(conId=12345)])
+
+    with _owner_grant(), pytest.raises(BrokerError, match="does not match the pinned con_id"):
+        await place_paper_order(client, _spec(con_id=756733))
+
+    client.ib.placeOrder.assert_not_called()
 
 
 @pytest.mark.asyncio

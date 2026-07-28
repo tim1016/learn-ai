@@ -78,6 +78,11 @@ from app.engine.live.account_clerk_operations import (
     AccountClerkOperationDependencies,
     AccountClerkReconciliationOutcome,
 )
+from app.engine.live.account_effect import (
+    AccountEffectClassifier,
+    AccountEffectEvidence,
+)
+from app.engine.live.account_effect_models import AccountEffectClass, AccountEffectPurpose
 from app.engine.live.account_epoch import (
     AccountEpochAuthority,
     AccountEpochState,
@@ -258,6 +263,7 @@ class AccountClerk:
         async_custody_config: AccountClerkAsyncCustodyConfig | None = None,
         epoch_authority: AccountEpochAuthority | None = None,
         safety_authority: AccountSafetyAuthority | None = None,
+        effect_classifier: AccountEffectClassifier | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
@@ -327,6 +333,10 @@ class AccountClerk:
         self._async_custody_config = async_custody_config
         self._epoch_authority = epoch_authority
         self._safety_authority = safety_authority
+        self._effect_classifier = effect_classifier or AccountEffectClassifier(
+            artifacts_root=artifacts_root,
+            account_id=account_id,
+        )
         self._async_custody_admission_lock = asyncio.Lock()
         self._async_custody_queues: dict[str, asyncio.Queue[AccountOwnerSubmitIntent]] = (
             {
@@ -513,13 +523,15 @@ class AccountClerk:
         intent: AccountOwnerSubmitIntent,
         *,
         clerk_request_received_at_ms: int | None = None,
-        lane: Literal["entry", "risk_reducing"] = "entry",
+        lane: Literal["entry", "risk_reducing"] | None = None,
     ) -> tuple[AccountClerkRecordedReceipt, AccountClerkCustodyStatus]:
         """Transfer custody at A0 and resolve broker work in a Clerk task.
 
-        ``lane`` exists for trusted Clerk-owned callers only. The public RPC
-        always admits the entry lane until Slice 7 supplies server-derived
-        effect classification for risk-reducing requests.
+        The public RPC never supplies ``lane``. A caller that names an exact
+        recovery target is classified by the server, but stock close requests
+        fail closed until IBKR offers an atomic reduce-only execution contract.
+        The explicit argument remains for pre-existing Clerk-owned recovery
+        callers and is not part of the socket contract.
         """
 
         if self._async_custody_config is None:
@@ -530,6 +542,21 @@ class AccountClerk:
             raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
         if intent.intent_kind in {"RECOVERY_FLATTEN", "CANCEL_NAMESPACE"}:
             self._reject(intent, "CLERK_ASYNC_CUSTODY_INTENT_KIND_UNSUPPORTED")
+        if (
+            intent.effect_request is not None
+            and intent.effect_request.purpose is AccountEffectPurpose.EXACT_CANCEL
+        ):
+            # An exact cancel needs the snapshot-bound operator action
+            # envelope introduced in Slice 13.  It must never be represented
+            # as an async order-placement job.
+            self._reject(intent, "CLERK_EXACT_CANCEL_ACTION_ENVELOPE_REQUIRED")
+        effect_evidence: AccountEffectEvidence | None = None
+        if lane is None:
+            if intent.effect_request is None:
+                lane = "entry"
+            else:
+                effect_evidence = await self._require_risk_reducing_effect(intent)
+                lane = "risk_reducing"
         try:
             self._require_paper_broker()
             IbkrOrderSpec.model_validate(intent.order_spec)
@@ -568,9 +595,10 @@ class AccountClerk:
                             pending_order_ref=pending_entry.order_ref,
                         )
 
-        # Lifecycle retirement takes its per-bot fence before the account
-        # safety writer, so entry follows that same order. Both waits happen
-        # before Clerk intake, preserving fill-before-ack callback progress.
+        # A risk-reducing write is not entry risk, but it still takes the
+        # shared reader permit: repair must never reclaim cross-runtime
+        # admission state while *any* Clerk broker write can still be in
+        # flight. Entry additionally takes its per-bot lifecycle fence.
         async with AsyncExitStack() as safety_admission:
             if lane == "entry":
                 await safety_admission.enter_async_context(
@@ -580,12 +608,12 @@ class AccountClerk:
                         required=True,
                     )
                 )
-                await safety_admission.enter_async_context(
-                    _account_safety_entry_admission_lock(
-                        self._artifacts_root,
-                        self._account_id,
-                    )
+            await safety_admission.enter_async_context(
+                _account_safety_entry_admission_lock(
+                    self._artifacts_root,
+                    self._account_id,
                 )
+            )
             async with self._async_custody_admission_lock, self._intake_lock:
                 await self._require_normal_submit_intake(intent)
                 existing_identity = await asyncio.to_thread(
@@ -634,6 +662,15 @@ class AccountClerk:
                                     pending_intent_id=pending_entry.intent_id,
                                     pending_order_ref=pending_entry.order_ref,
                                 )
+                        elif intent.effect_request is not None:
+                            effect_evidence = await self._require_risk_reducing_effect(intent)
+                        else:
+                            # Pre-S7 Clerk-owned callers can still use the
+                            # separate queue while the account is clean, but
+                            # they never receive a suspension exception: the
+                            # ordinary epoch/safety entry gate remains in
+                            # force. The socket API cannot choose this path.
+                            await self._require_epoch_entry_admission(intent)
                         self._require_async_custody_capacity(intent, lane)
                         intake_admitted_at_ms = self._now_ms()
                         recorded = await asyncio.to_thread(
@@ -642,6 +679,7 @@ class AccountClerk:
                             clerk_request_received_at_ms=clerk_request_received_at_ms,
                             clerk_intake_admitted_at_ms=intake_admitted_at_ms,
                             async_custody_lane=lane,
+                            effect_evidence=effect_evidence,
                         )
                 else:
                     recorded = existing.recorded
@@ -748,18 +786,28 @@ class AccountClerk:
                     return
                 self._require_paper_broker()
                 spec = IbkrOrderSpec.model_validate(intent.order_spec)
-                await self._require_epoch_entry_admission(intent)
+                is_server_proved_risk_reduction = (
+                    status.lane == "risk_reducing" and intent.effect_request is not None
+                )
+                if is_server_proved_risk_reduction:
+                    await self._require_risk_reducing_effect(intent)
+                else:
+                    await self._require_epoch_entry_admission(intent)
                 # Keep the permit after releasing intake: callback
                 # persistence and subsequent A0 requests remain
                 # responsive, while retirement/suspension cannot land
                 # between A1 and the broker invocation.
-                await admission.enter_async_context(
-                    self._broker_write_admission("account_clerk.broker.place_order")
+                execution_effect = await admission.enter_async_context(
+                    self._broker_write_admission(
+                        "account_clerk.broker.place_order",
+                        risk_reducing_intent=(intent if is_server_proved_risk_reduction else None),
+                    )
                 )
                 await asyncio.to_thread(
                     self._journal.append_broker_submitting,
                     intent,
                     **self._epoch_transition_provenance(),
+                    effect_evidence=execution_effect,
                 )
             self._schedule_custody_notification(intent)
             broker_write_uncertain = False
@@ -1194,6 +1242,86 @@ class AccountClerk:
     ) -> AccountClerkCancelNamespaceReceipt:
         return await self._operations.cancel_namespace(intent)
 
+    async def cancel_exact_order(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Cancel one broker-identified order under the narrow safe lane.
+
+        This is deliberately an internal Clerk primitive, not an unauthenticated
+        endpoint. Slice 13 will place it behind a snapshot-bound action
+        envelope; keeping the durable target and final effect proof here first
+        means that migration cannot regress to a symbol- or namespace-wide
+        cancel.
+        """
+
+        if self._broker is None:
+            raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        if intent.effect_request is None or intent.effect_request.purpose.value != "EXACT_CANCEL":
+            self._reject(intent, "CLERK_EXACT_CANCEL_EFFECT_REQUEST_REQUIRED")
+        cancel_exact = getattr(self._broker, "cancel_exact_open_order", None)
+        if not callable(cancel_exact):
+            raise RuntimeError("ACCOUNT_CLERK_CANCEL_EXACT_ORDER_UNSUPPORTED")
+
+        async with self._broker_write_lock, self._cancel_operation_lock, _intent_lifecycle_admission_lock(
+            self._artifacts_root,
+            intent,
+            required=True,
+        ), _account_safety_entry_admission_lock(
+            self._artifacts_root,
+            self._account_id,
+        ):
+            async with self._intake_lock:
+                await self._require_normal_submit_intake(intent)
+                admission_effect = await self._require_risk_reducing_effect(intent)
+                await asyncio.to_thread(
+                    self._record_intent_locked,
+                    intent,
+                    effect_evidence=admission_effect,
+                )
+                existing = await asyncio.to_thread(self._journal.cancel_confirmed_for_intent, intent)
+                if existing is not None:
+                    return existing
+                if await asyncio.to_thread(self._journal.cancel_submitting_for_intent, intent):
+                    uncertainty = RuntimeError("prior exact cancel attempt may have reached broker")
+                    await asyncio.to_thread(self._journal.append_cancel_uncertain, intent, uncertainty)
+                    raise AccountClerkCancelNamespaceUncertainError(
+                        "ACCOUNT_CLERK_EXACT_CANCEL_UNCERTAIN"
+                    )
+                self._require_paper_broker()
+
+            try:
+                async with self._broker_write_admission(
+                    "account_clerk.broker.cancel_exact_open_order",
+                    risk_reducing_intent=intent,
+                ) as execution_effect:
+                    await asyncio.to_thread(
+                        self._journal.append_cancel_submitting,
+                        intent,
+                        effect_evidence=execution_effect,
+                    )
+                    async with asyncio.timeout(ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S):
+                        cancelled = await cancel_exact(
+                            order_id=intent.effect_request.target_order_id,
+                            order_ref=intent.effect_request.target_order_ref,
+                        )
+                    if drain := self._callback_drain:
+                        await drain()
+            except AccountClerkGenerationFencedError:
+                raise
+            except Exception as exc:
+                async with self._intake_lock:
+                    await asyncio.to_thread(self._journal.append_cancel_uncertain, intent, exc)
+                raise AccountClerkCancelNamespaceUncertainError(
+                    "ACCOUNT_CLERK_EXACT_CANCEL_UNCERTAIN"
+                ) from exc
+            async with self._intake_lock:
+                return await asyncio.to_thread(
+                    self._journal.append_cancel_confirmed,
+                    intent,
+                    cancelled,
+                )
+
     @property
     def cancel_namespace_in_progress(self) -> bool:
         return self._operations.state.cancel_namespace_in_progress
@@ -1528,6 +1656,7 @@ class AccountClerk:
         clerk_request_received_at_ms: int | None = None,
         clerk_intake_admitted_at_ms: int | None = None,
         async_custody_lane: Literal["entry", "risk_reducing"] | None = None,
+        effect_evidence: AccountEffectEvidence | None = None,
     ) -> AccountClerkRecordedReceipt:
         if intent.account_id != self._account_id:
             self._reject(intent, "CLERK_ACCOUNT_MISMATCH")
@@ -1539,6 +1668,7 @@ class AccountClerk:
             clerk_request_received_at_ms=clerk_request_received_at_ms,
             clerk_intake_admitted_at_ms=clerk_intake_admitted_at_ms,
             async_custody_lane=async_custody_lane,
+            effect_evidence=effect_evidence,
             origin_epoch=provenance.get("observed_epoch"),
             observed_epoch=provenance.get("observed_epoch"),
             reconciliation_id=provenance.get("reconciliation_id"),
@@ -1916,6 +2046,69 @@ class AccountClerk:
                 reconciliation_id=exc.state.reconciliation_id,
             )
 
+    async def _require_risk_reducing_effect(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountEffectEvidence:
+        """Derive the sole suspended-account exception from current evidence.
+
+        The caller's requested purpose is intentionally not an authority. The
+        same read-only, broker-free classifier is invoked at A0 and again from
+        the final Clerk broker-write admission. Any unavailable, stale, or
+        changed target is therefore a typed refusal rather than a permissive
+        fallback to the legacy risk-reducing queue.
+        """
+
+        epoch_state = (
+            await asyncio.to_thread(self._epoch_authority.read)
+            if self._epoch_authority is not None
+            else None
+        )
+        evidence = await asyncio.to_thread(
+            self._effect_classifier.classify,
+            intent,
+            epoch_state=epoch_state,
+            now_ms=self._now_ms(),
+        )
+        if evidence.effect_class is AccountEffectClass.EXACT_CLOSE:
+            # A native stock order has no atomic reduce-only constraint. Even
+            # final A1 reclassification can race a newly received fill, so a
+            # client-side close would be able to cross zero. Keep the derived
+            # evidence observable, but do not create an A0/A1 write until a
+            # broker-side guarded-close protocol exists.
+            self._reject(
+                intent,
+                "CLERK_ATOMIC_REDUCE_ONLY_UNAVAILABLE",
+                effect_class=evidence.effect_class.value,
+                effect_reason=evidence.reason_code,
+                effect_classification_id=evidence.classification_id,
+                capability_blocker="BROKER_ATOMIC_REDUCE_ONLY_UNAVAILABLE",
+            )
+        if not evidence.permits_suspended_admission:
+            self._reject(
+                intent,
+                "CLERK_RISK_REDUCING_EFFECT_NOT_PROVEN",
+                effect_class=evidence.effect_class.value,
+                effect_reason=evidence.reason_code,
+                effect_classification_id=evidence.classification_id,
+            )
+        if self._safety_authority is not None:
+            try:
+                safety_state = await asyncio.to_thread(self._safety_authority.read)
+            except Exception:
+                self._reject(intent, "CLERK_ACCOUNT_SAFETY_UNAVAILABLE")
+            if safety_state.verdict not in {
+                AccountSafetyVerdict.CLEAN,
+                AccountSafetyVerdict.SUSPENDED,
+            }:
+                self._reject(
+                    intent,
+                    "CLERK_RISK_REDUCING_ACCOUNT_VERDICT_BLOCKED",
+                    safety_verdict=safety_state.verdict.value,
+                    effect_classification_id=evidence.classification_id,
+                )
+        return evidence
+
     def _suspend_retired_owner_custody_if_needed(
         self,
         intent: AccountOwnerSubmitIntent,
@@ -2004,6 +2197,18 @@ class AccountClerk:
         self._reject(intent, "CLERK_RPC_CLOSED")
 
     def _validate_intent_identity(self, intent: AccountOwnerSubmitIntent) -> None:
+        # Every durable Clerk intent that can reach ``place_order`` must carry
+        # the same broker echo token in its execution spec and its immutable
+        # journal identity.  Otherwise the receipt/effect proof could name a
+        # different broker order than the one IBKR receives. Namespace cancel
+        # is a management operation, never a broker order submission.
+        if intent.intent_kind != "CANCEL_NAMESPACE":
+            try:
+                spec = IbkrOrderSpec.model_validate(intent.order_spec)
+            except ValueError:
+                self._reject(intent, "CLERK_DURABLE_ORDER_SPEC_INVALID")
+            if spec.order_ref != intent.order_ref:
+                self._reject(intent, "CLERK_DURABLE_ORDER_REF_MISMATCH")
         if intent.intent_kind == MANUAL_ORDER_INTENT_KIND:
             self._validate_manual_order_intent(intent)
             return
@@ -2204,7 +2409,8 @@ class AccountClerk:
         boundary: str,
         *,
         before_broker_write: Callable[[], Awaitable[None]] | None = None,
-    ) -> AsyncIterator[None]:
+        risk_reducing_intent: AccountOwnerSubmitIntent | None = None,
+    ) -> AsyncIterator[AccountEffectEvidence | None]:
         """Hold every admission proof from a durable A1 marker through IBKR."""
 
         async with (
@@ -2212,9 +2418,10 @@ class AccountClerk:
             self._broker_write_admission_under_recovery_admission(
                 boundary,
                 before_broker_write=before_broker_write,
-            ),
+                risk_reducing_intent=risk_reducing_intent,
+            ) as effect_evidence,
         ):
-            yield
+            yield effect_evidence
 
     @asynccontextmanager
     async def _broker_write_admission_under_recovery_admission(
@@ -2222,7 +2429,8 @@ class AccountClerk:
         boundary: str,
         *,
         before_broker_write: Callable[[], Awaitable[None]] | None = None,
-    ) -> AsyncIterator[None]:
+        risk_reducing_intent: AccountOwnerSubmitIntent | None = None,
+    ) -> AsyncIterator[AccountEffectEvidence | None]:
         # A torn journal is a global account-write fence.  This final shared
         # boundary covers normal placements, recovery actions, cancellations,
         # and emergencies, so no exceptional path can reach IBKR on corrupt
@@ -2258,10 +2466,13 @@ class AccountClerk:
         # intake -> epoch-gate inversion for exceptional operations while
         # still holding the final proof check through the broker invocation.
         async with self._epoch_write_admission_lock:
-            if self._epoch_authority is not None:
+            effect_evidence: AccountEffectEvidence | None = None
+            if risk_reducing_intent is not None:
+                effect_evidence = await self._require_risk_reducing_effect(risk_reducing_intent)
+            elif self._epoch_authority is not None:
                 await asyncio.to_thread(self._epoch_authority.require_broker_write)
             if self._clerk_generation is None:
-                yield
+                yield effect_evidence
                 return
             try:
                 observed_generation = self._read_active_generation()
@@ -2288,7 +2499,7 @@ class AccountClerk:
                     boundary=boundary,
                     clerk_generation_provider=self._read_active_generation,
                 ):
-                    yield
+                    yield effect_evidence
             except AccountClerkWriteFenceError as exc:
                 if exc.reason not in {
                     "CLERK_LEASE_UNAVAILABLE_AT_BROKER_WRITE",

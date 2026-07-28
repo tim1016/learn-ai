@@ -564,6 +564,32 @@ class IbkrBrokerAdapter(BrokerAdapter):
             await self._wait_for_terminal_fills(targeted_set)
         return targeted
 
+    async def cancel_exact_open_order(self, *, order_id: int, order_ref: str) -> list[int]:
+        """Cancel exactly one current broker order proved by Clerk.
+
+        A broker reference is an attribution token, not a broker primary key.
+        The Clerk therefore hands the adapter both identities.  Resolve them
+        together immediately before the broker call and fail closed if the
+        broker no longer exposes exactly that row.
+        """
+
+        self._enforce_account_owner_write_fence("broker.cancel_exact_open_order")
+        open_orders = await list_open_orders(self._client)
+        matching = [
+            order
+            for order in open_orders
+            if int(order.order_id) == order_id and order.order_ref == order_ref
+        ]
+        if len(matching) != 1:
+            raise RuntimeError("BROKER_EXACT_CANCEL_TARGET_NOT_CURRENT")
+
+        await cancel_paper_order(self._client, order_id)
+        while any(int(order.order_id) == order_id for order in await list_open_orders(self._client)):
+            await asyncio.sleep(0.05)
+        if self._event_task is not None:
+            await self._wait_for_terminal_fills({order_id})
+        return [order_id]
+
     async def probe_intent_status(self, intent_id: str, order_ref: str) -> str:
         """Return ``PRESENT`` only when IBKR still echoes this exact order ref.
 

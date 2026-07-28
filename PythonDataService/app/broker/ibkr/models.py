@@ -522,6 +522,15 @@ class IbkrOrderSpec(BaseModel):
 
     symbol: str
     sec_type: SecType
+    con_id: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional IBKR contract identifier. Clerk exact-close recovery "
+            "requires this to match the server-proved current position so "
+            "the broker execution cannot resolve a same-symbol contract."
+        ),
+    )
     action: OrderAction
     quantity: float = Field(..., gt=0, description="Always positive; 'action' encodes side.")
     order_type: OrderType
