@@ -213,8 +213,27 @@ function resolveVerb(state: BotLifecycleDisplayStatus, status: LiveInstanceStatu
   ) {
     return { kind: 'crash_recovery' };
   }
-  if (lifecycle.primary_action) return { kind: 'lifecycle', action: lifecycle.primary_action };
+  // STOPPED is a durable operator latch. A roll-call offer can still project
+  // a lifecycle Start action, but Start is required to refuse until Resume
+  // changes the desired state. Keep the visible verb aligned with that
+  // server-enforced transition instead of offering a known-refused Start.
+  if (status.desired_state?.state === 'STOPPED') return { kind: 'remediation' };
   const remediation = status.operator_surface.trader_guidance.primary_remediation;
+  // Lifecycle primary action (e.g. "End day now") always takes precedence — an
+  // on-duty bot must be stoppable regardless of submit-readiness or remediation.
+  if (lifecycle.primary_action) return { kind: 'lifecycle', action: lifecycle.primary_action };
+  // If there is no lifecycle action but submit is blocked, surface the
+  // backend-declared cure so the operator knows what to do next.
+  if (
+    state === 'On duty' &&
+    !status.operator_surface.submit_readiness.can_submit &&
+    remediation.kind !== 'none'
+  ) {
+    if (remediation.kind === 'open_runbook' && runbookOpensInstancePage(remediation.slug)) {
+      return { kind: 'evidence' };
+    }
+    return { kind: 'remediation' };
+  }
   if (remediation.kind === 'open_runbook' && runbookOpensInstancePage(remediation.slug)) {
     // The runbook route is this bot's own page — navigating is a no-op. Open the
     // why-drawer, which holds this bot's recovery evidence and blockers.

@@ -283,6 +283,26 @@ async def apply_operator_adjustment(base_url: str, account_id: str, payload: dic
     )
 
 
+async def operator_recovery_flatten(base_url: str, account_id: str, payload: dict) -> dict:
+    """POST an exact recovery order through the daemon's host-local Clerk RPC."""
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-recovery-flatten",
+        payload,
+        timeout=_FLATTEN_TIMEOUT,
+    )
+
+
+async def authorize_emergency_flatten(base_url: str, account_id: str, payload: dict) -> dict:
+    """Ask the host-local Clerk to authorize one account emergency flatten."""
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/authorize-emergency-flatten",
+        payload,
+        timeout=_FLATTEN_TIMEOUT,
+    )
+
+
 async def retire_stale_binding(base_url: str, account_id: str, payload: dict) -> dict:
     """POST a stale-binding retirement to the daemon (host lifecycle authority).
 
@@ -403,7 +423,10 @@ async def fetch_instances(base_url: str) -> tuple[DaemonResult, dict | None]:
     fail-closed callers can keep checking ``payload is None``; the result is
     additive context for typed-failure surfacing.
     """
-    return await _typed_get_json(f"{base_url.rstrip('/')}/instances")
+    return await _typed_get_json(
+        f"{base_url.rstrip('/')}/instances",
+        timeout=_INSTANCE_PROBE_TIMEOUT,
+    )
 
 
 async def fetch_instance_process(

@@ -56,6 +56,17 @@ describe("dataPlaneControlIntentInterceptor", () => {
     });
   }
 
+  it("marks account transaction reads that the data plane always protects", () => {
+    const url = "/api/accounts/DU1234567/transactions";
+    http.get(url).subscribe();
+
+    const req = httpMock.expectOne(url);
+    expect(req.request.headers.get(DATA_PLANE_CONTROL_INTENT_HEADER)).toBe(
+      DATA_PLANE_CONTROL_INTENT_VALUE,
+    );
+    req.flush({});
+  });
+
   it("does not mark unprotected control reads", () => {
     http.get("/api/broker/health").subscribe();
 

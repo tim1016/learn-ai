@@ -255,6 +255,16 @@ def test_parse_failures_on_run_157b11c0_live_log_extracts_real_failure() -> None
             "live_idempotent absorb_count over threshold (12 absorbed in 60s)",
             IncidentCategory.SUBSCRIPTION_STALE,
         ),
+        (
+            "app.broker.ibkr.bars",
+            "IBKR reqRealTimeBars has not delivered 5-second bars",
+            IncidentCategory.SUBSCRIPTION_STALE,
+        ),
+        (
+            "app.broker.ibkr.bars",
+            "IBKR reqRealTimeBars has not delivered raw 5-second bars",
+            IncidentCategory.SUBSCRIPTION_STALE,
+        ),
         # UNKNOWN — anything the catalog doesn't recognise.
         (
             "app.misc",

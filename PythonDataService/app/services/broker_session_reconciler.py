@@ -72,14 +72,19 @@ def reconcile_broker_session_snapshot(
 
     visible_socket_rows: list[GatewaySocketRow] = []
     gvproxy_socket_rows: list[GatewaySocketRow] = []
+    account_clerk_socket_rows: list[GatewaySocketRow] = []
     global_events: list[BrokerSessionGlobalEvent] = []
     for socket in socket_rows:
         if _is_gvproxy_socket(socket):
             gvproxy_socket_rows.append(socket)
+        elif _is_account_clerk_socket(socket):
+            account_clerk_socket_rows.append(socket)
         else:
             visible_socket_rows.append(socket)
     if gvproxy_socket_rows:
         global_events.append(_gvproxy_global_event(gvproxy_socket_rows, as_of_ms))
+    if account_clerk_socket_rows:
+        global_events.append(_account_clerk_global_event(account_clerk_socket_rows, as_of_ms))
 
     rows = reconcile_broker_session_roster(
         socket_rows=visible_socket_rows,
@@ -426,6 +431,35 @@ def _gvproxy_global_event(
 def _is_gvproxy_socket(socket: GatewaySocketRow) -> bool:
     haystack = " ".join([socket.command, *socket.argv]).lower()
     return "gvproxy" in haystack
+
+
+def _account_clerk_global_event(
+    sockets: list[GatewaySocketRow],
+    as_of_ms: int,
+) -> BrokerSessionGlobalEvent:
+    count = len(sockets)
+    summary = (
+        "The Account Clerk broker client is connected as account-rooted write-authority "
+        "infrastructure, not as a bot session."
+    )
+    if count > 1:
+        summary = (
+            f"{count} Account Clerk broker clients are connected as account-rooted "
+            "write-authority infrastructure, not as bot sessions."
+        )
+    return BrokerSessionGlobalEvent(
+        code="ACCOUNT_CLERK_BROKER_CLIENT",
+        label="Account Clerk broker client",
+        severity="info",
+        summary=summary,
+        current=True,
+        source="network",
+        observed_at_ms=as_of_ms,
+    )
+
+
+def _is_account_clerk_socket(socket: GatewaySocketRow) -> bool:
+    return "app.engine.live.account_clerk" in socket.argv
 
 
 def _last_known_runtime_rows(

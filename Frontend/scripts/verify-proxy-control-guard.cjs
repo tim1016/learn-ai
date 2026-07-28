@@ -127,6 +127,18 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
   assert.equal(requiresDataPlaneControlSecret(req), true);
 }
 
+{
+  const req = request({
+    method: 'GET',
+    url: '/api/accounts/DU1234567/transactions',
+  });
+  const proxyReq = proxyReqRecorder();
+  attachDataPlaneSecret(proxyReq, req);
+  assert.equal(isProtectedControlRead(req), true);
+  assert.equal(requiresDataPlaneControlSecret(req), true);
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), TEST_DATA_PLANE_CONTROL_SECRET);
+}
+
 for (const prefix of PROTECTED_READ_PREFIXES) {
   const req = request({
     method: 'GET',

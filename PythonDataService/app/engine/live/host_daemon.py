@@ -37,6 +37,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
 from app.engine.live.account_clerk_rpc import (
     AccountClerkHostRpcClient,
     AccountClerkRpcClient,
@@ -114,9 +115,15 @@ from app.schemas.account_reconciliation import (
     StaleBindingRetirementRequest,
 )
 from app.schemas.broker_session import GatewaySocketsSnapshot
-from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
+from app.schemas.journal_cures import (
+    JournalCureReceipt,
+    JournalCureRequest,
+    OperatorRecoveryFlattenRequest,
+    OperatorRecoveryFlattenResponse,
+)
 from app.schemas.live_runs import (
     AccountClerkHealth,
+    AccountEmergencyFlattenAuthorizationRequest,
     AccountEmergencyFlattenDispatchRequest,
     AccountEmergencyFlattenResponse,
     AuditCopySizingLookup,
@@ -2715,6 +2722,73 @@ def create_app(
                 artifacts_root=process_manager.artifacts_root,
                 account_id=account_id,
             ).apply_operator_adjustment(request)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        except AccountClerkRpcError as exc:
+            retry_safe, reason_code = clerk_rejection_reason(exc)
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": reason_code,
+                    "message": "Clerk rejected or could not complete the request.",
+                },
+            ) from exc
+
+    @app.post(
+        "/accounts/{account_id}/clerk/operator-recovery-flatten",
+        response_model=OperatorRecoveryFlattenResponse,
+        dependencies=auth,
+    )
+    async def operator_recovery_flatten(
+        account_id: str,
+        request: OperatorRecoveryFlattenRequest,
+    ) -> OperatorRecoveryFlattenResponse:
+        """Forward one exact recovery order to the host-local Clerk RPC."""
+
+        if request.intent.account_id != account_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "intent account_id does not match path",
+            )
+        try:
+            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            receipt = await AccountClerkRpcClient(
+                artifacts_root=process_manager.artifacts_root,
+                account_id=account_id,
+            ).submit_operator_recovery_flatten(request.intent)
+            return OperatorRecoveryFlattenResponse(recovery_flatten=receipt)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        except AccountClerkRpcError as exc:
+            retry_safe, reason_code = clerk_rejection_reason(exc)
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": reason_code,
+                    "message": "Clerk rejected or could not complete the request.",
+                },
+            ) from exc
+
+    @app.post(
+        "/accounts/{account_id}/clerk/authorize-emergency-flatten",
+        response_model=AccountClerkEmergencyAuthorization,
+        dependencies=auth,
+    )
+    async def authorize_emergency_flatten(
+        account_id: str,
+        request: AccountEmergencyFlattenAuthorizationRequest,
+    ) -> AccountClerkEmergencyAuthorization:
+        """Authorize a flatten through the host-local Clerk RPC boundary."""
+
+        try:
+            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            return await AccountClerkRpcClient(
+                artifacts_root=process_manager.artifacts_root,
+                account_id=account_id,
+            ).authorize_emergency_flatten(
+                operation_id=request.operation_id,
+                reconciliation_evidence_version=request.reconciliation_evidence_version,
+            )
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
         except AccountClerkRpcError as exc:

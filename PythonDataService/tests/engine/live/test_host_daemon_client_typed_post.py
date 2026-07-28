@@ -30,8 +30,10 @@ from app.engine.live import host_daemon_client
 from app.engine.live.host_daemon_client import (
     HostDaemonError,
     HostDaemonOutcomeUnknownError,
+    authorize_emergency_flatten,
     deploy,
     ensure_account_clerk,
+    operator_recovery_flatten,
     release_account_clerk,
     start_run,
     stop_run,
@@ -140,6 +142,80 @@ async def test_release_account_clerk_uses_timeout_beyond_daemon_shutdown_budget(
 
     assert observed_timeout[0].read is not None
     assert observed_timeout[0].read > 4.0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_operator_recovery_flatten_posts_to_host_local_clerk_lane() -> None:
+    route = respx.post(f"{BASE}/accounts/DU123/clerk/operator-recovery-flatten").mock(
+        return_value=httpx.Response(200, json={"recovery_flatten": {"recorded": {}}})
+    )
+    payload = {
+        "intent": {"intent_id": "recovery-1"},
+        "request_provenance": "account-monitor/recovery",
+    }
+
+    result = await operator_recovery_flatten(BASE, "DU123", payload)
+
+    assert result == {"recovery_flatten": {"recorded": {}}}
+    assert route.calls.last.request.content == (
+        b'{"intent":{"intent_id":"recovery-1"},'
+        b'"request_provenance":"account-monitor/recovery"}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_operator_recovery_flatten_uses_broker_operation_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeout: list[httpx.Timeout] = []
+
+    async def post(_url: str, _payload: dict, *, timeout: httpx.Timeout) -> dict:
+        observed_timeout.append(timeout)
+        return {"recovery_flatten": {}}
+
+    monkeypatch.setattr(host_daemon_client, "_post_action", post)
+
+    await operator_recovery_flatten(BASE, "DU123", {})
+
+    assert observed_timeout == [host_daemon_client._FLATTEN_TIMEOUT]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_authorize_emergency_flatten_posts_to_host_local_clerk_lane() -> None:
+    route = respx.post(f"{BASE}/accounts/DU123/clerk/authorize-emergency-flatten").mock(
+        return_value=httpx.Response(200, json={"authorization_id": "a" * 16})
+    )
+    payload = {
+        "operation_id": "emergency-1",
+        "reconciliation_evidence_version": "receipt-1",
+    }
+
+    result = await authorize_emergency_flatten(BASE, "DU123", payload)
+
+    assert result == {"authorization_id": "a" * 16}
+    assert route.calls.last.request.content == (
+        b'{"operation_id":"emergency-1",'
+        b'"reconciliation_evidence_version":"receipt-1"}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorize_emergency_flatten_uses_broker_operation_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeout: list[httpx.Timeout] = []
+
+    async def post(_url: str, _payload: dict, *, timeout: httpx.Timeout) -> dict:
+        observed_timeout.append(timeout)
+        return {"authorization_id": "a" * 16}
+
+    monkeypatch.setattr(host_daemon_client, "_post_action", post)
+
+    await authorize_emergency_flatten(BASE, "DU123", {})
+
+    assert observed_timeout == [host_daemon_client._FLATTEN_TIMEOUT]
 
 
 # ---------------------------------------------------------------------------

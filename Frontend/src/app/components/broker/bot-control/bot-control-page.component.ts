@@ -228,9 +228,12 @@ export class BotControlPageComponent {
   readonly traderGuidance = computed(
     () => this.status()?.operator_surface.trader_guidance ?? null,
   );
-  readonly renderedPrimaryRemediation = computed<PresentedAction | null>(() =>
-    presentTraderRemediation(this.traderGuidance()?.primary_remediation ?? null),
-  );
+  readonly renderedPrimaryRemediation = computed<PresentedAction | null>(() => {
+    if (this.status()?.desired_state?.state === 'STOPPED') {
+      return { label: 'Resume', variant: 'primary' };
+    }
+    return presentTraderRemediation(this.traderGuidance()?.primary_remediation ?? null);
+  });
 
   readonly tradingModeLabel = computed(() => {
     const verdict = this.status()?.operator_surface.broker.safety_verdict;
@@ -308,6 +311,10 @@ export class BotControlPageComponent {
   }
 
   invokePrimaryRemediation(): void {
+    if (this.status()?.desired_state?.state === 'STOPPED') {
+      void this.dispatchResumeIntent();
+      return;
+    }
     const remediation = this.traderGuidance()?.primary_remediation ?? null;
     if (remediation !== null) this.invokeTraderRemediation(remediation);
   }
@@ -688,6 +695,7 @@ export class BotControlPageComponent {
     return (
       lifecycle.on_roster &&
       lifecycle.phase === 'OFF_DUTY' &&
+      lifecycle.display_status === 'Off duty' &&
       lifecycle.primary_action === null &&
       canStartHostProcess(capability)
     );

@@ -16,6 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 ACCOUNT_CLERK_RPC_SCHEMA_VERSION: Final = 1
 ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S: Final = 30.0
 ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S: Final = 120.0
+# Submit requests share one serialized Account Clerk queue. The supported
+# deployment-validation fleet can place eight broker writes ahead of one
+# caller, while each individual broker write remains independently bounded.
+# Keep the end-to-end caller budget large enough to cover that queue plus its
+# own write without turning a delayed acknowledgement into a false timeout.
+ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S: Final = 240.0
 
 AccountClerkRpcOperation = Literal[
     "submit",
@@ -260,11 +266,19 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
 
 
 def request_timeout_s(operation: AccountClerkRpcOperation) -> float:
-    return (
-        ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S
-        if operation in ("authorize_emergency_flatten", "emergency_flatten_account", "prepare_emergency_flatten", "mark_emergency_bots_paused", "mark_emergency_requires_reconciliation", "recovery_flatten", "recovery_flatten_batch")
-        else ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S
-    )
+    if operation == "submit":
+        return ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S
+    if operation in (
+        "authorize_emergency_flatten",
+        "emergency_flatten_account",
+        "prepare_emergency_flatten",
+        "mark_emergency_bots_paused",
+        "mark_emergency_requires_reconciliation",
+        "recovery_flatten",
+        "recovery_flatten_batch",
+    ):
+        return ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S
+    return ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S
 
 
 def request_identity(request: Mapping[str, object]) -> AccountClerkRpcRequestIdentity:

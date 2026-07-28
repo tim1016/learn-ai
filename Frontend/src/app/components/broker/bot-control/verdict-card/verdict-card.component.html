@@ -80,7 +80,7 @@
       <div class="vc-condition" role="note">
         <strong>{{ condition.title }}</strong>
         <span>{{ condition.detail }}</span>
-        <button type="button" (click)="invokeConditionCure()">
+        <button type="button" [disabled]="busy()" (click)="invokeConditionCure()">
           {{ condition.cure_label }}
         </button>
       </div>

@@ -35,6 +35,12 @@ describe('INCIDENT_COPY', () => {
     expect(copy.message).not.toContain('Error 1100');
     expect(copy.message).not.toContain('ib_async');
   });
+
+  it('describes both known bar-subscription stall modes', () => {
+    const copy = INCIDENT_COPY.subscription_stale;
+    expect(copy.message).toContain('fresh 5-second bars');
+    expect(copy.message).toContain('redelivered events');
+  });
 });
 
 describe('getIncidentCopy', () => {

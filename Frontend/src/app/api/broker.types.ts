@@ -435,7 +435,7 @@ export interface paths {
         put?: never;
         /**
          * Operator Recovery Flatten Endpoint
-         * @description Run the existing retired-namespace flatten lane after Clerk readiness proof.
+         * @description Run a retired-namespace flatten through the host-local Clerk lane.
          */
         post: operations["operator_recovery_flatten_endpoint_api_accounts__account_id__operator_recovery_flatten_post"];
         delete?: never;
@@ -1450,6 +1450,58 @@ export interface paths {
         get: operations["list_assets_api_brokers__broker__assets_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List bots whose durable binding carries this broker tag */
+        get: operations["list_bots_api_brokers__broker__bots_get"];
+        put?: never;
+        /** Deploy and start a log-only bot bound to this broker */
+        post: operations["deploy_bot_api_brokers__broker__bots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/{strategy_instance_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One bot's roster row (artifact-derived state + registry liveness) */
+        get: operations["get_bot_status_api_brokers__broker__bots__strategy_instance_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop a running bot (durable STOPPED intent first, then reap) */
+        post: operations["stop_bot_api_brokers__broker__bots__strategy_instance_id__stop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4058,6 +4110,26 @@ export interface paths {
          *     incremental polling on the closed-trades stream.
          */
         get: operations["get_trades_api_live_runs__run_id__trades_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/market-data-feed/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Shared IBKR market-data feed health
+         * @description Returns the current health snapshot for the process-level shared MarketDataFeed: connection state, stale flag, last bar timestamp, and active subscription count.  Returns 503 when the feed has not been installed (IBKR broker disabled).
+         */
+        get: operations["get_feed_health_api_market_data_feed_health_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8628,6 +8700,42 @@ export interface components {
             sick_bay?: number;
         };
         /**
+         * BotStatusView
+         * @description One bot's roster row: broker-tagged binding + artifact-derived state.
+         */
+        BotStatusView: {
+            /** Active Run Id */
+            active_run_id: string | null;
+            /** Binding Created At Ms */
+            binding_created_at_ms: number;
+            /** Broker */
+            broker: string;
+            /**
+             * Desired State
+             * @enum {string}
+             */
+            desired_state: "RUNNING" | "PAUSED" | "STOPPED";
+            duty_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
+            /** Last Transition At Ms */
+            last_transition_at_ms: number | null;
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "log_only";
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
+            /** Running */
+            running: boolean;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * BreachProbability
          * @description Probability that *any* simulation hit a drawdown >= threshold.
          *
@@ -9619,6 +9727,29 @@ export interface components {
             ticker: string;
         };
         /**
+         * ChannelHealth
+         * @description One submission-affecting stream's health fact, with its age (P7).
+         *
+         *     ``observed_at_ms`` is mandatory: no health fact is rendered without an
+         *     observation time. ``reason`` is empty when healthy.
+         */
+        ChannelHealth: {
+            /** Healthy */
+            healthy: boolean;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /**
+             * Reason
+             * @default
+             */
+            reason?: string;
+            /**
+             * Stream
+             * @enum {string}
+             */
+            stream: "market_data" | "execution";
+        };
+        /**
          * ChartDataRequest
          * @description Request for chart data with resampled bars and indicators.
          */
@@ -9839,6 +9970,8 @@ export interface components {
             account_id: string;
             /** Broker */
             broker: string;
+            /** Channel Healths */
+            channel_healths?: components["schemas"]["ChannelHealth"][] | null;
             hold: components["schemas"]["HoldState"];
             latest_reconciliation?: components["schemas"]["ReconciliationSummary"] | null;
             /** Observed At Ms */
@@ -11171,6 +11304,21 @@ export interface components {
              */
             valid?: boolean;
         };
+        /**
+         * DeployBotRequest
+         * @description Deploy (and start) a log-only bot bound to ``{broker}``.
+         */
+        DeployBotRequest: {
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Symbol */
+            symbol: string;
+            /**
+             * Use Rth
+             * @default true
+             */
+            use_rth?: boolean;
+        };
         /** DeployPreflightResponse */
         DeployPreflightResponse: {
             /** Blockers */
@@ -12208,6 +12356,35 @@ export interface components {
             recorded_fee: string | null;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * FeedHealth
+         * @description Point-in-time health snapshot for a MarketDataFeed.
+         *
+         *     ``connected`` — the underlying broker connection is alive.
+         *     ``stale``     — connected but no bar has arrived within the stale threshold.
+         *     ``last_bar_ms`` — ``start_ms`` of the most recently emitted bar, or ``None``
+         *                       if no bar has been emitted yet.
+         *     ``reason``    — human-readable detail when unhealthy (empty string when healthy).
+         *     ``active_subscription_count`` — number of symbols currently subscribed.
+         *     ``observed_at_ms`` — wall-clock of this snapshot, int64 ms UTC.
+         */
+        FeedHealth: {
+            /** Active Subscription Count */
+            active_subscription_count: number;
+            /** Connected */
+            connected: boolean;
+            /** Last Bar Ms */
+            last_bar_ms: number | null;
+            /**
+             * Observed At Ms
+             * @description Snapshot wall-clock, int64 ms UTC.
+             */
+            observed_at_ms: number;
+            /** Reason */
+            reason: string;
+            /** Stale */
+            stale: boolean;
         };
         /**
          * FitParamsResponse
@@ -21188,6 +21365,14 @@ export interface components {
             updated?: number | null;
         };
         /**
+         * StopBotRequest
+         * @description Button-Rule exit: stop a running bot (durable desired-state first).
+         */
+        StopBotRequest: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
          * StrategyAnalyzeRequest
          * @description Request to analyze an options strategy.
          */
@@ -25780,6 +25965,148 @@ export interface operations {
             };
         };
     };
+    list_bots_api_brokers__broker__bots_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotStatusView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deploy_bot_api_brokers__broker__bots_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeployBotRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bot_status_api_brokers__broker__bots__strategy_instance_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_bot_api_brokers__broker__bots__strategy_instance_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StopBotRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     clear_clerk_hold_api_brokers__broker__clerk_clear_hold_post: {
         parameters: {
             query?: never;
@@ -29413,6 +29740,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_feed_health_api_market_data_feed_health_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedHealth"];
                 };
             };
             /** @description Validation Error */

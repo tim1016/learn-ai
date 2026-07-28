@@ -90,6 +90,29 @@ describe('AccountDeskHoldingsStore', () => {
     expect(store.rows()[0]?.owner.owner_label).toBe('Bot alpha');
   });
 
+  it('removes a holding from open metrics when the live position closes', async () => {
+    const position = makePosition();
+    broker.account.mockResolvedValue(makeAccountSummary());
+    broker.positions.mockResolvedValue(makePositionsSnapshot(undefined, [position]));
+    broker.accountTruth.mockResolvedValue(makeAccountTruth(undefined, [makeTruthPosition(position)]));
+    const store = TestBed.inject(AccountDeskHoldingsStore);
+    await store.load('DU1234567');
+
+    StubEventSource.instances[1].dispatch(
+      'pnl',
+      JSON.stringify({
+        ...positionTick(),
+        position: 0,
+        unrealized_pnl: null,
+        market_value: null,
+      }),
+    );
+    await settleEffects();
+
+    expect(store.rows()).toEqual([]);
+    expect(store.headlineMetrics()?.openPositions).toBe(0);
+  });
+
   it('rejects a mismatched session before positions, Account Truth, or streams are requested', async () => {
     broker.account.mockResolvedValue(makeAccountSummary('DU9999999'));
     const store = TestBed.inject(AccountDeskHoldingsStore);

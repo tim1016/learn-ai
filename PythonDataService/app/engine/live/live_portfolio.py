@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -919,6 +919,47 @@ class LivePortfolio:
                 average_price=Decimal(str(pos.avg_cost)),
             )
         self.positions = refreshed
+
+    def retain_owned_position_quantities(
+        self,
+        owned_position_quantities: Mapping[str, int],
+    ) -> None:
+        """Replace account-net quantities with the instance-owned projection.
+
+        Formula: instance_position[symbol] =
+          ClerkJournalExposure[account, strategy_instance, symbol].
+        Reference: ADR 0030; docs/architecture/engine-authority-map.md,
+          "Live account contamination verdict".
+        Canonical implementation: journal_exposure.py::project_journal_exposure;
+          this method is a portfolio-cache consumer only.
+        Validated against:
+          tests/engine/live/test_live_engine.py::
+          test_live_engine_seeds_only_clerk_owned_positions_from_account_snapshot.
+
+        Broker positions are account-net and therefore cannot establish which
+        sibling bot owns a quantity. Their average cost is retained only as a
+        display/valuation hint when the Clerk projection proves this instance
+        owns the same symbol; the Clerk quantity remains authoritative.
+        """
+
+        account_net_positions = self.positions
+        owned: dict[str, Position] = {}
+        for raw_symbol, raw_quantity in owned_position_quantities.items():
+            symbol = raw_symbol.upper()
+            quantity = int(raw_quantity)
+            if quantity == 0:
+                continue
+            account_net = account_net_positions.get(symbol)
+            owned[symbol] = Position(
+                symbol=symbol,
+                quantity=quantity,
+                average_price=(
+                    account_net.average_price
+                    if account_net is not None
+                    else Decimal(0)
+                ),
+            )
+        self.positions = owned
 
     def update_reference_price(self, symbol: str, price: Decimal) -> None:
         self.reference_price[symbol.upper()] = price

@@ -43,6 +43,17 @@ describe('resolveVerdictCardModel', () => {
     expect(model.showChart).toBe(false);
   });
 
+  it('replaces a stale roll-call Start verb with Resume for a durably stopped bot', () => {
+    const model = resolveVerdictCardModel(
+      statusWith({ display_status: 'Ready' }, (status) => {
+        if (!status.desired_state) throw new Error('Fixture expected desired state.');
+        status.desired_state.state = 'STOPPED';
+      }),
+    );
+
+    expect(model.verb).toEqual({ kind: 'remediation' });
+  });
+
   it('does not synthesize a start verb when an Off duty bot has no roll-call offer', () => {
     const model = resolveVerdictCardModel(
       statusWith({ display_status: 'Off duty', primary_action: null }, (status) => {
@@ -86,6 +97,11 @@ describe('resolveVerdictCardModel', () => {
         },
         (status) => {
           status.operator_surface.current_risk = RISK;
+          status.operator_surface.submit_readiness.can_submit = true;
+          status.operator_surface.trader_guidance.primary_remediation = {
+            kind: 'none',
+            reason: 'READY',
+          };
         },
       ),
     );
@@ -101,6 +117,28 @@ describe('resolveVerdictCardModel', () => {
       'Unrealized P&L',
       'Orders today',
     ]);
+  });
+
+  it('shows End day even when submit is blocked — lifecycle action always wins for on-duty bots', () => {
+    const model = resolveVerdictCardModel(
+      statusWith({
+        display_status: 'On duty',
+        phase: 'ON_DUTY',
+        primary_action: {
+          id: 'end_day_now',
+          label: 'End day now',
+          enabled: true,
+          reason: null,
+          offer_id: null,
+          expires_at_ms: null,
+        },
+      }),
+    );
+
+    expect(model.verb).toEqual({
+      kind: 'lifecycle',
+      action: expect.objectContaining({ id: 'end_day_now' }),
+    });
   });
 
   it('falls back to the trader remediation verb for a Sick bay bot with no lifecycle action', () => {

@@ -4,6 +4,7 @@ and round-trip serialisation."""
 from __future__ import annotations
 
 import math
+import sys
 
 from app.broker.ibkr.models import (
     IbkrChainSnapshot,
@@ -23,6 +24,10 @@ def test_coerce_optional_float_preserves_real_values() -> None:
 def test_coerce_optional_float_treats_nan_as_none() -> None:
     assert _coerce_optional_float(math.nan) is None
     assert _coerce_optional_float(None) is None
+
+
+def test_coerce_optional_float_treats_ibkr_unset_double_as_none() -> None:
+    assert _coerce_optional_float(sys.float_info.max) is None
 
 
 def test_coerce_iv_treats_negative_as_none() -> None:

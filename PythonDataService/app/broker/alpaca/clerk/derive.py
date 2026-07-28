@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.models import (
     UNEXPLAINED_ORDER_HOLD_CODE,
+    ChannelHealth,
     ClerkEntryKind,
     ClerkStatus,
     HoldState,
@@ -30,6 +31,7 @@ def build_status(
     account_id: str,
     outstanding_intents: int,
     observed_at_ms: int,
+    channel_healths: list[ChannelHealth] | None = None,
 ) -> ClerkStatus:
     """Shape one ``ClerkStatus`` from a pre-read ledger (the single builder).
 
@@ -44,6 +46,7 @@ def build_status(
         latest_reconciliation=latest_reconciliation(entries),
         outstanding_intents=outstanding_intents,
         observed_at_ms=observed_at_ms,
+        channel_healths=channel_healths,
     )
 
 

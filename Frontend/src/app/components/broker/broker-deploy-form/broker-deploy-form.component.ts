@@ -195,7 +195,7 @@ export class BrokerDeployFormComponent {
   readonly inheritedExposurePositions = signal<Record<string, number>>({});
   readonly inheritedExposureSource = signal<string>('');
   readonly executionMode = signal<ExecutionMode>('paper_orders');
-  readonly hydratePolicy = signal<HydratePolicy>('require');
+  readonly hydratePolicy = signal<HydratePolicy>('optional');
   readonly maxOrdersPerDay = computed(() => this.ticket().maxOrdersPerDay);
   readonly actionPlan = signal<ActionPlan>({ on_enter: [], on_exit: [] });
   readonly parentRunId = signal<string | null>(null);

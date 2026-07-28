@@ -47,10 +47,45 @@ function onDutyStatus(): LiveInstanceStatus {
   return status;
 }
 
+function stoppedReadyStatus(): LiveInstanceStatus {
+  const status = startableReadyStatus();
+  if (!status.desired_state) throw new Error('Fixture expected desired state.');
+  status.desired_state.state = 'STOPPED';
+  return status;
+}
+
 function unreachableSickBayStatus(): LiveInstanceStatus {
   const status = makeStatus({ hostState: 'UNREACHABLE' });
   status.daily_lifecycle.display_status = 'Sick bay';
   status.daily_lifecycle.reason = 'The host process cannot be confirmed.';
+  return status;
+}
+
+function sickBayRetireConditionStatus(): LiveInstanceStatus {
+  const status = makeStatus();
+  status.daily_lifecycle.display_status = 'Sick bay';
+  status.daily_lifecycle.primary_action = null;
+  status.daily_lifecycle.ambient_actions = [
+    {
+      id: 'retire_replace',
+      label: 'Retire & Replace',
+      enabled: false,
+      reason: 'Fleet state blocks starts.',
+      offer_id: null,
+      expires_at_ms: null,
+    },
+  ];
+  status.daily_lifecycle.conditions = [
+    {
+      scope: 'bot',
+      severity: 'critical',
+      title: 'Bot halted before submit',
+      detail: 'The prior run halted and cannot be resumed safely.',
+      owner_label: 'sid-x',
+      cure_action: 'retire_replace',
+      cure_label: 'Retire & Replace',
+    },
+  ];
   return status;
 }
 
@@ -297,6 +332,26 @@ describe('BotControlPageComponent', () => {
     });
   });
 
+  it('shows Resume instead of a known-refused Start for a durably stopped bot', async () => {
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status: stoppedReadyStatus(),
+      mutationResponses: { setInstanceDesiredState: makeDesiredStateResponse() },
+    });
+
+    const verb = element.querySelector<HTMLButtonElement>('[data-testid="trader-primary-action"]');
+    expect(verb?.textContent?.trim()).toBe('Resume');
+
+    verb?.click();
+    await flush(fixture);
+
+    expect(liveRuns.startHostRunner).not.toHaveBeenCalled();
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+      action: 'resume',
+      reason: 'Resume',
+      updated_by: 'operator',
+    });
+  });
+
   it('guides an on-duty bot through graceful stop and records durable STOPPED intent', async () => {
     const { fixture, element, liveRuns } = await setupBotControlPage({
       status: onDutyStatus(),
@@ -483,6 +538,30 @@ describe('BotControlPageComponent', () => {
       updated_by: 'operator',
       reason: 'Retire & Replace',
     });
+  });
+
+  it('opens Retire & Replace from a sick-bay cure when the lifecycle action is disabled', async () => {
+    const { fixture, component, element, liveRuns } = await setupBotControlPage({
+      status: sickBayRetireConditionStatus(),
+    });
+
+    const operations = Array.from(element.querySelectorAll<HTMLButtonElement>(
+      '.bot-lens-switch button',
+    )).find((button) => button.textContent?.trim() === 'Operations');
+    operations?.click();
+    fixture.detectChanges();
+
+    const retire = Array.from(element.querySelectorAll<HTMLButtonElement>(
+      '.vc-condition button',
+    )).find((button) => button.textContent?.trim() === 'Retire & Replace');
+    expect(retire).toBeDefined();
+
+    retire?.click();
+    await flush(fixture);
+
+    expect(component.retireReplaceConfirmOpen()).toBe(true);
+    expect(element.textContent).toContain('Backend-authored retire body.');
+    expect(liveRuns.runRollCall).not.toHaveBeenCalled();
   });
 
   it('shows an error banner when the status request fails', async () => {

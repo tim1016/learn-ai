@@ -18,6 +18,7 @@ Per ``docs/architecture/iv-ownership-research.md`` and the project
 from __future__ import annotations
 
 import math
+import sys
 from decimal import Decimal
 from typing import Annotated, Literal
 
@@ -30,11 +31,12 @@ OptionRight = Literal["C", "P"]
 
 
 def _coerce_optional_float(value: float | None) -> float | None:
-    """Treat IBKR's ``NaN`` sentinel as ``None``.
+    """Treat IBKR's unset floating-point sentinels as ``None``.
 
-    ``ib_async`` surfaces "no model could compute this" as ``nan``; we
-    funnel that into ``None`` so downstream consumers can rely on
-    "value present ⇒ trustworthy number."
+    ``ib_async`` surfaces missing values as either ``nan`` or its
+    ``UNSET_DOUBLE`` constant (``sys.float_info.max``). Funnel both into
+    ``None`` so downstream consumers can rely on "value present ⇒
+    trustworthy number."
 
     Deliberately does **not** strip ``-1.0`` for the fields routed
     through this helper: a real delta can be ``-1.0`` for a deep ITM
@@ -44,9 +46,10 @@ def _coerce_optional_float(value: float | None) -> float | None:
     """
     if value is None:
         return None
-    if isinstance(value, float) and math.isnan(value):
+    out = float(value)
+    if not math.isfinite(out) or out == sys.float_info.max:
         return None
-    return float(value)
+    return out
 
 
 def _coerce_iv(value: float | None) -> float | None:

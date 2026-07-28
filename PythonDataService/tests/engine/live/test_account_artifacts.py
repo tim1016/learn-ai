@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -389,6 +392,47 @@ def test_append_account_event_requires_event_type(tmp_path: Path) -> None:
         )
 
     assert read_account_events(tmp_path, "DU123456") == []
+
+
+def test_account_event_sequence_survives_independent_advisory_lock_domains(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The host and podman VM do not share one reliable ``flock`` domain."""
+
+    monkeypatch.setattr(
+        account_artifacts,
+        "_file_lock",
+        lambda _path: contextlib.nullcontext(),
+    )
+    allocate = account_artifacts._next_account_event_seq_locked
+
+    def widened_allocation(path: Path) -> int:
+        next_seq = allocate(path)
+        time.sleep(0.02)
+        return next_seq
+
+    monkeypatch.setattr(
+        account_artifacts,
+        "_next_account_event_seq_locked",
+        widened_allocation,
+    )
+
+    def append(index: int) -> None:
+        account_artifacts.append_account_event(
+            tmp_path,
+            "DU123456",
+            {
+                "event_type": "concurrent_writer_probe",
+                "recorded_at_ms": 1_700_000_000_000 + index,
+            },
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        tuple(pool.map(append, range(24)))
+
+    events = read_account_events(tmp_path, "DU123456")
+    assert [event["seq"] for event in events] == list(range(1, 25))
 
 
 def test_read_account_events_fails_closed_on_malformed_current_rows(tmp_path: Path) -> None:

@@ -84,6 +84,28 @@ ReconciliationVerdict: TypeAlias = Literal[  # noqa: UP040
 # Rendered code-like through the frontend ``receiptLabel`` pipe.
 UNEXPLAINED_ORDER_HOLD_CODE = "UNEXPLAINED_ORDER_HOLD"
 
+# The reason code stamped on the hold raised by the dual-health submission
+# gate (S4, #1262): the shared market-data feed or the Alpaca execution
+# channel is unhealthy. A peer of ``UNEXPLAINED_ORDER_HOLD_CODE``; same hold
+# semantics (blocks new submissions, never reductions/cancels, journal-derived,
+# clearable — never auto-cleared).
+STREAM_HEALTH_HOLD_CODE = "STREAM_HEALTH_HOLD"
+
+
+class ChannelHealth(BaseModel):
+    """One submission-affecting stream's health fact, with its age (P7).
+
+    ``observed_at_ms`` is mandatory: no health fact is rendered without an
+    observation time. ``reason`` is empty when healthy.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    stream: Literal["market_data", "execution"]
+    healthy: bool
+    reason: str = ""
+    observed_at_ms: int
+
 
 class OrderJournalEntry(BaseModel):
     """One append-only order-journal line.
@@ -308,6 +330,10 @@ class ClerkStatus(BaseModel):
     latest_reconciliation: ReconciliationSummary | None = None
     outstanding_intents: int
     observed_at_ms: int
+    # S4 (#1262): both submission-gate channel healths, each with its own
+    # observation time. ``None`` = the stream-health gate is not installed
+    # (distinct from "installed and healthy").
+    channel_healths: list[ChannelHealth] | None = None
 
 
 class OrderCancelResult(BaseModel):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -28,8 +29,42 @@ from app.engine.live.order_identity import build_order_ref
 from app.services.account_journal_authority import _has_requalification_window, _qualification_alarm_is_active
 from app.services.fleet_contamination import (
     collect_fleet_position_explanations,
+    instance_broker,
     record_account_journal_parity_observation,
 )
+
+
+def test_instance_broker_uses_clerk_positions_not_stale_sidecar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = SimpleNamespace(
+        run_id="run-a",
+        bot_order_namespace="learn-ai/bot-a/v1",
+        expected_position_by_symbol={"QQQ": 1},
+        pending_intents=[],
+    )
+    monkeypatch.setattr(
+        fleet_contamination,
+        "read_instance_live_state",
+        lambda _root, _sid: envelope,
+    )
+    monkeypatch.setattr(
+        fleet_contamination,
+        "read_ledger",
+        lambda _path: SimpleNamespace(account_id="DU123456"),
+    )
+    monkeypatch.setattr(
+        fleet_contamination,
+        "_collect_journal_position_explanations",
+        lambda _root, *, account_id=None: {},
+    )
+
+    broker = instance_broker(tmp_path / "live_runs", "bot-a")
+
+    assert broker is not None
+    assert broker.owned_positions == {}
+    assert broker.pending_order_count == 0
 
 
 def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:

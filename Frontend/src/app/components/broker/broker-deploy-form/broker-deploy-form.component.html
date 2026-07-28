@@ -340,8 +340,8 @@
             <label class="field">
               <span>Saved strategy state</span>
               <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)">
-                <option value="require">Require saved state (recommended)</option>
-                <option value="optional">Use saved state when available</option>
+                <option value="require">Require saved state</option>
+                <option value="optional">Use saved state when available (recommended)</option>
                 <option value="disabled">Start fresh</option>
               </select>
               <small>Choose how the strategy starts if it has state from an earlier run.</small>

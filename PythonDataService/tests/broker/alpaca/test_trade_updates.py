@@ -1027,3 +1027,30 @@ async def test_socket_authorizes_before_listening(monkeypatch: pytest.MonkeyPatc
 def test_stream_url_is_paper_wss_stream() -> None:
     settings = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper")
     assert _stream_url(settings) == "wss://paper-api.alpaca.markets/stream"
+
+
+async def test_connection_watermark_flips_during_a_cycle_and_clears_after(
+    tmp_path: Path,
+) -> None:
+    """S4 (#1262): the connection watermark feeds the dual-health gate.
+
+    A consumer starts disconnected; a consumed cycle marks it connected from
+    the first accepted frame and disconnected again when the source ends, with
+    the change time stamped for P7 age.
+    """
+    observed: list[bool] = []
+    consumer, _clerk, _journal = await _consumer(tmp_path, _load_frames()[:1])
+    original = consumer._handle_frame
+
+    async def _spy(frame):  # records the watermark while a frame is in flight
+        observed.append(consumer.connected)
+        await original(frame)
+
+    consumer._handle_frame = _spy  # type: ignore[method-assign]
+    assert consumer.connected is False
+
+    await consumer.run()
+
+    assert observed == [True]  # connected while the cycle was live
+    assert consumer.connected is False  # source exhausted -> disconnected
+    assert consumer.connection_changed_at_ms == _FIXED_MS
