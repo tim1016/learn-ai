@@ -174,6 +174,42 @@ class AccountClerkJournal:
                     return entry.intent
         return None
 
+    def nonterminal_async_entry_for_strategy_instance(
+        self,
+        *,
+        strategy_instance_id: str,
+        excluding_intent_id: str,
+    ) -> AccountOwnerSubmitIntent | None:
+        """Find a prior normal-entry A0 that still owns this strategy instance.
+
+        This guard is intentionally journal-derived rather than process-local:
+        an originator crash after A0 cannot make a freshly restarted bot admit
+        a second entry while its predecessor is queued, submitting, broker
+        known, or awaiting reconciliation.  Expiry before A1 and an observed
+        economic terminal are the only states that free the entry slot.
+        """
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+        grouped: dict[str, list[AccountClerkJournalEntry]] = {}
+        for entry in entries:
+            if entry.intent is not None:
+                grouped.setdefault(entry.intent.intent_id, []).append(entry)
+        for intent_id, intent_entries in grouped.items():
+            if intent_id == excluding_intent_id:
+                continue
+            intent = intent_entries[0].intent
+            assert intent is not None
+            if intent.strategy_instance_id != strategy_instance_id:
+                continue
+            status = _custody_status_for_entries(intent_entries)
+            if status is None or status.lane != "entry":
+                continue
+            if status.lifecycle_state not in {"economic_terminal", "expired_before_submit"}:
+                return intent
+        return None
+
     def queued_async_custody_intents(
         self,
     ) -> tuple[tuple[AccountOwnerSubmitIntent, Literal["entry", "risk_reducing"]], ...]:

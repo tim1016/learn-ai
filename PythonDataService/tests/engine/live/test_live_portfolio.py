@@ -20,12 +20,20 @@ from app.engine.live.account_artifacts import (
     RESTART_INTENSITY_SOURCE,
     AccountFreezeEvidence,
 )
-from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitRejected, AccountOwnerSubmitResult
+from app.engine.live.account_owner import (
+    AccountClerkCustodyAccepted,
+    AccountOwnerSubmitIntent,
+    AccountOwnerSubmitRejected,
+    AccountOwnerSubmitResult,
+    CustodyLifecycleState,
+    CustodyStage,
+)
 from app.engine.live.live_portfolio import (
     AccountFreezeBlockError,
     AccountLiveSessionBlockError,
     AccountRegistryBlockError,
     AccountTruthBlockError,
+    CustodyPendingOrder,
     LivePortfolio,
     SessionPolicyBlockError,
     SubmitUncertainHaltError,
@@ -1450,6 +1458,98 @@ async def test_submit_pending_orders_routes_to_account_owner_when_enabled() -> N
     assert captured[0].owner_generation == 3
     assert captured[0].order_spec["symbol"] == "SPY"
     assert acks[0].order_id == 44
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_records_a0_custody_without_fabricating_broker_ack() -> None:
+    broker = FakeBroker()
+
+    async def submitter(intent: AccountOwnerSubmitIntent) -> AccountClerkCustodyAccepted:
+        return AccountClerkCustodyAccepted(
+            status="custody_accepted",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            journal_seq=19,
+            recorded_at_ms=_NOW_MS,
+            custody_stage="A0_CUSTODY_ACCEPTED",
+            custody_lifecycle_state="queued",
+        )
+
+    portfolio = LivePortfolio(
+        broker,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="spy_ema_paper",
+        run_id="run-alpha",
+        bot_order_namespace="learn-ai/spy_ema_paper/v1",
+        owner_generation_provider=lambda: 3,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    assert await portfolio.submit_pending_orders() == []
+    [pending] = portfolio.custody_pending_orders
+    assert isinstance(pending, CustodyPendingOrder)
+    assert pending.journal_seq == 19
+    assert pending.recorded_at_ms == _NOW_MS
+    assert pending.order.symbol == "SPY"
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage", "lifecycle", "has_pending_projection"),
+    [
+        ("A1_BROKER_WRITE_STARTED", "submitting", True),
+        ("A2_BROKER_KNOWN", "broker_known", True),
+        ("A3_ECONOMIC_TERMINAL", "economic_terminal", False),
+    ],
+)
+async def test_custody_replay_at_later_lifecycle_never_becomes_a_fake_broker_ack(
+    stage: CustodyStage,
+    lifecycle: CustodyLifecycleState,
+    has_pending_projection: bool,
+) -> None:
+    broker = FakeBroker()
+
+    async def submitter(intent: AccountOwnerSubmitIntent) -> AccountClerkCustodyAccepted:
+        return AccountClerkCustodyAccepted(
+            status="custody_accepted",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            journal_seq=20,
+            recorded_at_ms=_NOW_MS,
+            custody_stage=stage,
+            custody_lifecycle_state=lifecycle,
+        )
+
+    portfolio = LivePortfolio(
+        broker,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="spy_ema_paper",
+        run_id="run-alpha",
+        bot_order_namespace="learn-ai/spy_ema_paper/v1",
+        owner_generation_provider=lambda: 3,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    assert await portfolio.submit_pending_orders() == []
+    assert bool(portfolio.custody_pending_orders) is has_pending_projection
     assert broker.orders == []
 
 

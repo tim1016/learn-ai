@@ -44,6 +44,11 @@ from app.engine.execution.order_sizer import (
 )
 from app.engine.execution.portfolio import Position
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
+from app.engine.live.account_custody_projection import (
+    CustodyEntryPendingError,
+    CustodyPendingOrder,
+    CustodyProjection,
+)
 from app.engine.live.account_owner_fence import (
     require_account_clerk_write_grant,
 )
@@ -874,6 +879,7 @@ class LivePortfolio:
     # value type (existing tests construct ``Order`` directly).
     _intent_by_order_id: dict[int, str] = field(default_factory=dict)
     _last_minted_intent_id: str | None = None
+    _custody_projection: CustodyProjection = field(default_factory=CustodyProjection)
 
     def __post_init__(self) -> None:
         """ADR 0008 / Stage 6 — enforce the durable AccountOwner invariant.
@@ -902,6 +908,18 @@ class LivePortfolio:
             "IntentWal lane. Pass account_owner_submitter plus a non-empty "
             "bot_order_namespace so AccountOwner remains the sole writer."
         )
+
+    @property
+    def custody_pending_orders(self) -> tuple[CustodyPendingOrder, ...]:
+        """Current bot-local A0 admissions, ordered by local order identity."""
+
+        return self._custody_projection.pending_orders
+
+    @property
+    def custody_projection(self) -> CustodyProjection:
+        """Expose the ephemeral A0-to-callback join to the live engine."""
+
+        return self._custody_projection
 
     def drop_pending_before_submit(self, *, drop_reason: DropReason, ts_ms: int) -> None:
         """Append drop events for WAL-identified pending orders, then clear memory."""
@@ -1609,7 +1627,11 @@ class LivePortfolio:
                     AccountClerkRpcTimeoutError,
                     AccountClerkRpcUnavailableError,
                 )
-                from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitRejected
+                from app.engine.live.account_owner import (
+                    AccountClerkCustodyAccepted,
+                    AccountOwnerSubmitIntent,
+                    AccountOwnerSubmitRejected,
+                )
                 from app.utils.timestamps import now_ms_utc
 
                 if not self.account_id or not self.strategy_instance_id or not self.run_id:
@@ -1650,6 +1672,12 @@ class LivePortfolio:
                         reason=exc.reason,
                     ) from exc
                 except AccountClerkRpcRejectedError as exc:
+                    if exc.reason == "CLERK_ASYNC_ENTRY_PENDING":
+                        raise CustodyEntryPendingError(
+                            intent_id=intent_id,
+                            order_ref=order_ref,
+                            reason=exc.reason,
+                        ) from exc
                     raise SubmitUncertainHaltError(
                         intent_id=intent_id,
                         order_ref=order_ref,
@@ -1689,6 +1717,32 @@ class LivePortfolio:
                         retry_count=0,
                         reason=exc.reason_code,
                     ) from exc
+                if isinstance(result, AccountClerkCustodyAccepted):
+                    if (
+                        result.trace_id != str(trace_id)
+                        or result.intent_id != intent_id
+                        or result.order_ref != order_ref
+                        or result.account_id != self.account_id
+                        or result.strategy_instance_id != self.strategy_instance_id
+                        or result.run_id != self.run_id
+                        or result.owner_generation != int(owner_generation)
+                    ):
+                        raise SubmitUncertainHaltError(
+                            intent_id=intent_id,
+                            order_ref=order_ref,
+                            probe_result="custody_protocol_error",
+                            retry_count=0,
+                            reason="ACCOUNT_CLERK_CUSTODY_RECEIPT_IDENTITY_MISMATCH",
+                        )
+                    self._custody_projection.record_a0_admission(
+                        order=order,
+                        intent_id=intent_id,
+                        order_ref=order_ref,
+                        journal_seq=result.journal_seq,
+                        recorded_at_ms=result.recorded_at_ms,
+                        current_lifecycle_is_terminal=result.is_economically_or_admission_terminal,
+                    )
+                    continue
                 if getattr(result, "status", None) != "accepted":
                     reason = str(getattr(result, "reason", None) or "AccountOwner submit was not accepted")
                     raise SubmitUncertainHaltError(

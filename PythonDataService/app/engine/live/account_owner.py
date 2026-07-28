@@ -30,6 +30,22 @@ from app.engine.live.account_registry import evaluate_account_instance_binding
 from app.schemas.live_runs import GateResult
 
 AccountOwnerRuntimePhase = Literal["accepting", "reconnecting", "draining", "frozen"]
+CustodyStage = Literal[
+    "A0_CUSTODY_ACCEPTED",
+    "A1_BROKER_WRITE_STARTED",
+    "A2_BROKER_KNOWN",
+    "A3_ECONOMIC_TERMINAL",
+]
+CustodyLifecycleState = Literal[
+    "queued",
+    "submitting",
+    "broker_known",
+    "economic_terminal",
+    "expired_before_submit",
+    "recovery_action_required",
+    "submission_hold",
+    "uncertain_requires_reconciliation",
+]
 
 # A manual ticket belongs to the account Clerk rather than to a deployed bot.
 # These values remain inside its durable intent shape so manual broker events
@@ -67,6 +83,13 @@ class AccountOwnerSubmitIntent(BaseModel):
 
 @dataclass(frozen=True)
 class AccountOwnerSubmitResult:
+    """Outcome from the legacy synchronous AccountOwner submit boundary.
+
+    ``accepted`` means the paper broker has acknowledged the order.  It must
+    never be used for an asynchronous Clerk A0 receipt: callers that opt into
+    that boundary receive :class:`AccountClerkCustodyAccepted` instead.
+    """
+
     status: Literal["accepted", "rejected", "failed", "uncertain"]
     trace_id: str
     account_id: str
@@ -80,6 +103,35 @@ class AccountOwnerSubmitResult:
     exec_id: str | None = None
     reason: str | None = None
     diagnostics: dict | None = None
+
+
+@dataclass(frozen=True)
+class AccountClerkCustodyAccepted:
+    """A durable Clerk A0 admission, explicitly not a broker acknowledgement.
+
+    ``custody_stage`` is the latest observed Clerk fold, so an idempotent
+    replay may legitimately report A1, A2, or A3.  The type itself proves A0
+    was recorded for this immutable identity.
+    """
+
+    status: Literal["custody_accepted"]
+    trace_id: str
+    account_id: str
+    strategy_instance_id: str
+    run_id: str
+    intent_id: str
+    order_ref: str
+    owner_generation: int
+    journal_seq: int
+    recorded_at_ms: int
+    custody_stage: CustodyStage
+    custody_lifecycle_state: CustodyLifecycleState
+
+    @property
+    def is_economically_or_admission_terminal(self) -> bool:
+        """Whether this returned fold has no active Clerk-custody wait state."""
+
+        return self.custody_lifecycle_state in {"economic_terminal", "expired_before_submit"}
 
 
 class AccountOwnerSubmitRejected(RuntimeError):
@@ -562,9 +614,12 @@ async def _maybe_await(value):
 
 
 __all__ = [
+    "AccountClerkCustodyAccepted",
     "AccountOwner",
     "AccountOwnerSubmitIntent",
     "AccountOwnerSubmitRejected",
     "AccountOwnerSubmitResult",
     "ClientIdInUseError",
+    "CustodyLifecycleState",
+    "CustodyStage",
 ]

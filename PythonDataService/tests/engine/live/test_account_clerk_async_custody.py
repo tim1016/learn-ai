@@ -415,6 +415,51 @@ async def test_async_custody_refuses_full_queue_without_losing_existing_a0(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_async_custody_rejects_second_entry_for_one_strategy_but_keeps_risk_lane(tmp_path: Path) -> None:
+    """A bot crash/restart cannot turn one durable A0 entry into two entries."""
+
+    _bind(tmp_path, "bot-a")
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        ACCOUNT,
+        phase="accepting",
+        recorded_at_ms=START_MS,
+        source="test",
+    ).generation
+    broker = _DelayedBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        clerk_generation=generation,
+        async_custody_config=AccountClerkAsyncCustodyConfig(entry_capacity=2, risk_reducing_capacity=1),
+    )
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+    client = AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT)
+    first = _intent("bot-a", "entry-a0")
+    duplicate = _intent("bot-a", "entry-after-originator-death")
+    risk = _intent("bot-a", "risk-reducing")
+    try:
+        recorded, initial = await client.submit_custody_v2(first)
+        assert recorded.intent_id == first.intent_id
+        assert initial.custody_stage == "A0_CUSTODY_ACCEPTED"
+
+        with pytest.raises(AccountClerkRpcRejectedError) as rejected:
+            await client.submit_custody_v2(duplicate)
+        assert rejected.value.reason == "CLERK_ASYNC_ENTRY_PENDING"
+        assert await client.read_custody_v2(duplicate) is None
+
+        risk_recorded, risk_status = await clerk.submit_async_custody(risk, lane="risk_reducing")
+        assert risk_recorded.intent_id == risk.intent_id
+        assert risk_status.lane == "risk_reducing"
+        assert await client.read_custody_v2(first) is not None
+    finally:
+        broker.release.set()
+        await server.close()
+
+
+@pytest.mark.asyncio
 async def test_async_custody_broker_socket_loss_after_a1_returns_to_reconciler(tmp_path: Path) -> None:
     """Only A0 is fenced from the generic reconciler; A1 keeps its recovery path."""
 

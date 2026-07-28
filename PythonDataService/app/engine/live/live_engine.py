@@ -41,6 +41,7 @@ from app.engine.execution.order_sizer import OrderSizer, WholeAccountPortfolioVa
 from app.engine.execution.signal_intent_executor import SignalIntentExecutor
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 from app.engine.live import bot_event_spine
+from app.engine.live.account_custody_projection import CustodyEntryPendingError, CustodyProjection
 from app.engine.live.artifacts import (
     CORE_DECISION_COLUMNS,
     DECISION_COLUMNS,
@@ -599,6 +600,7 @@ class LiveEngine:
         # Per-order metadata captured at submit time; used to expand
         # IBKR fill events back into engine OrderEvents.
         self._order_meta: dict[int, _OrderMeta] = {}
+        self._custody_projection: CustodyProjection | None = None
         # Optional artifact-writer integration. When ``output_dir`` is
         # set, the run() loop opens a LiveArtifactWriters bundle, feeds
         # input bars / decisions / executions / trades / equity snapshots,
@@ -1130,6 +1132,7 @@ class LiveEngine:
             owner_generation_provider=self._owner_generation_provider,
             trace_id_provider=self._trace_id_provider,
         )
+        self._custody_projection = portfolio.custody_projection
         if self._config.sizing is not None:
             portfolio.order_sizer = OrderSizer(
                 self._config.sizing,
@@ -1249,6 +1252,8 @@ class LiveEngine:
 
             raw_events = self._drain_raw_real_broker_events()
             self._append_raw_broker_callbacks(raw_events)
+            for raw_event in raw_events:
+                self._adopt_custody_callback_metadata(raw_event)
             if self._halt_enabled and raw_events:
                 self._extend_seen_executions(seen_executions, raw_events)
                 await self._check_halt_outside_mutation(
@@ -2264,8 +2269,32 @@ class LiveEngine:
                 pause.reason,
             )
             return []
+        except CustodyEntryPendingError as pending:
+            # A prior entry is still durably owned by the Clerk.  The
+            # duplicate local order was drained at the portfolio boundary;
+            # continue this healthy bot and wait for the original intent's
+            # callback rather than turning ordinary backpressure into a halt.
+            logger.info(
+                "[CUSTODY_ENTRY_PENDING] strategy=%s intent_id=%s — duplicate entry suppressed (%s)",
+                self._strategy_key,
+                pending.intent_id,
+                pending.reason,
+            )
+            return []
         submitted_at_ms = now_ms_utc()
-        for order, ack in zip(pending_snapshot, acks, strict=True):
+        self._custody_projection = portfolio.custody_projection
+        direct_ack_orders = []
+        for order in pending_snapshot:
+            pending_identity = pending_identities.get(order.order_id)
+            custody_metadata = portfolio.custody_projection.capture_submission_metadata(
+                order_id=order.order_id,
+                evaluation_id=(
+                    pending_identity.evaluation_id if pending_identity is not None else evaluation_id
+                ),
+            )
+            if custody_metadata is None:
+                direct_ack_orders.append(order)
+        for order, ack in zip(direct_ack_orders, acks, strict=True):
             bot_event_identity = bot_event_spine.submitted_bot_event_identity(
                 ack,
                 pending_identities.get(order.order_id),
@@ -3338,10 +3367,40 @@ class LiveEngine:
             return []
         out: list[OrderEvent] = []
         for fill in self._broker.drain_broker_events():
+            self._adopt_custody_callback_metadata(fill)
             engine_event = self._convert_ibkr_fill(fill)
             if engine_event is not None:
                 out.append(engine_event)
         return out
+
+    def _adopt_custody_callback_metadata(
+        self,
+        event: IbkrOrderEvent,
+    ) -> None:
+        """Install metadata validated by the dedicated custody projection."""
+
+        if self._custody_projection is None:
+            return
+        meta = self._custody_projection.adopt_callback(
+            event,
+            strategy_instance_id=self._strategy_instance_id,
+        )
+        if meta is None:
+            return
+
+        if event.perm_id is not None:
+            self._owned_perm_ids.add(int(event.perm_id))
+        if int(event.order_id) not in self._order_meta:
+            self._order_meta[int(event.order_id)] = _OrderMeta(
+                symbol=meta.symbol,
+                tag=meta.tag,
+                signed_qty=meta.signed_qty,
+                submitted_at_ms=meta.submitted_at_ms,
+                evaluation_id=meta.evaluation_id,
+                intent_id=meta.intent_id,
+                order_ref=meta.order_ref,
+                perm_id=event.perm_id if event.perm_id is not None else meta.perm_id,
+            )
 
     def _check_reconnect_revalidation(self, portfolio: LivePortfolio) -> None:
         """Phase 3 reconnect re-validation / VCR-0006.

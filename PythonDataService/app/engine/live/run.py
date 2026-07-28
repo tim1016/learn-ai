@@ -1486,6 +1486,58 @@ def _resolve_prior_run_dir(*, current_run_dir: Path, strategy_instance_id: str, 
     return best[1] if best is not None else None
 
 
+async def _submit_strategy_custody_at_a0(clerk_client, intent):
+    """Resolve one strategy submission to a durable Clerk A0 admission.
+
+    A response timeout has no custody meaning on its own.  The same immutable
+    identity is read (and, if absent, replayed) before this boundary returns;
+    the returned fold may already have advanced beyond A0 but is never turned
+    into a broker acknowledgement.
+    """
+
+    from app.engine.live.account_clerk_rpc import AccountClerkRpcTimeoutError
+    from app.engine.live.account_owner import AccountClerkCustodyAccepted
+
+    try:
+        recorded, custody = await clerk_client.submit_custody_v2(intent)
+    except AccountClerkRpcTimeoutError:
+        custody = await clerk_client.read_custody_v2(intent)
+        if custody is None:
+            recorded, custody = await clerk_client.submit_custody_v2(intent)
+        else:
+            recorded = custody.recorded
+
+    if (
+        recorded.trace_id != intent.trace_id
+        or recorded.account_id != intent.account_id
+        or recorded.strategy_instance_id != intent.strategy_instance_id
+        or recorded.run_id != intent.run_id
+        or recorded.bot_order_namespace != intent.bot_order_namespace
+        or recorded.intent_id != intent.intent_id
+        or recorded.order_ref != intent.order_ref
+        or custody.account_id != intent.account_id
+        or custody.intent_id != intent.intent_id
+        or custody.order_ref != intent.order_ref
+        or custody.recorded != recorded
+    ):
+        raise RuntimeError("ACCOUNT_CLERK_CUSTODY_A0_CONTRACT_VIOLATION")
+
+    return AccountClerkCustodyAccepted(
+        status="custody_accepted",
+        trace_id=recorded.trace_id,
+        account_id=recorded.account_id,
+        strategy_instance_id=recorded.strategy_instance_id,
+        run_id=recorded.run_id,
+        intent_id=recorded.intent_id,
+        order_ref=recorded.order_ref,
+        owner_generation=intent.owner_generation,
+        journal_seq=recorded.journal_seq,
+        recorded_at_ms=recorded.recorded_at_ms,
+        custody_stage=custody.custody_stage,
+        custody_lifecycle_state=custody.lifecycle_state,
+    )
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     """Run the live engine end-to-end against an existing run directory.
 
@@ -2080,12 +2132,12 @@ def cmd_start(args: argparse.Namespace) -> int:
             AccountBrokerEvidence,
             classify_account,
         )
-        from app.engine.live.account_clerk import AccountClerkRpcClient
         from app.engine.live.account_clerk_cursor import (
             AccountClerkEventConsumerIdentity,
             AccountClerkEventCursorRepo,
         )
-        from app.engine.live.account_owner import AccountOwner, AccountOwnerSubmitResult
+        from app.engine.live.account_clerk_rpc import AccountClerkRpcClient
+        from app.engine.live.account_owner import AccountOwner
         from app.engine.live.account_registry import read_account_instance_registry
         from app.engine.live.fleet_reset_baseline import read_applicable_baseline
 
@@ -2189,21 +2241,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                 )
             )
 
-        async def _submit_to_account_clerk(intent) -> AccountOwnerSubmitResult:
-            receipt = await clerk_client.submit(intent)
-            return AccountOwnerSubmitResult(
-                status="accepted",
-                trace_id=intent.trace_id,
-                account_id=intent.account_id,
-                strategy_instance_id=intent.strategy_instance_id,
-                run_id=intent.run_id,
-                intent_id=intent.intent_id,
-                order_ref=intent.order_ref,
-                owner_generation=intent.owner_generation,
-                order_id=receipt.order_id,
-                perm_id=receipt.perm_id,
-                exec_id=receipt.exec_id,
-            )
+        async def _submit_to_account_clerk(intent):
+            return await _submit_strategy_custody_at_a0(clerk_client, intent)
 
         async def _submit_recovery_to_account_clerk(intents):
             return await clerk_client.submit_recovery_flatten_batch(intents)

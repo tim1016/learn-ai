@@ -130,6 +130,12 @@ _BROKER_SUBMIT_TIMEOUT_S = 25.0
 # ledger capacity and never becomes a second source of backpressure.
 _ASYNC_CUSTODY_NOTIFICATION_QUEUE_CAPACITY = 256
 _ASYNC_CUSTODY_NOTIFICATION_TIMEOUT_S = 1.0
+# Production defaults deliberately bound account-wide unacknowledged work.
+# The per-strategy-instance admission fence below is stricter for normal
+# entries; this is the account-level backpressure limit that protects the
+# Clerk process if many independent strategies are active at once.
+_PRODUCTION_ASYNC_CUSTODY_ENTRY_CAPACITY = 64
+_PRODUCTION_ASYNC_CUSTODY_RISK_REDUCING_CAPACITY = 32
 logger = logging.getLogger(__name__)
 
 
@@ -407,6 +413,19 @@ class AccountClerk:
                 self._reject(intent, "CLERK_ASYNC_CUSTODY_REQUIRES_NEW_INTENT")
             is_existing_queued = existing is not None and existing.lifecycle_state == "queued"
             if existing is None:
+                if lane == "entry":
+                    pending_entry = await asyncio.to_thread(
+                        self._journal.nonterminal_async_entry_for_strategy_instance,
+                        strategy_instance_id=intent.strategy_instance_id,
+                        excluding_intent_id=intent.intent_id,
+                    )
+                    if pending_entry is not None:
+                        self._reject(
+                            intent,
+                            "CLERK_ASYNC_ENTRY_PENDING",
+                            pending_intent_id=pending_entry.intent_id,
+                            pending_order_ref=pending_entry.order_ref,
+                        )
                 self._require_async_custody_capacity(intent, lane)
                 intake_admitted_at_ms = self._now_ms()
                 recorded = await asyncio.to_thread(
@@ -1610,7 +1629,7 @@ class AccountClerk:
         if self._on_generation_fenced is not None:
             self._on_generation_fenced()
 
-    def _reject(self, intent: AccountOwnerSubmitIntent, reason: str) -> None:
+    def _reject(self, intent: AccountOwnerSubmitIntent, reason: str, **extra_diagnostics: object) -> None:
         raise AccountClerkIntentRejected(
             reason=reason,
             diagnostics={
@@ -1621,6 +1640,7 @@ class AccountClerk:
                 "bot_order_namespace": intent.bot_order_namespace,
                 "intent_id": intent.intent_id,
                 "order_ref": intent.order_ref,
+                **extra_diagnostics,
             },
         )
 
@@ -1710,6 +1730,10 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             durable_generation_provider=durable_generation_provider,
             on_generation_fenced=stop.set,
             host_binding_capability=os.environ.get(CLERK_HOST_BINDING_CAPABILITY_ENV),
+            async_custody_config=AccountClerkAsyncCustodyConfig(
+                entry_capacity=_PRODUCTION_ASYNC_CUSTODY_ENTRY_CAPACITY,
+                risk_reducing_capacity=_PRODUCTION_ASYNC_CUSTODY_RISK_REDUCING_CAPACITY,
+            ),
         )
 
         def on_callback_persistence_failure(_failure: BaseException) -> None:

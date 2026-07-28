@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.ibkr.models import IbkrPositionsSnapshot
+from app.broker.ibkr.models import IbkrOrderEvent, IbkrPositionsSnapshot
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Position
-from app.engine.live.account_owner import AccountOwnerSubmitResult
+from app.engine.live.account_owner import AccountClerkCustodyAccepted, AccountOwnerSubmitResult
 from app.engine.live.account_registry import bot_order_namespace_for_instance
 from app.engine.live.clock_out import clock_out_is_in_progress, read_clock_out_receipt
 from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
@@ -110,6 +110,71 @@ async def test_command_poll_loop_refreshes_heartbeat_after_poll_cycle(
             await task
 
     assert [block.heartbeat_at_ms for block in aggregator.blocks[:2]] == [10_000, 13_200]
+
+
+@pytest.mark.asyncio
+async def test_a0_custody_callback_projects_one_fill_without_fake_broker_ack() -> None:
+    broker = FakeBroker()
+
+    async def submitter(intent) -> AccountClerkCustodyAccepted:
+        return AccountClerkCustodyAccepted(
+            status="custody_accepted",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            journal_seq=12,
+            recorded_at_ms=1_784_000_000_000,
+            custody_stage="A0_CUSTODY_ACCEPTED",
+            custody_lifecycle_state="queued",
+        )
+
+    portfolio = LivePortfolio(
+        broker,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="custody-bot",
+        run_id="run-custody",
+        bot_order_namespace=bot_order_namespace_for_instance("custody-bot"),
+        owner_generation_provider=lambda: 1,
+    )
+    portfolio.submit_market_order("SPY", 2, _bar(0).time, tag="A0-entry")
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        strategy_instance_id="custody-bot",
+    )
+
+    assert await engine._submit_pending_with_meta(portfolio) == []
+    [pending] = portfolio.custody_pending_orders
+    event = IbkrOrderEvent(
+        account_id="DU123",
+        order_id=811,
+        perm_id=9811,
+        event_type="fill",
+        status="Filled",
+        order_ref=pending.order_ref,
+        symbol="SPY",
+        side="BUY",
+        fill_quantity=2,
+        avg_fill_price=501.25,
+        last_fill_price=501.25,
+        exec_id="exec-custody-811",
+        ts_ms=1_784_000_000_100,
+    )
+
+    engine._adopt_custody_callback_metadata(event)
+    converted = engine._convert_ibkr_fill(event)
+
+    assert converted is not None
+    assert converted.order_id == 811
+    assert converted.fill_quantity == 2
+    assert converted.tag == "A0-entry"
+    assert portfolio.custody_pending_orders == ()
 
 
 @pytest.mark.asyncio

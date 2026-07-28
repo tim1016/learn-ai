@@ -2566,6 +2566,7 @@ async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_af
 ) -> None:
     generation = _write_active_clerk_generation(tmp_path)
     events: list[str] = []
+    captured: dict[str, AccountClerk] = {}
 
     class _StoppedEvent:
         def set(self) -> None:
@@ -2614,8 +2615,8 @@ async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_af
                 await self._event_task
 
     class _Server:
-        def __init__(self, _clerk: AccountClerk, **_kwargs: object) -> None:
-            pass
+        def __init__(self, clerk: AccountClerk, **_kwargs: object) -> None:
+            captured["clerk"] = clerk
 
         async def start(self) -> None:
             events.append("socket_serve")
@@ -2654,6 +2655,13 @@ async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_af
     assert events.index("lock_acquired") < events.index("broker_connect") < events.index("socket_serve")
     assert events.index("socket_serve") < events.index("stream_started") < events.index("stream_stopped")
     assert events.index("broker_disconnect") < events.index("lock_released")
+    assert captured["clerk"].async_custody_health().model_dump() == {
+        "enabled": True,
+        "entry_depth": 0,
+        "entry_capacity": 64,
+        "risk_reducing_depth": 0,
+        "risk_reducing_capacity": 32,
+    }
 
 
 @pytest.mark.asyncio

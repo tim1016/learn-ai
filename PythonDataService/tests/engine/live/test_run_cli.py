@@ -2378,15 +2378,148 @@ def test_account_durable_intents_project_account_owner_events() -> None:
     assert intents[0].exec_id == "exec-90044"
 
 
+@pytest.mark.asyncio
+async def test_strategy_custody_submit_recovers_timeout_by_exact_identity_read() -> None:
+    from app.engine.live.account_clerk_journal_models import (
+        AccountClerkCustodyStatus,
+        AccountClerkRecordedReceipt,
+    )
+    from app.engine.live.account_clerk_rpc import AccountClerkRpcTimeoutError
+    from app.engine.live.account_clerk_rpc_protocol import AccountClerkRpcRequestIdentity
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
+    from app.engine.live.account_registry import bot_order_namespace_for_instance
+    from app.engine.live.order_identity import build_order_ref
+    from app.engine.live.run import _submit_strategy_custody_at_a0
+
+    namespace = bot_order_namespace_for_instance("custody-bot")
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-timeout",
+        account_id="DU123",
+        strategy_instance_id="custody-bot",
+        run_id="run-custody",
+        bot_order_namespace=namespace,
+        intent_id="intent-timeout",
+        order_ref=build_order_ref(namespace, "intent-timeout"),
+        intent_kind="STRATEGY",
+        order_spec={},
+        owner_generation=7,
+        created_at_ms=1_784_000_000_000,
+    )
+    recorded = AccountClerkRecordedReceipt(
+        trace_id=intent.trace_id,
+        account_id=intent.account_id,
+        strategy_instance_id=intent.strategy_instance_id,
+        run_id=intent.run_id,
+        bot_order_namespace=intent.bot_order_namespace,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        journal_seq=44,
+        recorded_at_ms=intent.created_at_ms,
+    )
+    advanced = AccountClerkCustodyStatus(
+        account_id=intent.account_id,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        custody_stage="A2_BROKER_KNOWN",
+        lifecycle_state="broker_known",
+        lane="entry",
+        recorded=recorded,
+        updated_at_ms=intent.created_at_ms + 1,
+    )
+
+    class _TimeoutThenReadClient:
+        def __init__(self) -> None:
+            self.operations: list[str] = []
+
+        async def submit_custody_v2(self, _intent: AccountOwnerSubmitIntent):
+            self.operations.append("submit")
+            raise AccountClerkRpcTimeoutError(
+                operation="submit_custody_v2",
+                request_identity=AccountClerkRpcRequestIdentity(
+                    intent_id=intent.intent_id,
+                    order_ref=intent.order_ref,
+                ),
+            )
+
+        async def read_custody_v2(self, _intent: AccountOwnerSubmitIntent):
+            self.operations.append("read")
+            return advanced
+
+    client = _TimeoutThenReadClient()
+    result = await _submit_strategy_custody_at_a0(client, intent)
+
+    assert result.status == "custody_accepted"
+    assert result.custody_stage == "A2_BROKER_KNOWN"
+    assert result.custody_lifecycle_state == "broker_known"
+    assert client.operations == ["submit", "read"]
+
+
+@pytest.mark.asyncio
+async def test_strategy_custody_submit_rejects_mismatched_durable_identity() -> None:
+    from app.engine.live.account_clerk_journal_models import (
+        AccountClerkCustodyStatus,
+        AccountClerkRecordedReceipt,
+    )
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
+    from app.engine.live.account_registry import bot_order_namespace_for_instance
+    from app.engine.live.order_identity import build_order_ref
+    from app.engine.live.run import _submit_strategy_custody_at_a0
+
+    namespace = bot_order_namespace_for_instance("custody-bot")
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-mismatch",
+        account_id="DU123",
+        strategy_instance_id="custody-bot",
+        run_id="run-custody",
+        bot_order_namespace=namespace,
+        intent_id="intent-mismatch",
+        order_ref=build_order_ref(namespace, "intent-mismatch"),
+        intent_kind="STRATEGY",
+        order_spec={},
+        owner_generation=7,
+        created_at_ms=1_784_000_000_000,
+    )
+    recorded = AccountClerkRecordedReceipt(
+        trace_id=intent.trace_id,
+        account_id="DU999",
+        strategy_instance_id=intent.strategy_instance_id,
+        run_id=intent.run_id,
+        bot_order_namespace=intent.bot_order_namespace,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        journal_seq=45,
+        recorded_at_ms=intent.created_at_ms,
+    )
+    custody = AccountClerkCustodyStatus(
+        account_id=recorded.account_id,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        custody_stage="A0_CUSTODY_ACCEPTED",
+        lifecycle_state="queued",
+        lane="entry",
+        recorded=recorded,
+        updated_at_ms=intent.created_at_ms,
+    )
+
+    class _MismatchedClient:
+        async def submit_custody_v2(self, _intent: AccountOwnerSubmitIntent):
+            return recorded, custody
+
+    with pytest.raises(RuntimeError, match="ACCOUNT_CLERK_CUSTODY_A0_CONTRACT_VIOLATION"):
+        await _submit_strategy_custody_at_a0(_MismatchedClient(), intent)
+
+
 def test_cmd_start_wires_account_owner_submitter_for_real_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import argparse as _argparse
+    import asyncio
     import types
     from collections.abc import AsyncIterator
 
     from app.broker.ibkr import orders as orders_mod
+    from app.engine.live import account_clerk_rpc as clerk_rpc_mod
     from app.engine.live import engine_runtime_publisher as publisher_mod
     from app.engine.live import live_engine as live_engine_mod
     from app.engine.live import reconciliation_orchestrator as recon_mod
@@ -2394,6 +2527,13 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
         read_account_clerk_generation,
         read_account_events,
     )
+    from app.engine.live.account_clerk_journal_models import (
+        AccountClerkCustodyStatus,
+        AccountClerkRecordedReceipt,
+    )
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
+    from app.engine.live.account_registry import bot_order_namespace_for_instance
+    from app.engine.live.order_identity import build_order_ref
     from app.engine.live.reconciliation_classifier import Continue
     from app.engine.live.run import cmd_start
     from app.engine.live.run_ledger import build_ledger, write_ledger
@@ -2451,11 +2591,45 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     async def _reconcile(**_kwargs: object) -> object:
         return types.SimpleNamespace(verdict=Continue())
 
+    custody_calls: list[str] = []
+
+    class _ClerkClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def submit(self, _intent: object) -> object:
+            raise AssertionError("normal strategy submission must not use synchronous Clerk submit")
+
+        async def submit_custody_v2(self, intent: AccountOwnerSubmitIntent):
+            custody_calls.append(intent.intent_id)
+            recorded = AccountClerkRecordedReceipt(
+                trace_id=intent.trace_id,
+                account_id=intent.account_id,
+                strategy_instance_id=intent.strategy_instance_id,
+                run_id=intent.run_id,
+                bot_order_namespace=intent.bot_order_namespace,
+                intent_id=intent.intent_id,
+                order_ref=intent.order_ref,
+                journal_seq=21,
+                recorded_at_ms=1_784_000_000_000,
+            )
+            return recorded, AccountClerkCustodyStatus(
+                account_id=intent.account_id,
+                intent_id=intent.intent_id,
+                order_ref=intent.order_ref,
+                custody_stage="A0_CUSTODY_ACCEPTED",
+                lifecycle_state="queued",
+                lane="entry",
+                recorded=recorded,
+                updated_at_ms=recorded.recorded_at_ms,
+            )
+
     monkeypatch.setattr(live_engine_mod, "LiveEngine", _LiveEngine)
     monkeypatch.setattr(publisher_mod, "EngineRuntimePublisher", _Publisher)
     monkeypatch.setattr(orders_mod, "list_open_orders", _empty_open_orders)
     monkeypatch.setattr(orders_mod, "executions_for_reconnect_recovery", _empty_executions)
     monkeypatch.setattr(recon_mod, "reconcile", _reconcile)
+    monkeypatch.setattr(clerk_rpc_mod, "AccountClerkRpcClient", _ClerkClient)
 
     strategy_spec = (
         Path(__file__).resolve().parents[3]
@@ -2506,6 +2680,24 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     assert "account_owner_broker_writer" not in kwargs
     assert callable(kwargs["account_clerk_namespace_canceller"])
     assert callable(kwargs["owner_generation_provider"])
+    namespace = bot_order_namespace_for_instance("spy_ema_paper")
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-a0",
+        account_id="DU123",
+        strategy_instance_id="spy_ema_paper",
+        run_id=ledger.run_id,
+        bot_order_namespace=namespace,
+        intent_id="intent-a0",
+        order_ref=build_order_ref(namespace, "intent-a0"),
+        intent_kind="STRATEGY",
+        order_spec={},
+        owner_generation=1,
+        created_at_ms=1_784_000_000_000,
+    )
+    custody_result = asyncio.run(kwargs["account_owner_submitter"](intent))  # type: ignore[operator]
+    assert custody_result.status == "custody_accepted"
+    assert custody_result.journal_seq == 21
+    assert custody_calls == ["intent-a0"]
     clerk_generation = read_account_clerk_generation(artifacts_root, "DU123")
     assert clerk_generation is not None
     assert clerk_generation.generation == 1

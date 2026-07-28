@@ -96,3 +96,28 @@ recovery-action-required rows as non-retryable. A worker blocked by a dynamic
 post-A0 intake fence writes a durable `submission_hold` status rather than
 leaving a request indefinitely queued. The optional originator notification is
 bounded, coalesced, and never authoritative over the durable read API.
+
+## Strategy A0 cutover amendment (2026-07-27, #1245)
+
+Normal paper-strategy submission now uses `submit_custody_v2`; the runner
+returns only after the Clerk has durably recorded A0. It must not translate
+that receipt into an `IbkrOrderAck`, a broker order id, or `Submitted` state.
+The production Clerk starts this capability with bounded account-wide entry
+and risk-reducing capacities (64 and 32 respectively); those are backpressure
+limits, not evidence that an individual strategy may have that many entries.
+
+For each `(account_id, strategy_instance_id)`, the Clerk admits at most one
+nonterminal normal entry. The journal-derived check survives originator death
+and bot restart, and returns `CLERK_ASYNC_ENTRY_PENDING` before creating a
+second A0 row. The dedicated risk-reducing lane does not consume that normal
+entry slot. An entry slot becomes available only after an economic terminal
+callback or an A0-only expiry before broker submission.
+
+The bot keeps a small in-memory projection of its own A0 admissions so it can
+wait for Clerk callback facts instead of assuming a broker call succeeded. It
+is explicitly not an account ledger. On a same-process callback it restores
+the original strategy metadata; after a bot restart it accepts only an exact
+namespace-matching fill and derives the minimum metadata required to project
+that fill. The canonical Clerk journal and the bot callback WAL remain the
+durable records. A duplicate local strategy entry while the earlier one is in
+custody is a nonterminal suppression, not a broker-uncertainty halt.
