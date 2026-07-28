@@ -20,9 +20,29 @@ import type { OperatorBlocker } from './operator-blocker.types';
 export type IbkrAccountSummary = components['schemas']['IbkrAccountSummary'];
 export type AccountSafetySnapshot = components['schemas']['AccountSafetySnapshot'];
 export type PresentedOperatorAction = components['schemas']['PresentedOperatorAction'];
+export type PresentedOperatorActionInvocation = components['schemas']['PresentedOperatorActionInvocation'];
 export type PresentedOperatorActionRejection = components['schemas']['PresentedOperatorActionRejection'];
 export type PresentedOperatorActionResult = components['schemas']['PresentedOperatorActionResult'];
 export type IbkrConnectionHealth = components['schemas']['IbkrConnectionHealth'];
+
+/** Keep browser mutations to the exact fields the server signed and verifies. */
+export function presentedActionInvocation(
+  action: PresentedOperatorAction,
+): PresentedOperatorActionInvocation {
+  if (!action.presentation_token) {
+    throw new Error('Backend action presentation is unavailable; refusing the operation.');
+  }
+  return {
+    action_id: action.action_id,
+    target: action.target,
+    snapshot_id: action.snapshot_id,
+    snapshot_version: action.snapshot_version,
+    idempotency_key: action.idempotency_key,
+    issued_at_ms: action.issued_at_ms,
+    expires_at_ms: action.expires_at_ms,
+    presentation_token: action.presentation_token,
+  };
+}
 export type IbkrOpenOrder = components['schemas']['IbkrOpenOrder'] &
   IbkrOrderEvidenceFields &
   IbkrOrderRefFields;

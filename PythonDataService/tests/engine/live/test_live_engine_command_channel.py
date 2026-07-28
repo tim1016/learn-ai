@@ -26,6 +26,7 @@ from app.engine.live.account_registry import bot_order_namespace_for_instance
 from app.engine.live.clock_out import clock_out_is_in_progress, read_clock_out_receipt
 from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
+from app.engine.live.desired_state import DesiredState
 from app.engine.live.engine_runtime import CommandLoopBlock
 from app.engine.live.halt import PoisonedHaltTrigger, read_poisoned_flag
 from app.engine.live.live_engine import LiveEngine
@@ -218,6 +219,100 @@ async def test_command_poll_loop_acks_pending_pause(tmp_path: Path) -> None:
     assert ack_payload["verb"] == "PAUSE"
     assert ack_payload["outcome"]["status"] == "success"
     assert len(durable_writes) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_resume_command_is_acked_without_overwriting_newer_pause_intent() -> None:
+    class _QueuedResumeChannel:
+        def __init__(self) -> None:
+            self.acked = asyncio.Event()
+            self.outcome: dict | None = None
+
+        def read_pending(self) -> list[Command]:
+            return [] if self.acked.is_set() else [Command(seq=1, verb=CommandVerb.RESUME)]
+
+        def ack(self, _command: Command, *, outcome: dict) -> None:
+            self.outcome = outcome
+            self.acked.set()
+
+    channel = _QueuedResumeChannel()
+    durable_writes: list[tuple[object, str]] = []
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        command_channel=channel,  # type: ignore[arg-type]
+        desired_state_reader=lambda: DesiredState.PAUSED,
+        desired_state_writer=lambda state, reason: durable_writes.append((state, reason)),
+    )
+    shutdown_event = asyncio.Event()
+    task = asyncio.create_task(engine._command_poll_loop(shutdown_event))  # type: ignore[attr-defined]
+    try:
+        await asyncio.wait_for(channel.acked.wait(), timeout=0.2)
+    finally:
+        shutdown_event.set()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert engine._paused is True
+    assert durable_writes == []
+    assert channel.outcome == {
+        "status": "superseded",
+        "reason_code": "DURABLE_INTENT_SUPERSEDED",
+        "effect": "RESUME skipped because durable intent is PAUSED",
+    }
+
+
+@pytest.mark.parametrize(
+    ("desired_state", "initial_paused", "expected_paused", "expected_shutdown"),
+    [
+        (DesiredState.PAUSED, False, True, False),
+        (DesiredState.RUNNING, True, False, False),
+        (DesiredState.STOPPED, False, False, True),
+    ],
+)
+def test_durable_desired_state_actuates_without_a_daemon_command(
+    desired_state: DesiredState,
+    initial_paused: bool,
+    expected_paused: bool,
+    expected_shutdown: bool,
+) -> None:
+    """A durable outage-time intent reaches the still-running engine once."""
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        desired_state_reader=lambda: desired_state,
+    )
+    engine._paused = initial_paused
+    shutdown_event = asyncio.Event()
+
+    engine._apply_durable_desired_state(shutdown_event)
+
+    assert engine._paused is expected_paused
+    assert shutdown_event.is_set() is expected_shutdown
+
+
+def test_unreadable_durable_desired_state_pauses_without_stopping() -> None:
+    """Corrupt outage-time control evidence must never be treated as RUNNING."""
+
+    def unreadable() -> DesiredState:
+        raise OSError("desired_state.json is unreadable")
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        desired_state_reader=unreadable,
+    )
+    shutdown_event = asyncio.Event()
+
+    engine._apply_durable_desired_state(shutdown_event)
+
+    assert engine._paused is True
+    assert shutdown_event.is_set() is False
 
 
 @pytest.mark.parametrize(

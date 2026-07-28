@@ -6986,7 +6986,7 @@
           "start_request": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/HostRunnerStartRequest"
+                "$ref": "#/components/schemas/HostRunnerStartRequest-Output"
               },
               {
                 "type": "null"
@@ -14765,6 +14765,74 @@
         "title": "EmergencyFlattenRequest",
         "type": "object"
       },
+      "EndDayIntentResponse": {
+        "description": "End-day receipt with durable PAUSED intent and a separate clock-out effect.",
+        "properties": {
+          "actuation": {
+            "$ref": "#/components/schemas/IntentActuation"
+          },
+          "command_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
+          "durable": {
+            "$ref": "#/components/schemas/DesiredStateRecordResponse"
+          },
+          "mutation_attempt_id": {
+            "title": "Mutation Attempt Id",
+            "type": "string"
+          },
+          "mutation_dispatch_state": {
+            "enum": [
+              "PREPARED",
+              "DISPATCHING",
+              "RESPONSE_CONFIRMED",
+              "OUTCOME_UNKNOWN",
+              "EFFECT_CONFIRMED",
+              "EFFECT_NOT_OBSERVED",
+              "NOT_PROVABLE",
+              "EVIDENCE_CONFLICT"
+            ],
+            "title": "Mutation Dispatch State",
+            "type": "string"
+          },
+          "process": {
+            "$ref": "#/components/schemas/InstanceProcessView"
+          },
+          "rung_receipt": {
+            "$ref": "#/components/schemas/MutationRungReceipt"
+          },
+          "rung_receipt_warnings": {
+            "items": {
+              "$ref": "#/components/schemas/MutationRungReceipt"
+            },
+            "title": "Rung Receipt Warnings",
+            "type": "array"
+          },
+          "stop_outcome": {
+            "title": "Stop Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "durable",
+          "actuation",
+          "rung_receipt",
+          "mutation_attempt_id",
+          "mutation_dispatch_state",
+          "process",
+          "stop_outcome"
+        ],
+        "title": "EndDayIntentResponse",
+        "type": "object"
+      },
       "EngineBacktestJobRequest": {
         "description": "Body of POST /api/jobs-internal/engine-backtest.\n\nMirrors the existing synchronous EngineBacktestRequest shape but\naccepts it as a ``backtest`` sub-object so the field validation\nremains the single source of truth. The .NET JobsApi forwards the\nEngine Lab POST body verbatim plus an injected ``job_id``.",
         "properties": {
@@ -17702,7 +17770,7 @@
           "request": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/HostRunnerStartRequest"
+                "$ref": "#/components/schemas/HostRunnerStartRequest-Output"
               },
               {
                 "type": "null"
@@ -18186,7 +18254,7 @@
         "title": "HostRunnerProcessStatus",
         "type": "object"
       },
-      "HostRunnerStartRequest": {
+      "HostRunnerStartRequest-Input": {
         "description": "Request body for starting one existing run from the host daemon.",
         "properties": {
           "hydrate_policy": {
@@ -18225,6 +18293,94 @@
             "minimum": 0.0,
             "title": "Max Orders Per Day",
             "type": "integer"
+          },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "readonly": {
+            "default": true,
+            "title": "Readonly",
+            "type": "boolean"
+          },
+          "roll_call_offer_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roll Call Offer Id"
+          },
+          "strategy": {
+            "default": "spy_ema_crossover",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "title": "Strategy",
+            "type": "string"
+          }
+        },
+        "title": "HostRunnerStartRequest",
+        "type": "object"
+      },
+      "HostRunnerStartRequest-Output": {
+        "description": "Request body for starting one existing run from the host daemon.",
+        "properties": {
+          "hydrate_policy": {
+            "default": "require",
+            "enum": [
+              "require",
+              "optional",
+              "disabled"
+            ],
+            "title": "Hydrate Policy",
+            "type": "string"
+          },
+          "ibkr_host": {
+            "default": "127.0.0.1",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Ibkr Host",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "max_orders_per_day": {
+            "default": 2000,
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Max Orders Per Day",
+            "type": "integer"
+          },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "readonly": {
             "default": true,
@@ -18274,6 +18430,16 @@
               }
             ],
             "title": "Idempotency Key"
+          },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "HostRunnerStopRequest",
@@ -21674,7 +21840,7 @@
         "type": "object"
       },
       "IntentActuation": {
-        "description": "Result of actuating durable intent against the live binding (ADR 0004).\n\n``actuated`` is true only when a command was queued on a live run. With no\nlive binding the durable write still gates the next start.",
+        "description": "Result of actuating durable intent against the live binding (ADR 0004).\n\n``actuated`` is true only when a command was queued on a live run. With no\nlive binding the durable write still gates the next start. ``effect_state``\nkeeps accepted intent distinct from its observed runtime effect: a durable\nrequest remains ``PENDING`` until the engine can observe it, while a queued\ncommand is only queued, not proof that the engine has applied it.",
         "properties": {
           "actuated": {
             "title": "Actuated",
@@ -21693,6 +21859,15 @@
           },
           "detail": {
             "title": "Detail",
+            "type": "string"
+          },
+          "effect_state": {
+            "default": "PENDING",
+            "enum": [
+              "QUEUED",
+              "PENDING"
+            ],
+            "title": "Effect State",
             "type": "string"
           },
           "run_id": {
@@ -24309,6 +24484,16 @@
             ],
             "title": "Parent Run Id"
           },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "qc_audit_copy_path": {
             "minLength": 1,
             "title": "Qc Audit Copy Path",
@@ -24341,7 +24526,7 @@
             "type": "integer"
           },
           "start_options": {
-            "$ref": "#/components/schemas/HostRunnerStartRequest"
+            "$ref": "#/components/schemas/HostRunnerStartRequest-Input"
           },
           "strategy_instance_id": {
             "default": "",
@@ -30295,8 +30480,17 @@
         "description": "Closed, snapshot-bound operator action; never an executable URL or command.",
         "properties": {
           "action_id": {
-            "const": "reconcile_now",
-            "title": "Action Id"
+            "enum": [
+              "reconcile_now",
+              "pause",
+              "stop",
+              "end_day",
+              "resume",
+              "start",
+              "deploy"
+            ],
+            "title": "Action Id",
+            "type": "string"
           },
           "availability": {
             "enum": [
@@ -30318,8 +30512,13 @@
             "type": "string"
           },
           "effect_class": {
-            "const": "EVIDENCE_REFRESH",
-            "title": "Effect Class"
+            "enum": [
+              "EVIDENCE_REFRESH",
+              "RISK_REDUCING_LIFECYCLE",
+              "RISK_INCREASING_LIFECYCLE"
+            ],
+            "title": "Effect Class",
+            "type": "string"
           },
           "evidence_refs": {
             "default": [],
@@ -30410,8 +30609,17 @@
         "description": "The browser may return only this closed, signed-by-snapshot envelope.",
         "properties": {
           "action_id": {
-            "const": "reconcile_now",
-            "title": "Action Id"
+            "enum": [
+              "reconcile_now",
+              "pause",
+              "stop",
+              "end_day",
+              "resume",
+              "start",
+              "deploy"
+            ],
+            "title": "Action Id",
+            "type": "string"
           },
           "expires_at_ms": {
             "minimum": 0.0,
@@ -30563,8 +30771,17 @@
             "type": "string"
           },
           "action_id": {
-            "const": "reconcile_now",
-            "title": "Action Id"
+            "enum": [
+              "reconcile_now",
+              "pause",
+              "stop",
+              "end_day",
+              "resume",
+              "start",
+              "deploy"
+            ],
+            "title": "Action Id",
+            "type": "string"
           },
           "finished_copy": {
             "maxLength": 512,
@@ -30621,13 +30838,39 @@
       },
       "PresentedOperatorActionTarget": {
         "additionalProperties": false,
-        "description": "Exact account scope bound into one server-presented operator action.",
+        "description": "Exact account and optional lifecycle scope bound into one action.",
         "properties": {
           "account_id": {
             "maxLength": 64,
             "minLength": 1,
             "title": "Account Id",
             "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
           }
         },
         "required": [
@@ -34558,6 +34801,16 @@
         "properties": {
           "action": {
             "$ref": "#/components/schemas/DesiredStateAction"
+          },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reason": {
             "default": "",
@@ -42531,6 +42784,121 @@
         ]
       }
     },
+    "/api/accounts/{account_id}/presented-lifecycle-actions/{action_id}": {
+      "get": {
+        "description": "Present one exact lifecycle action; it is not an executable command.",
+        "operationId": "present_lifecycle_action_endpoint_api_accounts__account_id__presented_lifecycle_actions__action_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "enum": [
+                "pause",
+                "stop",
+                "end_day",
+                "resume",
+                "start",
+                "deploy"
+              ],
+              "title": "Action Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 160,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorAction"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
+                }
+              }
+            },
+            "description": "Current account safety proof does not permit this action."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Present Lifecycle Action Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/{account_id}/reconciliation": {
       "post": {
         "description": "Create a durable account reconciliation receipt from Account Truth.",
@@ -49576,7 +49944,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/HostRunnerStartRequest"
+                "$ref": "#/components/schemas/HostRunnerStartRequest-Input"
               }
             }
           },
@@ -49613,7 +49981,7 @@
     },
     "/api/live-instances/runs/{run_id}/stop": {
       "post": {
-        "description": "Stop the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).\n\nSame token-forwarding rationale as :func:`start_run`.",
+        "description": "Retire direct daemon Stop in favour of durable, instance-scoped intent.",
         "operationId": "stop_run_api_live_instances_runs__run_id__stop_post",
         "parameters": [
           {
@@ -49657,7 +50025,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HostRunnerActionResponse"
+                  "$ref": "#/components/schemas/SetInstanceDesiredStateResponse"
                 }
               }
             },
@@ -50523,7 +50891,7 @@
     },
     "/api/live-instances/{strategy_instance_id}/desired-state": {
       "post": {
-        "description": "The single operator intent knob (ADR 0004).\n\n1. Write durable intent first (the crash-proof guarantee).\n2. If a live binding exists, enqueue the matching actuation command on the\n   bound run so the running engine actuates immediately and acks.\n3. With no live binding, the durable write alone gates the next start.\n\nThe engine command dispatcher persists intent as a *reconciling* writer, so\nlive actuation leaves ``desired_state.json`` at the same semantic state \u2014\n\"paused-but-still-trading\" is structurally hard to create.",
+        "description": "Persist operator intent and separately report any observed runtime effect.",
         "operationId": "set_instance_desired_state_api_live_instances__strategy_instance_id__desired_state_post",
         "parameters": [
           {
@@ -50593,7 +50961,7 @@
     },
     "/api/live-instances/{strategy_instance_id}/end-day-now": {
       "post": {
-        "description": "Queue Clerk-owned clean exit; only broker evidence can finish the day.",
+        "description": "Persist a safe clock-out intent before attempting a live command.",
         "operationId": "end_day_now_api_live_instances__strategy_instance_id__end_day_now_post",
         "parameters": [
           {
@@ -50644,7 +51012,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HostRunnerActionResponse"
+                  "$ref": "#/components/schemas/EndDayIntentResponse"
                 }
               }
             },
@@ -50670,7 +51038,7 @@
     },
     "/api/live-instances/{strategy_instance_id}/flatten-and-pause": {
       "post": {
-        "description": "VCR-0007 / Phase 6A / ADR 0010 \u2014 composed panic-button endpoint.\n\nThe cockpit's \"Flatten and pause\" affordance is the only path that\ncomposes durable PAUSE with a one-shot FLATTEN_NOW; the underlying\nprimitives (``set_instance_desired_state`` and ``write_from_operator``)\nstay pure. Order is strictly:\n\n1. Write ``desired_state = PAUSED`` to the durable sidecar. If this\n   fails, abort BEFORE enqueueing the one-shot \u2014 leaving a live FLATTEN\n   behind an unpersisted PAUSE would re-open the bug VCR-0007 named.\n2. If a live binding exists, enqueue ``FLATTEN_NOW`` on the bound run.\n   The bar loop honours ``desired_state = PAUSED`` and refuses new\n   entries even if the one-shot fails to enqueue.\n\nThe endpoint returns the structured response shape the existing\ndesired-state endpoint uses so the cockpit can reuse its renderer.",
+        "description": "Persist signed Pause first, then best-effort enqueue Flatten.",
         "operationId": "flatten_and_pause_instance_api_live_instances__strategy_instance_id__flatten_and_pause_post",
         "parameters": [
           {
@@ -51697,7 +52065,7 @@
       },
       "post": {
         "deprecated": true,
-        "description": "DEPRECATED (#400 cutover): superseded by the instance-addressed intent knob\n``POST /api/live-instances/{id}/desired-state``, which writes durable intent\n*and* actuates the live binding. Run-addressed routes are evidence-only;\noperator mutations move to the instance console. Kept temporarily for\nback-compat \u2014 slated for removal once the cutover is signed off.",
+        "description": "Retire unsigned run-addressed writes in favour of signed instance intent.",
         "operationId": "set_desired_state_api_live_runs__run_id__desired_state_post",
         "parameters": [
           {
@@ -51726,22 +52094,13 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetDesiredStateRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
+          "410": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DesiredStateRecordResponse"
+                  "title": "Response Set Desired State Api Live Runs  Run Id  Desired State Post",
+                  "type": "null"
                 }
               }
             },

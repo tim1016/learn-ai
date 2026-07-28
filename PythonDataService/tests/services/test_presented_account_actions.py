@@ -14,13 +14,15 @@ from app.config import settings
 from app.schemas.account_reconciliation import AccountReconciliationReceipt
 from app.schemas.account_safety_snapshot import (
     PresentedOperatorAction,
-    PresentedOperatorActionInvocation,
     PresentedOperatorActionPrecondition,
+)
+from app.schemas.operator_blocker import OperatorConfirmationCopy
+from app.schemas.presented_operator_action import (
+    PresentedOperatorActionInvocation,
     PresentedOperatorActionTarget,
     has_valid_presented_operator_action_token,
     issue_presented_operator_action_token,
 )
-from app.schemas.operator_blocker import OperatorConfirmationCopy
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_safety_snapshot import AccountSafetySnapshotService
 from app.services.presented_account_actions import (

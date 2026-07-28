@@ -1,3 +1,5 @@
+import type { PresentedOperatorActionInvocation } from './broker-models';
+
 export type RunState =
   | 'idle'
   | 'waiting_for_bars'
@@ -92,7 +94,6 @@ export interface ReconcileSummary {
 // contract stays in one file.
 import type {
   CommandVerb,
-  DesiredStateAction,
   DesiredStateView,
 } from './live-runs-controls.types';
 
@@ -109,16 +110,6 @@ export type {
  * has a stable local name.
  */
 export type DesiredState = DesiredStateView;
-
-export interface DesiredStateWriteRequest {
-  action: DesiredStateAction;
-  reason?: string;
-}
-
-export interface DesiredStateWriteResponse {
-  accepted: boolean;
-  desired_state: DesiredState;
-}
 
 /**
  * One command-channel entry, derived from the real command files under
@@ -421,12 +412,14 @@ export interface HostRunnerStartRequest {
   max_orders_per_day: number;
   ibkr_host: string;
   roll_call_offer_id?: string | null;
+  presented_action?: PresentedOperatorActionInvocation | null;
 }
 
 export const DEFAULT_MAX_ORDERS_PER_DAY = 2000;
 
 export interface HostRunnerStopRequest {
   force: boolean;
+  presented_action?: PresentedOperatorActionInvocation | null;
 }
 
 export interface HostRunnerActionResponse {
@@ -536,6 +529,7 @@ export interface HostRunnerDeployRequest {
   inherited_exposure_positions?: Record<string, number>;
   inherited_exposure_source?: string;
   exposure_coherence_confirmation?: ExposureCoherenceConfirmation;
+  presented_action?: PresentedOperatorActionInvocation | null;
 }
 
 export interface HostRunnerDeployResponse {

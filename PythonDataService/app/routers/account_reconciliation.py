@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from app.broker.ibkr import account as ibkr_account
-from app.broker.ibkr.client import BrokerError, IbkrClient, NotConnectedError, _is_paper_account, get_client
+from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
@@ -68,7 +68,7 @@ from app.schemas.account_reconciliation import (
 )
 from app.schemas.account_safety_snapshot import (
     AccountSafetySnapshot,
-    PresentedOperatorActionInvocation,
+    PresentedOperatorAction,
     PresentedOperatorActionRejection,
     PresentedOperatorActionRejectionResponse,
     PresentedOperatorActionResult,
@@ -86,6 +86,10 @@ from app.schemas.live_runs import (
     AccountEmergencyFlattenResponse,
     EmergencyFlattenRequest,
 )
+from app.schemas.presented_operator_action import (
+    PresentedOperatorActionInvocation,
+    PresentedOperatorActionTarget,
+)
 from app.services.account_cockpit import AccountCockpitService
 from app.services.account_directory import (
     AccountDirectoryError,
@@ -97,6 +101,7 @@ from app.services.account_event_journal import AccountEventJournalError, Account
 from app.services.account_gate_policy import AccountGatePolicyService
 from app.services.account_gate_promotion import AccountGatePromotionError
 from app.services.account_reconciliation import AccountReconciliationService
+from app.services.account_safety_access import current_broker_account
 from app.services.account_safety_snapshot import AccountSafetySnapshotService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
 from app.services.journal_cures import JournalCureService
@@ -109,6 +114,11 @@ from app.services.presented_account_actions import (
     PresentedAccountActionService,
     PresentedActionOutcomeUnknownError,
     PresentedActionRejectedError,
+)
+from app.services.presented_lifecycle_actions import (
+    LifecyclePresentedActionId,
+    PresentedLifecycleActionRejectedError,
+    PresentedLifecycleActionService,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -156,16 +166,7 @@ def get_account_event_journal_service(
 def get_current_broker_account() -> CurrentBrokerAccount | None:
     """Expose the single currently connected broker account, if one exists."""
 
-    try:
-        client = get_client()
-    except NotConnectedError:
-        return None
-    if not client.is_connected():
-        return None
-    account_id = client.connected_account
-    if account_id is None:
-        return None
-    return CurrentBrokerAccount(account_id=account_id, is_paper=_is_paper_account(account_id))
+    return current_broker_account()
 
 
 CurrentBrokerAccountDependency = Annotated[CurrentBrokerAccount | None, Depends(get_current_broker_account)]
@@ -190,6 +191,9 @@ def get_account_safety_snapshot_service(
 ) -> AccountSafetySnapshotService:
     """Compose existing account authorities without refreshing broker evidence."""
 
+    # Preserve this injectable directory boundary for Account desk tests.
+    # Other routers use the dedicated service factory instead of importing
+    # this router just to obtain the same broker-free composition.
     return AccountSafetySnapshotService(artifacts_root=artifacts_root, directory=directory)
 
 
@@ -286,6 +290,50 @@ async def account_safety_snapshot_endpoint(
 
     try:
         return service.snapshot(account_id=_canonical_account_id(account_id))
+    except UnknownAccountError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
+    except AccountDirectoryError as exc:
+        raise _account_directory_http_error(exc) from exc
+
+
+@router.get(
+    "/{account_id}/presented-lifecycle-actions/{action_id}",
+    response_model=PresentedOperatorAction,
+    responses={
+        status.HTTP_409_CONFLICT: {
+            "model": PresentedOperatorActionRejectionResponse,
+            "description": "Current account safety proof does not permit this action.",
+        },
+    },
+)
+async def present_lifecycle_action_endpoint(
+    account_id: str,
+    action_id: LifecyclePresentedActionId,
+    snapshot_service: Annotated[AccountSafetySnapshotService, Depends(get_account_safety_snapshot_service)],
+    strategy_instance_id: str = Query(min_length=1, max_length=128),
+    run_id: str | None = Query(default=None, min_length=1, max_length=160),
+) -> PresentedOperatorAction:
+    """Present one exact lifecycle action; it is not an executable command."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        snapshot = snapshot_service.snapshot(account_id=canonical_account_id)
+        target = PresentedOperatorActionTarget(
+            account_id=canonical_account_id,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+        )
+        return PresentedLifecycleActionService().present(
+            action_id=action_id,
+            snapshot=snapshot,
+            target=target,
+        )
+    except PresentedLifecycleActionRejectedError as exc:
+        raise _presented_action_rejection_http_error(
+            reason_code=exc.reason_code,
+            message=exc.message,
+            snapshot=snapshot,
+        ) from exc
     except UnknownAccountError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
     except AccountDirectoryError as exc:

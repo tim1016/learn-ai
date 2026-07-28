@@ -2271,6 +2271,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         command_channel=command_channel,
         start_paused=start_paused,
         desired_state_writer=_write_desired_state,
+        desired_state_reader=desired_repo.read_state,
         run_id=ledger.run_id,
         strategy_key=args.strategy,
         strategy_instance_id=strategy_instance_id,

@@ -464,6 +464,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/presented-lifecycle-actions/{action_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Present Lifecycle Action Endpoint
+         * @description Present one exact lifecycle action; it is not an executable command.
+         */
+        get: operations["present_lifecycle_action_endpoint_api_accounts__account_id__presented_lifecycle_actions__action_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/reconciliation": {
         parameters: {
             query?: never;
@@ -3329,9 +3349,7 @@ export interface paths {
         put?: never;
         /**
          * Stop Run
-         * @description Stop the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).
-         *
-         *     Same token-forwarding rationale as :func:`start_run`.
+         * @description Retire direct daemon Stop in favour of durable, instance-scoped intent.
          */
         post: operations["stop_run_api_live_instances_runs__run_id__stop_post"];
         delete?: never;
@@ -3564,16 +3582,7 @@ export interface paths {
         put?: never;
         /**
          * Set Instance Desired State
-         * @description The single operator intent knob (ADR 0004).
-         *
-         *     1. Write durable intent first (the crash-proof guarantee).
-         *     2. If a live binding exists, enqueue the matching actuation command on the
-         *        bound run so the running engine actuates immediately and acks.
-         *     3. With no live binding, the durable write alone gates the next start.
-         *
-         *     The engine command dispatcher persists intent as a *reconciling* writer, so
-         *     live actuation leaves ``desired_state.json`` at the same semantic state —
-         *     "paused-but-still-trading" is structurally hard to create.
+         * @description Persist operator intent and separately report any observed runtime effect.
          */
         post: operations["set_instance_desired_state_api_live_instances__strategy_instance_id__desired_state_post"];
         delete?: never;
@@ -3593,7 +3602,7 @@ export interface paths {
         put?: never;
         /**
          * End Day Now
-         * @description Queue Clerk-owned clean exit; only broker evidence can finish the day.
+         * @description Persist a safe clock-out intent before attempting a live command.
          */
         post: operations["end_day_now_api_live_instances__strategy_instance_id__end_day_now_post"];
         delete?: never;
@@ -3613,22 +3622,7 @@ export interface paths {
         put?: never;
         /**
          * Flatten And Pause Instance
-         * @description VCR-0007 / Phase 6A / ADR 0010 — composed panic-button endpoint.
-         *
-         *     The cockpit's "Flatten and pause" affordance is the only path that
-         *     composes durable PAUSE with a one-shot FLATTEN_NOW; the underlying
-         *     primitives (``set_instance_desired_state`` and ``write_from_operator``)
-         *     stay pure. Order is strictly:
-         *
-         *     1. Write ``desired_state = PAUSED`` to the durable sidecar. If this
-         *        fails, abort BEFORE enqueueing the one-shot — leaving a live FLATTEN
-         *        behind an unpersisted PAUSE would re-open the bug VCR-0007 named.
-         *     2. If a live binding exists, enqueue ``FLATTEN_NOW`` on the bound run.
-         *        The bar loop honours ``desired_state = PAUSED`` and refuses new
-         *        entries even if the one-shot fails to enqueue.
-         *
-         *     The endpoint returns the structured response shape the existing
-         *     desired-state endpoint uses so the cockpit can reuse its renderer.
+         * @description Persist signed Pause first, then best-effort enqueue Flatten.
          */
         post: operations["flatten_and_pause_instance_api_live_instances__strategy_instance_id__flatten_and_pause_post"];
         delete?: never;
@@ -3913,11 +3907,7 @@ export interface paths {
         /**
          * Set Desired State
          * @deprecated
-         * @description DEPRECATED (#400 cutover): superseded by the instance-addressed intent knob
-         *     ``POST /api/live-instances/{id}/desired-state``, which writes durable intent
-         *     *and* actuates the live binding. Run-addressed routes are evidence-only;
-         *     operator mutations move to the instance console. Kept temporarily for
-         *     back-compat — slated for removal once the cutover is signed off.
+         * @description Retire unsigned run-addressed writes in favour of signed instance intent.
          */
         post: operations["set_desired_state_api_live_runs__run_id__desired_state_post"];
         delete?: never;
@@ -8398,7 +8388,7 @@ export interface components {
              * @enum {string}
              */
             readiness_verdict?: "READY" | "BLOCKED" | "DEGRADED" | "UNKNOWN";
-            start_request?: components["schemas"]["HostRunnerStartRequest"] | null;
+            start_request?: components["schemas"]["HostRunnerStartRequest-Output"] | null;
             /** Status Detail */
             status_detail?: string | null;
             /** Status Label */
@@ -11802,6 +11792,29 @@ export interface components {
             idempotency_key: string;
         };
         /**
+         * EndDayIntentResponse
+         * @description End-day receipt with durable PAUSED intent and a separate clock-out effect.
+         */
+        EndDayIntentResponse: {
+            actuation: components["schemas"]["IntentActuation"];
+            /** Command Id */
+            command_id?: string | null;
+            durable: components["schemas"]["DesiredStateRecordResponse"];
+            /** Mutation Attempt Id */
+            mutation_attempt_id: string;
+            /**
+             * Mutation Dispatch State
+             * @enum {string}
+             */
+            mutation_dispatch_state: "PREPARED" | "DISPATCHING" | "RESPONSE_CONFIRMED" | "OUTCOME_UNKNOWN" | "EFFECT_CONFIRMED" | "EFFECT_NOT_OBSERVED" | "NOT_PROVABLE" | "EVIDENCE_CONFLICT";
+            process: components["schemas"]["InstanceProcessView"];
+            rung_receipt: components["schemas"]["MutationRungReceipt"];
+            /** Rung Receipt Warnings */
+            rung_receipt_warnings?: components["schemas"]["MutationRungReceipt"][];
+            /** Stop Outcome */
+            stop_outcome: string;
+        };
+        /**
          * EngineBacktestJobRequest
          * @description Body of POST /api/jobs-internal/engine-backtest.
          *
@@ -13225,7 +13238,7 @@ export interface components {
             enabled: boolean;
             /** Gate Results */
             gate_results?: components["schemas"]["GateResult"][];
-            request?: components["schemas"]["HostRunnerStartRequest"] | null;
+            request?: components["schemas"]["HostRunnerStartRequest-Output"] | null;
             /** Run Id */
             run_id?: string | null;
         };
@@ -13378,7 +13391,7 @@ export interface components {
          * HostRunnerStartRequest
          * @description Request body for starting one existing run from the host daemon.
          */
-        HostRunnerStartRequest: {
+        "HostRunnerStartRequest-Input": {
             /**
              * Hydrate Policy
              * @default require
@@ -13397,6 +13410,44 @@ export interface components {
              * @default 2000
              */
             max_orders_per_day?: number;
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
+            /**
+             * Readonly
+             * @default true
+             */
+            readonly?: boolean;
+            /** Roll Call Offer Id */
+            roll_call_offer_id?: string | null;
+            /**
+             * Strategy
+             * @default spy_ema_crossover
+             */
+            strategy?: string;
+        };
+        /**
+         * HostRunnerStartRequest
+         * @description Request body for starting one existing run from the host daemon.
+         */
+        "HostRunnerStartRequest-Output": {
+            /**
+             * Hydrate Policy
+             * @default require
+             * @enum {string}
+             */
+            hydrate_policy?: "require" | "optional" | "disabled";
+            /**
+             * Ibkr Host
+             * @default 127.0.0.1
+             */
+            ibkr_host?: string;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /**
+             * Max Orders Per Day
+             * @default 2000
+             */
+            max_orders_per_day?: number;
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
             /**
              * Readonly
              * @default true
@@ -13422,6 +13473,7 @@ export interface components {
             force?: boolean;
             /** Idempotency Key */
             idempotency_key?: string | null;
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
         };
         /**
          * IbkrAccountSummary
@@ -14964,7 +15016,10 @@ export interface components {
          * @description Result of actuating durable intent against the live binding (ADR 0004).
          *
          *     ``actuated`` is true only when a command was queued on a live run. With no
-         *     live binding the durable write still gates the next start.
+         *     live binding the durable write still gates the next start. ``effect_state``
+         *     keeps accepted intent distinct from its observed runtime effect: a durable
+         *     request remains ``PENDING`` until the engine can observe it, while a queued
+         *     command is only queued, not proof that the engine has applied it.
          */
         IntentActuation: {
             /** Actuated */
@@ -14973,6 +15028,12 @@ export interface components {
             command_seq?: number | null;
             /** Detail */
             detail: string;
+            /**
+             * Effect State
+             * @default PENDING
+             * @enum {string}
+             */
+            effect_state?: "QUEUED" | "PENDING";
             /** Run Id */
             run_id?: string | null;
         };
@@ -16243,6 +16304,7 @@ export interface components {
             live_config?: Record<string, never>;
             /** Parent Run Id */
             parent_run_id?: string | null;
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
             /** Qc Audit Copy Path */
             qc_audit_copy_path: string;
             /** Qc Cloud Backtest Id */
@@ -16256,7 +16318,7 @@ export interface components {
             start?: boolean;
             /** Start Date Ms */
             start_date_ms: number;
-            start_options?: components["schemas"]["HostRunnerStartRequest"];
+            start_options?: components["schemas"]["HostRunnerStartRequest-Input"];
             /**
              * Strategy Instance Id
              * @default
@@ -18874,9 +18936,9 @@ export interface components {
         PresentedOperatorAction: {
             /**
              * Action Id
-             * @constant
+             * @enum {string}
              */
-            action_id: "reconcile_now";
+            action_id: "reconcile_now" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
             /**
              * Availability
              * @enum {string}
@@ -18890,9 +18952,9 @@ export interface components {
             disposition: "fix_here" | "wait";
             /**
              * Effect Class
-             * @constant
+             * @enum {string}
              */
-            effect_class: "EVIDENCE_REFRESH";
+            effect_class: "EVIDENCE_REFRESH" | "RISK_REDUCING_LIFECYCLE" | "RISK_INCREASING_LIFECYCLE";
             /**
              * Evidence Refs
              * @default []
@@ -18926,9 +18988,9 @@ export interface components {
         PresentedOperatorActionInvocation: {
             /**
              * Action Id
-             * @constant
+             * @enum {string}
              */
-            action_id: "reconcile_now";
+            action_id: "reconcile_now" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
             /** Expires At Ms */
             expires_at_ms: number;
             /** Idempotency Key */
@@ -18983,9 +19045,9 @@ export interface components {
             action_attempt_id: string;
             /**
              * Action Id
-             * @constant
+             * @enum {string}
              */
-            action_id: "reconcile_now";
+            action_id: "reconcile_now" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
             /** Finished Copy */
             finished_copy: string;
             reconciliation_receipt?: components["schemas"]["AccountReconciliationReceipt"] | null;
@@ -19001,11 +19063,15 @@ export interface components {
         };
         /**
          * PresentedOperatorActionTarget
-         * @description Exact account scope bound into one server-presented operator action.
+         * @description Exact account and optional lifecycle scope bound into one action.
          */
         PresentedOperatorActionTarget: {
             /** Account Id */
             account_id: string;
+            /** Run Id */
+            run_id?: string | null;
+            /** Strategy Instance Id */
+            strategy_instance_id?: string | null;
         };
         /**
          * PricingCompareRequest
@@ -20828,6 +20894,7 @@ export interface components {
          */
         SetDesiredStateRequest: {
             action: components["schemas"]["DesiredStateAction"];
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
             /**
              * Reason
              * @default
@@ -24659,6 +24726,52 @@ export interface operations {
                 };
             };
             /** @description The presented action is stale, unavailable, or does not match its target. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    present_lifecycle_action_endpoint_api_accounts__account_id__presented_lifecycle_actions__action_id__get: {
+        parameters: {
+            query: {
+                strategy_instance_id: string;
+                run_id?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                action_id: "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorAction"];
+                };
+            };
+            /** @description Current account safety proof does not permit this action. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -28764,7 +28877,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["HostRunnerStartRequest"];
+                "application/json": components["schemas"]["HostRunnerStartRequest-Input"];
             };
         };
         responses: {
@@ -28811,7 +28924,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HostRunnerActionResponse"];
+                    "application/json": components["schemas"]["SetInstanceDesiredStateResponse"];
                 };
             };
             /** @description Validation Error */
@@ -29249,7 +29362,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HostRunnerActionResponse"];
+                    "application/json": components["schemas"]["EndDayIntentResponse"];
                 };
             };
             /** @description Validation Error */
@@ -29742,19 +29855,15 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SetDesiredStateRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DesiredStateRecordResponse"];
+                    "application/json": null;
                 };
             };
             /** @description Validation Error */

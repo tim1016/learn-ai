@@ -133,6 +133,34 @@ def test_start_requires_admission_and_never_clears_a_stopped_latch(tmp_path: Pat
         evaluator.assert_start_latch_allows_start()
 
 
+def test_presented_pause_replays_the_one_durable_lifecycle_disposition(tmp_path: Path) -> None:
+    evaluator = BotLifecycleEvaluator(tmp_path, _SID)
+
+    first = evaluator.set_desired_state(
+        DesiredState.PAUSED,
+        now_ms=10,
+        updated_by="operator",
+        reason="outage pause",
+        idempotency_key="a" * 64,
+    )
+    replay = evaluator.set_desired_state(
+        DesiredState.PAUSED,
+        now_ms=20,
+        updated_by="operator",
+        reason="outage pause",
+        idempotency_key="a" * 64,
+    )
+
+    assert first.replayed is False
+    assert replay.replayed is True
+    assert replay.receipt.receipt_id == first.receipt.receipt_id
+    assert replay.desired_state == first.desired_state
+    assert [(receipt.sequence, receipt.status) for receipt in _receipts(tmp_path)] == [
+        (1, "PENDING"),
+        (1, "COMMITTED"),
+    ]
+
+
 def test_prepared_start_is_durable_before_actuation_and_commits_from_daemon_observation(
     tmp_path: Path,
 ) -> None:

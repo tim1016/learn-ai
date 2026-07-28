@@ -31,6 +31,7 @@ import {
   type SizingPreset,
 } from '../../../api/live-runs.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
+import { presentedActionInvocation } from '../../../api/broker-models';
 import { ActionPlanPickerComponent } from './action-plan-picker/action-plan-picker.component';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -684,6 +685,14 @@ export class BrokerDeployFormComponent {
       ibkr_host: '127.0.0.1',
     };
     try {
+      const accountId = this.brokerAccountId().trim();
+      if (accountId === '') throw new Error('Connected broker account is unavailable.');
+      const action = await this.broker.presentLifecycleAction(
+        accountId,
+        'deploy',
+        request.strategy_instance_id,
+      );
+      request.presented_action = presentedActionInvocation(action);
       const response = await this.svc.deployInstance(request);
       this.deployed.set(response);
       this.deployedInstanceId.set(request.strategy_instance_id);

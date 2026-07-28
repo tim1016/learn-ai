@@ -29,6 +29,7 @@ import type {
   ReconcileAckResponse,
 } from '../../../api/live-runs.types';
 import type { ClerkTransactionHistoryResponse } from '../../../api/clerk-transaction-history.types';
+import type { PresentedOperatorAction } from '../../../api/broker-models';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -110,8 +111,43 @@ export class FakeLiveRunsService {
 export class FakeBrokerService {
   reconcileAccount = vi.fn<(accountId: string) => Promise<unknown>>();
   accountSafetySnapshot = vi.fn<BrokerService['accountSafetySnapshot']>();
+  presentLifecycleAction = vi.fn<BrokerService['presentLifecycleAction']>();
   accountTransactions = vi.fn<BrokerService['accountTransactions']>();
   accountTransaction = vi.fn<BrokerService['accountTransaction']>();
+}
+
+function makePresentedLifecycleAction(
+  accountId: string,
+  actionId: PresentedOperatorAction['action_id'],
+  strategyInstanceId: string,
+  runId?: string,
+): PresentedOperatorAction {
+  return {
+    action_id: actionId,
+    target: { account_id: accountId, strategy_instance_id: strategyInstanceId, run_id: runId ?? null },
+    snapshot_id: 'a'.repeat(64),
+    snapshot_version: 'a'.repeat(64),
+    evidence_refs: [],
+    effect_class: actionId === 'reconcile_now'
+      ? 'EVIDENCE_REFRESH'
+      : actionId === 'pause' || actionId === 'stop' || actionId === 'end_day'
+        ? 'RISK_REDUCING_LIFECYCLE'
+        : 'RISK_INCREASING_LIFECYCLE',
+    idempotency_key: 'b'.repeat(64),
+    issued_at_ms: 1,
+    expires_at_ms: 60_001,
+    presentation_token: 'c'.repeat(64),
+    preconditions: [],
+    confirmation: {
+      title: 'Confirm lifecycle action',
+      body: 'Test action.',
+      consequence: 'Test consequence.',
+      confirm_label: 'Continue',
+    },
+    availability: 'AVAILABLE',
+    disposition: 'fix_here',
+    finished_copy: 'Accepted.',
+  };
 }
 
 function emptyCustodyHistory(): ClerkTransactionHistoryResponse {
@@ -186,7 +222,7 @@ export function allowSetDesiredStateCall(
 
 export function allowEndDayNowCall(
   liveRuns: FakeLiveRunsService,
-  response: HostRunnerActionResponse,
+  response: SetInstanceDesiredStateResponse,
 ): void {
   liveRuns.endDayNow.mockResolvedValue(response);
 }
@@ -300,7 +336,7 @@ interface BotControlMutationResponses {
   renewControlPlaneLease?: HostRunnerHealth;
   runRollCall?: BotRollCallResponse;
   startHostRunner?: AsyncMockValue<HostRunnerActionResponse>;
-  endDayNow?: HostRunnerActionResponse;
+  endDayNow?: SetInstanceDesiredStateResponse;
   botLifecycleMutation?: BotLifecycleMutationResponse;
   setInstanceDesiredState?: SetInstanceDesiredStateResponse;
   flattenAndPause?: SetInstanceDesiredStateResponse;
@@ -480,6 +516,9 @@ export async function setupBotControlPage(
   broker.accountSafetySnapshot.mockImplementation((accountId) =>
     Promise.resolve(makeAccountSafetySnapshot({ account_id: accountId })),
   );
+  broker.presentLifecycleAction.mockImplementation((accountId, actionId, strategyInstanceId, runId) =>
+    Promise.resolve(makePresentedLifecycleAction(accountId, actionId, strategyInstanceId, runId)),
+  );
   broker.accountTransactions.mockResolvedValue(emptyCustodyHistory());
   broker.accountTransaction.mockRejectedValue(new Error('No receipt selected.'));
   const surface = new FakeBotSurfaceStore();
@@ -528,6 +567,9 @@ export async function setupBotControlSidebarHost(
   const broker = new FakeBrokerService();
   broker.accountSafetySnapshot.mockImplementation((accountId) =>
     Promise.resolve(makeAccountSafetySnapshot({ account_id: accountId })),
+  );
+  broker.presentLifecycleAction.mockImplementation((accountId, actionId, strategyInstanceId, runId) =>
+    Promise.resolve(makePresentedLifecycleAction(accountId, actionId, strategyInstanceId, runId)),
   );
   broker.accountTransactions.mockResolvedValue(emptyCustodyHistory());
   broker.accountTransaction.mockRejectedValue(new Error('No receipt selected.'));

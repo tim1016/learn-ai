@@ -73,7 +73,7 @@ from app.engine.live.command_channel import (
     CommandVerb,
 )
 from app.engine.live.config import LiveConfig
-from app.engine.live.desired_state import DesiredState
+from app.engine.live.desired_state import DesiredState, DesiredStateCorruptError
 from app.engine.live.halt import (
     FatalHaltError,
     PoisonedHaltReason,
@@ -499,6 +499,11 @@ class LiveEngine:
         # channel dispatches PAUSE/RESUME/STOP so it outlives this run.
         start_paused: bool = False,
         desired_state_writer: Callable[[DesiredState, str], None] | None = None,
+        # The control loop also observes the durable desired-state sidecar.
+        # This is the recovery path when the data plane cannot reach the host
+        # daemon to enqueue a per-run command, but the shared artifact store
+        # remains available to the running engine.
+        desired_state_reader: Callable[[], DesiredState] | None = None,
         # NEW: decision-row provenance (PRD-A §16.1 Resolution 5). Threaded
         # from run.py off the ledger + resolved spec. ``decision_columns``
         # is the resolved parquet schema (core + spec.decision_columns);
@@ -648,6 +653,7 @@ class LiveEngine:
         self._live_state_writer = live_state_writer
         self._command_channel = command_channel
         self._desired_state_writer = desired_state_writer
+        self._desired_state_reader = desired_state_reader
         # PAUSE drops new orders the strategy queues each bar; RESUME
         # restores normal submission. STOP / MARK_POISONED set the
         # bar loop's shutdown_event so the existing graceful path runs.
@@ -2167,7 +2173,7 @@ class LiveEngine:
             return
         try:
             self._live_state_writer(portfolio, bar_close_ms)
-        except Exception:
+        except (DesiredStateCorruptError, OSError):
             logger.exception("live-state sidecar write failed; continuing")
 
     @staticmethod
@@ -2398,6 +2404,9 @@ class LiveEngine:
             # cadence is owned by ``broker_probe_task`` so the two
             # heartbeats don't share a fate.
             await self._publish_command_loop_block()
+            self._apply_durable_desired_state(shutdown_event)
+            if shutdown_event.is_set():
+                return
             try:
                 pending = self._command_channel.read_pending()
             except CommandChannelCorruptError:
@@ -2418,7 +2427,8 @@ class LiveEngine:
                 logger.exception("command channel read_pending failed; sleeping then retrying")
                 pending = []
             for cmd in pending:
-                outcome = self._dispatch_command(cmd, shutdown_event)
+                durable_state = self._apply_durable_desired_state(shutdown_event)
+                outcome = self._dispatch_command(cmd, shutdown_event, durable_state=durable_state)
                 try:
                     self._command_channel.ack(cmd, outcome=outcome)
                 except Exception:
@@ -2433,7 +2443,43 @@ class LiveEngine:
             await self._publish_command_loop_block()
             await asyncio.sleep(1.0)
 
-    def _dispatch_command(self, cmd: Command, shutdown_event: asyncio.Event) -> dict:
+    def _apply_durable_desired_state(self, shutdown_event: asyncio.Event) -> DesiredState | None:
+        """Apply a newer durable operator intent without rewriting it.
+
+        The command queue is the normal low-latency actuation path. During a
+        data-plane-to-daemon outage, however, an operator can still persist a
+        risk-reducing desired state. Reading that sidecar here makes the
+        running engine the eventual actuator while preserving the original
+        durable writer and avoiding a duplicate command/receipt.
+
+        An unreadable sidecar is handled conservatively: pause new entries and
+        leave the process alive for inspection. It is not safe to infer a
+        RUNNING intent from corrupt durable control evidence.
+        """
+
+        if self._desired_state_reader is None:
+            return None
+        try:
+            desired_state = self._desired_state_reader()
+        except Exception:
+            logger.exception("durable desired-state read failed; pausing new entries")
+            self._paused = True
+            return None
+        if desired_state is DesiredState.PAUSED:
+            self._paused = True
+        elif desired_state is DesiredState.RUNNING:
+            self._paused = False
+        elif desired_state is DesiredState.STOPPED:
+            shutdown_event.set()
+        return desired_state
+
+    def _dispatch_command(
+        self,
+        cmd: Command,
+        shutdown_event: asyncio.Event,
+        *,
+        durable_state: DesiredState | None = None,
+    ) -> dict:
         """Apply a single command to engine state. Returns the outcome
         payload that will be written into the ack file.
 
@@ -2441,6 +2487,28 @@ class LiveEngine:
         down the poll loop; the outcome reflects the failure for
         post-mortem inspection.
         """
+        expected_state = {
+            CommandVerb.PAUSE: DesiredState.PAUSED,
+            CommandVerb.RESUME: DesiredState.RUNNING,
+            CommandVerb.STOP: DesiredState.STOPPED,
+            CommandVerb.CLOCK_OUT: DesiredState.PAUSED,
+        }.get(cmd.verb)
+        if expected_state is not None and self._desired_state_reader is not None:
+            if durable_state is None:
+                return {
+                    "status": "superseded",
+                    "reason_code": "DURABLE_INTENT_UNAVAILABLE",
+                    "effect": "command skipped because current durable intent is unreadable",
+                }
+            if durable_state is not expected_state:
+                return {
+                    "status": "superseded",
+                    "reason_code": "DURABLE_INTENT_SUPERSEDED",
+                    "effect": (
+                        f"{cmd.verb.value} skipped because durable intent is "
+                        f"{durable_state.value}"
+                    ),
+                }
         try:
             if cmd.verb is CommandVerb.PAUSE:
                 self._persist_command_desired_state(

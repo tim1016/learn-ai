@@ -22,10 +22,10 @@ import {
 } from './bot-control-page.testing';
 
 function startableReadyStatus(): LiveInstanceStatus {
-  return makeStatus({
+  return withLifecycleAccount(makeStatus({
     startCapabilityEnabled: true,
     startRunId: 'run-x',
-  });
+  }));
 }
 
 function offDutyNeedsRollCallStatus(): LiveInstanceStatus {
@@ -41,9 +41,21 @@ function offDutyNeedsRollCallStatus(): LiveInstanceStatus {
 }
 
 function onDutyStatus(): LiveInstanceStatus {
-  const status = makeStatus({ hostState: 'RUNNING' });
+  const status = withLifecycleAccount(makeStatus({ hostState: 'RUNNING' }));
   status.daily_lifecycle.display_status = 'On duty';
   status.daily_lifecycle.reason = 'The bot is running.';
+  return status;
+}
+
+function withLifecycleAccount(status: LiveInstanceStatus): LiveInstanceStatus {
+  status.operator_surface.account_clerk = {
+    account_id: 'DU1234567',
+    generation: 1,
+    phase: 'accepting',
+    lease_active: true,
+    recorded_at_ms: 1_700_000_000_000,
+    source: 'fixture',
+  };
   return status;
 }
 
@@ -321,7 +333,7 @@ describe('BotControlPageComponent', () => {
   });
 
   it('dispatches the start-host-runner mutation when the primary verb is clicked', async () => {
-    const { fixture, element, liveRuns } = await setupBotControlPage({
+    const { fixture, element, broker, liveRuns } = await setupBotControlPage({
       status: startableReadyStatus(),
       mutationResponses: {
         startHostRunner: { accepted: true, process: makeHostRunnerHealth().process },
@@ -334,18 +346,25 @@ describe('BotControlPageComponent', () => {
     verb?.click();
     await flush(fixture);
 
-    expect(liveRuns.startHostRunner).toHaveBeenCalledWith('run-x', {
+    expect(broker.presentLifecycleAction).toHaveBeenCalledWith(
+      'DU1234567', 'start', 'sid-x', 'run-x',
+    );
+    expect(liveRuns.startHostRunner).toHaveBeenCalledWith('run-x', expect.objectContaining({
       readonly: false,
       hydrate_policy: 'require',
       strategy: 'deployment_validation',
       max_orders_per_day: 2,
       ibkr_host: '127.0.0.1',
       roll_call_offer_id: 'offer-run-x',
-    });
+      presented_action: expect.objectContaining({
+        action_id: 'start',
+        target: expect.objectContaining({ account_id: 'DU1234567', strategy_instance_id: 'sid-x' }),
+      }),
+    }));
   });
 
   it('shows Resume instead of a known-refused Start for a durably stopped bot', async () => {
-    const { fixture, element, liveRuns } = await setupBotControlPage({
+    const { fixture, element, broker, liveRuns } = await setupBotControlPage({
       status: stoppedReadyStatus(),
       mutationResponses: { setInstanceDesiredState: makeDesiredStateResponse() },
     });
@@ -357,15 +376,19 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     expect(liveRuns.startHostRunner).not.toHaveBeenCalled();
-    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+    expect(broker.presentLifecycleAction).toHaveBeenCalledWith(
+      'DU1234567', 'resume', 'sid-x', undefined,
+    );
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', expect.objectContaining({
       action: 'resume',
       reason: 'Resume',
       updated_by: 'operator',
-    });
+      presented_action: expect.objectContaining({ action_id: 'resume' }),
+    }));
   });
 
   it('guides an on-duty bot through graceful stop and records durable STOPPED intent', async () => {
-    const { fixture, element, liveRuns } = await setupBotControlPage({
+    const { fixture, element, broker, liveRuns } = await setupBotControlPage({
       status: onDutyStatus(),
       mutationResponses: { setInstanceDesiredState: makeDesiredStateResponse() },
     });
@@ -378,11 +401,55 @@ describe('BotControlPageComponent', () => {
     stop?.click();
     await flush(fixture);
 
-    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+    expect(broker.presentLifecycleAction).toHaveBeenCalledWith(
+      'DU1234567', 'stop', 'sid-x', undefined,
+    );
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', expect.objectContaining({
       action: 'stop',
       reason: 'Stop',
       updated_by: 'operator',
+      presented_action: expect.objectContaining({ action_id: 'stop' }),
+    }));
+    expect(element.textContent).toContain('Intent accepted: PAUSED.');
+    expect(element.textContent).toContain('Command accepted.');
+  });
+
+  it('persists end-of-day intent with its own signed risk-reducing action', async () => {
+    const { fixture, broker, component, element, liveRuns } = await setupBotControlPage({
+      status: onDutyStatus(),
+      mutationResponses: { endDayNow: makeDesiredStateResponse() },
     });
+
+    await component.dispatchEndDayNow();
+    await flush(fixture);
+
+    expect(broker.presentLifecycleAction).toHaveBeenCalledWith(
+      'DU1234567', 'end_day', 'sid-x', undefined,
+    );
+    expect(liveRuns.endDayNow).toHaveBeenCalledWith('sid-x', {
+      force: false,
+      presented_action: expect.objectContaining({ action_id: 'end_day' }),
+    });
+    expect(element.textContent).toContain('Intent accepted: PAUSED.');
+    expect(element.textContent).toContain('Command accepted.');
+  });
+
+  it('signs Flatten and pause as a durable Pause before dispatching it', async () => {
+    const { fixture, broker, component, liveRuns } = await setupBotControlPage({
+      status: onDutyStatus(),
+      mutationResponses: { flattenAndPause: makeDesiredStateResponse() },
+    });
+
+    await component.dispatchFlattenAndPause();
+    await flush(fixture);
+
+    expect(broker.presentLifecycleAction).toHaveBeenCalledWith(
+      'DU1234567', 'pause', 'sid-x', undefined,
+    );
+    expect(liveRuns.flattenAndPause).toHaveBeenCalledWith('sid-x', expect.objectContaining({
+      action: 'pause',
+      presented_action: expect.objectContaining({ action_id: 'pause' }),
+    }));
   });
 
   it('keeps graceful stop available when a sick-bay bot has unproven host liveness', async () => {
@@ -423,14 +490,14 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     expect(liveRuns.runRollCall).toHaveBeenCalledTimes(1);
-    expect(liveRuns.startHostRunner).toHaveBeenCalledWith('run-x', {
+    expect(liveRuns.startHostRunner).toHaveBeenCalledWith('run-x', expect.objectContaining({
       readonly: false,
       hydrate_policy: 'require',
       strategy: 'deployment_validation',
       max_orders_per_day: 2,
       ibkr_host: '127.0.0.1',
       roll_call_offer_id: 'offer-from-roll-call',
-    });
+    }));
   });
 
   it('shows account verification while the start boundary is being checked', async () => {

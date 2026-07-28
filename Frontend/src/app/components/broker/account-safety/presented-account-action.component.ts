@@ -64,6 +64,8 @@ export class PresentedAccountActionComponent {
     switch (action.action_id) {
       case 'reconcile_now':
         return this.broker.executePresentedReconcileNow(action.target.account_id, action);
+      default:
+        throw new Error('This action is not dispatched from the account-safety panel.');
     }
   }
 }

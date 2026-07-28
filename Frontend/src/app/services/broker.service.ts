@@ -1,6 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import { presentedActionInvocation } from '../api/broker-models';
 import type {
   AccountAcceptExposureOverrideRequest,
   AccountAcceptExposureOverrideResponse,
@@ -161,33 +162,30 @@ export class BrokerService {
     );
   }
 
+  presentLifecycleAction(
+    accountId: string,
+    actionId: 'pause' | 'stop' | 'end_day' | 'resume' | 'start' | 'deploy',
+    strategyInstanceId: string,
+    runId?: string,
+  ): Promise<PresentedOperatorAction> {
+    const params: Record<string, string> = { strategy_instance_id: strategyInstanceId };
+    if (runId !== undefined) params['run_id'] = runId;
+    return firstValueFrom(
+      this.http.get<PresentedOperatorAction>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-lifecycle-actions/${encodeURIComponent(actionId)}`,
+        { params },
+      ),
+    );
+  }
+
   executePresentedReconcileNow(
     accountId: string,
     action: PresentedOperatorAction,
   ): Promise<PresentedOperatorActionResult> {
-    const {
-      action_id,
-      target,
-      snapshot_id,
-      snapshot_version,
-      idempotency_key,
-      issued_at_ms,
-      expires_at_ms,
-      presentation_token,
-    } = action;
     return firstValueFrom(
       this.http.post<PresentedOperatorActionResult>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-actions/reconcile-now`,
-        {
-          action_id,
-          target,
-          snapshot_id,
-          snapshot_version,
-          idempotency_key,
-          issued_at_ms,
-          expires_at_ms,
-          presentation_token,
-        },
+        presentedActionInvocation(action),
       ),
     );
   }

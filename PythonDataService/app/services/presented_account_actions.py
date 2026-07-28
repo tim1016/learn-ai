@@ -16,11 +16,13 @@ from app.engine.live.account_artifacts import account_artifacts_root
 from app.schemas.account_reconciliation import AccountReconciliationReceipt
 from app.schemas.account_safety_snapshot import (
     PresentedOperatorAction,
-    PresentedOperatorActionInvocation,
     PresentedOperatorActionResult,
-    has_valid_presented_operator_action_token,
 )
 from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydantic_artifact
+from app.schemas.presented_operator_action import (
+    PresentedOperatorActionInvocation,
+    has_valid_presented_operator_action_token,
+)
 from app.utils.timestamps import now_ms_utc
 
 _ACTION_ATTEMPTS_DIRECTORY = "presented_operator_actions"

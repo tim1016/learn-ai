@@ -11,6 +11,12 @@
     </p>
   }
 
+  @if (lifecycleIntentNotice(); as notice) {
+    <p class="pending-banner" role="status" aria-live="polite">
+      <strong>{{ notice.title }}</strong> {{ notice.detail }}
+    </p>
+  }
+
   @if (startupAutomationDisplay(); as automation) {
     @if (automation.phase !== 'idle') {
       <section

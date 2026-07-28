@@ -36,13 +36,15 @@ from app.schemas.account_safety_snapshot import (
     AccountSafetySnapshotVerdict,
     PresentedOperatorAction,
     PresentedOperatorActionPrecondition,
-    PresentedOperatorActionTarget,
-    issue_presented_operator_action_token,
-    presented_operator_action_signing_available,
 )
 from app.schemas.account_truth import AccountTruthResponse
 from app.schemas.artifact_io import read_pydantic_artifact
 from app.schemas.operator_blocker import OperatorConfirmationCopy
+from app.schemas.presented_operator_action import (
+    PresentedOperatorActionTarget,
+    issue_presented_operator_action_token,
+    presented_operator_action_signing_available,
+)
 from app.services.account_directory import AccountDirectoryService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_snapshot import (

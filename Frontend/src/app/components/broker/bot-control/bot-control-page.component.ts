@@ -22,6 +22,8 @@ import type {
 } from '../../../api/live-instances.types';
 import type { OperatorConfirmationCopy, OperatorMove } from '../../../api/operator-blocker.types';
 import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
+import { presentedActionInvocation } from '../../../api/broker-models';
+import type { PresentedOperatorAction } from '../../../api/broker-models';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerService } from '../../../services/broker.service';
 import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
@@ -55,6 +57,11 @@ type StartupAutomationState =
   | { readonly phase: 'running'; readonly label: string; readonly detail: string }
   | { readonly phase: 'ready'; readonly label: string; readonly detail: string }
   | { readonly phase: 'blocked'; readonly label: string; readonly detail: string };
+
+interface LifecycleIntentNotice {
+  readonly title: string;
+  readonly detail: string;
+}
 
 interface StartReadyCapability {
   readonly run_id: string;
@@ -92,6 +99,7 @@ export class BotControlPageComponent {
   readonly readOnly = this.surface.readOnly;
   readonly pendingAttemptId = this.surface.pendingAttemptId;
   readonly mutationError = signal<string | null>(null);
+  readonly lifecycleIntentNotice = signal<LifecycleIntentNotice | null>(null);
   readonly busyAction = signal<string | null>(null);
   readonly activeLens = signal<'trader' | 'operations'>('trader');
   readonly startupAutomation = signal<StartupAutomationState>({ phase: 'idle' });
@@ -448,9 +456,18 @@ export class BotControlPageComponent {
     if (!id || this.mutationsDisabled()) return;
     this.busyAction.set('end_day_now');
     this.mutationError.set(null);
+    this.lifecycleIntentNotice.set(null);
     try {
-      const response = await this.liveRuns.endDayNow(id, { force: false });
+      const action = await this.presentLifecycleAction('end_day');
+      const response = await this.liveRuns.endDayNow(id, {
+        force: false,
+        presented_action: presentedActionInvocation(action),
+      });
       this.surface.establishPending(response);
+      this.lifecycleIntentNotice.set({
+        title: `Intent accepted: ${response.durable.state}.`,
+        detail: response.actuation.detail,
+      });
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('stop', err));
     } finally {
@@ -463,13 +480,20 @@ export class BotControlPageComponent {
     if (!id || this.mutationsDisabled()) return;
     this.busyAction.set('flatten_and_pause');
     this.mutationError.set(null);
+    this.lifecycleIntentNotice.set(null);
     try {
+      const action = await this.presentLifecycleAction('pause');
       const response = await this.liveRuns.flattenAndPause(id, {
         action: 'pause',
         reason: 'Flatten and pause',
         updated_by: 'operator',
+        presented_action: presentedActionInvocation(action),
       });
       this.surface.establishPending(response);
+      this.lifecycleIntentNotice.set({
+        title: `Intent accepted: ${response.durable.state}.`,
+        detail: response.actuation.detail,
+      });
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('flatten', err));
     } finally {
@@ -818,7 +842,11 @@ export class BotControlPageComponent {
       detail: this.accountStartGate()?.operator_reason ?? 'Checking current account proof before start.',
     });
     try {
-      const response = await this.liveRuns.startHostRunner(runId, request);
+      const action = await this.presentLifecycleAction('start', runId);
+      const response = await this.liveRuns.startHostRunner(runId, {
+        ...request,
+        presented_action: presentedActionInvocation(action),
+      });
       this.surface.establishPending(response);
       this.startupAutomation.set({
         phase: 'ready',
@@ -837,13 +865,20 @@ export class BotControlPageComponent {
     if (!id || this.mutationsDisabled()) return;
     this.busyAction.set(action);
     this.mutationError.set(null);
+    this.lifecycleIntentNotice.set(null);
     try {
+      const presented = await this.presentLifecycleAction(action);
       const response = await this.liveRuns.setInstanceDesiredState(id, {
         action,
         reason: label,
         updated_by: 'operator',
+        presented_action: presentedActionInvocation(presented),
       });
       this.surface.establishPending(response);
+      this.lifecycleIntentNotice.set({
+        title: `Intent accepted: ${response.durable.state}.`,
+        detail: response.actuation.detail,
+      });
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage(action, err));
     } finally {
@@ -855,6 +890,18 @@ export class BotControlPageComponent {
     const error = toOperationError(operation, err);
     this.surface.establishPending(error);
     return `${error.detail} ${error.remediation}`;
+  }
+
+  private async presentLifecycleAction(
+    actionId: 'pause' | 'stop' | 'end_day' | 'resume' | 'start' | 'deploy',
+    runId?: string,
+  ): Promise<PresentedOperatorAction> {
+    const accountId = this.boundAccountId();
+    const instanceId = this.instanceId();
+    if (!accountId || !instanceId) {
+      throw new Error('Account and bot identity must be available before presenting an action.');
+    }
+    return this.broker.presentLifecycleAction(accountId, actionId, instanceId, runId);
   }
 
   private humanError(err: unknown): string {

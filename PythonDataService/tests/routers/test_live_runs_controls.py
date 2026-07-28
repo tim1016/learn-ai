@@ -153,51 +153,18 @@ async def test_status_includes_controls_fields(live_runs_root):
     assert body["command_summary"]["pending_count"] == 0
 
 
-# --- UI-3: durable desired-state write API ---
+# --- UI-3: retired run-addressed desired-state write API ---
 
 
-async def test_set_desired_state_persists_and_bumps_version(live_runs_root):
+@pytest.mark.parametrize("action", ["pause", "resume", "stop"])
+async def test_set_desired_state_requires_signed_instance_intent(live_runs_root, action: str):
     _make_run(live_runs_root, _RID, sid="inst-write")
     async with _client() as client:
-        first = await client.post(
-            f"/api/live-runs/{_RID}/desired-state",
-            json={"action": "pause", "reason": "r1", "updated_by": "op"},
-        )
-        second = await client.post(
-            f"/api/live-runs/{_RID}/desired-state", json={"action": "resume"}
-        )
-    assert first.status_code == 200
-    assert first.json()["state"] == "PAUSED"
-    assert first.json()["version"] == 1
-    assert isinstance(first.json()["updated_at_ms"], int)
-    assert second.status_code == 200
-    assert second.json()["state"] == "RUNNING"
-    assert second.json()["version"] == 2
+        response = await client.post(f"/api/live-runs/{_RID}/desired-state", json={"action": action})
 
-    repo = DesiredStateRepo(stable_desired_state_path(_artifacts_root(live_runs_root), "inst-write"))
-    record = repo.read()
-    assert record is not None
-    assert record.desired_state == DesiredState.RUNNING
-    assert record.version == 2
-
-
-async def test_set_desired_state_stop_maps_to_stopped(live_runs_root):
-    _make_run(live_runs_root, _RID, sid="inst-stopw")
-    async with _client() as client:
-        resp = await client.post(
-            f"/api/live-runs/{_RID}/desired-state", json={"action": "stop"}
-        )
-    assert resp.status_code == 200
-    assert resp.json()["state"] == "STOPPED"
-
-
-async def test_set_desired_state_legacy_binding_conflict(live_runs_root):
-    _make_run(live_runs_root, _RID, sid="")
-    async with _client() as client:
-        resp = await client.post(
-            f"/api/live-runs/{_RID}/desired-state", json={"action": "pause"}
-        )
-    assert resp.status_code == 409
+    assert response.status_code == 410
+    assert response.json()["detail"]["reason_code"] == "INSTANCE_INTENT_ENDPOINT_REQUIRED"
+    assert DesiredStateRepo(stable_desired_state_path(_artifacts_root(live_runs_root), "inst-write")).read() is None
 
 
 # --- UI-4: per-run command-channel API ---
@@ -238,12 +205,22 @@ async def test_enqueue_command_invalid_verb_rejected(live_runs_root):
 async def test_command_summary_in_status(live_runs_root):
     _make_run(live_runs_root, _RID, sid="inst-cmd")
     async with _client() as client:
-        await client.post(f"/api/live-runs/{_RID}/commands", json={"verb": "PAUSE"})
+        await client.post(f"/api/live-runs/{_RID}/commands", json={"verb": "FLATTEN"})
         resp = await client.get(f"/api/live-runs/{_RID}/status")
     cs = resp.json()["command_summary"]
     assert cs["pending_count"] == 1
     assert cs["acked_count"] == 0
-    assert cs["latest_verb"] == "PAUSE"
+    assert cs["latest_verb"] == "FLATTEN"
+
+
+@pytest.mark.parametrize("verb", ["PAUSE", "RESUME", "STOP"])
+async def test_enqueue_command_rejects_legacy_durable_controls(live_runs_root, verb: str):
+    _make_run(live_runs_root, _RID, sid="inst-cmd")
+    async with _client() as client:
+        response = await client.post(f"/api/live-runs/{_RID}/commands", json={"verb": verb})
+
+    assert response.status_code == 410
+    assert response.json()["detail"]["reason_code"] == "DURABLE_INTENT_ENDPOINT_REQUIRED"
 
 
 async def test_command_timeline_reads_ack_files(live_runs_root):

@@ -224,18 +224,14 @@ async def test_host_process_block_running_when_daemon_bound_to_run(
 
 
 # ---------------------------------------------------------------------------
-# Cycle 11 — mutation endpoints re-evaluate the shared capability
-# evaluator server-side and reject with 409 + reason code
+# Cycle 11 — Flatten preserves signed durable Pause even without a binding.
 # ---------------------------------------------------------------------------
 
 
-async def test_flatten_and_pause_returns_409_no_live_binding_when_unbound(
+async def test_flatten_and_pause_persists_pause_without_dispatching_flatten_when_unbound(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A stale UI that issues flatten-and-pause against an unbound
-    instance must be rejected by the same capability evaluator the
-    cockpit reads from the status snapshot.  The Frontend handles the
-    409 by reloading status (see #610)."""
+    """An unbound request records Pause and explicitly reports no Flatten effect."""
 
     app, root = app_with_root
     _write_ledger(root, "run-ddd", "spy_ema_paper", 100)
@@ -244,9 +240,17 @@ async def test_flatten_and_pause_returns_409_no_live_binding_when_unbound(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/live-instances/spy_ema_paper/flatten-and-pause")
 
-    assert response.status_code == 409
+    assert response.status_code == 200
     body = response.json()
-    assert body["detail"]["disabled_reason_code"] == "NO_LIVE_BINDING"
+    assert body["durable"]["state"] == "PAUSED"
+    assert body["actuation"] == {
+        "actuated": False,
+        "effect_state": "PENDING",
+        "run_id": None,
+        "command_seq": None,
+        "detail": "PAUSE persisted; no live binding so FLATTEN_NOW was not enqueued",
+    }
+    assert not list((root / "run-ddd" / "commands").glob("*.FLATTEN.pending.json"))
 
 
 async def test_mark_poisoned_returns_409_no_live_binding_when_unbound(

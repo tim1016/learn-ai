@@ -27,10 +27,8 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.broker.ibkr.config import get_settings
-from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.desired_state import (
-    DesiredState,
     DesiredStateCorruptError,
     DesiredStateRepo,
     stable_desired_state_path,
@@ -54,9 +52,7 @@ from app.schemas.live_runs import (
     CommandTimelineEntry,
     CommandView,
     DecisionsSummary,
-    DesiredStateAction,
     DesiredStatePathStatus,
-    DesiredStateRecordResponse,
     DesiredStateView,
     EnqueueCommandRequest,
     ExecutionsSummary,
@@ -68,7 +64,6 @@ from app.schemas.live_runs import (
     LogLine,
     ReconcileSummary,
     RunStatusSidecar,
-    SetDesiredStateRequest,
     TradesSummary,
 )
 from app.services.live_log_failures import (
@@ -84,7 +79,6 @@ router = APIRouter(tags=["live-runs"])
 logger = logging.getLogger(__name__)
 
 _RUN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,127}$")
-
 
 def _validate_path_segment(value: str, *, field: str) -> str:
     """Reject any operator-supplied value unsafe as a single path segment.
@@ -1112,13 +1106,6 @@ def _validate_strategy_instance_id(sid: str) -> None:
         ) from exc
 
 
-_ACTION_TO_STATE = {
-    DesiredStateAction.pause: DesiredState.PAUSED,
-    DesiredStateAction.resume: DesiredState.RUNNING,
-    DesiredStateAction.stop: DesiredState.STOPPED,
-}
-
-
 @router.get("/{run_id}/desired-state", response_model=DesiredStateView)
 async def get_desired_state(run_id: str) -> DesiredStateView:
     """Return the resolved durable-intent view for a run (UI-1)."""
@@ -1133,43 +1120,15 @@ async def get_desired_state(run_id: str) -> DesiredStateView:
     return _resolve_desired_state(root, ledger.strategy_instance_id)
 
 
-@router.post("/{run_id}/desired-state", response_model=DesiredStateRecordResponse, deprecated=True)
-async def set_desired_state(run_id: str, body: SetDesiredStateRequest) -> DesiredStateRecordResponse:
-    """DEPRECATED (#400 cutover): superseded by the instance-addressed intent knob
-    ``POST /api/live-instances/{id}/desired-state``, which writes durable intent
-    *and* actuates the live binding. Run-addressed routes are evidence-only;
-    operator mutations move to the instance console. Kept temporarily for
-    back-compat — slated for removal once the cutover is signed off."""
-    root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
-    ledger = _ledger_or_404(run_dir, run_id)
-    sid = ledger.strategy_instance_id
-    if not sid:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail="run has no strategy_instance_id binding (legacy ledger)",
-        )
-    _validate_strategy_instance_id(sid)
-    artifacts_root = _desired_state_root(root)
-    record = BotLifecycleEvaluator(artifacts_root, sid).set_desired_state(
-        _ACTION_TO_STATE[body.action],
-        updated_by=body.updated_by,
-        reason=body.reason,
-        now_ms=_now_ms(),
-    ).desired_state
-    if record is None:
-        raise OSError("lifecycle evaluator did not return a desired-state record")
-    return DesiredStateRecordResponse(
-        state=record.desired_state.value,
-        updated_at_ms=record.updated_at_ms,
-        updated_by=record.updated_by,
-        reason=record.reason,
-        version=record.version,
+@router.post("/{run_id}/desired-state", deprecated=True, status_code=status.HTTP_410_GONE)
+async def set_desired_state(run_id: str) -> None:
+    """Retire unsigned run-addressed writes in favour of signed instance intent."""
+    raise HTTPException(
+        status.HTTP_410_GONE,
+        detail={
+            "reason_code": "INSTANCE_INTENT_ENDPOINT_REQUIRED",
+            "message": "Use the signed instance desired-state control instead.",
+        },
     )
 
 
@@ -1191,6 +1150,14 @@ async def enqueue_command(run_id: str, body: EnqueueCommandRequest) -> CommandVi
         verb = CommandVerb(body.verb)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid command verb") from exc
+    if verb in {CommandVerb.PAUSE, CommandVerb.RESUME, CommandVerb.STOP}:
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            detail={
+                "reason_code": "DURABLE_INTENT_ENDPOINT_REQUIRED",
+                "message": "Use the instance desired-state control for Pause, Resume, or Stop.",
+            },
+        )
     channel = CommandChannel(run_dir / "commands")
     command = channel.write_from_operator(verb)
     return CommandView(seq=command.seq, verb=command.verb.value)
