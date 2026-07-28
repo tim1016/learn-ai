@@ -62,7 +62,9 @@ class _HoldFeed:
 def api(tmp_path: Path):
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())
-    registry = BotTaskRegistry(tmp_path, feed_resolver=lambda: _HoldFeed())
+    registry = BotTaskRegistry(
+        tmp_path, feed_resolver=lambda: _HoldFeed(), boot_recovery_required=False
+    )
     set_bot_task_registry(registry)
     app = FastAPI()
     app.include_router(router)

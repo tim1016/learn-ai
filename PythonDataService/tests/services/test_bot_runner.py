@@ -93,6 +93,8 @@ def _registry(
         tmp_path,
         feed_resolver=lambda: feed,
         restart_policy=policy or RestartIntensityPolicy(threshold=100),
+        # Boot recovery has its own suite (test_boot_recovery.py).
+        boot_recovery_required=False,
     )
 
 
@@ -330,6 +332,7 @@ async def test_restart_intensity_window_expiry_allows_restart(tmp_path: Path) ->
         feed_resolver=lambda: feed,
         restart_policy=policy,
         now_ms=lambda: clock["now"],
+        boot_recovery_required=False,
     )
 
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")

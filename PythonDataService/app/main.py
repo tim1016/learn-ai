@@ -422,6 +422,27 @@ async def lifespan(app: FastAPI):
     set_bot_task_registry(bot_task_registry)
     logger.info("In-container bot runner installed (task registry, daemon-free).")
 
+    # S5 (#1263) — boot recovery sweep, BEFORE any bot may start (fail
+    # closed): durable ON_DUTY state from before the restart becomes typed
+    # interrupted evidence; the clerk resolves unresolved intents by identity
+    # and runs one reconciliation pass; starts stay refused while any intent
+    # remains uncertain.
+    from app.broker.alpaca.clerk import derive as alpaca_derive
+    from app.broker.alpaca.clerk import get_alpaca_clerk
+
+    _boot_clerk = get_alpaca_clerk()
+    if _boot_clerk is not None:
+        async def _unresolved_intents() -> int:
+            return len(alpaca_derive.unresolved_intents(await _boot_clerk.read_journal_entries()))
+
+        await bot_task_registry.run_boot_recovery(
+            recover=_boot_clerk.recover,
+            reconcile=_boot_clerk.reconcile_once,
+            unresolved_intents_probe=_unresolved_intents,
+        )
+    else:
+        await bot_task_registry.run_boot_recovery()
+
     # ADR-0028 Stage 2 — each visible bot gets one producer-owned status
     # snapshot before the API begins serving normal reads. The producer owns
     # broker-activity bootstrap and periodic assembly; status GET only reads

@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -60,6 +60,7 @@ from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
+    BotLifecycleStateCorruptError,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
@@ -114,6 +115,14 @@ class RestartIntensityRefusedError(BotRunnerError):
     http_status = 429
 
 
+class BootRecoveryIncompleteError(BotRunnerError):
+    http_status = 503
+
+
+class RecoveryUncertainError(BotRunnerError):
+    http_status = 409
+
+
 class BrokerBotBinding(BaseModel):
     """Durable broker-tagged run binding (P9)."""
 
@@ -127,6 +136,16 @@ class BrokerBotBinding(BaseModel):
     mode: Literal["log_only"] = "log_only"
     run_id: str
     created_at_ms: int
+
+
+class BootRecoveryReport(BaseModel):
+    """What the boot sweep found and did (S5, #1263)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    interrupted_instances: tuple[str, ...]
+    unresolved_intents: int
+    completed_at_ms: int
 
 
 @dataclass
@@ -157,6 +176,7 @@ class BotTaskRegistry:
         feed_resolver: Callable[[], MarketDataFeed | None],
         restart_policy: RestartIntensityPolicy | None = None,
         now_ms: Callable[[], int] = now_ms_utc,
+        boot_recovery_required: bool = True,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
@@ -164,6 +184,14 @@ class BotTaskRegistry:
         self._now_ms = now_ms
         self._bots: dict[str, _ManagedBot] = {}
         self._start_history: dict[str, list[int]] = {}
+        # S5 (#1263) fail-closed start gate: no bot starts until the boot
+        # recovery sweep has run, and none while recovery left an uncertain
+        # outcome (the probe re-evaluates per deploy, so a later resolution
+        # unblocks without a restart). Tests that do not exercise recovery
+        # opt out explicitly with ``boot_recovery_required=False``.
+        self._boot_recovery_required = boot_recovery_required
+        self._boot_recovery_complete = False
+        self._unresolved_intents_probe: Callable[[], Awaitable[int]] | None = None
 
     # ── deploy / stop ─────────────────────────────────────────────────
 
@@ -183,6 +211,7 @@ class BotTaskRegistry:
                 f"Bot '{strategy_instance_id}' is already running.",
                 detail=f"Active run {managed.binding.run_id}; stop it before redeploying.",
             )
+        await self._require_recovered()
         now = self._now_ms()
         self._enforce_restart_intensity(strategy_instance_id, now)
         feed = self._feed_resolver()
@@ -292,6 +321,117 @@ class BotTaskRegistry:
                 managed.binding, kind="STOPPED", reason_code="SERVICE_SHUTDOWN"
             )
             self._reap(managed.binding.strategy_instance_id, managed.binding.run_id)
+
+    # ── S5 boot recovery (container restart is a drilled event) ───────
+
+    async def run_boot_recovery(
+        self,
+        *,
+        recover: Callable[[], Awaitable[None]] | None = None,
+        reconcile: Callable[[], Awaitable[object]] | None = None,
+        unresolved_intents_probe: Callable[[], Awaitable[int]] | None = None,
+    ) -> BootRecoveryReport:
+        """Reconcile durable ON_DUTY state against the (empty) task registry.
+
+        Every instance recorded on-duty with no live task gets typed durable
+        interrupted evidence (``EXITED_UNVERIFIED`` / ``INTERRUPTED_BY_RESTART``)
+        and is NEVER auto-restarted. Then the clerk's ``recover`` (identity
+        resolution — present/absent/uncertain, no blind retry) and a
+        reconciliation pass run; a failure in either is surfaced and leaves the
+        journal to speak for itself — the per-deploy uncertainty probe keeps
+        starts refused until the intents actually resolve.
+        """
+        interrupted: list[str] = []
+        live_state_root = self._artifacts_root / "live_state"
+        if live_state_root.is_dir():
+            for child in sorted(live_state_root.iterdir()):
+                if not (child / "lifecycle_state.json").is_file():
+                    continue
+                sid = child.name
+                repo = self._lifecycle_repo(sid)
+                try:
+                    record = repo.read()
+                except BotLifecycleStateCorruptError as exc:
+                    logger.warning(
+                        "Boot sweep skipping corrupt lifecycle state",
+                        extra={"action": "boot_sweep_corrupt_lifecycle", "path": str(exc.path)},
+                    )
+                    continue
+                if record is None or record.phase is not BotLifecyclePhase.ON_DUTY:
+                    continue
+                if sid in self._bots and not self._bots[sid].task.done():
+                    continue  # genuinely alive (non-boot rerun) — not interrupted
+                repo.record_terminal_outcome(
+                    BotDutyOutcome(
+                        kind="EXITED_UNVERIFIED",
+                        reason_code="INTERRUPTED_BY_RESTART",
+                        recorded_at_ms=self._now_ms(),
+                        run_id=record.active_run_id,
+                    ),
+                    updated_by="bot_runner_boot_sweep",
+                    reason="container_restart",
+                    expected_active_run_id=record.active_run_id,
+                )
+                interrupted.append(sid)
+                logger.warning(
+                    "Boot sweep recorded interrupted bot",
+                    extra={
+                        "action": "boot_sweep_interrupted",
+                        "strategy_instance_id": sid,
+                        "run_id": record.active_run_id,
+                    },
+                )
+        for step_name, step in (("recover", recover), ("reconcile", reconcile)):
+            if step is None:
+                continue
+            try:
+                await step()
+            except Exception:
+                # Surfaced, not silenced; the uncertainty probe still refuses
+                # starts while intents remain unresolved in the journal.
+                logger.exception(
+                    "Boot recovery step failed",
+                    extra={"action": "boot_recovery_step_failed", "step": step_name},
+                )
+        self._unresolved_intents_probe = unresolved_intents_probe
+        unresolved = (
+            await unresolved_intents_probe() if unresolved_intents_probe is not None else 0
+        )
+        self._boot_recovery_complete = True
+        report = BootRecoveryReport(
+            interrupted_instances=tuple(interrupted),
+            unresolved_intents=unresolved,
+            completed_at_ms=self._now_ms(),
+        )
+        logger.info(
+            "Boot recovery sweep complete",
+            extra={
+                "action": "boot_recovery_complete",
+                "interrupted": list(report.interrupted_instances),
+                "unresolved_intents": report.unresolved_intents,
+            },
+        )
+        return report
+
+    async def _require_recovered(self) -> None:
+        """Fail-closed start gate (S5 AC4)."""
+        if self._boot_recovery_required and not self._boot_recovery_complete:
+            raise BootRecoveryIncompleteError(
+                "Bot starts are refused until the boot recovery sweep completes.",
+                detail="The data plane restarted; durable state is being reconciled.",
+            )
+        if self._unresolved_intents_probe is not None:
+            unresolved = await self._unresolved_intents_probe()
+            if unresolved > 0:
+                raise RecoveryUncertainError(
+                    f"Bot starts are refused: {unresolved} order intent(s) remain "
+                    "unresolved after recovery.",
+                    detail=(
+                        "An unresolved intent may still represent live broker "
+                        "exposure; resolve it (recovery replay / sweep) before "
+                        "starting bots."
+                    ),
+                )
 
     # ── read surface ──────────────────────────────────────────────────
 
