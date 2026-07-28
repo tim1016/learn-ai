@@ -6419,7 +6419,7 @@
           "duty_outcome": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/app__schemas__live_runs__BotDutyOutcomeView"
+                "$ref": "#/components/schemas/BotDutyOutcomeView"
               },
               {
                 "type": "null"
@@ -6577,6 +6577,51 @@
           "marker_path"
         ],
         "title": "BotDeleteResponse",
+        "type": "object"
+      },
+      "BotDutyOutcomeView": {
+        "additionalProperties": false,
+        "description": "Durable terminal duty evidence rendered by the operator surface.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "CLOCKED_OUT_FLAT",
+              "STOPPED",
+              "HALTED",
+              "CRASHED",
+              "FAILED_LAUNCH",
+              "EXITED_UNVERIFIED",
+              "RETIRED"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "kind",
+          "reason_code",
+          "recorded_at_ms"
+        ],
+        "title": "BotDutyOutcomeView",
         "type": "object"
       },
       "BotEveningReport": {
@@ -7378,7 +7423,7 @@
           "duty_outcome": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/app__schemas__broker_bots__BotDutyOutcomeView"
+                "$ref": "#/components/schemas/BotDutyOutcomeView"
               },
               {
                 "type": "null"
@@ -39801,95 +39846,6 @@
           "signal_reason"
         ],
         "title": "_TradeRecordModel",
-        "type": "object"
-      },
-      "app__schemas__broker_bots__BotDutyOutcomeView": {
-        "description": "Projection of the durable terminal duty fact (never liveness-inferred).",
-        "properties": {
-          "kind": {
-            "enum": [
-              "CLOCKED_OUT_FLAT",
-              "STOPPED",
-              "HALTED",
-              "CRASHED",
-              "FAILED_LAUNCH",
-              "EXITED_UNVERIFIED",
-              "RETIRED"
-            ],
-            "title": "Kind",
-            "type": "string"
-          },
-          "reason_code": {
-            "title": "Reason Code",
-            "type": "string"
-          },
-          "recorded_at_ms": {
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          }
-        },
-        "required": [
-          "kind",
-          "reason_code",
-          "recorded_at_ms"
-        ],
-        "title": "BotDutyOutcomeView",
-        "type": "object"
-      },
-      "app__schemas__live_runs__BotDutyOutcomeView": {
-        "additionalProperties": false,
-        "description": "Durable terminal duty evidence rendered by the operator surface.",
-        "properties": {
-          "kind": {
-            "enum": [
-              "CLOCKED_OUT_FLAT",
-              "STOPPED",
-              "HALTED",
-              "CRASHED",
-              "FAILED_LAUNCH",
-              "EXITED_UNVERIFIED",
-              "RETIRED"
-            ],
-            "title": "Kind",
-            "type": "string"
-          },
-          "reason_code": {
-            "title": "Reason Code",
-            "type": "string"
-          },
-          "recorded_at_ms": {
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          }
-        },
-        "required": [
-          "kind",
-          "reason_code",
-          "recorded_at_ms"
-        ],
-        "title": "BotDutyOutcomeView",
         "type": "object"
       },
       "app__schemas__live_runs__OpenRunbookAction": {

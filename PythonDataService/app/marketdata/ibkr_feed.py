@@ -27,8 +27,8 @@ Architecture (phase-3 design §4 + #1258 L2 "one shared feed, in-process fan-out
   The translated bar carries ``feed_id="ibkr"`` as provenance.
 
 Temporal contract: all ``int64 ms UTC``; no ISO strings, no naive datetimes.
-Ban-list clean (no ``datetime.utcnow``, no ``datetime.now()`` without tz,
-no ``pd.to_datetime`` without utc).
+Temporal ban-list clean: no utcnow, no tz-naive now(), no pd.to_datetime
+without utc.
 """
 
 from __future__ import annotations
