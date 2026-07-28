@@ -47,6 +47,10 @@ class AccountClerkInboxEntry(BaseModel):
     schema_version: Literal[1] = 1
     seq: int = Field(ge=1)
     received_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    # The RPC server supplies this local arrival fact when it has one. Direct
+    # Clerk callers intentionally leave it absent rather than relabelling the
+    # intent creation time as transport evidence.
+    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
     intent: AccountOwnerSubmitIntent
 
 
@@ -209,6 +213,12 @@ class AccountClerkJournalEntry(BaseModel):
     reconciliation_verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"] | None = None
     reconciliation_reason: str | None = None
     broker_error: str | None = None
+    # S1 custody instrumentation. These are optional to keep older durable
+    # journal rows replayable and to represent clocks that this process did not
+    # observe. ``seq`` remains serialization order, never a timestamp.
+    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
     event_account_id: str | None = Field(default=None, min_length=1)
     broker_callback_idempotency_key: str | None = Field(default=None, min_length=1)
     operator_adjustment: AccountClerkOperatorAdjustment | None = None
@@ -316,6 +326,9 @@ class AccountClerkRecordedReceipt(BaseModel):
     order_ref: str = Field(min_length=1)
     journal_seq: int = Field(ge=1)
     recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
+    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
+    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=_MAX_INT64)
 
     @classmethod
     def from_journal_entry(cls, entry: AccountClerkJournalEntry) -> AccountClerkRecordedReceipt:
@@ -330,6 +343,9 @@ class AccountClerkRecordedReceipt(BaseModel):
             order_ref=intent.order_ref,
             journal_seq=entry.seq,
             recorded_at_ms=entry.recorded_at_ms,
+            clerk_request_received_at_ms=entry.clerk_request_received_at_ms,
+            clerk_intake_admitted_at_ms=entry.clerk_intake_admitted_at_ms,
+            inbox_fsynced_at_ms=entry.inbox_fsynced_at_ms,
         )
 
 

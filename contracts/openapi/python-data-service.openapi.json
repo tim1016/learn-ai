@@ -260,6 +260,32 @@
               }
             ]
           },
+          "clerk_intake_admitted_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Intake Admitted At Ms"
+          },
+          "clerk_request_received_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Request Received At Ms"
+          },
           "exec_id": {
             "anyOf": [
               {
@@ -270,6 +296,19 @@
               }
             ],
             "title": "Exec Id"
+          },
+          "inbox_fsynced_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inbox Fsynced At Ms"
           },
           "intent_id": {
             "minLength": 1,
@@ -430,6 +469,45 @@
             "minLength": 1,
             "title": "Bot Order Namespace",
             "type": "string"
+          },
+          "clerk_intake_admitted_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Intake Admitted At Ms"
+          },
+          "clerk_request_received_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Request Received At Ms"
+          },
+          "inbox_fsynced_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inbox Fsynced At Ms"
           },
           "intent_id": {
             "minLength": 1,
@@ -10335,6 +10413,241 @@
         "title": "ClearHoldRequest",
         "type": "object"
       },
+      "ClerkCustodyDurations": {
+        "additionalProperties": false,
+        "description": "Measured same-clock durations for one Clerk-owned intent.",
+        "properties": {
+          "a0_to_broker_write_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "A0 To Broker Write Ms"
+          },
+          "broker_return_to_first_callback_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Return To First Callback Ms"
+          },
+          "broker_write_to_return_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Write To Return Ms"
+          },
+          "intake_to_a0_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intake To A0 Ms"
+          },
+          "request_to_intake_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request To Intake Ms"
+          },
+          "terminal_age_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Age Ms"
+          }
+        },
+        "title": "ClerkCustodyDurations",
+        "type": "object"
+      },
+      "ClerkCustodyTimeline": {
+        "additionalProperties": false,
+        "description": "Distinct source, arrival, and durable clocks for one intent lifecycle.",
+        "properties": {
+          "a0_custody_accepted_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "A0 Custody Accepted At Ms"
+          },
+          "broker_ack_recorded_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Ack Recorded At Ms"
+          },
+          "broker_call_returned_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Call Returned At Ms"
+          },
+          "broker_write_started_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Write Started At Ms"
+          },
+          "clerk_intake_admitted_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Intake Admitted At Ms"
+          },
+          "clerk_request_received_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Request Received At Ms"
+          },
+          "durations": {
+            "$ref": "#/components/schemas/ClerkCustodyDurations"
+          },
+          "economic_terminal_recorded_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Economic Terminal Recorded At Ms"
+          },
+          "first_callback_arrived_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Callback Arrived At Ms"
+          },
+          "first_callback_recorded_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Callback Recorded At Ms"
+          },
+          "first_callback_source_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Callback Source At Ms"
+          },
+          "inbox_fsynced_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inbox Fsynced At Ms"
+          },
+          "intent_created_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Created At Ms"
+          }
+        },
+        "title": "ClerkCustodyTimeline",
+        "type": "object"
+      },
       "ClerkOrderInstruction": {
         "additionalProperties": false,
         "description": "Typed, receipt-supplied order fields; never a client-side inference.",
@@ -10710,6 +11023,16 @@
             ],
             "title": "Commission Status",
             "type": "string"
+          },
+          "custody_timeline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClerkCustodyTimeline"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "events": {
             "items": {

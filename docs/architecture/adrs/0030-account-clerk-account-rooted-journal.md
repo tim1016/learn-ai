@@ -405,3 +405,11 @@ the retired runtime. Account transaction history remains solely the bounded
 Clerk transaction projector: indexed opaque-keyset reads (maximum 100 rows;
 initial render 25) may apply origin, lifecycle, bot, and run predicates but
 never scan journals, sweep brokers, or fall back to Account Truth.
+
+### Custody timing baseline (2026-07-27, #1243)
+
+ADR 0033 defines the custody-clock contract used by the account journal. The
+current synchronous Clerk remains the behavior baseline: durable A0 evidence
+is measured before broker work but is not yet returned early. The transaction
+detail projection derives phase evidence from Clerk receipts without treating
+the journal sequence as time or creating another account authority.

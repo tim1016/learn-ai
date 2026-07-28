@@ -30,11 +30,13 @@ from app.schemas.clerk_transaction_projection import (
     TransactionFeedState,
     TransactionOrigin,
 )
+from app.services.clerk_custody_timeline import custody_timeline_from_transaction
 from app.services.clerk_transaction_projection_ibkr import (
     event_from_journal,
     opaque_projection_id,
     row_from_event,
 )
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 MAX_PROJECTION_READ_BYTES = 1_048_576
@@ -904,9 +906,13 @@ async def transaction_detail(
     """Read one operator-selected receipt from the indexed projection only."""
 
     resolved_store = store or _default_store()
-    return await resolved_store.transaction_detail(
+    row = await resolved_store.transaction_detail(
         account_id=account_id, transaction_id=transaction_id
     )
+    if row is None:
+        return None
+    timeline = custody_timeline_from_transaction(row, now_ms=now_ms_utc())
+    return row.model_copy(update={"custody_timeline": timeline})
 
 
 def _json_value(value: Any) -> Any:

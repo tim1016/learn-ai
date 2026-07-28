@@ -231,11 +231,24 @@ class AccountClerk:
 
         self._callback_drain = drain
 
-    async def record_intent(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
+    async def record_intent(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        clerk_request_received_at_ms: int | None = None,
+    ) -> AccountClerkRecordedReceipt:
         """Validate, durably record, and acknowledge one intent without I/O to IBKR."""
 
         async with self._intake_lock:
-            return await asyncio.to_thread(self._record_intent_locked, intent)
+            if clerk_request_received_at_ms is None:
+                return await asyncio.to_thread(self._record_intent_locked, intent)
+            clerk_intake_admitted_at_ms = self._now_ms()
+            return await asyncio.to_thread(
+                self._record_intent_locked,
+                intent,
+                clerk_request_received_at_ms=clerk_request_received_at_ms,
+                clerk_intake_admitted_at_ms=clerk_intake_admitted_at_ms,
+            )
 
     async def emergency_flatten_account(
         self,
@@ -339,6 +352,8 @@ class AccountClerk:
     async def submit_intent(
         self,
         intent: AccountOwnerSubmitIntent,
+        *,
+        clerk_request_received_at_ms: int | None = None,
     ) -> tuple[AccountClerkRecordedReceipt, AccountClerkBrokerAckReceipt]:
         """Serially record then submit one paper intent through the clerk broker.
 
@@ -373,7 +388,16 @@ class AccountClerk:
             )
             with operation_fence:
                 await self._require_normal_submit_intake(intent)
-                recorded = await asyncio.to_thread(self._record_intent_locked, intent)
+                if clerk_request_received_at_ms is None:
+                    recorded = await asyncio.to_thread(self._record_intent_locked, intent)
+                else:
+                    clerk_intake_admitted_at_ms = self._now_ms()
+                    recorded = await asyncio.to_thread(
+                        self._record_intent_locked,
+                        intent,
+                        clerk_request_received_at_ms=clerk_request_received_at_ms,
+                        clerk_intake_admitted_at_ms=clerk_intake_admitted_at_ms,
+                    )
                 existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
                 if existing_ack is not None:
                     await self._publish_manual_order_ack_event(intent, existing_ack)
@@ -649,11 +673,22 @@ class AccountClerk:
 
         return self._journal.recover_inbox()
 
-    def _record_intent_locked(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
+    def _record_intent_locked(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        clerk_request_received_at_ms: int | None = None,
+        clerk_intake_admitted_at_ms: int | None = None,
+    ) -> AccountClerkRecordedReceipt:
         if intent.account_id != self._account_id:
             self._reject(intent, "CLERK_ACCOUNT_MISMATCH")
 
-        return self._journal.record_intent(intent, validate_intent=self._validate_intent_identity)
+        return self._journal.record_intent(
+            intent,
+            validate_intent=self._validate_intent_identity,
+            clerk_request_received_at_ms=clerk_request_received_at_ms,
+            clerk_intake_admitted_at_ms=clerk_intake_admitted_at_ms,
+        )
 
     def append_broker_event(self, intent: AccountOwnerSubmitIntent, event: IbkrOrderEvent) -> None:
         """Compatibility helper for synchronous test-only callback injection.

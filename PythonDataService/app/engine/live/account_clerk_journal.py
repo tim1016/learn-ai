@@ -99,6 +99,8 @@ class AccountClerkJournal:
         intent: AccountOwnerSubmitIntent,
         *,
         validate_intent: Callable[[AccountOwnerSubmitIntent], None],
+        clerk_request_received_at_ms: int | None = None,
+        clerk_intake_admitted_at_ms: int | None = None,
     ) -> AccountClerkRecordedReceipt:
         inbox_path, journal_path = self._paths()
         journal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,13 +116,21 @@ class AccountClerkJournal:
             inbox_entry = AccountClerkInboxEntry(
                 seq=next_seq,
                 received_at_ms=self._now_ms(),
+                clerk_request_received_at_ms=clerk_request_received_at_ms,
                 intent=intent,
             )
             _append_jsonl(inbox_path, inbox_entry)
+            inbox_fsynced_at_ms = self._now_ms()
             journal_entry = AccountClerkJournalEntry(
                 seq=inbox_entry.seq,
                 recorded_at_ms=self._now_ms(),
                 intent=inbox_entry.intent,
+                clerk_request_received_at_ms=inbox_entry.clerk_request_received_at_ms,
+                clerk_intake_admitted_at_ms=clerk_intake_admitted_at_ms,
+                # This timestamp is taken only after the inbox durable append
+                # returns. Replayed legacy inbox rows leave it unknown rather
+                # than presenting a synthesized fsync clock.
+                inbox_fsynced_at_ms=inbox_fsynced_at_ms,
             )
             self._append_entry_locked(journal_path, entries, journal_entry)
             self.register_attribution(intent)
@@ -918,6 +928,7 @@ def _validate_inbox_replayable(
             seq=inbox_entry.seq,
             recorded_at_ms=inbox_entry.received_at_ms,
             intent=inbox_entry.intent,
+            clerk_request_received_at_ms=inbox_entry.clerk_request_received_at_ms,
         )
         expected_seq += 1
     return unique_inbox_entries

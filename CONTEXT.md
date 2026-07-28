@@ -1340,3 +1340,21 @@ at the moment of the click.
   pattern, ADR-0013 §6).
 
 Authority: ADR-0015 § Amendment 2026-07-08 (b).
+
+## Account custody language (resolved 2026-07-27)
+
+- **Originator** — the immutable strategy instance, run, and namespace that
+  authored an intent. It remains provenance after its process dies.
+- **Custodian** — the one durable account authority responsible for resolving
+  an admitted intent lifecycle. In normal paper operation this is the
+  accepting Account Clerk generation.
+- **Manager** — the at-most-one fenced actor permitted to issue the next
+  broker write for a custody lifecycle. _Avoid_: owner, submitter.
+- **A0 custody receipt** — proof that the Clerk fsynced an intent and accepted
+  responsibility to resolve it; it is not broker acknowledgement or exposure
+  evidence. _Avoid_: order accepted, broker success.
+- **Custody timeline** — the per-intent evidence that keeps broker/source time,
+  local arrival time, and durable record time distinct. Journal sequence orders
+  file writes only and is never a causal clock.
+- **Account epoch** — the accepting Clerk generation's bounded period of valid
+  broker proof. Facts from an invalidated epoch cannot authorize a new entry.

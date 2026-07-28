@@ -80,6 +80,7 @@ from app.engine.live.account_registry import (
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.services.bot_deletion import BotDeletionCorruptError, bot_retirement_is_pending
 from app.services.journal_cures import JournalCureError, JournalCureHandler
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -725,7 +726,10 @@ class AccountClerkRpcServer:
             raise _AccountClerkRpcRequestRejected("CLERK_RPC_CLOSED")
         if operation == "submit":
             intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
-            recorded, broker_acked = await self._clerk.submit_intent(intent)
+            recorded, broker_acked = await self._clerk.submit_intent(
+                intent,
+                clerk_request_received_at_ms=now_ms_utc(),
+            )
             return AccountClerkRpcSuccessEnvelope(
                 payload={
                     "recorded": recorded.model_dump(mode="json"),

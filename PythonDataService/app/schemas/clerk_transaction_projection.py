@@ -54,6 +54,39 @@ class ClerkTransactionEventRow(BaseModel):
     receipt: dict[str, Any] = Field(default_factory=dict)
 
 
+class ClerkCustodyDurations(BaseModel):
+    """Measured same-clock durations for one Clerk-owned intent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request_to_intake_ms: int | None = Field(default=None, ge=0)
+    intake_to_a0_ms: int | None = Field(default=None, ge=0)
+    a0_to_broker_write_ms: int | None = Field(default=None, ge=0)
+    broker_write_to_return_ms: int | None = Field(default=None, ge=0)
+    broker_return_to_first_callback_ms: int | None = Field(default=None, ge=0)
+    terminal_age_ms: int | None = Field(default=None, ge=0)
+
+
+class ClerkCustodyTimeline(BaseModel):
+    """Distinct source, arrival, and durable clocks for one intent lifecycle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent_created_at_ms: int | None = Field(default=None, ge=0)
+    clerk_request_received_at_ms: int | None = Field(default=None, ge=0)
+    clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0)
+    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0)
+    a0_custody_accepted_at_ms: int | None = Field(default=None, ge=0)
+    broker_write_started_at_ms: int | None = Field(default=None, ge=0)
+    broker_call_returned_at_ms: int | None = Field(default=None, ge=0)
+    broker_ack_recorded_at_ms: int | None = Field(default=None, ge=0)
+    earliest_broker_source_at_ms: int | None = Field(default=None, ge=0)
+    first_callback_arrived_at_ms: int | None = Field(default=None, ge=0)
+    first_callback_recorded_at_ms: int | None = Field(default=None, ge=0)
+    economic_terminal_recorded_at_ms: int | None = Field(default=None, ge=0)
+    durations: ClerkCustodyDurations = Field(default_factory=ClerkCustodyDurations)
+
+
 class ClerkTransactionRow(BaseModel):
     """One operator transaction, projected from a durable Clerk receipt."""
 
@@ -81,6 +114,7 @@ class ClerkTransactionRow(BaseModel):
     fee: float | None = None
     receipt: dict[str, Any] = Field(default_factory=dict)
     events: list[ClerkTransactionEventRow] = Field(default_factory=list)
+    custody_timeline: ClerkCustodyTimeline | None = None
 
 
 class ClerkTransactionSummaryRow(BaseModel):
