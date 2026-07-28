@@ -25,7 +25,7 @@ import os
 import signal
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from contextlib import asynccontextmanager, contextmanager, nullcontext, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -81,6 +81,7 @@ from app.engine.live.account_clerk_operations import (
 from app.engine.live.account_epoch import (
     AccountEpochAuthority,
     AccountEpochState,
+    AccountEpochWriteBlockedError,
     EpochInvalidationTrigger,
 )
 from app.engine.live.account_epoch_observer import (
@@ -89,6 +90,7 @@ from app.engine.live.account_epoch_observer import (
 from app.engine.live.account_epoch_observer import (
     supervise_account_epoch_signals as _supervise_account_epoch_signals,
 )
+from app.engine.live.account_epoch_reconciliation import collect_epoch_reconciliation_proof
 from app.engine.live.account_owner import (
     MANUAL_OPERATOR_RUN_ID,
     MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
@@ -199,6 +201,9 @@ class AccountClerk:
         self._host_binding_capability = host_binding_capability
         self._intake_lock = asyncio.Lock()
         self._broker_write_lock = asyncio.Lock()
+        # This lock linearizes a final broker-write admission with a newly
+        # observed invalidation. Its ordering is always intake -> epoch gate.
+        self._epoch_write_admission_lock = asyncio.Lock()
         self._journal = AccountClerkJournal(
             artifacts_root=artifacts_root,
             account_id=account_id,
@@ -403,7 +408,7 @@ class AccountClerk:
 
         if self._epoch_authority is None:
             return
-        async with self._intake_lock:
+        async with self._intake_lock, self._epoch_write_admission_lock:
             await asyncio.to_thread(self._epoch_authority.invalidate, trigger)
 
     def mark_broker_event_stream_live(self) -> None:
@@ -423,7 +428,7 @@ class AccountClerk:
 
         if self._epoch_authority is None or not has_nonterminal_work:
             return
-        async with self._intake_lock:
+        async with self._intake_lock, self._epoch_write_admission_lock:
             last_observed_at_ms = self._last_broker_callback_recorded_at_ms
             if (
                 self._critical_stream_silence_recorded
@@ -589,7 +594,7 @@ class AccountClerk:
     async def _advance_async_custody_intent(self, intent: AccountOwnerSubmitIntent) -> None:
         """Cross A1 under the Clerk grant, then retain uncertainty durably."""
 
-        async with self._broker_write_lock:
+        async with self._broker_write_lock, AsyncExitStack() as admission:
             async with self._intake_lock:
                 await self._require_normal_submit_intake(intent)
                 status = await asyncio.to_thread(self._journal.custody_status_for_intent, intent)
@@ -597,16 +602,23 @@ class AccountClerk:
                     return
                 self._require_paper_broker()
                 spec = IbkrOrderSpec.model_validate(intent.order_spec)
-                # This durable A1 receipt is written before the broker call and
-                # after the durable A0 row that the caller can query by identity.
+                await self._require_epoch_entry_admission(intent)
+                # Keep the permit after releasing intake: callback persistence
+                # and subsequent A0 requests remain responsive while an A1
+                # broker call is pending, but an invalidation still waits until
+                # this call resolves and can never land between A1 and IBKR.
+                await admission.enter_async_context(
+                    self._broker_write_admission("account_clerk.broker.place_order")
+                )
                 await asyncio.to_thread(
                     self._journal.append_broker_submitting,
                     intent,
                     **self._epoch_transition_provenance(),
                 )
             self._schedule_custody_notification(intent)
+            broker_write_uncertain = False
             try:
-                ack = await self._place_under_clerk_grant(spec)
+                ack = await self._place_broker_order(spec)
             except Exception as exc:
                 async with self._intake_lock:
                     await asyncio.to_thread(
@@ -615,17 +627,20 @@ class AccountClerk:
                         exc,
                         **self._epoch_transition_provenance(),
                     )
-                self._schedule_custody_notification(intent)
-                return
-            async with self._intake_lock:
-                receipt = await asyncio.to_thread(
-                    self._journal.append_broker_ack,
-                    intent,
-                    ack,
-                    **self._epoch_transition_provenance(),
-                )
-            await self._publish_manual_order_ack_event(intent, receipt)
+                broker_write_uncertain = True
+            if not broker_write_uncertain:
+                async with self._intake_lock:
+                    receipt = await asyncio.to_thread(
+                        self._journal.append_broker_ack,
+                        intent,
+                        ack,
+                        **self._epoch_transition_provenance(),
+                    )
+        if broker_write_uncertain:
             self._schedule_custody_notification(intent)
+            return
+        await self._publish_manual_order_ack_event(intent, receipt)
+        self._schedule_custody_notification(intent)
 
     async def _hold_async_custody_before_a1(
         self,
@@ -901,6 +916,12 @@ class AccountClerk:
             )
             with operation_fence:
                 await self._require_normal_submit_intake(intent)
+                existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
+                if existing_ack is not None:
+                    recorded = await asyncio.to_thread(self._record_intent_locked, intent)
+                    await self._publish_manual_order_ack_event(intent, existing_ack)
+                    return recorded, existing_ack
+                await self._require_epoch_entry_admission(intent)
                 if clerk_request_received_at_ms is None:
                     recorded = await asyncio.to_thread(self._record_intent_locked, intent)
                 else:
@@ -911,29 +932,29 @@ class AccountClerk:
                         clerk_request_received_at_ms=clerk_request_received_at_ms,
                         clerk_intake_admitted_at_ms=clerk_intake_admitted_at_ms,
                     )
-                existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
-                if existing_ack is not None:
-                    await self._publish_manual_order_ack_event(intent, existing_ack)
-                    return recorded, existing_ack
                 # A stream can die while the inbox/journal fsync is in flight.
                 # Never start the broker write after that closed the submit lane.
                 await self._require_normal_submit_intake(intent)
                 self._require_paper_broker()
                 spec = IbkrOrderSpec.model_validate(intent.order_spec)
-                await asyncio.to_thread(
-                    self._journal.append_broker_submitting,
-                    intent,
-                    **self._epoch_transition_provenance(),
-                )
+                broker_write_started = False
                 try:
-                    ack = await self._place_under_clerk_grant(spec)
+                    async with self._broker_write_admission("account_clerk.broker.place_order"):
+                        await asyncio.to_thread(
+                            self._journal.append_broker_submitting,
+                            intent,
+                            **self._epoch_transition_provenance(),
+                        )
+                        broker_write_started = True
+                        ack = await self._place_broker_order(spec)
                 except Exception as exc:
-                    await asyncio.to_thread(
-                        self._journal.append_broker_uncertain,
-                        intent,
-                        exc,
-                        **self._epoch_transition_provenance(),
-                    )
+                    if broker_write_started:
+                        await asyncio.to_thread(
+                            self._journal.append_broker_uncertain,
+                            intent,
+                            exc,
+                            **self._epoch_transition_provenance(),
+                        )
                     raise
                 broker_ack = await asyncio.to_thread(
                     self._journal.append_broker_ack,
@@ -1356,6 +1377,45 @@ class AccountClerk:
         async with self._intake_lock:
             return await asyncio.to_thread(self._journal.snapshot)
 
+    async def reconcile_epoch_if_required(self) -> AccountEpochState | None:
+        """Resolve an invalid proof horizon from fresh, Clerk-owned broker facts.
+
+        Intake is deliberately released during slow broker reads because the
+        epoch is already invalid. The proof carries the journal tail it saw;
+        callbacks or a later invalidation therefore make it stale rather than
+        letting it reopen a newer account horizon.
+        """
+
+        if self._epoch_authority is None:
+            return None
+        async with self._intake_lock, self._epoch_write_admission_lock:
+            state = await asyncio.to_thread(self._epoch_authority.read)
+            if state.status == "CLEAN":
+                return state
+            if state.reconciliation_id is None:
+                raise RuntimeError("ACCOUNT_EPOCH_RECONCILIATION_ID_MISSING")
+            entries = await asyncio.to_thread(self._journal.snapshot)
+        proof = await collect_epoch_reconciliation_proof(
+            broker=self._broker,
+            state=state,
+            entries=entries,
+        )
+        async with self._intake_lock, self._epoch_write_admission_lock:
+            current = await asyncio.to_thread(self._epoch_authority.read)
+            if (
+                current.status != "INVALID"
+                or current.reconciliation_id != proof.reconciliation_id
+                or current.current_epoch != proof.candidate_epoch
+            ):
+                return current
+            current_entries = await asyncio.to_thread(self._journal.snapshot)
+            if max((entry.seq for entry in current_entries), default=0) != proof.journal_tail_seq:
+                return current
+            return await asyncio.to_thread(
+                self._epoch_authority.complete_reconciliation,
+                proof,
+            )
+
     async def reconcile_uncertain_intent(
         self,
         intent: AccountOwnerSubmitIntent,
@@ -1380,6 +1440,7 @@ class AccountClerk:
             with operation_fence:
                 await self._require_normal_submit_intake(intent)
                 await asyncio.to_thread(self._validate_intent_identity, intent)
+                await self._require_epoch_entry_admission(intent)
                 return await self._retry_recorded_intent_locked(intent)
 
     async def _retry_recorded_intent_locked(self, intent: AccountOwnerSubmitIntent) -> AccountClerkBrokerAckReceipt:
@@ -1387,20 +1448,24 @@ class AccountClerk:
 
         await asyncio.to_thread(self._journal.register_attribution, intent)
         spec = IbkrOrderSpec.model_validate(intent.order_spec)
-        await asyncio.to_thread(
-            self._journal.append_broker_submitting,
-            intent,
-            **self._epoch_transition_provenance(),
-        )
+        broker_write_started = False
         try:
-            ack = await self._place_under_clerk_grant(spec)
+            async with self._broker_write_admission("account_clerk.broker.place_order"):
+                await asyncio.to_thread(
+                    self._journal.append_broker_submitting,
+                    intent,
+                    **self._epoch_transition_provenance(),
+                )
+                broker_write_started = True
+                ack = await self._place_broker_order(spec)
         except Exception as exc:
-            await asyncio.to_thread(
-                self._journal.append_broker_uncertain,
-                intent,
-                exc,
-                **self._epoch_transition_provenance(),
-            )
+            if broker_write_started:
+                await asyncio.to_thread(
+                    self._journal.append_broker_uncertain,
+                    intent,
+                    exc,
+                    **self._epoch_transition_provenance(),
+                )
             raise
         receipt = await asyncio.to_thread(
             self._journal.append_broker_ack,
@@ -1495,6 +1560,22 @@ class AccountClerk:
         )
         if unresolved:
             self._reject(intent, "CLERK_CANCEL_NAMESPACE_UNRESOLVED")
+
+    async def _require_epoch_entry_admission(self, intent: AccountOwnerSubmitIntent) -> None:
+        """Reject a new or retrying entry before it can create A1 uncertainty."""
+
+        if self._epoch_authority is None:
+            return
+        try:
+            await asyncio.to_thread(self._epoch_authority.require_broker_write)
+        except AccountEpochWriteBlockedError as exc:
+            self._reject(
+                intent,
+                "CLERK_ACCOUNT_EPOCH_RECONCILIATION_REQUIRED",
+                epoch_status=exc.state.status,
+                epoch_reason=exc.state.would_block_reason,
+                reconciliation_id=exc.state.reconciliation_id,
+            )
 
     def _require_rpc_write_intake(self, intent: AccountOwnerSubmitIntent) -> None:
         if not self._rpc_write_intake_closed:
@@ -1636,16 +1717,23 @@ class AccountClerk:
         *,
         wait_for_perm_id: bool = False,
     ) -> Any:
+        return await self._run_broker_write(
+            "account_clerk.broker.place_order",
+            lambda: self._place_broker_order(spec, wait_for_perm_id=wait_for_perm_id),
+        )
+
+    async def _place_broker_order(
+        self,
+        spec: IbkrOrderSpec,
+        *,
+        wait_for_perm_id: bool = False,
+    ) -> Any:
+        """Invoke the broker only while a caller already holds Clerk admission."""
+
         place_order = self._broker.place_order
         accepts_perm_id_wait = "perm_id_wait_s" in inspect.signature(place_order).parameters
         kwargs = {"perm_id_wait_s": _RECOVERY_PERM_ID_WAIT_S} if wait_for_perm_id and accepts_perm_id_wait else {}
-        return await asyncio.wait_for(
-            self._run_broker_write(
-                "account_clerk.broker.place_order",
-                lambda: place_order(spec, **kwargs),
-            ),
-            timeout=_BROKER_SUBMIT_TIMEOUT_S,
-        )
+        return await asyncio.wait_for(place_order(spec, **kwargs), timeout=_BROKER_SUBMIT_TIMEOUT_S)
 
     async def _journal_recovery_write_reason(self) -> str | None:
         """Return the durable account-wide broker-write fence, if any.
@@ -1683,12 +1771,116 @@ class AccountClerk:
     ) -> Any:
         """Exclude a recovery claim from final broker-write admission onward."""
 
-        async with _journal_recovery_broker_write_lock(self._artifacts_root, self._account_id):
-            return await self._run_broker_write_under_recovery_admission(
+        async with self._broker_write_admission(
+            boundary,
+            before_broker_write=before_broker_write,
+        ):
+            return await write()
+
+    @asynccontextmanager
+    async def _broker_write_admission(
+        self,
+        boundary: str,
+        *,
+        before_broker_write: Callable[[], Awaitable[None]] | None = None,
+    ) -> AsyncIterator[None]:
+        """Hold every admission proof from a durable A1 marker through IBKR."""
+
+        async with (
+            _journal_recovery_broker_write_lock(self._artifacts_root, self._account_id),
+            self._broker_write_admission_under_recovery_admission(
                 boundary,
-                write,
                 before_broker_write=before_broker_write,
-            )
+            ),
+        ):
+            yield
+
+    @asynccontextmanager
+    async def _broker_write_admission_under_recovery_admission(
+        self,
+        boundary: str,
+        *,
+        before_broker_write: Callable[[], Awaitable[None]] | None = None,
+    ) -> AsyncIterator[None]:
+        # A torn journal is a global account-write fence.  This final shared
+        # boundary covers normal placements, recovery actions, cancellations,
+        # and emergencies, so no exceptional path can reach IBKR on corrupt
+        # durable intent evidence.
+        recovery_reason = await self._journal_recovery_write_reason()
+        if recovery_reason is not None:
+            raise RuntimeError(recovery_reason)
+        # Preserve the existing no-A1 rule for a superseded Clerk. A durable
+        # pre-write marker is not harmless if it could make a later recovery
+        # mistake a fenced cancellation for an ambiguous broker attempt.
+        if self._clerk_generation is not None:
+            try:
+                observed_generation = self._read_active_generation()
+            except (OSError, ValueError) as exc:
+                self._fence_stale_generation()
+                raise AccountClerkGenerationFencedError(
+                    account_id=self._account_id,
+                    expected_generation=self._clerk_generation,
+                    observed_generation=None,
+                    boundary=boundary,
+                ) from exc
+            if observed_generation != self._clerk_generation:
+                self._fence_stale_generation()
+                raise AccountClerkGenerationFencedError(
+                    account_id=self._account_id,
+                    expected_generation=self._clerk_generation,
+                    observed_generation=observed_generation,
+                    boundary=boundary,
+                )
+        if before_broker_write is not None:
+            await before_broker_write()
+        # The lock begins after any durable pre-write marker.  That avoids an
+        # intake -> epoch-gate inversion for exceptional operations while
+        # still holding the final proof check through the broker invocation.
+        async with self._epoch_write_admission_lock:
+            if self._epoch_authority is not None:
+                await asyncio.to_thread(self._epoch_authority.require_broker_write)
+            if self._clerk_generation is None:
+                yield
+                return
+            try:
+                observed_generation = self._read_active_generation()
+            except (OSError, ValueError) as exc:
+                self._fence_stale_generation()
+                raise AccountClerkGenerationFencedError(
+                    account_id=self._account_id,
+                    expected_generation=self._clerk_generation,
+                    observed_generation=None,
+                    boundary=boundary,
+                ) from exc
+            if observed_generation != self._clerk_generation:
+                self._fence_stale_generation()
+                raise AccountClerkGenerationFencedError(
+                    account_id=self._account_id,
+                    expected_generation=self._clerk_generation,
+                    observed_generation=observed_generation,
+                    boundary=boundary,
+                )
+            try:
+                with account_clerk_write_grant(
+                    account_id=self._account_id,
+                    clerk_generation=self._clerk_generation,
+                    boundary=boundary,
+                    clerk_generation_provider=self._read_active_generation,
+                ):
+                    yield
+            except AccountClerkWriteFenceError as exc:
+                if exc.reason not in {
+                    "CLERK_LEASE_UNAVAILABLE_AT_BROKER_WRITE",
+                    "OWNER_GENERATION_STALE_AT_BROKER_WRITE",
+                }:
+                    raise
+                self._fence_stale_generation()
+                raise AccountClerkGenerationFencedError(
+                    account_id=self._account_id,
+                    expected_generation=self._clerk_generation,
+                    observed_generation=exc.current_clerk_generation,
+                    boundary=boundary,
+                ) from exc
 
     async def _run_broker_write_under_recovery_admission(
         self,
@@ -1697,58 +1889,13 @@ class AccountClerk:
         *,
         before_broker_write: Callable[[], Awaitable[None]] | None = None,
     ) -> Any:
-        # A torn journal is a global account-write fence.  This final shared
-        # boundary covers normal placements, recovery actions, cancellations,
-        # and emergencies, so no exceptional path can reach IBKR on corrupt
-        # durable intent evidence.
-        recovery_reason = await self._journal_recovery_write_reason()
-        if recovery_reason is not None:
-            raise RuntimeError(recovery_reason)
-        if self._clerk_generation is None:
-            if before_broker_write is not None:
-                await before_broker_write()
+        """Compatibility seam for focused tests of final write admission."""
+
+        async with self._broker_write_admission_under_recovery_admission(
+            boundary,
+            before_broker_write=before_broker_write,
+        ):
             return await write()
-        try:
-            observed_generation = self._read_active_generation()
-        except (OSError, ValueError) as exc:
-            self._fence_stale_generation()
-            raise AccountClerkGenerationFencedError(
-                account_id=self._account_id,
-                expected_generation=self._clerk_generation,
-                observed_generation=None,
-                boundary=boundary,
-            ) from exc
-        if observed_generation != self._clerk_generation:
-            self._fence_stale_generation()
-            raise AccountClerkGenerationFencedError(
-                account_id=self._account_id,
-                expected_generation=self._clerk_generation,
-                observed_generation=observed_generation,
-                boundary=boundary,
-            )
-        try:
-            with account_clerk_write_grant(
-                account_id=self._account_id,
-                clerk_generation=self._clerk_generation,
-                boundary=boundary,
-                clerk_generation_provider=self._read_active_generation,
-            ):
-                if before_broker_write is not None:
-                    await before_broker_write()
-                return await write()
-        except AccountClerkWriteFenceError as exc:
-            if exc.reason not in {
-                "CLERK_LEASE_UNAVAILABLE_AT_BROKER_WRITE",
-                "OWNER_GENERATION_STALE_AT_BROKER_WRITE",
-            }:
-                raise
-            self._fence_stale_generation()
-            raise AccountClerkGenerationFencedError(
-                account_id=self._account_id,
-                expected_generation=self._clerk_generation,
-                observed_generation=exc.current_clerk_generation,
-                boundary=boundary,
-            ) from exc
 
     def _read_active_generation(self) -> int | None:
         if self._durable_generation_provider is None:
@@ -1793,7 +1940,6 @@ class AccountClerk:
                 **extra_diagnostics,
             },
         )
-
 
 def account_clerk_authority_lock_target(artifacts_root: Path, account_id: str) -> Path:
     """Return the non-generation target used for this account's lifetime lock.

@@ -1,10 +1,9 @@
-"""Durable account-epoch evidence owned by the Account Clerk.
+"""Durable account-epoch evidence and broker-write proof owned by the Clerk.
 
 An epoch is deliberately a *proof horizon*, not a connection boolean.  When
 the Clerk observes a condition that can make broker knowledge stale, it moves
-the account into an invalid shadow epoch and records an idempotent receipt.
-Slice 4 only exposes the proposed write fence; later slices decide when a
-reconciliation can mint a clean successor.
+the account into an invalid epoch and records an idempotent receipt.  A broker
+write resumes only after the Clerk durably records a reconciled successor.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.engine.live.account_artifacts import (
     ACCOUNT_CLERK_GENERATION_FILENAME,
@@ -40,6 +39,7 @@ EpochInvalidationTrigger = Literal[
     "GENERATION_FENCED",
 ]
 EpochReconciliationDepth = Literal["full", "incremental"]
+EpochReconciliationVerdict = Literal["NOT_REQUIRED", "RECONCILING", "CLEAN", "ADOPTED", "CONTAMINATED"]
 
 
 class AccountEpoch(BaseModel):
@@ -67,6 +67,68 @@ class AccountEpochInvalidationReceipt(BaseModel):
     recorded_at_ms: int = Field(ge=0)
 
 
+class AccountEpochOutageChanges(BaseModel):
+    """Typed discovered and changed facts from one broker outage comparison."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    discovered: tuple[dict[str, JsonValue], ...] = ()
+    changed: tuple[dict[str, JsonValue], ...] = ()
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.discovered or self.changed)
+
+
+class AccountEpochOutageDiff(BaseModel):
+    """Complete, JSON-safe proof payload retained with one reconciliation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    required_reconciliation_depth: EpochReconciliationDepth
+    performed_reconciliation_depth: Literal["full"] = "full"
+    intents: AccountEpochOutageChanges
+    orders: AccountEpochOutageChanges
+    executions: AccountEpochOutageChanges
+    positions: AccountEpochOutageChanges
+
+    @property
+    def has_changes(self) -> bool:
+        return any(
+            changes.has_changes
+            for changes in (self.intents, self.orders, self.executions, self.positions)
+        )
+
+
+class AccountEpochReconciliationProof(BaseModel):
+    """Immutable Clerk evidence that may, but need not, reopen the write gate."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    reconciliation_id: str = Field(min_length=1, max_length=128)
+    candidate_epoch: AccountEpoch
+    required_reconciliation_depth: EpochReconciliationDepth
+    # The Clerk currently executes a full broker-fact sweep even when 1102
+    # requires only an incremental minimum. The recorded proof makes that
+    # conservative superset explicit rather than silently relabelling it.
+    performed_reconciliation_depth: Literal["full"] = "full"
+    journal_tail_seq: int = Field(ge=0)
+    evidence_status: Literal["COMPLETE", "UNAVAILABLE"]
+    outage_diff: AccountEpochOutageDiff
+
+    @property
+    def permits_clean_successor(self) -> bool:
+        """Whether this complete, flat proof can mint exactly one successor."""
+
+        return (
+            self.evidence_status == "COMPLETE"
+            and not self.outage_diff.has_changes
+        )
+
+
 class AccountEpochState(BaseModel):
     """The current persisted shadow-epoch authority for one account."""
 
@@ -84,12 +146,23 @@ class AccountEpochState(BaseModel):
     # Account-event projection is replayable from them after a crash.
     invalidation_receipts: tuple[AccountEpochInvalidationReceipt, ...] = ()
     receipt_projection_status: Literal["CURRENT", "PENDING"] = "CURRENT"
+    reconciliation_verdict: EpochReconciliationVerdict = "NOT_REQUIRED"
+    outage_diff: dict[str, object] | None = None
     reconciliation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    last_reconciliation_id: str | None = Field(default=None, min_length=1, max_length=128)
     updated_at_ms: int = Field(ge=0)
 
 
 class AccountEpochGenerationFencedError(RuntimeError):
     """A stale Clerk attempted to mutate a newer account epoch."""
+
+
+class AccountEpochWriteBlockedError(RuntimeError):
+    """The current account epoch has not durably regained broker-write proof."""
+
+    def __init__(self, state: AccountEpochState) -> None:
+        super().__init__(state.would_block_reason or "ACCOUNT_EPOCH_RECONCILING")
+        self.state = state
 
 
 class AccountEpochAuthority:
@@ -177,6 +250,7 @@ class AccountEpochAuthority:
                     invalidation_triggers=("CLERK_DEATH", "GENERATION_FENCED"),
                     invalidation_receipts=(*existing.invalidation_receipts, death_receipt, fence_receipt),
                     receipt_projection_status="PENDING",
+                    reconciliation_verdict="RECONCILING",
                     reconciliation_id=reconciliation_id,
                     updated_at_ms=death_receipt.recorded_at_ms,
                 )
@@ -222,53 +296,151 @@ class AccountEpochAuthority:
                 raise AccountEpochGenerationFencedError("ACCOUNT_EPOCH_GENERATION_STALE")
             already_invalid = state.status == "INVALID"
             origin = state.current_epoch
-            observed = (
-                origin
-                if already_invalid
-                else AccountEpoch(clerk_boot_id=self._clerk_boot_id, epoch_seq=origin.epoch_seq + 1)
-            )
-            depth = _reconciliation_depth(trigger)
-            reconciliation_id = state.reconciliation_id or _reconciliation_id(self._account_id, observed)
-            receipt = next(
+            existing_receipt = next(
                 (
                     item
                     for item in state.invalidation_receipts
-                    if item.trigger == trigger and item.observed_epoch == observed
+                    if item.trigger == trigger and item.observed_epoch == origin
                 ),
                 None,
             )
-            if receipt is None:
-                receipt = _receipt(
-                    account_id=self._account_id,
-                    trigger=trigger,
-                    origin_epoch=origin,
-                    observed_epoch=observed,
-                    reconciliation_id=reconciliation_id,
-                    depth=depth,
-                    already_invalid=already_invalid,
-                    recorded_at_ms=self._now_ms(),
-                )
-                state = AccountEpochState(
-                    account_id=self._account_id,
-                    current_epoch=observed,
-                    clerk_generation=state.clerk_generation,
-                    status="INVALID",
-                    would_block_reason=state.would_block_reason or trigger,
-                    required_reconciliation_depth=_stronger_depth(
-                        state.required_reconciliation_depth,
-                        depth,
-                    ),
-                    invalidation_triggers=(*state.invalidation_triggers,)
-                    if trigger in state.invalidation_triggers
-                    else (*state.invalidation_triggers, trigger),
-                    invalidation_receipts=(*state.invalidation_receipts, receipt),
-                    receipt_projection_status="PENDING",
-                    reconciliation_id=reconciliation_id,
-                    updated_at_ms=receipt.recorded_at_ms,
-                )
-                self._write_locked(path, state)
+            if existing_receipt is not None:
+                return existing_receipt
+            # A new outage observation always starts a new candidate epoch.
+            # Keeping different signals on one candidate would let a full
+            # 1101 reconciliation clear evidence that arrived later under a
+            # distinct 1102 (or transport-loss) proof horizon.
+            observed = AccountEpoch(
+                clerk_boot_id=self._clerk_boot_id,
+                epoch_seq=origin.epoch_seq + 1,
+            )
+            depth = _reconciliation_depth(trigger)
+            reconciliation_id = _reconciliation_id(self._account_id, observed)
+            receipt = _receipt(
+                account_id=self._account_id,
+                trigger=trigger,
+                origin_epoch=origin,
+                observed_epoch=observed,
+                reconciliation_id=reconciliation_id,
+                depth=depth,
+                already_invalid=already_invalid,
+                recorded_at_ms=self._now_ms(),
+            )
+            state = AccountEpochState(
+                account_id=self._account_id,
+                current_epoch=observed,
+                clerk_generation=state.clerk_generation,
+                status="INVALID",
+                would_block_reason=trigger,
+                required_reconciliation_depth=depth,
+                invalidation_triggers=(trigger,),
+                invalidation_receipts=(*state.invalidation_receipts, receipt),
+                receipt_projection_status="PENDING",
+                reconciliation_verdict="RECONCILING",
+                reconciliation_id=reconciliation_id,
+                updated_at_ms=receipt.recorded_at_ms,
+            )
+            self._write_locked(path, state)
         self._replay_invalidation_receipts(state)
         return receipt
+
+    def require_broker_write(self) -> AccountEpochState:
+        """Recheck the durable epoch immediately before a Clerk broker write."""
+
+        path = self._path()
+        with _file_lock(self._generation_path()), _file_lock(path):
+            self._assert_durable_generation()
+            state = self._read_locked(path)
+            if state is None or state.status != "CLEAN":
+                raise AccountEpochWriteBlockedError(
+                    state
+                    if state is not None
+                    else AccountEpochState(
+                        account_id=self._account_id,
+                        current_epoch=AccountEpoch(clerk_boot_id=self._clerk_boot_id, epoch_seq=1),
+                        clerk_generation=self._clerk_generation,
+                        status="INVALID",
+                        would_block_reason="ACCOUNT_EPOCH_MISSING",
+                        reconciliation_verdict="RECONCILING",
+                        updated_at_ms=self._now_ms(),
+                    )
+                )
+            if state.reconciliation_verdict not in {"NOT_REQUIRED", "CLEAN", "ADOPTED"}:
+                raise AccountEpochWriteBlockedError(state)
+            return state
+
+    def complete_reconciliation(self, proof: AccountEpochReconciliationProof) -> AccountEpochState:
+        """Durably resolve an invalid epoch and mint a successor only on proof."""
+
+        path = self._path()
+        with _file_lock(self._generation_path()), _file_lock(path):
+            self._assert_durable_generation()
+            state = self._read_locked(path)
+            if (
+                state is None
+                or state.reconciliation_id != proof.reconciliation_id
+                or state.account_id != proof.account_id
+                or state.current_epoch != proof.candidate_epoch
+                or state.required_reconciliation_depth != proof.required_reconciliation_depth
+            ):
+                raise ValueError("ACCOUNT_EPOCH_RECONCILIATION_ID_MISMATCH")
+            if state.status != "INVALID":
+                raise ValueError("ACCOUNT_EPOCH_RECONCILIATION_NOT_REQUIRED")
+            if not proof.permits_clean_successor:
+                updated = state.model_copy(
+                    update={
+                        "status": "INVALID",
+                        "would_block_reason": "ACCOUNT_EPOCH_CONTAMINATED",
+                        "reconciliation_verdict": "CONTAMINATED",
+                        "outage_diff": proof.outage_diff.model_dump(mode="json"),
+                        "updated_at_ms": self._now_ms(),
+                    }
+                )
+            else:
+                successor = AccountEpoch(
+                    clerk_boot_id=self._clerk_boot_id,
+                    epoch_seq=state.current_epoch.epoch_seq + 1,
+                )
+                updated = state.model_copy(
+                    update={
+                        "current_epoch": successor,
+                        "status": "CLEAN",
+                        "would_block_reason": None,
+                        "reconciliation_verdict": "CLEAN",
+                        "outage_diff": proof.outage_diff.model_dump(mode="json"),
+                        "reconciliation_id": None,
+                        "last_reconciliation_id": proof.reconciliation_id,
+                        "updated_at_ms": self._now_ms(),
+                    }
+                )
+            self._write_locked(path, updated)
+        verdict: Literal["CLEAN", "CONTAMINATED"] = "CLEAN" if updated.status == "CLEAN" else "CONTAMINATED"
+        try:
+            append_account_event(
+                self._artifacts_root,
+                self._account_id,
+                {
+                    "event_type": "account_epoch_reconciliation_resolved",
+                    "receipt_id": f"account-epoch-reconciliation:{proof.reconciliation_id}:{verdict}",
+                    "reconciliation_id": proof.reconciliation_id,
+                    "verdict": verdict,
+                    "outage_diff": proof.outage_diff.model_dump(mode="json"),
+                    "origin_epoch": state.current_epoch.model_dump(mode="json"),
+                    "observed_epoch": updated.current_epoch.model_dump(mode="json"),
+                    "recorded_at_ms": updated.updated_at_ms,
+                },
+                only_if_receipt_absent=True,
+            )
+        except Exception:
+            # The state replacement above is the durable admission proof.  A
+            # projection outage must not make a completed reconciliation look
+            # retriable and mint another successor; the persisted epoch state
+            # remains the authoritative operator-health evidence.
+            logger.exception(
+                "account epoch reconciliation event projection failed",
+                extra={"account_id": self._account_id, "reconciliation_id": proof.reconciliation_id},
+            )
+        return updated
 
     def _replay_invalidation_receipts(self, state: AccountEpochState) -> AccountEpochState:
         """Project fsynced epoch receipts into the account-event evidence log."""
@@ -366,13 +538,6 @@ def _reconciliation_depth(trigger: EpochInvalidationTrigger) -> EpochReconciliat
     return "incremental" if trigger == "IBKR_1102" else "full"
 
 
-def _stronger_depth(
-    current: EpochReconciliationDepth | None,
-    proposed: EpochReconciliationDepth,
-) -> EpochReconciliationDepth:
-    return "full" if current == "full" or proposed == "full" else "incremental"
-
-
 def _reconciliation_id(account_id: str, epoch: AccountEpoch) -> str:
     return f"epoch:{account_id}:{epoch.clerk_boot_id}:{epoch.epoch_seq}"
 
@@ -410,6 +575,10 @@ __all__ = [
     "AccountEpochAuthority",
     "AccountEpochGenerationFencedError",
     "AccountEpochInvalidationReceipt",
+    "AccountEpochOutageChanges",
+    "AccountEpochOutageDiff",
+    "AccountEpochReconciliationProof",
     "AccountEpochState",
+    "AccountEpochWriteBlockedError",
     "EpochInvalidationTrigger",
 ]

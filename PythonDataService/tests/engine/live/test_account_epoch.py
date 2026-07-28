@@ -12,15 +12,24 @@ import pytest
 import app.engine.live.account_clerk as account_clerk_module
 import app.engine.live.account_epoch as account_epoch_module
 import app.engine.live.account_epoch_observer as account_epoch_observer_module
-from app.broker.ibkr.models import IbkrOrderEvent
+from app.broker.ibkr.models import IbkrOrderEvent, IbkrPosition, IbkrPositionsSnapshot
 from app.engine.live.account_artifacts import read_account_events
 from app.engine.live.account_clerk import AccountClerk
-from app.engine.live.account_clerk_journal import AccountClerkJournal
+from app.engine.live.account_clerk_journal import AccountClerkJournal, seed_account_clerk_broker_evidence_baseline
+from app.engine.live.account_clerk_journal_models import (
+    AccountClerkBrokerEvidenceBaseline,
+    AccountClerkPositionEvidence,
+)
+from app.engine.live.account_clerk_reconciler import AccountClerkReconciler
 from app.engine.live.account_clerk_rpc import AccountClerkRpcServer
 from app.engine.live.account_epoch import (
     AccountEpoch,
     AccountEpochAuthority,
     AccountEpochGenerationFencedError,
+    AccountEpochOutageChanges,
+    AccountEpochOutageDiff,
+    AccountEpochReconciliationProof,
+    AccountEpochWriteBlockedError,
     EpochInvalidationTrigger,
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
@@ -84,12 +93,12 @@ def test_1101_and_1102_remain_distinct_new_epoch_candidates(tmp_path: Path) -> N
     recovered_with_maintained_data = authority.invalidate("IBKR_1102")
 
     assert recovered_with_lost_data.observed_epoch.epoch_seq == 2
-    assert recovered_with_maintained_data.observed_epoch == recovered_with_lost_data.observed_epoch
+    assert recovered_with_maintained_data.observed_epoch.epoch_seq == 3
     assert recovered_with_lost_data.required_reconciliation_depth == "full"
     assert recovered_with_maintained_data.required_reconciliation_depth == "incremental"
     state = authority.read()
-    assert state.required_reconciliation_depth == "full"
-    assert state.invalidation_triggers == ("IBKR_1101", "IBKR_1102")
+    assert state.required_reconciliation_depth == "incremental"
+    assert state.invalidation_triggers == ("IBKR_1102",)
 
 
 def test_new_generation_preserves_invalid_history_and_stale_generation_cannot_advance(tmp_path: Path) -> None:
@@ -123,6 +132,26 @@ def test_durable_generation_fences_old_epoch_writer_before_successor_boot(tmp_pa
     durable_generation = 5
     with pytest.raises(AccountEpochGenerationFencedError):
         original.invalidate("GENERATION_FENCED")
+    with pytest.raises(AccountEpochGenerationFencedError):
+        original.require_broker_write()
+    with pytest.raises(AccountEpochGenerationFencedError):
+        original.complete_reconciliation(
+            AccountEpochReconciliationProof(
+                account_id=ACCOUNT_ID,
+                reconciliation_id="epoch:DU1234567:boot-a:2",
+                candidate_epoch=AccountEpoch(clerk_boot_id="boot-a", epoch_seq=2),
+                required_reconciliation_depth="full",
+                journal_tail_seq=0,
+                evidence_status="COMPLETE",
+                outage_diff=AccountEpochOutageDiff(
+                    required_reconciliation_depth="full",
+                    intents=AccountEpochOutageChanges(),
+                    orders=AccountEpochOutageChanges(),
+                    executions=AccountEpochOutageChanges(),
+                    positions=AccountEpochOutageChanges(),
+                ),
+            )
+        )
 
     successor = AccountEpochAuthority(
         artifacts_root=tmp_path,
@@ -139,6 +168,415 @@ def test_durable_generation_fences_old_epoch_writer_before_successor_boot(tmp_pa
         "CLERK_DEATH",
         "GENERATION_FENCED",
     ]
+
+
+class _EpochBroker:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.positions: list[IbkrPosition] = []
+        self.executions: list[IbkrOrderEvent] = []
+        self.open_orders: list[object] = []
+        self.completed_orders: list[object] = []
+
+    async def place_order(self, _spec: object | None = None) -> object:
+        self.calls += 1
+        return SimpleNamespace(order_id=42, perm_id=43, exec_id="exec-1")
+
+    async def fetch_positions(self) -> IbkrPositionsSnapshot:
+        return IbkrPositionsSnapshot(
+            account_id=ACCOUNT_ID,
+            is_paper=True,
+            positions=self.positions,
+            fetched_at_ms=1_780_000_000_000,
+        )
+
+    async def fetch_execution_evidence(self) -> list[IbkrOrderEvent]:
+        return self.executions
+
+    async def list_open_orders(self) -> list[object]:
+        return self.open_orders
+
+    async def list_completed_orders(self) -> list[object]:
+        return self.completed_orders
+
+
+@pytest.mark.asyncio
+async def test_epoch_reconciliation_mints_successor_only_after_complete_known_facts(tmp_path: Path) -> None:
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    authority.initialize()
+    authority.invalidate("SOCKET_LOSS")
+    broker = _EpochBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=broker,
+        epoch_authority=authority,
+    )
+
+    with pytest.raises(AccountEpochWriteBlockedError):
+        await clerk._run_broker_write_under_recovery_admission("test.epoch.write", broker.place_order)
+    assert broker.calls == 0
+
+    reconciled = await clerk.reconcile_epoch_if_required()
+
+    assert reconciled is not None
+    assert reconciled.status == "CLEAN"
+    assert reconciled.reconciliation_verdict == "CLEAN"
+    assert reconciled.last_reconciliation_id == "epoch:DU1234567:boot-a:2"
+    assert reconciled.outage_diff == {
+        "schema_version": 1,
+        "required_reconciliation_depth": "full",
+        "performed_reconciliation_depth": "full",
+        "intents": {"discovered": [], "changed": []},
+        "orders": {"discovered": [], "changed": []},
+        "executions": {"discovered": [], "changed": []},
+        "positions": {"discovered": [], "changed": []},
+    }
+    reconciliation_events = [
+        event for event in read_account_events(tmp_path, ACCOUNT_ID)
+        if event["event_type"] == "account_epoch_reconciliation_resolved"
+    ]
+    assert [event["receipt_id"] for event in reconciliation_events] == [
+        "account-epoch-reconciliation:epoch:DU1234567:boot-a:2:CLEAN"
+    ]
+    await clerk._run_broker_write_under_recovery_admission("test.epoch.write", broker.place_order)
+    assert broker.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_epoch_reconciliation_nonflat_position_without_full_contract_proof_remains_invalid(tmp_path: Path) -> None:
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    epoch = authority.initialize().current_epoch
+    intent = _intent()
+    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id=ACCOUNT_ID, now_ms=lambda: 1_780_000_000_000)
+    journal.record_intent(intent, validate_intent=lambda _: None, origin_epoch=epoch, observed_epoch=epoch)
+    journal.append_broker_ack(intent, SimpleNamespace(order_id=42, perm_id=43, exec_id="exec-1"))
+    authority.invalidate("IBKR_1101")
+    broker = _EpochBroker()
+    broker.positions = [
+        IbkrPosition(
+            account_id=ACCOUNT_ID,
+            con_id=123,
+            symbol="AMD",
+            sec_type="STK",
+            quantity=5.0,
+            avg_cost=100.0,
+            fetched_at_ms=1_780_000_000_001,
+        )
+    ]
+    broker.executions = [
+        IbkrOrderEvent(
+            account_id=ACCOUNT_ID,
+            order_ref=intent.order_ref,
+            order_id=42,
+            exec_id="exec-1",
+            event_type="fill",
+            symbol="AMD",
+            side="BUY",
+            fill_quantity=5.0,
+            ts_ms=1_780_000_000_001,
+        )
+    ]
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=broker,
+        epoch_authority=authority,
+    )
+
+    reconciled = await clerk.reconcile_epoch_if_required()
+
+    assert reconciled is not None
+    assert reconciled.status == "INVALID"
+    assert reconciled.reconciliation_verdict == "CONTAMINATED"
+    assert reconciled.outage_diff is not None
+    assert reconciled.outage_diff["positions"] == {
+        "discovered": [
+            {
+                "con_id": 123,
+                "symbol": "AMD",
+                "sec_type": "STK",
+                "expiry_ms": None,
+                "strike": None,
+                "right": None,
+                "multiplier": 1,
+                "signed_quantity": 5.0,
+            }
+        ],
+        "changed": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_clerk_reconciler_proves_epoch_before_it_considers_uncertain_intents(tmp_path: Path) -> None:
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    authority.initialize()
+    authority.invalidate("IBKR_1102")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=_EpochBroker(),
+        epoch_authority=authority,
+    )
+
+    resolutions = await AccountClerkReconciler(clerk).reconcile_once()
+
+    assert resolutions == ()
+    state = authority.read()
+    assert state.status == "CLEAN"
+    assert state.reconciliation_verdict == "CLEAN"
+    assert state.outage_diff is not None
+    assert state.outage_diff["required_reconciliation_depth"] == "incremental"
+    assert state.outage_diff["performed_reconciliation_depth"] == "full"
+
+
+@pytest.mark.asyncio
+async def test_epoch_reconciliation_missing_broker_fact_remains_invalid(tmp_path: Path) -> None:
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    authority.initialize()
+    authority.invalidate("IBKR_1101")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=SimpleNamespace(),
+        epoch_authority=authority,
+    )
+
+    reconciled = await clerk.reconcile_epoch_if_required()
+
+    assert reconciled is not None
+    assert reconciled.status == "INVALID"
+    assert reconciled.reconciliation_verdict == "CONTAMINATED"
+    assert reconciled.outage_diff is not None
+    assert reconciled.outage_diff["intents"]["discovered"] == [{"failure_type": "RuntimeError"}]
+    with pytest.raises(AccountEpochWriteBlockedError):
+        await clerk._run_broker_write_under_recovery_admission("test.epoch.write", lambda: None)
+
+
+@pytest.mark.asyncio
+async def test_epoch_reconciliation_rejects_flat_snapshot_when_durable_prior_exposure_is_unexplained(
+    tmp_path: Path,
+) -> None:
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    authority.initialize()
+    seed_account_clerk_broker_evidence_baseline(
+        tmp_path,
+        ACCOUNT_ID,
+        AccountClerkBrokerEvidenceBaseline(
+            account_id=ACCOUNT_ID,
+            observed_at_ms=1_780_000_000_000,
+            positions=(
+                AccountClerkPositionEvidence(
+                    symbol="AMD",
+                    signed_quantity=5.0,
+                    evidence_observed_at_ms=1_780_000_000_000,
+                ),
+            ),
+        ),
+    )
+    authority.invalidate("SOCKET_LOSS")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=_EpochBroker(),
+        epoch_authority=authority,
+    )
+
+    reconciled = await clerk.reconcile_epoch_if_required()
+
+    assert reconciled is not None
+    assert reconciled.status == "INVALID"
+    assert reconciled.outage_diff is not None
+    assert reconciled.outage_diff["positions"]["changed"] == [
+        {"symbol": "AMD", "expected_signed_quantity": 5.0, "observed_signed_quantity": 0.0}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_epoch_reconciliation_keeps_same_symbol_contracts_separate_in_contamination_evidence(
+    tmp_path: Path,
+) -> None:
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    authority.initialize()
+    authority.invalidate("IBKR_1101")
+    broker = _EpochBroker()
+    broker.positions = [
+        IbkrPosition(
+            account_id=ACCOUNT_ID,
+            con_id=123,
+            symbol="AMD",
+            sec_type="STK",
+            quantity=1.0,
+            avg_cost=100.0,
+            fetched_at_ms=1_780_000_000_001,
+        ),
+        IbkrPosition(
+            account_id=ACCOUNT_ID,
+            con_id=456,
+            symbol="AMD",
+            sec_type="OPT",
+            expiry_ms=1_790_000_000_000,
+            strike=100.0,
+            right="C",
+            multiplier=100,
+            quantity=1.0,
+            avg_cost=1.0,
+            fetched_at_ms=1_780_000_000_001,
+        ),
+    ]
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=broker,
+        epoch_authority=authority,
+    )
+
+    reconciled = await clerk.reconcile_epoch_if_required()
+
+    assert reconciled is not None
+    assert reconciled.status == "INVALID"
+    assert reconciled.outage_diff is not None
+    assert [fact["con_id"] for fact in reconciled.outage_diff["positions"]["discovered"]] == [123, 456]
+
+
+@pytest.mark.asyncio
+async def test_epoch_invalidation_waits_for_admitted_broker_write_then_blocks_the_next_one(tmp_path: Path) -> None:
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    authority.initialize()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT_ID, epoch_authority=authority)
+    write_started = asyncio.Event()
+    release_write = asyncio.Event()
+    writes = 0
+
+    async def delayed_write() -> None:
+        nonlocal writes
+        write_started.set()
+        await release_write.wait()
+        writes += 1
+
+    write_task = asyncio.create_task(
+        clerk._run_broker_write_under_recovery_admission("test.epoch.write", delayed_write)
+    )
+    await write_started.wait()
+    invalidation_task = asyncio.create_task(clerk.observe_epoch_invalidation("SOCKET_LOSS"))
+    await asyncio.sleep(0)
+    assert authority.read().status == "CLEAN"
+
+    release_write.set()
+    await write_task
+    await invalidation_task
+    assert writes == 1
+    with pytest.raises(AccountEpochWriteBlockedError):
+        await clerk._run_broker_write_under_recovery_admission("test.epoch.write", delayed_write)
+
+
+@pytest.mark.asyncio
+async def test_epoch_invalidation_cannot_create_a1_uncertainty_between_recorded_and_broker_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    epoch = authority.initialize().current_epoch
+    broker = _EpochBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=broker,
+        epoch_authority=authority,
+    )
+    intent = _intent().model_copy(
+        update={
+            "order_spec": {
+                "symbol": "AMD",
+                "sec_type": "STK",
+                "action": "BUY",
+                "quantity": 1.0,
+                "order_type": "MKT",
+                "confirm_paper": True,
+                "order_ref": "bot:strategy-1:intent-1",
+            }
+        }
+    )
+    clerk._journal.record_intent(intent, validate_intent=lambda _: None, origin_epoch=epoch, observed_epoch=epoch)
+    entered_a1 = threading.Event()
+    release_a1 = threading.Event()
+    append_submitting = clerk._journal.append_broker_submitting
+
+    def delayed_append(*args: object, **kwargs: object) -> object:
+        entered_a1.set()
+        assert release_a1.wait(timeout=2)
+        return append_submitting(*args, **kwargs)
+
+    monkeypatch.setattr(clerk._journal, "append_broker_submitting", delayed_append)
+
+    async def retry() -> None:
+        async with clerk._intake_lock:
+            await clerk._retry_recorded_intent_locked(intent)
+
+    retry_task = asyncio.create_task(retry())
+    assert await asyncio.to_thread(entered_a1.wait, 2)
+    invalidation_task = asyncio.create_task(clerk.observe_epoch_invalidation("SOCKET_LOSS"))
+    await asyncio.sleep(0)
+    assert authority.read().status == "CLEAN"
+
+    release_a1.set()
+    await retry_task
+    await invalidation_task
+
+    assert broker.calls == 1
+    assert [entry.entry_kind for entry in clerk._journal.snapshot()] == [
+        "recorded",
+        "broker_submitting",
+        "broker_acked",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_epoch_reconciliation_discards_a_proof_overtaken_by_a_callback(tmp_path: Path) -> None:
+    class _DelayedEvidenceBroker(_EpochBroker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.positions_started = asyncio.Event()
+            self.release_positions = asyncio.Event()
+
+        async def fetch_positions(self) -> IbkrPositionsSnapshot:
+            self.positions_started.set()
+            await self.release_positions.wait()
+            return await super().fetch_positions()
+
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    epoch = authority.initialize().current_epoch
+    authority.invalidate("SOCKET_LOSS")
+    broker = _DelayedEvidenceBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=broker,
+        epoch_authority=authority,
+    )
+    intent = _intent()
+    clerk._journal.record_intent(intent, validate_intent=lambda _: None, origin_epoch=epoch, observed_epoch=epoch)
+
+    reconcile_task = asyncio.create_task(clerk.reconcile_epoch_if_required())
+    await broker.positions_started.wait()
+    await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT_ID,
+            order_id=42,
+            event_type="status",
+            order_ref=intent.order_ref,
+            symbol="AMD",
+            side="BUY",
+            ts_ms=1_780_000_000_001,
+        )
+    )
+    broker.release_positions.set()
+
+    reconciled = await reconcile_task
+
+    assert reconciled is not None
+    assert reconciled.status == "INVALID"
+    assert reconciled.reconciliation_verdict == "RECONCILING"
 
 
 def test_epoch_receipt_replays_after_crash_between_state_and_event_projection(

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 from app.broker.ibkr.account import fetch_account_summary, fetch_positions
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
+from app.broker.ibkr.order_history import list_completed_orders
 from app.broker.ibkr.orders import (
     cancel_paper_order,
     executions_for_reconnect_recovery,
@@ -577,6 +578,11 @@ class IbkrBrokerAdapter(BrokerAdapter):
         """Read current broker orders for Clerk startup reconciliation only."""
 
         return list(await list_open_orders(self._client))
+
+    async def list_completed_orders(self) -> list[object]:
+        """Read terminal broker orders for Account Epoch reconciliation."""
+
+        return list(await list_completed_orders(self._client))
 
     async def probe_namespace_cancel_status(self, bot_order_namespace: str) -> str:
         """Prove whether a fenced namespace still has broker open orders.

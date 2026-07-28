@@ -95,6 +95,9 @@ class AccountClerkReconciler:
         return self._unhealthy
 
     async def reconcile_once(self) -> tuple[ReconciliationResolution, ...]:
+        # The epoch fence resolves first: an uncertain A1 must not be retried
+        # until fresh account facts durably establish the current proof horizon.
+        await self._clerk.reconcile_epoch_if_required()
         entries = await self._clerk.reconciliation_snapshot()
         self._reassert_missing_halt_freeze(entries)
         resolutions: list[ReconciliationResolution] = []
