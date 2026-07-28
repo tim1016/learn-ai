@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.schemas.bot_lifecycle import BotDutyOutcomeKind
+from app.schemas.live_runs import BotDutyOutcomeView
 
 
 class DeployBotRequest(BaseModel):
@@ -48,17 +48,6 @@ class StopBotRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reason: str | None = Field(default=None, max_length=256)
-
-
-class BotDutyOutcomeView(BaseModel):
-    """Projection of the durable terminal duty fact (never liveness-inferred)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    kind: BotDutyOutcomeKind
-    reason_code: str
-    recorded_at_ms: int
-    run_id: str | None = None
 
 
 class BotStatusView(BaseModel):

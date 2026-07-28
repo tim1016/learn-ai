@@ -177,6 +177,7 @@ class BotTaskRegistry:
         restart_policy: RestartIntensityPolicy | None = None,
         now_ms: Callable[[], int] = now_ms_utc,
         boot_recovery_required: bool = True,
+        supported_broker_ids: frozenset[str] | None = None,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
@@ -192,6 +193,11 @@ class BotTaskRegistry:
         self._boot_recovery_required = boot_recovery_required
         self._boot_recovery_complete = False
         self._unresolved_intents_probe: Callable[[], Awaitable[int]] | None = None
+        # When set, the boot sweep skips bots whose binding carries a broker
+        # tag that is not in this set (e.g. IBKR bots share the same
+        # artifacts_root but are managed by the host daemon, not the
+        # in-container runner).
+        self._supported_broker_ids = supported_broker_ids
 
     # ── deploy / stop ─────────────────────────────────────────────────
 
@@ -361,6 +367,17 @@ class BotTaskRegistry:
                     continue
                 if sid in self._bots and not self._bots[sid].task.done():
                     continue  # genuinely alive (non-boot rerun) — not interrupted
+                # Skip bots bound to a broker this runner does not manage.
+                # (IBKR bots share the same artifacts_root but are owned by
+                # the host daemon; marking them interrupted would corrupt their
+                # durable state from outside the daemon's authority.)
+                if self._supported_broker_ids is not None:
+                    try:
+                        binding = self._read_binding(sid)
+                    except InvalidStrategyInstanceIdError:
+                        binding = None
+                    if binding is None or binding.broker not in self._supported_broker_ids:
+                        continue
                 repo.record_terminal_outcome(
                     BotDutyOutcome(
                         kind="EXITED_UNVERIFIED",

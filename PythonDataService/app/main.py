@@ -231,9 +231,9 @@ async def lifespan(app: FastAPI):
             )
 
             alpaca_sweep = ReconciliationSweep(clerk=alpaca_clerk)
-            alpaca_sweep.start()
+            # NOTE: .start() is deferred to AFTER bot_task_registry.run_boot_recovery()
+            # to avoid racing the boot reconciliation pass with the periodic sweep.
             set_reconciliation_sweep(alpaca_sweep)
-            logger.info("Alpaca reconciliation sweep started (S6).")
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -418,6 +418,7 @@ async def lifespan(app: FastAPI):
     bot_task_registry = BotTaskRegistry(
         artifacts_root=Path(ibkr_settings.live_runs_root).parent,
         feed_resolver=get_market_data_feed,
+        supported_broker_ids=frozenset({"alpaca"}),
     )
     set_bot_task_registry(bot_task_registry)
     logger.info("In-container bot runner installed (task registry, daemon-free).")
@@ -442,6 +443,15 @@ async def lifespan(app: FastAPI):
         )
     else:
         await bot_task_registry.run_boot_recovery()
+
+    # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
+    # sweep cannot race the boot reconciliation pass (both call reconcile_once).
+    from app.broker.alpaca.clerk import get_reconciliation_sweep
+
+    _pending_sweep = get_reconciliation_sweep()
+    if _pending_sweep is not None:
+        _pending_sweep.start()
+        logger.info("Alpaca reconciliation sweep started (S6, post-boot-recovery).")
 
     # ADR-0028 Stage 2 — each visible bot gets one producer-owned status
     # snapshot before the API begins serving normal reads. The producer owns
@@ -614,12 +624,12 @@ app.include_router(iv_recorder.router)
 # carries its own prefix so we mount it bare.
 app.include_router(research_divergence.router)
 # Shared MarketDataFeed diagnostic surface — read-only feed health + fan-out
-# subscription count. Gated behind the data-plane control secret because it
-# exposes live broker state (connection status, last bar watermark).
+# subscription count. Requires the always-on control secret (GET exposes live
+# broker state: connection status, last bar watermark, subscription count).
 app.include_router(
     market_data_feed.router,
     prefix="/api/market-data-feed",
-    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.

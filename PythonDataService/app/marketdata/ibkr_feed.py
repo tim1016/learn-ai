@@ -37,7 +37,7 @@ import logging
 from collections.abc import AsyncGenerator
 
 from app.broker.ibkr.bars import IBKRBarStreamError, stream_minute_bars
-from app.broker.ibkr.client import IbkrClient
+from app.broker.ibkr.client import IbkrClient, NotConnectedError
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.utils.timestamps import now_ms_utc
@@ -111,7 +111,7 @@ class IbkrMarketDataFeed:
                 self._last_bar_ms = bar.start_ms
                 self._last_bar_wall_ms = now_ms_utc()
                 yield bar
-        except IBKRBarStreamError as exc:
+        except (IBKRBarStreamError, NotConnectedError) as exc:
             raise MarketDataFeedError(str(exc)) from exc
         finally:
             self._active_count = max(0, self._active_count - 1)
