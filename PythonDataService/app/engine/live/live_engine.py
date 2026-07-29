@@ -968,7 +968,7 @@ class LiveEngine:
         if self._account_id and getattr(self._broker, "requires_durable_submit", False):
             from app.engine.live.account_safety import (
                 AccountSafetyAuthority,
-                AccountSafetyVerdict,
+                account_safety_blocks_current_bot,
             )
             from app.services.account_truth_snapshot import (
                 AccountTruthSubmitGrace,
@@ -994,7 +994,7 @@ class LiveEngine:
                     # that projection; it must never take a cross-runtime
                     # writer permit or mutate safety from the bot event loop.
                     safety = safety_authority.read()
-                    if safety.verdict is not AccountSafetyVerdict.CLEAN:
+                    if account_safety_blocks_current_bot(safety, self._strategy_instance_id):
                         suspension = safety.suspension
                         return GateResult(
                             gate_id="account.safety",

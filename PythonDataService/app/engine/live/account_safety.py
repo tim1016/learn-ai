@@ -1319,6 +1319,27 @@ def _broker_evidence_ref(kind: str, identity: str) -> str:
     return f"broker-{kind}:{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
 
 
+def account_safety_blocks_current_bot(
+    safety: AccountSafetyState,
+    strategy_instance_id: str,
+) -> bool:
+    """Return True iff account safety should block this specific bot.
+
+    A suspension whose custody list names only other bots' strategy_instance_ids
+    must not cascade to bots that have no retired-owner exposure of their own.
+    When custody is empty or strategy_instance_id is unknown the check is
+    conservative (True) so no unexamined gap silently permits entry.
+    """
+    if safety.verdict is not AccountSafetyVerdict.SUSPENDED:
+        return False
+    suspension = safety.suspension
+    if suspension is None or not suspension.custody:
+        return True
+    if not strategy_instance_id:
+        return True
+    return any(c.strategy_instance_id == strategy_instance_id for c in suspension.custody)
+
+
 __all__ = [
     "ACCOUNT_SAFETY_ADMISSION_FILENAME",
     "ACCOUNT_SAFETY_ADMISSION_REPAIR_FILENAME",
@@ -1335,6 +1356,7 @@ __all__ = [
     "account_safety_admission_lock",
     "account_safety_admission_path",
     "account_safety_admission_repair_path",
+    "account_safety_blocks_current_bot",
     "account_safety_entry_admission_lock",
     "account_safety_path",
     "account_safety_suspension_reservation",

@@ -39,6 +39,7 @@ from app.engine.live.account_safety import (
     account_safety_admission_lock,
     account_safety_admission_path,
     account_safety_admission_repair_path,
+    account_safety_blocks_current_bot,
     account_safety_entry_admission_lock,
     account_safety_suspension_reservation,
     repair_account_safety_admission,
@@ -855,3 +856,61 @@ def test_retirement_preserves_nonterminal_clerk_custody_before_terminal_lifecycl
     assert safety.verdict is AccountSafetyVerdict.SUSPENDED
     assert safety.suspension is not None
     assert safety.suspension.requires_broker_clearance is True
+
+
+# ---------------------------------------------------------------------------
+# account_safety_blocks_current_bot — sibling-exemption regression (BUG-11)
+# ---------------------------------------------------------------------------
+
+def test_account_safety_blocks_current_bot_blocks_own_sid(tmp_path: Path) -> None:
+    """A bot whose own SID is in custody must be blocked."""
+    authority = AccountSafetyAuthority(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        now_ms=lambda: NOW_MS,
+    )
+    authority.suspend_retired_owner_custody(
+        (
+            RetiredOwnerCustody(
+                account_id=ACCOUNT_ID,
+                strategy_instance_id="dv-20260727-amd",
+                intent_id="intent-amd-001",
+                order_ref="learn-ai/dv-20260727-amd/v1:intent-amd-001",
+            ),
+        ),
+    )
+    safety = authority.read()
+
+    assert account_safety_blocks_current_bot(safety, "dv-20260727-amd") is True
+
+
+def test_account_safety_blocks_current_bot_exempts_sibling_sid(tmp_path: Path) -> None:
+    """A bot not named in custody must NOT be blocked by a sibling's suspension.
+
+    This is the root cause of the Jul 27 2026 cascade: AMD crashed with an
+    in-flight intent, its namespace was RETIRED, Clerk detected nonterminal
+    custody, suspended the account, and all 7 sibling bots were halted at
+    their next bar evaluation.  After this fix each sibling's gate provider
+    calls account_safety_blocks_current_bot() and sees its own SID is absent
+    from custody, so it returns None (no block) instead of a block GateResult.
+    """
+    authority = AccountSafetyAuthority(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        now_ms=lambda: NOW_MS,
+    )
+    authority.suspend_retired_owner_custody(
+        (
+            RetiredOwnerCustody(
+                account_id=ACCOUNT_ID,
+                strategy_instance_id="dv-20260727-amd",
+                intent_id="intent-amd-001",
+                order_ref="learn-ai/dv-20260727-amd/v1:intent-amd-001",
+            ),
+        ),
+    )
+    safety = authority.read()
+
+    # Siblings (SPY, QQQ, AAPL, …) must not be blocked
+    for sibling_sid in ("dv-20260727-spy", "dv-20260727-qqq", "dv-20260727-aapl"):
+        assert account_safety_blocks_current_bot(safety, sibling_sid) is False, sibling_sid
