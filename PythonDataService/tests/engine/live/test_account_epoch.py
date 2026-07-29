@@ -18,6 +18,7 @@ from app.engine.live.account_clerk import AccountClerk
 from app.engine.live.account_clerk_journal import AccountClerkJournal, seed_account_clerk_broker_evidence_baseline
 from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerEvidenceBaseline,
+    AccountClerkOperatorAdjustment,
     AccountClerkPositionEvidence,
 )
 from app.engine.live.account_clerk_reconciler import AccountClerkReconciler
@@ -928,3 +929,148 @@ def test_legacy_journal_epoch_provenance_is_explicitly_unknown(tmp_path: Path) -
     assert entry.origin_epoch is None
     assert entry.observed_epoch is None
     assert entry.reconciliation_id is None
+
+
+@pytest.mark.asyncio
+async def test_epoch_reconciliation_never_submitted_emergency_flatten_is_not_unresolved(
+    tmp_path: Path,
+) -> None:
+    """A recorded EMERGENCY_FLATTEN with no broker_submitting entry must not block epoch clean-up.
+
+    Root cause: the eflat-DUM284968 cascade (2026-07-27) left 3 EMERGENCY_FLATTEN
+    intents stuck in 'recorded' state after a Clerk crash between record_intent and
+    append_broker_submitting.  The reconciler correctly skips retrying them; the epoch
+    proof must also exclude them from unresolved_intents because they had no broker effect.
+    """
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    authority.initialize()
+    authority.invalidate("SOCKET_LOSS")
+
+    eflat_intent = AccountOwnerSubmitIntent(
+        trace_id="eflat-trace",
+        account_id=ACCOUNT_ID,
+        strategy_instance_id="eflat-DU1234567",
+        run_id="eflat-run-1",
+        bot_order_namespace="learn-ai/eflat-DU1234567/v1",
+        intent_id="eflat-intent-spy",
+        order_ref="learn-ai/eflat-DU1234567/v1:eflat-intent-spy",
+        intent_kind="EMERGENCY_FLATTEN",
+        order_spec={"symbol": "SPY", "action": "SELL", "totalQuantity": 1},
+        owner_generation=1,
+        created_at_ms=1_780_000_000_000,
+    )
+    journal = AccountClerkJournal(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        now_ms=lambda: 1_780_000_000_000,
+    )
+    # Record the eflat intent but deliberately omit broker_submitting — simulates
+    # the crash window between record_intent and append_broker_submitting.
+    journal.record_intent(eflat_intent, validate_intent=lambda _: None)
+
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=_EpochBroker(),
+        epoch_authority=authority,
+    )
+
+    reconciled = await clerk.reconcile_epoch_if_required()
+
+    assert reconciled is not None
+    assert reconciled.status == "CLEAN", (
+        "Never-submitted EMERGENCY_FLATTEN must not block epoch advancement"
+    )
+    assert reconciled.reconciliation_verdict == "CLEAN"
+    assert reconciled.outage_diff is not None
+    assert reconciled.outage_diff["intents"]["changed"] == [], (
+        "Never-submitted EMERGENCY_FLATTEN must not appear in unresolved_intents"
+    )
+
+
+@pytest.mark.asyncio
+async def test_epoch_reconciliation_namespace_cure_clears_position_contamination(
+    tmp_path: Path,
+) -> None:
+    """A namespace-level operator_adjustment cure must clear positions.changed contamination.
+
+    Root cause (DUM284968, 2026-07-29): cohort-paper-20260717-a left an unclosed
+    BUY in the journal (+1 SPY fill-only).  The journal-cures system wrote an
+    operator_adjustment (-1 SPY) to zero the namespace claim.  The epoch proof
+    used project_journal_account_exposure which accumulates raw fills and ignores
+    operator_adjustment entries, so it still saw +1 SPY expected vs 0 observed and
+    flagged CONTAMINATED.  Switching the proof to namespace-level sums (which include
+    cures) means the cure propagates correctly through the proof and the epoch advances
+    to CLEAN.
+    """
+    authority = _authority(tmp_path, generation=4, boot_id="boot-a")
+    authority.initialize()
+    authority.invalidate("SOCKET_LOSS")
+
+    # Bot had a BUY fill for SPY but was RETIRED before closing the position.
+    bot_intent = AccountOwnerSubmitIntent(
+        trace_id="trace-buy",
+        account_id=ACCOUNT_ID,
+        strategy_instance_id="strat-a",
+        run_id="run-a",
+        bot_order_namespace="learn-ai/cohort-a/v1",
+        intent_id="intent-buy-spy",
+        order_ref="learn-ai/cohort-a/v1:intent-buy-spy",
+        intent_kind="ENTRY",
+        order_spec={"symbol": "SPY"},
+        owner_generation=1,
+        created_at_ms=1_780_000_000_000,
+    )
+    journal = AccountClerkJournal(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        now_ms=lambda: 1_780_000_000_000,
+    )
+    journal.record_intent(bot_intent, validate_intent=lambda _: None)
+    buy_fill = IbkrOrderEvent(
+        account_id=ACCOUNT_ID,
+        order_ref=bot_intent.order_ref,
+        order_id=10,
+        exec_id="spy-buy-exec-1",
+        event_type="fill",
+        status="Filled",
+        symbol="SPY",
+        side="BUY",
+        fill_quantity=1.0,
+        ts_ms=1_780_000_000_001,
+    )
+    journal.record_broker_event(buy_fill)
+
+    # Operator cure: correct the stale +1 SPY claim in the namespace.
+    cure = AccountClerkOperatorAdjustment(
+        account_id=ACCOUNT_ID,
+        bot_order_namespace="learn-ai/cohort-a/v1",
+        symbol="SPY",
+        signed_quantity=-1.0,
+        request_provenance="test/namespace-cure",
+        reason="Bot was retired with open position; broker confirms flat",
+        evidence_refs=("test-evidence-1",),
+        idempotency_key="test-namespace-cure-spy-1",
+        recorded_at_ms=1_780_000_000_002,
+    )
+    journal.append_operator_adjustment(cure, validate_adjustment=lambda _: None)
+
+    # Broker is flat — the position was closed externally before Clerk saw it.
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        broker=_EpochBroker(),
+        epoch_authority=authority,
+    )
+
+    reconciled = await clerk.reconcile_epoch_if_required()
+
+    assert reconciled is not None
+    assert reconciled.status == "CLEAN", (
+        "Namespace cure must propagate through epoch proof — fills alone must not override cures"
+    )
+    assert reconciled.reconciliation_verdict == "CLEAN"
+    assert reconciled.outage_diff is not None
+    assert reconciled.outage_diff["positions"]["changed"] == [], (
+        "Cured namespace position must not appear in positions.changed"
+    )

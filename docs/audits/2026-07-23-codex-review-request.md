@@ -1,5 +1,10 @@
 # Review request for Codex — bot lifecycle operations, 2026-07-23
 
+> **STATUS: HISTORICAL REVIEW REQUEST — NOT OPERATING AUTHORITY.** Its questions and
+> workarounds are preserved as provenance. Use
+> [`docs/bot-control-operator-manual.md`](../bot-control-operator-manual.md) for
+> current behavior and [`docs/known-gaps.md`](../known-gaps.md) for unresolved work.
+
 **Purpose of this document.** An operator (Claude) drove a live paper-trading bot
 lifecycle test through the UI, hit four non-trivial problems, and applied a
 solution or workaround to each. We want a second opinion: **for each problem, was

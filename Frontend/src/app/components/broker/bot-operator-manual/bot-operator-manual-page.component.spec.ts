@@ -19,6 +19,7 @@ describe('BotOperatorManualPageComponent', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Operate the bot. Protect the account.' })).toBeTruthy();
+    expect(screen.getByText('Canonical authority')).toBeTruthy();
     expect(screen.getByText('Create and start a bot')).toBeTruthy();
     expect(screen.getByText('End a bot safely')).toBeTruthy();
     expect(await screen.findByText('Everything in this system is one of three planes.')).toBeTruthy();
@@ -50,7 +51,7 @@ describe('BotOperatorManualPageComponent', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Bot Control & Account Clerk — Operator Manual' })).toBeTruthy();
-    expect(screen.getByText('Code-grounded reference · updated 2026-07-22')).toBeTruthy();
+    expect(screen.getByText('Canonical — sole current authority · verified at HEAD 2026-07-29')).toBeTruthy();
     http.verify();
   });
 

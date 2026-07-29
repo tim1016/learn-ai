@@ -1,5 +1,11 @@
 # Eight-bot Deployment Validation UI experiment — 2026-07-27
 
+> **STATUS: HISTORICAL VALIDATION EVIDENCE — NOT OPERATING AUTHORITY.** Use
+> [`docs/bot-control-operator-manual.md`](../bot-control-operator-manual.md) for
+> current Bot Control and Account Clerk behavior and
+> [`docs/known-gaps.md`](../known-gaps.md) for current unresolved work. This report
+> records one dated experiment; it does not define current start-rate or recovery rules.
+
 **Status:** stopped at an external connectivity boundary; safe local closeout complete, full session acceptance incomplete
 **Operator surface:** in-app browser; canonical UI controls only  
 **Authorized account posture:** PAPER only; no mutation is permitted until current UI/backend evidence proves the selected account is paper-only, current, clean, unfrozen, and free of unexplained exposure/orders  
@@ -41,7 +47,9 @@ The unchecked market-hours objectives were not silently abandoned. At approximat
 
 ### Restart-intensity cadence
 
-The 2026-07-22 operator manual says the third account start within five minutes freezes the account. Current code is newer and more specific:
+The manual's **historical 2026-07-22 text** said the third account start within five
+minutes freezes the account. The current canonical manual was corrected on 2026-07-29;
+the evidence recorded in this experiment was:
 
 - `RestartIntensityPolicy` still has `threshold=3`, `window_ms=300000`.
 - `_restart_intensity_groups` groups ACTIVE bindings by `strategy_instance_id`.
@@ -49,7 +57,9 @@ The 2026-07-22 operator manual says the third account start within five minutes 
 - `test_restart_intensity_ignores_distinct_bot_first_starts` proves five distinct first starts do not freeze the account.
 
 **Classification:** confirmed authority from current code and regression test.  
-**Consequence:** eight distinct first deployments may use the requested roughly one-per-minute cadence. Repeated activation of any one bot remains subject to the three-in-five-minute guard. The operator manual is stale and must be corrected before closeout.
+**Historical consequence:** eight distinct first deployments may use the requested
+roughly one-per-minute cadence. Repeated activation of any one bot remains subject to
+the three-in-five-minute guard. The current manual now records that behavior.
 
 ## Event log
 
@@ -127,7 +137,7 @@ This table preserves the first-wave deploy and fill evidence used to diagnose th
 
 | Finding | Scope / altitude | Original evidence | Safe remedy | Result | Test | Commit |
 | --- | --- | --- | --- | --- | --- | --- |
-| Operator manual describes restart intensity as an account-wide count of distinct starts, while current code measures repeated activations of the busiest bot | Documentation | Manual §6.4 vs current `account_artifacts.py` and its regression test | Correct the manual without changing the safety gate | pending | existing regression test; documentation check pending | pending |
+| Historical manual described restart intensity as an account-wide count of distinct starts, while the then-current code measured repeated activations of the busiest bot | Documentation | Historical Manual §6.4 vs `account_artifacts.py` and its regression test | Correct the manual without changing the safety gate | resolved in the canonical manual (2026-07-29) | regression test plus canonical-manual guard | uncommitted reconciliation |
 | Host daemon was down; Account verification was revoked/expired and Session Mirror could not prove socket attribution | Account-wide host/control-plane | Account Desk: `Daemon Down`, Clerk generation 77/Accepting but account service needs attention; diagnostics: “Live engine is not answering” | At verified flat/no-order/no-host-run boundary, start the host daemon using the repository launcher, then refresh diagnostics, Clerk, account reconciliation, orders, and mirror | recovered; account generation 78 verified clean/flat with Host Available | runtime/UI revalidation passed | n/a |
 | Session Mirror labels the current Account Clerk child socket as `Unattributed broker socket` and includes it in orphan-candidate attention | Diagnostics/UI | Host process relationship and argv prove PID 12757 is the generation-78 Account Clerk; refreshed Session Mirror originally reported that same current PID/port as unattributed | Lift recognized Clerk sockets to an explicit global infrastructure event without weakening any safety or freeze gate | fixed; current roster is 0 and global events explicitly show Account Clerk, gateway proxy, and data-plane clients | 15 focused Python tests passed; focused Ruff check passed | `4986af52` |
 | Fresh deployment tickets defaulted to strict saved-state hydration despite no compatible prior sidecar | Deploy UI | Running UI selected `Require saved state (recommended)` on a blank ticket | Default to `optional`, recommend it in operator copy, and preserve explicit `require` for continuity-sensitive restarts | fixed and verified in running UI | 59 focused tests passed; changed files lint clean | `2ec738dc` |

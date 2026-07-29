@@ -1,5 +1,10 @@
 # Deployment Validation: the day the fleet lost its horizon
 
+> **STATUS: HISTORICAL INCIDENT EVIDENCE — NOT OPERATING AUTHORITY.** Use
+> [`docs/bot-control-operator-manual.md`](../bot-control-operator-manual.md) for
+> current operating behavior and [`docs/known-gaps.md`](../known-gaps.md) for current
+> unresolved work. This report preserves incident provenance only.
+
 **Incident date:** 2026-07-27
 
 **Report boundary:** 14:27 CT, when the operator reported Internet loss and IB Gateway unavailability
