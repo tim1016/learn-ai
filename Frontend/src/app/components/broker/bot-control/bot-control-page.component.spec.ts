@@ -674,4 +674,30 @@ describe('BotControlPageComponent', () => {
     expect(element.querySelector<HTMLButtonElement>('[data-testid="trader-primary-action"]')?.disabled)
       .toBe(true);
   });
+
+  it('renders the human label "Stopped" (not the raw code "STOPPED") in the lifecycle intent banner', async () => {
+    const stoppedResponse = {
+      ...makeDesiredStateResponse(),
+      durable: {
+        ...makeDesiredStateResponse().durable,
+        state: 'STOPPED' as const,
+      },
+    };
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status: onDutyStatus(),
+      mutationResponses: { setInstanceDesiredState: stoppedResponse },
+    });
+
+    const stop = element.querySelector<HTMLButtonElement>('[data-testid="trader-graceful-stop"]');
+    expect(stop?.disabled).toBe(false);
+    stop?.click();
+    await flush(fixture);
+
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', expect.objectContaining({
+      action: 'stop',
+    }));
+    // The banner must show the human-readable label from formatReceiptLabel, not the raw backend code.
+    expect(element.textContent).toContain('Intent accepted: Stopped.');
+    expect(element.textContent).not.toContain('Intent accepted: STOPPED.');
+  });
 });

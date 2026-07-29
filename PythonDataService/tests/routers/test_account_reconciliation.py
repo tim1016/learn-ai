@@ -1325,6 +1325,124 @@ def test_account_event_head_includes_a_late_callback_that_sorts_before_existing_
     assert refreshed_head.rows[-1].event_id not in {row.event_id for row in first_head.rows}
 
 
+async def test_account_events_degrades_unprojectable_manual_order_without_blanking_desk(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    timestamp = 1_710_000_000_000
+    account_id = "DU1234567"
+    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id=account_id, now_ms=lambda: timestamp)
+
+    valid_ref = "manual/operator/v1:valid-1"
+    valid_intent = AccountOwnerSubmitIntent(
+        trace_id="manual-order:valid-1",
+        account_id=account_id,
+        strategy_instance_id="manual-operator",
+        run_id="manual-ticket",
+        bot_order_namespace="manual/operator/v1",
+        intent_id="valid-1",
+        order_ref=valid_ref,
+        intent_kind="MANUAL_ORDER",
+        order_spec={
+            "symbol": "SPY",
+            "sec_type": "STK",
+            "action": "BUY",
+            "quantity": 3,
+            "order_type": "LMT",
+            "time_in_force": "DAY",
+            "confirm_paper": True,
+            "order_ref": valid_ref,
+            "limit_price": 593.25,
+            "manual_order": True,
+        },
+        owner_generation=1,
+        created_at_ms=timestamp - 2,
+    )
+    journal.record_intent(valid_intent, validate_intent=lambda _: None)
+    journal.append_broker_ack(
+        valid_intent,
+        IbkrOrderAck(
+            account_id=account_id,
+            is_paper=True,
+            order_id=42,
+            perm_id=9001,
+            client_id=1,
+            con_id=756733,
+            symbol="SPY",
+            action="BUY",
+            quantity=3,
+            order_type="LMT",
+            limit_price=593.25,
+            status="Submitted",
+            order_ref=valid_ref,
+            placed_at_ms=timestamp,
+        ),
+    )
+
+    # A corrupt/legacy receipt whose order_spec can no longer be projected.
+    corrupt_ref = "manual/operator/v1:corrupt-1"
+    corrupt_intent = AccountOwnerSubmitIntent(
+        trace_id="manual-order:corrupt-1",
+        account_id=account_id,
+        strategy_instance_id="manual-operator",
+        run_id="manual-ticket",
+        bot_order_namespace="manual/operator/v1",
+        intent_id="corrupt-1",
+        order_ref=corrupt_ref,
+        intent_kind="MANUAL_ORDER",
+        order_spec={
+            "symbol": "SPY",
+            "sec_type": "STK",
+            "action": "BUY",
+            "quantity": "not-a-number",
+            "order_type": "MKT",
+            "order_ref": corrupt_ref,
+        },
+        owner_generation=1,
+        created_at_ms=timestamp - 1,
+    )
+    journal.record_intent(corrupt_intent, validate_intent=lambda _: None)
+    journal.append_broker_ack(
+        corrupt_intent,
+        IbkrOrderAck(
+            account_id=account_id,
+            is_paper=True,
+            order_id=43,
+            perm_id=9002,
+            client_id=1,
+            con_id=756733,
+            symbol="SPY",
+            action="BUY",
+            quantity=1,
+            order_type="MKT",
+            status="Submitted",
+            order_ref=corrupt_ref,
+            placed_at_ms=timestamp + 1,
+        ),
+    )
+
+    service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: timestamp)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/events?view=operations")
+    finally:
+        app.dependency_overrides.clear()
+
+    # One malformed receipt must not blank the entire Desk history.
+    assert response.status_code == 200
+    rows = response.json()["rows"]
+    projected_order_ids = {
+        row["operator_order_receipt"]["order_id"] for row in rows if row["operator_order_receipt"]
+    }
+    assert 42 in projected_order_ids
+    unclassified = [
+        row for row in rows if row["operator_order_receipt"] is None and row["kind"] == "other"
+    ]
+    assert any("could not be projected" in row["operator_detail"] for row in unclassified)
+
+
 async def test_account_events_exposes_manual_order_receipts_only_to_operations(tmp_path: Path) -> None:
     from app.main import app
 

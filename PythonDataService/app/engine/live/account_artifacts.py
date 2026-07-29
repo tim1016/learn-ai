@@ -25,6 +25,7 @@ ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACCOUNT_CLERK_GENERATION_FILENAME = "clerk_generation.json"
 ACCOUNT_CLERK_LEASE_FILENAME = "clerk_lease.json"
 ACCOUNT_RECOVERY_CLEARANCE_FILENAME = "account_recovery_clearance.json"
+ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME = "account_restart_intensity_clearance.json"
 ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES = frozenset(
     {
         "account_recovery_proof_recorded",
@@ -529,6 +530,17 @@ def clear_account_freeze(
                 "account freeze cleared but recovery clearance could not be recorded",
                 extra={"account_id": account_id, "cleared_at_ms": cleared_at_ms},
             )
+    if evidence.pauses_healthy_runs:
+        try:
+            _record_restart_intensity_clearance(artifacts_root, account_id, cleared_at_ms)
+        except Exception:
+            # A retained cutoff only prevents a false re-freeze; a failed write
+            # keeps the account conservatively subject to restart-intensity, never
+            # a false unblock.
+            logger.exception(
+                "account freeze cleared but restart-intensity cutoff could not be retained",
+                extra={"account_id": account_id, "cleared_at_ms": cleared_at_ms},
+            )
     cleared_event = {
         "event_type": "account_freeze_cleared",
         "account_id": account_id,
@@ -618,6 +630,77 @@ def record_account_recovery_clearance(
             return existing
         _atomic_write_json_locked(path, candidate.model_dump())
     return candidate
+
+
+def read_or_migrate_account_recovery_clearance(
+    artifacts_root: Path,
+    account_id: str,
+) -> AccountRecoveryClearance | None:
+    """Read the typed clearance, seeding it once from legacy recovery evidence.
+
+    Accounts cleared before the typed ``account_recovery_clearance.json`` artifact
+    existed retain only immutable ``account_recovery_proof_recorded`` or
+    ``account_audited_override_recorded`` history. Without a one-time migration a
+    legitimately recovered crash-retired binding would stay blocked forever. The
+    migration is fail-closed: it never materializes a clearance that legacy
+    evidence does not already prove, and it surfaces (rather than silences) a
+    malformed legacy row.
+    """
+
+    existing = read_account_recovery_clearance(artifacts_root, account_id)
+    if existing is not None:
+        return existing
+    legacy = _legacy_recovery_clearance(artifacts_root, account_id)
+    if legacy is None:
+        return None
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_RECOVERY_CLEARANCE_FILENAME,
+    )
+    with _file_lock(path):
+        current = read_account_recovery_clearance(artifacts_root, account_id)
+        if current is not None:
+            return current
+        _atomic_write_json_locked(path, legacy.model_dump())
+    return legacy
+
+
+def _legacy_recovery_clearance(
+    artifacts_root: Path,
+    account_id: str,
+) -> AccountRecoveryClearance | None:
+    """Reconstruct the latest recovery clearance from pre-artifact events."""
+
+    best: AccountRecoveryClearance | None = None
+    for event in read_legacy_account_events(artifacts_root, account_id):
+        event_type = event.get("event_type")
+        if event_type == "account_recovery_proof_recorded":
+            source: Literal["account_recovery_proof", "account_audited_override"] = "account_recovery_proof"
+            evidence_id = event.get("recovery_id")
+            cleared_at_ms = event.get("recorded_at_ms")
+        elif event_type == "account_audited_override_recorded":
+            if event.get("approved_decision") == "freeze":
+                # A freeze override never cleared a restart block.
+                continue
+            source = "account_audited_override"
+            evidence_id = event.get("override_id")
+            cleared_at_ms = event.get("approved_at_ms")
+        else:
+            continue
+        if not isinstance(evidence_id, str) or not 0 < len(evidence_id) <= 128:
+            raise AccountArtifactError("legacy account recovery clearance has an invalid evidence id")
+        if not isinstance(cleared_at_ms, int) or isinstance(cleared_at_ms, bool) or cleared_at_ms < 0:
+            raise AccountArtifactError("legacy account recovery clearance has an invalid timestamp")
+        candidate = AccountRecoveryClearance(
+            account_id=account_id,
+            source=source,
+            evidence_id=evidence_id,
+            cleared_at_ms=cleared_at_ms,
+        )
+        if best is None or candidate.cleared_at_ms > best.cleared_at_ms:
+            best = candidate
+    return best
 
 
 def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
@@ -1262,16 +1345,66 @@ def _restart_intensity_binding_events(
     ]
 
 
+def _record_restart_intensity_clearance(
+    artifacts_root: Path,
+    account_id: str,
+    cleared_at_ms: int,
+) -> None:
+    """Retain the restart-intensity clear cutoff independently of the freeze slot.
+
+    The active-freeze artifact holds one freeze at a time, so a later unrelated
+    freeze would otherwise erase the cutoff that starts a fresh restart-intensity
+    window. This dedicated record keeps the latest cutoff monotonically.
+    """
+
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME,
+    )
+    with _file_lock(path):
+        existing = _read_restart_intensity_clearance_ms(artifacts_root, account_id)
+        if existing is not None and existing >= cleared_at_ms:
+            return
+        _atomic_write_json_locked(path, {"account_id": account_id, "cleared_at_ms": cleared_at_ms})
+
+
+def _read_restart_intensity_clearance_ms(artifacts_root: Path, account_id: str) -> int | None:
+    """Read the retained restart-intensity clear cutoff, if any."""
+
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME,
+    )
+    if path is None:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise AccountArtifactError("account restart-intensity clearance is unreadable") from exc
+    if not isinstance(payload, dict) or payload.get("account_id") != account_id:
+        raise AccountArtifactError("account restart-intensity clearance belongs to another account")
+    cleared_at_ms = payload.get("cleared_at_ms")
+    if not isinstance(cleared_at_ms, int) or isinstance(cleared_at_ms, bool) or cleared_at_ms < 0:
+        raise AccountArtifactError("account restart-intensity clearance has an invalid timestamp")
+    return cleared_at_ms
+
+
 def _latest_restart_intensity_clear_ms(artifacts_root: Path, account_id: str) -> int | None:
+    candidates: list[int] = []
+    dedicated = _read_restart_intensity_clearance_ms(artifacts_root, account_id)
+    if dedicated is not None:
+        candidates.append(dedicated)
     evidence = read_account_freeze_evidence(artifacts_root, account_id)
     if (
-        evidence is None
-        or evidence.cleared_at_ms is None
-        or evidence.source != RESTART_INTENSITY_SOURCE
-        or not evidence.reason.startswith(RESTART_INTENSITY_REASON)
+        evidence is not None
+        and evidence.cleared_at_ms is not None
+        and evidence.source == RESTART_INTENSITY_SOURCE
+        and evidence.reason.startswith(RESTART_INTENSITY_REASON)
     ):
-        return None
-    return evidence.cleared_at_ms
+        candidates.append(evidence.cleared_at_ms)
+    return max(candidates) if candidates else None
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
@@ -1607,6 +1740,7 @@ _LOCAL_EXPORTS = [
     "ACCOUNT_FREEZE_FILENAME",
     "ACCOUNT_OWNER_GENERATION_FILENAME",
     "ACCOUNT_RECOVERY_CLEARANCE_FILENAME",
+    "ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME",
     "RESTART_INTENSITY_REASON",
     "RESTART_INTENSITY_SOURCE",
     "AccountArtifactError",
@@ -1641,6 +1775,7 @@ _LOCAL_EXPORTS = [
     "read_account_freeze",
     "read_account_freeze_evidence",
     "read_account_recovery_clearance",
+    "read_or_migrate_account_recovery_clearance",
     "read_account_owner_generation",
     "resolve_account_event_ts_ms",
     "record_account_recovery_clearance",

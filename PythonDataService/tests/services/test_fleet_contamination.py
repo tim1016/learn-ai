@@ -354,6 +354,59 @@ def test_forward_producer_display_event_cannot_qualify_journal_authority(tmp_pat
     assert account_journal_authority_is_active(tmp_path, account) is False
 
 
+def test_legacy_event_ts_ms_rejects_invalid_timestamps() -> None:
+    from app.services.account_journal_authority import _legacy_event_ts_ms
+
+    assert _legacy_event_ts_ms({}) is None
+    for invalid in (0, -1, "1700000000000", 1.5, True):
+        assert _legacy_event_ts_ms({"ts_ms": invalid}) is None
+    assert _legacy_event_ts_ms({"ts_ms": 1_700_000_000_000}) == 1_700_000_000_000
+
+
+def test_malformed_legacy_requalification_timestamp_does_not_seed_qualification(tmp_path: Path) -> None:
+    from app.services.account_journal_authority import _seed_authority_state_from_legacy
+
+    account = "DU123456"
+    (tmp_path / "accounts" / account).mkdir(parents=True)
+    (tmp_path / "accounts" / account / "account_events.jsonl").write_text(
+        json.dumps(
+            {
+                "account_id": account,
+                "event_type": "account_clerk_journal_authority_requalified",
+                "ts_ms": 0,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = _seed_authority_state_from_legacy(tmp_path, account)
+
+    assert state.qualified_at_ms is None
+
+
+def test_valid_legacy_requalification_timestamp_seeds_qualification(tmp_path: Path) -> None:
+    from app.services.account_journal_authority import _seed_authority_state_from_legacy
+
+    account = "DU123456"
+    (tmp_path / "accounts" / account).mkdir(parents=True)
+    (tmp_path / "accounts" / account / "account_events.jsonl").write_text(
+        json.dumps(
+            {
+                "account_id": account,
+                "event_type": "account_clerk_journal_authority_requalified",
+                "ts_ms": 1_700_000_000_000,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = _seed_authority_state_from_legacy(tmp_path, account)
+
+    assert state.qualified_at_ms == 1_700_000_000_000
+
+
 def test_legacy_shadow_comparator_drops_zero_position_sidecars(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

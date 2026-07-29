@@ -1067,3 +1067,66 @@ def test_restart_intensity_recovery_clear_starts_a_new_window(tmp_path: Path) ->
     assert gate.status == "pass"
     assert "observed=0" in gate.operator_reason
     assert read_account_freeze(tmp_path, "DU123456") is None
+
+
+def test_restart_intensity_clear_cutoff_survives_a_later_unrelated_freeze(tmp_path: Path) -> None:
+    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
+    for index, recorded_at_ms in enumerate(
+        (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
+        start=1,
+    ):
+        write_account_instance_binding(
+            tmp_path,
+            _binding(
+                sid="spy-1",
+                run_id=f"run-{index}",
+                namespace="learn-ai/spy-1/v1",
+                recorded_at_ms=recorded_at_ms,
+            ),
+        )
+    evaluate_restart_intensity(tmp_path, account_id="DU123456", now_ms=1_700_000_020_001, policy=policy)
+    clear_account_freeze(
+        tmp_path,
+        recovery_proof=AccountRecoveryProof(
+            account_id="DU123456",
+            recovery_id="restart-recovery-1",
+            requested_action="reconcile",
+            requested_by="operator",
+            broker_evidence={"positions": [], "open_orders": []},
+            reconciliation_result="clean",
+            final_gate_result=GateResult(
+                gate_id="account.restart_intensity",
+                status="pass",
+                source="account_restart_intensity",
+                operator_reason="restart intensity recovered",
+                operator_next_step="GATE_PASSING",
+                evidence_at_ms=1_700_000_030_000,
+            ),
+            recorded_at_ms=1_700_000_030_000,
+        ),
+    )
+
+    # A later, unrelated freeze overwrites the single active-freeze artifact.
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU123456",
+            reason="watchdog.flatten_failed",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_700_000_031_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+
+    # The restart-intensity cutoff must survive the overwrite so the pre-clear
+    # restarts do not re-enter the window and cause a false breach.
+    assert account_artifacts._latest_restart_intensity_clear_ms(tmp_path, "DU123456") == 1_700_000_030_000
+    gate = evaluate_restart_intensity(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_031_001,
+        policy=policy,
+        record_freeze=False,
+    )
+    assert gate.status == "pass"
+    assert "observed=0" in gate.operator_reason

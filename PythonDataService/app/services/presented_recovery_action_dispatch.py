@@ -311,7 +311,12 @@ def _current_recovery_candidate(
             candidate_con_id = spec.get("con_id")
             candidate_quantity = float(spec["quantity"])
             candidate_signed_quantity = candidate_quantity if spec["action"] == "SELL" else -candidate_quantity
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "skipping recovery flatten candidate %s with an unreadable order_spec: %s",
+                candidate.intent.intent_id,
+                exc,
+            )
             continue
         if (
             candidate.intent.intent_id == target.recovery_intent_id

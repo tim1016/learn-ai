@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +33,8 @@ from app.schemas.account_events import (
     TraderAccountEventsResponse,
 )
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 _NY_TZ = ZoneInfo("America/New_York")
 
@@ -357,6 +360,13 @@ def _event_presentation(
             None,
             "A non-authoritative operational row referenced a manual order; inspect the Clerk journal.",
         )
+    if event_type == "account_clerk_manual_order_unprojectable":
+        return (
+            "other",
+            None,
+            "A manual order receipt could not be projected from the Clerk journal and is shown "
+            "unclassified; inspect the Clerk journal.",
+        )
     return _EVENT_PRESENTATION.get(
         event_type,
         ("other", None, "An unclassified account journal event was recorded."),
@@ -428,14 +438,39 @@ def _manual_order_ack_history_from_clerk_journal(
             or entry.order_id is None
         ):
             continue
+        ack = entry.broker_ack
+        acknowledged_at_ms = ack.placed_at_ms if ack is not None else entry.recorded_at_ms
         try:
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
         except ValidationError as exc:
-            raise AccountEventJournalError(
-                f"canonical Clerk manual order receipt {entry.seq} has invalid order_spec: {exc}"
-            ) from exc
-        ack = entry.broker_ack
-        acknowledged_at_ms = ack.placed_at_ms if ack is not None else entry.recorded_at_ms
+            # A single unprojectable receipt must not blank the whole operator
+            # Desk. Surface it as an unclassified row and keep the rest visible.
+            logger.warning(
+                "clerk manual order receipt %s has an unprojectable order_spec; "
+                "surfacing an unclassified row instead of failing the Desk: %s",
+                entry.seq,
+                exc,
+            )
+            history.append(
+                MergedOperationalHistoryEvent(
+                    event_id=f"clerk:{account_id}:{entry.seq}",
+                    source="clerk_journal",
+                    account_id=account_id,
+                    event_type="account_clerk_manual_order_unprojectable",
+                    display_clock_ms=acknowledged_at_ms,
+                    event_at_ms=ack.placed_at_ms if ack is not None else None,
+                    recorded_at_ms=entry.recorded_at_ms,
+                    producer="clerk_journal",
+                    producer_boot_id="canonical",
+                    producer_seq=entry.seq,
+                    payload={
+                        "intent_id": intent.intent_id,
+                        "order_ref": intent.order_ref,
+                        "order_id": entry.order_id,
+                    },
+                )
+            )
+            continue
         history.append(
             MergedOperationalHistoryEvent(
                 event_id=f"clerk:{account_id}:{entry.seq}",

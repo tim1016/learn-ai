@@ -48,7 +48,7 @@ function makeStore(overrides: Record<string, unknown> = {}) {
 describe("AccountDeskOperatorEventsComponent", () => {
   it("renders account operations evidence with local instants, filters, and load older", async () => {
     const store = makeStore();
-    const view = await render(AccountDeskOperatorEventsComponent, {
+    await render(AccountDeskOperatorEventsComponent, {
       providers: [
         { provide: AccountDeskEventsStore, useValue: store },
         {
@@ -188,5 +188,69 @@ describe("AccountDeskOperatorEventsComponent", () => {
       "Account event history is unavailable.",
     );
     expect(screen.queryByText(/No account journal/)).toBeNull();
+  });
+
+  it("appends older rows below the initial rows after Load older is clicked", async () => {
+    const store = makeStore();
+    const rendered = await render(AccountDeskOperatorEventsComponent, {
+      providers: [
+        { provide: AccountDeskEventsStore, useValue: store },
+        {
+          provide: AccountDeskGuidanceStore,
+          useValue: { blockersFor: vi.fn().mockReturnValue([]) },
+        },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
+    });
+
+    // Initial render: the one row from makeStore() is visible.
+    expect(
+      screen.getByText("Account reconciliation receipt recorded in the journal."),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("Older configuration event."),
+    ).toBeNull();
+
+    // Simulate clicking Load older — the store's loadOlder mock is invoked.
+    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+    expect(store.loadOlder).toHaveBeenCalledOnce();
+
+    // Simulate the store responding with an additional older row.
+    store.operationRows.update((rows) => [
+      ...rows,
+      {
+        schema_version: 1 as const,
+        event_id: "DU1234567:2",
+        provenance: "producer_operational_log" as const,
+        seq: 2,
+        kind: "configuration" as const,
+        occurred_at_ms: 1_779_000_000_000,
+        event_at_ms: null,
+        arrived_at_ms: null,
+        recorded_at_ms: 1_779_000_000_001,
+        producer: "data_plane",
+        producer_boot_id: "test-boot",
+        producer_seq: 2,
+        trader_narration: null,
+        operator_detail: "Older configuration event.",
+        evidence_refs: [],
+      },
+    ]);
+    // Hide the Load older button once the cursor is exhausted.
+    store.nextBeforeSeq.set(null);
+    rendered.fixture.detectChanges();
+
+    // Both the original row and the newly appended older row appear in the DOM.
+    expect(
+      screen.getByText("Account reconciliation receipt recorded in the journal."),
+    ).toBeTruthy();
+    expect(screen.getByText("Older configuration event.")).toBeTruthy();
+    // Load older button is gone because nextBeforeSeq is now null.
+    expect(screen.queryByRole("button", { name: "Load older" })).toBeNull();
+
+    // Two list items are rendered.
+    expect(
+      document.querySelectorAll('[aria-label="Account operations events"] > [role="listitem"]'),
+    ).toHaveLength(2);
   });
 });

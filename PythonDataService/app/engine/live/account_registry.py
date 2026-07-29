@@ -19,7 +19,7 @@ from app.engine.live.account_artifacts import (
     _append_account_event,
     _safe_account_path_segment,
     account_artifacts_root,
-    read_account_recovery_clearance,
+    read_or_migrate_account_recovery_clearance,
 )
 from app.engine.live.account_binding_ledger import (
     AccountBindingCommand,
@@ -447,7 +447,7 @@ def account_recovery_evidence_exists_after(
     unresolved-exposure freeze existed.
     """
 
-    evidence = read_account_recovery_clearance(artifacts_root, account_id)
+    evidence = read_or_migrate_account_recovery_clearance(artifacts_root, account_id)
     return (
         evidence is not None
         and evidence.cleared_at_ms > recorded_at_ms

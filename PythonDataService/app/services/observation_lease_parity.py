@@ -252,9 +252,9 @@ def observation_lease_shadow_parity_archive_payload(
 ) -> dict[str, object]:
     """Build an immutable-input report payload suitable for cutover evidence.
 
-    The event journal is read once under its writer lock.  The resulting
-    source bytes are parsed directly, so the reported digest names precisely
-    the rows assessed for the promotion decision.
+    The shadow-comparison rows are read once via ``_read_shadow_rows``.  The
+    resulting source bytes are parsed directly, so the reported digest names
+    precisely the rows assessed for the promotion decision.
     """
 
     rows = _read_shadow_rows(artifacts_root, account_id)

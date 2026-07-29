@@ -8,6 +8,7 @@ keeps the proven Account Truth path active and reports exactly what is missing.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -29,6 +30,8 @@ from app.services.observation_lease_parity import (
     AccountObservationLeaseParityReport,
     assess_observation_lease_shadow_parity_from_artifacts,
 )
+
+logger = logging.getLogger(__name__)
 
 AccountGateAuthority = Literal["account_truth", "observation_lease"]
 AccountGatePromotionState = Literal[
@@ -307,7 +310,13 @@ def _current_restart_smoke(
                 artifact = _ClerkRestartSmokeArtifact.model_validate_json(
                     artifact_path.read_text(encoding="utf-8")
                 )
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "clerk restart smoke artifact for %s is unreadable; treating as absent "
+                    "so promotion stays gated: %s",
+                    account_id,
+                    exc,
+                )
                 return None
             if (
                 artifact.account_id != account_id
