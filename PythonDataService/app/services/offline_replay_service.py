@@ -140,16 +140,30 @@ class OfflineReplayService:
         self,
         request: OfflineReplayCreateRequest,
     ) -> OfflineReplaySessionResponse:
-        """Create a durable session record and launch preparation in background."""
-        session_date = datetime.fromtimestamp(
-            request.session_date_ms / 1000,
-            tz=UTC,
-        ).astimezone(ZoneInfo("America/New_York")).date()
-        window = session_window_for_date(session_date)
+        """Create a durable session record and launch preparation in background.
+
+        Every rejection raised here is a ``ValueError`` the router maps to a
+        typed 422 — a weekend/holiday timestamp (calendar ``LookupError``), an
+        out-of-range epoch (``OverflowError``/``OSError``), a non-open instant,
+        or a session that has not completed yet must not surface as a 500.
+        """
+        try:
+            session_date = (
+                datetime.fromtimestamp(request.session_date_ms / 1000, tz=UTC)
+                .astimezone(ZoneInfo("America/New_York"))
+                .date()
+            )
+            window = session_window_for_date(session_date)
+        except (LookupError, OverflowError, OSError, ValueError) as exc:
+            raise ValueError(
+                "session_date_ms must be the open timestamp of a completed NYSE session"
+            ) from exc
         if request.session_date_ms != window.open_ms_utc:
             raise ValueError(
                 "session_date_ms must equal the canonical NYSE session-open timestamp"
             )
+        if window.close_ms_utc >= self._now_ms():
+            raise ValueError("selected NYSE session has not completed yet")
 
         session_id = uuid4().hex
         created_at_ms = self._now_ms()
@@ -345,15 +359,23 @@ class OfflineReplayService:
                 }
                 for symbol, item in items.items():
                     await queues[symbol].put(item)
-                await asyncio.wait_for(
-                    asyncio.gather(*(item.consumed.wait() for item in items.values())),
-                    timeout=_BOT_PROCESS_TIMEOUT_S,
-                )
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*(item.consumed.wait() for item in items.values())),
+                        timeout=_BOT_PROCESS_TIMEOUT_S,
+                    )
+                except TimeoutError:
+                    # An engine stalled on a bar. Stop feeding and let cleanup
+                    # cancel the stuck task so the replay can't hang forever.
+                    break
                 record.playhead_ms = next(iter(items.values())).bar.end_ms
                 for bot in record.bots.values():
                     bot.bars_processed = index + 1
                 self._persist(record)
-                self._raise_if_bot_failed(tasks)
+                if self._any_bot_task_failed(tasks):
+                    # A bot crashed mid-bar; stop feeding and let the normal
+                    # BOT_RUNTIME_FAILED finalization below classify the parent.
+                    break
 
                 # Pace *after* emitting so a single STEP advances exactly one bar
                 # (before_tick consumes the step budget once, per bar). RUN sleeps
@@ -363,17 +385,8 @@ class OfflineReplayService:
                     await record.clock.pace(permission)
         finally:
             for queue in queues.values():
-                await queue.put(None)
-            results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-            for symbol, result in zip(tasks, results, strict=True):
-                if isinstance(result, BaseException) and not isinstance(
-                    result,
-                    asyncio.CancelledError,
-                ):
-                    bot = record.bots[symbol]
-                    bot.status = "failed"
-                    bot.failure_code = type(result).__name__
-                    bot.failure_message = str(result)
+                queue.put_nowait(None)
+            await self._finalize_bot_tasks(record, tasks)
 
         # STOP can arrive while both engines are consuming the final queued
         # bar, leaving no subsequent clock check to set the local flag.
@@ -445,13 +458,46 @@ class OfflineReplayService:
                 item.consumed.set()
 
     @staticmethod
-    def _raise_if_bot_failed(tasks: dict[OfflineReplaySymbol, asyncio.Task[None]]) -> None:
-        for symbol, task in tasks.items():
-            if not task.done() or task.cancelled():
-                continue
-            exc = task.exception()
-            if exc is not None:
-                raise RuntimeError(f"{symbol} replay bot failed") from exc
+    def _any_bot_task_failed(tasks: dict[OfflineReplaySymbol, asyncio.Task[None]]) -> bool:
+        return any(
+            task.done() and not task.cancelled() and task.exception() is not None
+            for task in tasks.values()
+        )
+
+    @staticmethod
+    async def _finalize_bot_tasks(
+        record: _SessionRecord,
+        tasks: dict[OfflineReplaySymbol, asyncio.Task[None]],
+    ) -> None:
+        """Settle bot tasks with a bounded wait, cancelling any that stall.
+
+        Gives each engine one processing window to drain the sentinel and
+        finish; a task still running past that (a stuck engine) is cancelled so
+        the replay always reaches a terminal state instead of hanging on an
+        unbounded gather. Each bot's own ``failure_code`` is preserved; the
+        parent's ``BOT_RUNTIME_FAILED`` classification is applied by the caller.
+        """
+        _, pending = await asyncio.wait(
+            set(tasks.values()),
+            timeout=_BOT_PROCESS_TIMEOUT_S,
+        )
+        for task in pending:
+            task.cancel()
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        for symbol, result in zip(tasks, results, strict=True):
+            bot = record.bots[symbol]
+            if isinstance(result, asyncio.CancelledError):
+                if bot.status in {"pending", "running"}:
+                    bot.status = "failed"
+                    bot.failure_code = "BOT_PROCESS_TIMEOUT"
+                    bot.failure_message = (
+                        f"{symbol} replay engine did not settle within "
+                        f"{int(_BOT_PROCESS_TIMEOUT_S)}s"
+                    )
+            elif isinstance(result, BaseException):
+                bot.status = "failed"
+                bot.failure_code = type(result).__name__
+                bot.failure_message = str(result)
 
     @staticmethod
     def _apply_bot_result(
@@ -526,12 +572,26 @@ class OfflineReplayService:
             if response is None:
                 continue
             if response.status not in _TERMINAL_STATUSES:
+                restart_message = "data service restarted before replay completion"
+                retired_bots = [
+                    bot
+                    if bot.status in {"completed", "failed", "stopped"}
+                    else bot.model_copy(
+                        update={
+                            "status": "failed",
+                            "failure_code": bot.failure_code or "SERVICE_RESTARTED",
+                            "failure_message": bot.failure_message or restart_message,
+                        }
+                    )
+                    for bot in response.bots
+                ]
                 response = response.model_copy(
                     update={
                         "status": "interrupted",
                         "completed_at_ms": self._now_ms(),
                         "failure_code": "SERVICE_RESTARTED",
-                        "failure_message": "data service restarted before replay completion",
+                        "failure_message": restart_message,
+                        "bots": retired_bots,
                     }
                 )
                 atomic_write_pydantic_artifact(path, response)

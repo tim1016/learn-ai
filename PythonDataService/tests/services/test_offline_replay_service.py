@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,7 +18,7 @@ from app.schemas.offline_replay import (
 )
 from app.services.offline_replay_clock import OfflineReplayClock, ReplayTickPermission
 from app.services.offline_replay_data import PreparedOfflineReplay
-from app.services.offline_replay_service import OfflineReplayService
+from app.services.offline_replay_service import OfflineReplayService, _BotRecord
 
 _WARMUP_MINUTES = 225
 
@@ -204,6 +205,10 @@ def test_restart_marks_an_unfinished_durable_session_interrupted(
     assert recovered.status == "interrupted"
     assert recovered.completed_at_ms == 3
     assert recovered.failure_code == "SERVICE_RESTARTED"
+    # The parent and its bots must agree: no bot may remain "running" once the
+    # owning session is archived interrupted (there is no task to advance it).
+    assert all(bot.status == "failed" for bot in recovered.bots)
+    assert all(bot.failure_code == "SERVICE_RESTARTED" for bot in recovered.bots)
     assert OfflineReplaySessionResponse.model_validate_json(
         path.read_text(encoding="utf-8")
     ).status == "interrupted"
@@ -264,3 +269,83 @@ async def test_single_step_advances_exactly_one_playback_bar(
     assert session.status == "completed", session.failure_message
     assert session.playhead_ms == prepared.playback_end_ms
     assert all(bot.bars_processed == total_minutes for bot in session.bots)
+
+
+@pytest.mark.asyncio
+async def test_finalize_cancels_a_stuck_bot_and_preserves_a_crash_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crashed bot keeps its real failure code; a stalled bot is cancelled.
+
+    Guards the timeout path: an engine that never settles must not leave the
+    replay hanging on an unbounded gather, and a crash must not be relabelled.
+    """
+    monkeypatch.setattr(
+        "app.services.offline_replay_service._BOT_PROCESS_TIMEOUT_S", 0.05
+    )
+    record = SimpleNamespace(
+        bots={
+            "SPY": _BotRecord(
+                symbol="SPY", run_id="r-spy", initial_cash=Decimal("100000"), status="running"
+            ),
+            "TSLA": _BotRecord(
+                symbol="TSLA", run_id="r-tsla", initial_cash=Decimal("100000"), status="running"
+            ),
+        }
+    )
+
+    async def crash() -> None:
+        raise ValueError("engine boom")
+
+    async def hang() -> None:
+        await asyncio.Event().wait()
+
+    tasks = {
+        "SPY": asyncio.create_task(crash()),
+        "TSLA": asyncio.create_task(hang()),
+    }
+
+    await OfflineReplayService._finalize_bot_tasks(record, tasks)  # type: ignore[arg-type]
+
+    assert record.bots["SPY"].status == "failed"
+    assert record.bots["SPY"].failure_code == "ValueError"
+    assert record.bots["TSLA"].status == "failed"
+    assert record.bots["TSLA"].failure_code == "BOT_PROCESS_TIMEOUT"
+    assert all(task.done() for task in tasks.values())
+
+
+@pytest.mark.asyncio
+async def test_create_session_rejects_a_non_trading_day(tmp_path: Path) -> None:
+    service = OfflineReplayService(
+        data_service=_PreparedData,  # type: ignore[arg-type]
+        root=tmp_path,
+    )
+    saturday_ms = int(datetime(2026, 7, 25, 13, 30, tzinfo=UTC).timestamp() * 1000)
+
+    with pytest.raises(ValueError, match="completed NYSE session"):
+        await service.create_session(
+            OfflineReplayCreateRequest(
+                session_date_ms=saturday_ms,
+                playback_minutes=30,
+                speed=60,
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_session_rejects_a_session_not_yet_completed(tmp_path: Path) -> None:
+    window = session_window_for_date(date(2026, 7, 28))
+    service = OfflineReplayService(
+        data_service=_PreparedData,  # type: ignore[arg-type]
+        root=tmp_path,
+        now_ms=lambda: window.open_ms_utc + 1_000,
+    )
+
+    with pytest.raises(ValueError, match="has not completed yet"):
+        await service.create_session(
+            OfflineReplayCreateRequest(
+                session_date_ms=window.open_ms_utc,
+                playback_minutes=30,
+                speed=60,
+            )
+        )
