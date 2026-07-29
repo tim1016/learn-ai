@@ -1,4 +1,3 @@
-import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -11,18 +10,20 @@ import {
 
 import type {
   OfflineReplayCatalogResponse,
-  OfflineReplayCatalogSession,
   OfflineReplayCommandAction,
   OfflineReplaySession,
   OfflineReplaySpeed,
 } from '../../../api/offline-replay.types';
 import { OfflineReplayService } from '../../../services/offline-replay.service';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
-import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { formatTimestampDisplay } from '../../../shared/timestamp/timestamp-display';
 import { extractServerMessage } from '../operation-error';
+import {
+  OfflineReplayDateOption,
+  OfflineReplayLaunchCardComponent,
+} from './offline-replay-launch-card.component';
+import { OfflineReplaySessionCardComponent } from './offline-replay-session-card.component';
 
-const ACTIVE_STATUSES = new Set([
+const ACTIVE_STATUSES = new Set<OfflineReplaySession['status']>([
   'preparing',
   'warming_up',
   'running',
@@ -32,11 +33,7 @@ const ACTIVE_STATUSES = new Set([
 
 @Component({
   selector: 'app-offline-replay-page',
-  imports: [
-    CommonModule,
-    ReceiptLabelPipe,
-    TimestampDisplayComponent,
-  ],
+  imports: [OfflineReplayLaunchCardComponent, OfflineReplaySessionCardComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './offline-replay-page.component.html',
   styleUrl: './offline-replay-page.component.scss',
@@ -48,7 +45,6 @@ export class OfflineReplayPageComponent {
   private destroyed = false;
 
   readonly catalog = signal<OfflineReplayCatalogResponse | null>(null);
-  readonly recentSessions = signal<OfflineReplaySession[]>([]);
   readonly currentSession = signal<OfflineReplaySession | null>(null);
   readonly selectedSessionDateMs = signal<number | null>(null);
   readonly playbackMinutes = signal<30 | 60>(60);
@@ -56,15 +52,14 @@ export class OfflineReplayPageComponent {
   readonly loading = signal(true);
   readonly acting = signal(false);
   readonly errorMessage = signal<string | null>(null);
-  readonly playbackSpeeds: readonly OfflineReplaySpeed[] = [1, 10, 60];
 
-  readonly dateOptions = computed(() =>
-    (this.catalog()?.sessions ?? []).filter((session) => session.eligible).map(
-      (session) => ({
+  readonly dateOptions = computed<OfflineReplayDateOption[]>(() =>
+    (this.catalog()?.sessions ?? [])
+      .filter((session) => session.eligible)
+      .map((session) => ({
         session,
         label: formatTimestampDisplay(session.session_date_ms, { mode: 'date-et' }),
-      }),
-    ),
+      })),
   );
 
   readonly active = computed(() => {
@@ -72,32 +67,12 @@ export class OfflineReplayPageComponent {
     return status !== undefined && ACTIVE_STATUSES.has(status);
   });
 
-  readonly visibleBarsProcessed = computed(() => {
-    const session = this.currentSession();
-    if (!session || session.bots.length === 0) return 0;
-    const warmupBars = Math.round(
-      (session.warmup_end_ms - session.session_open_ms) / 60_000,
-    );
-    return Math.max(
-      0,
-      Math.min(...session.bots.map((bot) => bot.bars_processed)) - warmupBars,
-    );
-  });
-
-  readonly progressPercent = computed(() => {
-    const session = this.currentSession();
-    if (!session) return 0;
-    return Math.min(100, (this.visibleBarsProcessed() / session.playback_minutes) * 100);
-  });
-
   constructor() {
     this.destroyRef.onDestroy(() => {
       this.destroyed = true;
       if (this.pollHandle !== null) clearTimeout(this.pollHandle);
     });
-    afterNextRender(() => {
-      setTimeout(() => void this.initialize(), 0);
-    });
+    afterNextRender(() => void this.initialize());
   }
 
   async initialize(): Promise<void> {
@@ -109,7 +84,6 @@ export class OfflineReplayPageComponent {
         this.replay.listSessions(),
       ]);
       this.catalog.set(catalog);
-      this.recentSessions.set(sessions);
       this.selectedSessionDateMs.set(
         catalog.recommended_session_date_ms
           ?? catalog.sessions.find((session) => session.eligible)?.session_date_ms
@@ -117,8 +91,7 @@ export class OfflineReplayPageComponent {
       );
       if (sessions.length > 0) {
         this.currentSession.set(
-          sessions.find((session) => ACTIVE_STATUSES.has(session.status))
-            ?? sessions[0],
+          sessions.find((session) => ACTIVE_STATUSES.has(session.status)) ?? sessions[0],
         );
       }
       this.schedulePoll();
@@ -149,7 +122,6 @@ export class OfflineReplayPageComponent {
         auto_fetch: true,
       });
       this.currentSession.set(session);
-      this.recentSessions.update((sessions) => [session, ...sessions]);
       this.schedulePoll();
     } catch (error) {
       this.errorMessage.set(
@@ -185,29 +157,6 @@ export class OfflineReplayPageComponent {
     }
   }
 
-  selectDate(event: Event): void {
-    const value = Number((event.target as HTMLSelectElement).value);
-    this.selectedSessionDateMs.set(Number.isFinite(value) ? value : null);
-  }
-
-  selectDuration(event: Event): void {
-    const value = Number((event.target as HTMLSelectElement).value);
-    if (value === 30 || value === 60) this.playbackMinutes.set(value);
-  }
-
-  selectLaunchSpeed(event: Event): void {
-    const value = Number((event.target as HTMLSelectElement).value);
-    if (value === 1 || value === 10 || value === 60) this.speed.set(value);
-  }
-
-  cachedLabel(session: OfflineReplayCatalogSession): string {
-    if (session.cached_symbols.length === 2) return 'SPY + TSLA cached';
-    if (session.cached_symbols.length === 1) {
-      return `${session.cached_symbols[0]} cached · missing symbol downloads on launch`;
-    }
-    return 'Downloads SPY + TSLA on launch';
-  }
-
   private schedulePoll(): void {
     if (this.destroyed || !this.active() || this.pollHandle !== null) return;
     this.pollHandle = setTimeout(() => {
@@ -220,13 +169,7 @@ export class OfflineReplayPageComponent {
     const sessionId = this.currentSession()?.session_id;
     if (!sessionId || this.destroyed) return;
     try {
-      const updated = await this.replay.getSession(sessionId);
-      this.currentSession.set(updated);
-      this.recentSessions.update((sessions) =>
-        sessions.map((session) =>
-          session.session_id === updated.session_id ? updated : session
-        ),
-      );
+      this.currentSession.set(await this.replay.getSession(sessionId));
     } catch (error) {
       this.errorMessage.set(
         extractServerMessage(error, 'Replay status could not be refreshed.'),

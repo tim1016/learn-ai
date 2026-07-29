@@ -323,23 +323,16 @@ class OfflineReplayService:
             for symbol in record.symbols
         }
         stopped = False
-        first_playback_bar = True
         try:
             total_bars = len(prepared.bars_by_symbol[record.symbols[0]])
+            last_index = total_bars - 1
             for index in range(total_bars):
                 warmup = index < prepared.warmup_minutes
-                permission = await record.clock.before_tick(warmup=warmup)
-                if permission is ReplayTickPermission.STOP:
-                    stopped = True
-                    break
-                if not warmup and not first_playback_bar:
-                    await record.clock.pace(permission)
+                if not warmup:
                     permission = await record.clock.before_tick(warmup=False)
                     if permission is ReplayTickPermission.STOP:
                         stopped = True
                         break
-                if not warmup:
-                    first_playback_bar = False
                     record.status = (
                         "paused"
                         if permission is ReplayTickPermission.STEP
@@ -361,6 +354,13 @@ class OfflineReplayService:
                     bot.bars_processed = index + 1
                 self._persist(record)
                 self._raise_if_bot_failed(tasks)
+
+                # Pace *after* emitting so a single STEP advances exactly one bar
+                # (before_tick consumes the step budget once, per bar). RUN sleeps
+                # ~60/speed s (interruptible); STEP returns immediately. The final
+                # bar skips the trailing wait — nothing follows it to pace toward.
+                if not warmup and index != last_index:
+                    await record.clock.pace(permission)
         finally:
             for queue in queues.values():
                 await queue.put(None)

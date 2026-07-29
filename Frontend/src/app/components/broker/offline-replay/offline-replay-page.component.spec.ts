@@ -1,4 +1,4 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -27,8 +27,8 @@ function replaySession(status: OfflineReplaySession['status']): OfflineReplaySes
     started_at_ms: SESSION_OPEN_MS,
     completed_at_ms: null,
     symbols: ['SPY', 'TSLA'],
-    bots: ['SPY', 'TSLA'].map((symbol) => ({
-      symbol: symbol as 'SPY' | 'TSLA',
+    bots: (['SPY', 'TSLA'] as const).map((symbol) => ({
+      symbol,
       status: status === 'failed' ? 'failed' : 'running',
       run_id: `replay-1-${symbol.toLowerCase()}`,
       bars_processed: 230,
@@ -61,15 +61,16 @@ const CATALOG: OfflineReplayCatalogResponse = {
 
 class FakeOfflineReplayService {
   getCatalog = vi.fn().mockResolvedValue(CATALOG);
-  listSessions = vi.fn().mockResolvedValue([]);
+  listSessions = vi.fn().mockResolvedValue([] as OfflineReplaySession[]);
   createSession = vi.fn().mockResolvedValue(replaySession('running'));
   getSession = vi.fn().mockResolvedValue(replaySession('running'));
   command = vi.fn().mockResolvedValue(replaySession('paused'));
 }
 
-async function setup() {
+async function setup(sessions: OfflineReplaySession[] = []) {
   TestBed.resetTestingModule();
   const service = new FakeOfflineReplayService();
+  service.listSessions.mockResolvedValue(sessions);
   await TestBed.configureTestingModule({
     imports: [OfflineReplayPageComponent],
     providers: [{ provide: OfflineReplayService, useValue: service }],
@@ -82,11 +83,25 @@ async function setup() {
   return { fixture, service };
 }
 
+function clickButton(
+  fixture: ComponentFixture<OfflineReplayPageComponent>,
+  label: string,
+): void {
+  const root = fixture.nativeElement as HTMLElement;
+  const button = Array.from(root.querySelectorAll('button')).find((element) =>
+    element.textContent?.includes(label),
+  );
+  if (!button) throw new Error(`no button matching "${label}"`);
+  button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
+
 describe('OfflineReplayPageComponent', () => {
-  it('launches exactly one SPY bot and one TSLA bot', async () => {
+  it('launches one SPY bot and one TSLA bot from the launch control', async () => {
     const { fixture, service } = await setup();
 
-    await fixture.componentInstance.launch();
+    clickButton(fixture, 'Launch SPY + TSLA');
+    await fixture.whenStable();
+    fixture.detectChanges();
 
     expect(service.createSession).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -95,7 +110,6 @@ describe('OfflineReplayPageComponent', () => {
         speed: 60,
       }),
     );
-    fixture.detectChanges();
     const symbols = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll('.symbol'),
     ).map((element) => element.textContent?.trim());
@@ -103,26 +117,25 @@ describe('OfflineReplayPageComponent', () => {
     fixture.destroy();
   });
 
-  it('sends a single-bar step command while paused', async () => {
-    const { fixture, service } = await setup();
-    fixture.componentInstance.currentSession.set(replaySession('paused'));
+  it('sends a single-minute step from the transport while paused', async () => {
+    const { fixture, service } = await setup([replaySession('paused')]);
 
-    await fixture.componentInstance.sendCommand('step');
+    clickButton(fixture, 'Step one minute');
+    await fixture.whenStable();
 
     expect(service.command).toHaveBeenCalledWith('replay-1', { action: 'step' });
     fixture.destroy();
   });
 
   it('renders a bot failure instead of hiding the stopped engine', async () => {
-    const { fixture } = await setup();
     const failed = replaySession('failed');
     failed.bots[1] = {
       ...failed.bots[1],
       failure_code: 'BOT_RUNTIME_FAILED',
       failure_message: 'strategy callback raised',
     };
-    fixture.componentInstance.currentSession.set(failed);
-    fixture.detectChanges();
+
+    const { fixture } = await setup([failed]);
 
     const alert = (fixture.nativeElement as HTMLElement).querySelector(
       '.bot-failure[role="alert"]',

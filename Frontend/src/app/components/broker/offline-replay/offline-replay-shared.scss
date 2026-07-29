@@ -1,0 +1,76 @@
+// Shared style primitives for the offline-replay page and its child cards.
+// View encapsulation stops the page stylesheet from reaching child templates,
+// so the base chip / control / card / heading rules live here as mixins and
+// each component includes only what its own markup renders.
+
+@mixin flex-row {
+  display: flex;
+  align-items: center;
+}
+
+@mixin flex-between {
+  justify-content: space-between;
+  gap: 20px;
+}
+
+@mixin eyebrow {
+  margin: 0 0 5px;
+  color: var(--text-subtle);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+@mixin heading-2 {
+  margin-top: 0;
+  margin-bottom: 0;
+  font-size: 20px;
+  letter-spacing: -.015em;
+}
+
+@mixin chip-base {
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  padding: 7px 11px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+@mixin card-surface {
+  max-width: 1180px;
+  margin: 0 auto 18px;
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+  box-shadow: var(--shadow-card);
+}
+
+// Base look for the <select> and <button> controls in the launch card and
+// transport. Consumers add their own padding / width on top.
+@mixin control-base {
+  min-height: 40px;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  color: var(--text-primary);
+  background: var(--bg-sunken);
+  font: inherit;
+}
+
+@mixin button-interactions {
+  padding: 0 14px;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    border-color: var(--text-muted);
+    background: var(--bg-hover);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: .48;
+  }
+}

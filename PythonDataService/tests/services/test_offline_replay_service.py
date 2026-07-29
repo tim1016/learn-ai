@@ -15,7 +15,7 @@ from app.schemas.offline_replay import (
     OfflineReplayCreateRequest,
     OfflineReplaySessionResponse,
 )
-from app.services.offline_replay_clock import OfflineReplayClock
+from app.services.offline_replay_clock import OfflineReplayClock, ReplayTickPermission
 from app.services.offline_replay_data import PreparedOfflineReplay
 from app.services.offline_replay_service import OfflineReplayService
 
@@ -62,6 +62,36 @@ async def _no_sleep(_: float) -> None:
 
 def _fast_clock(speed: int) -> OfflineReplayClock:
     return OfflineReplayClock(speed, sleep=_no_sleep)  # type: ignore[arg-type]
+
+
+class _ScriptedClock:
+    """Yield one fixed playback permission per bar; warm-up always runs.
+
+    Popping exactly one permission per playback ``before_tick`` pins the drive
+    loop to a single clock check per bar, which is what makes one STEP advance
+    one bar. The previous double-``before_tick`` loop consumed two permissions
+    per non-first bar, so this script would exhaust and stall before the run
+    completed.
+    """
+
+    def __init__(self, playback_permissions: list[ReplayTickPermission]) -> None:
+        self._script = iter(playback_permissions)
+        self.stop_requested = False
+
+    @property
+    def speed(self) -> int:
+        return 60
+
+    async def before_tick(self, *, warmup: bool) -> ReplayTickPermission:
+        if warmup:
+            return ReplayTickPermission.RUN
+        permission = next(self._script, ReplayTickPermission.STOP)
+        if permission is ReplayTickPermission.STOP:
+            self.stop_requested = True
+        return permission
+
+    async def pace(self, permission: ReplayTickPermission) -> None:
+        return None
 
 
 @pytest.mark.asyncio
@@ -177,3 +207,60 @@ def test_restart_marks_an_unfinished_durable_session_interrupted(
     assert OfflineReplaySessionResponse.model_validate_json(
         path.read_text(encoding="utf-8")
     ).status == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_single_step_advances_exactly_one_playback_bar(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression: one STEP per playback bar must feed every playback bar.
+
+    The earlier loop called ``before_tick`` twice per non-first playback bar,
+    so the step budget was consumed by the first check and the second check
+    blocked — a single Step press advanced no bar on every bar but the first.
+    With one clock check per bar, a script of exactly one STEP per bar drives
+    the run to completion.
+    """
+    caplog.set_level(logging.WARNING, logger="app.engine.live.live_engine")
+    window = session_window_for_date(date(2026, 7, 28))
+    playback_bars = 4
+    total_minutes = _WARMUP_MINUTES + playback_bars
+    prepared = PreparedOfflineReplay(
+        session=window,
+        warmup_minutes=_WARMUP_MINUTES,
+        playback_minutes=playback_bars,
+        warmup_end_ms=window.open_ms_utc + _WARMUP_MINUTES * 60_000,
+        playback_end_ms=window.open_ms_utc + total_minutes * 60_000,
+        bars_by_symbol={
+            "SPY": _stream("SPY", open_ms=window.open_ms_utc, count=total_minutes),
+            "TSLA": _stream("TSLA", open_ms=window.open_ms_utc, count=total_minutes),
+        },
+        data_sha256_by_symbol={"SPY": "spy-digest", "TSLA": "tsla-digest"},
+    )
+    script = [ReplayTickPermission.STEP] * playback_bars
+    service = OfflineReplayService(
+        data_service=_PreparedData(prepared),  # type: ignore[arg-type]
+        root=tmp_path,
+        clock_factory=lambda _speed: _ScriptedClock(list(script)),  # type: ignore[arg-type]
+    )
+
+    created = await service.create_session(
+        OfflineReplayCreateRequest(
+            session_date_ms=window.open_ms_utc,
+            playback_minutes=30,
+            speed=60,
+        )
+    )
+
+    for _ in range(500):
+        session = service.get_session(created.session_id)
+        if session.status in {"completed", "failed", "stopped"}:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        pytest.fail("offline replay did not reach a terminal state")
+
+    assert session.status == "completed", session.failure_message
+    assert session.playhead_ms == prepared.playback_end_ms
+    assert all(bot.bars_processed == total_minutes for bot in session.bots)

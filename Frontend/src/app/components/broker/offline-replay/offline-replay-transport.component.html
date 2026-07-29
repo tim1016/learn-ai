@@ -1,0 +1,40 @@
+<div class="transport" aria-label="Replay controls">
+  @if (status() === 'paused') {
+    <button type="button" [disabled]="acting()" (click)="emit('resume')">
+      <i class="pi pi-play" aria-hidden="true"></i> Resume
+    </button>
+    <button type="button" [disabled]="acting()" (click)="emit('step')">
+      <i class="pi pi-step-forward" aria-hidden="true"></i> Step one minute
+    </button>
+  } @else {
+    <button
+      type="button"
+      [disabled]="acting() || status() === 'preparing' || status() === 'warming_up'"
+      (click)="emit('pause')"
+    >
+      <i class="pi pi-pause" aria-hidden="true"></i> Pause
+    </button>
+  }
+
+  <div class="speed-buttons" aria-label="Playback speed">
+    @for (candidate of playbackSpeeds; track candidate) {
+      <button
+        type="button"
+        [class.active]="speed() === candidate"
+        [disabled]="acting() || status() === 'preparing'"
+        (click)="emit('set_speed', candidate)"
+      >
+        {{ candidate }}×
+      </button>
+    }
+  </div>
+
+  <button
+    type="button"
+    class="stop-action"
+    [disabled]="acting()"
+    (click)="emit('stop')"
+  >
+    <i class="pi pi-stop" aria-hidden="true"></i> Stop
+  </button>
+</div>

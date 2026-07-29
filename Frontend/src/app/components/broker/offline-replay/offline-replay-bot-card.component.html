@@ -1,0 +1,37 @@
+@let current = bot();
+<article class="bot-card" [attr.data-bot-status]="current.status">
+  <div class="bot-heading">
+    <div>
+      <span class="symbol">{{ current.symbol }}</span>
+      <span class="bot-name">{{ current.symbol }} replay bot</span>
+    </div>
+    <span class="bot-status">{{ current.status | receiptLabel }}</span>
+  </div>
+
+  <dl class="metrics">
+    @for (metric of countMetrics(); track metric.label) {
+      <div>
+        <dt>{{ metric.label }}</dt>
+        <dd>{{ metric.value | number }}</dd>
+      </div>
+    }
+    <div>
+      <dt>Sim equity</dt>
+      <dd>{{ current.final_equity_usd | currency:'USD':'symbol':'1.2-2' }}</dd>
+    </div>
+  </dl>
+
+  @if (current.failure_code || current.failure_message) {
+    <div class="bot-failure" role="alert">
+      <strong>{{ current.failure_code | receiptLabel }}</strong>
+      <span>{{ current.failure_message }}</span>
+    </div>
+  }
+
+  @if (current.data_sha256) {
+    <div class="receipt">
+      <span>Market-data SHA-256</span>
+      <code>{{ current.data_sha256 }}</code>
+    </div>
+  }
+</article>
