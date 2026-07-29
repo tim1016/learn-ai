@@ -1,5 +1,10 @@
 # Three-bot lifecycle operations — 2026-07-23
 
+> **STATUS: HISTORICAL VALIDATION EVIDENCE — NOT OPERATING AUTHORITY.** Use
+> [`docs/bot-control-operator-manual.md`](../bot-control-operator-manual.md) for
+> current Bot Control and Account Clerk behavior. This dated operations record is
+> retained for provenance and must not be followed as a runbook.
+
 Live UI-driven operations record. Times are CDT unless noted. Account `DUM284968`
 (IBKR paper). Posture: paper submit-to-paper (real paper fills), 2000-order cap per
 bot. Driven entirely through the cockpit UI; corrective actions recorded inline and

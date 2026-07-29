@@ -1,5 +1,13 @@
 # Bot-Control 8-Bot Call-Graph Audit — 2026-07-28
 
+> **STATUS: SUPPORTING HISTORICAL ENGINEERING EVIDENCE — NOT OPERATING AUTHORITY.**
+> This point-in-time investigation is not a Bot Control manual, quick procedure, or
+> implementation authority. Use
+> [`docs/bot-control-operator-manual.md`](../bot-control-operator-manual.md) for
+> current Bot Control and Account Clerk behavior, ADRs for decisions, and
+> [`docs/known-gaps.md`](../known-gaps.md) for the living open-defect register. The
+> findings below preserve provenance and qualification evidence only.
+
 **Goal:** run 8 concurrent Interactive Brokers (IBKR) paper bots tomorrow without repeating the
 2026-07-27 failure. **Method:** traced every bot-control UI action → FastAPI router → host daemon →
 Clerk → broker, stack-trace style, then adversarially re-verified every cross-agent conflict and every

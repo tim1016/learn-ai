@@ -19,6 +19,7 @@ import type {
 import { brokerSse, type SseStream } from '../../../../../services/broker-sse';
 import { BrokerService } from '../../../../../services/broker.service';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
+import { ReceiptLabelPipe } from '../../../../../shared/pipes/receipt-label.pipe';
 import { fmtTimestampNy } from '../../../format';
 import { PolygonDataEngineCardComponent } from '../polygon-data-engine-card/polygon-data-engine-card.component';
 
@@ -32,7 +33,7 @@ interface EvidenceLine extends IbkrApiEvidenceEvent {
 
 @Component({
   selector: 'app-ibkr-api-evidence-panel',
-  imports: [AssetIdentityComponent, PolygonDataEngineCardComponent],
+  imports: [AssetIdentityComponent, PolygonDataEngineCardComponent, ReceiptLabelPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './ibkr-api-evidence-panel.component.html',
   styleUrl: './ibkr-api-evidence-panel.component.scss',

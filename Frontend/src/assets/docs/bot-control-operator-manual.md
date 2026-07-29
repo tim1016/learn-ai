@@ -1,20 +1,43 @@
 # Bot Control & Account Clerk — Operator Manual
 
+> # AUTHORITY STATUS: CANONICAL — SOLE CURRENT AUTHORITY
+>
+> **Canonical file:** `docs/bot-control-operator-manual.md`.
+>
+> This is the sole current operating and implementation-reference document for Bot
+> Control and Account Clerk behavior. Humans, coding agents, reviewers, and UI
+> maintainers must use this document instead of older plans, runbooks, audits,
+> handoffs, or implementation snapshots. The in-app page at `/broker/bot-manual`
+> renders the synchronized copy of this file.
+>
+> **Verified against:** `bcbfe935a07139023f045aae277078058368857c` (HEAD),
+> 2026-07-29. **Audience:** traders, operators, reviewers, and coding agents.
+> **Surfaces governed:** the IBKR Bot fleet and detail pages (`/broker/bots`,
+> `/broker/bots/:id`), Account Desk and Account Safety (`/broker/accounts/:accountId`),
+> the rendered manual, and their FastAPI control/read boundaries. It also records the
+> boundary to the separate Alpaca Broker System v2 desk (`/brokers/alpaca`); it does
+> not misrepresent that desk as the IBKR host-daemon control plane.
+>
+> This supersedes former operator runbooks, AccountOwner snapshots, cockpit/cohort
+> guides, controller plans, quick procedures, and point-in-time audits as present
+> operating instructions. Current ADRs remain the separate authority for durable
+> decisions and invariants: ADR-0001–0008, ADR-0010–0019, ADR-0022, ADR-0024–0027,
+> ADR-0029–0033. ADR-0028 is proposal-only except for its explicit surviving channel
+> contract. `docs/known-gaps.md` owns open defects, not implemented behavior.
+>
+> When this document conflicts with executable code, committed contracts, or focused
+> tests, treat this document as defective: verify the implementation, correct this
+> document, and record any unresolved ADR conflict. Do not follow the conflicting
+> older document.
+
 **Audience:** operators running paper-trading bots on the learn-ai live stack.
 **Scope:** how to deploy, run, stop, and recover bots; how the Account Clerk keeps an
 account honest; every gate that can block you; and the non-obvious blindspots that
 bite in practice.
 
-> This manual is the current operator and trader-facing implementation snapshot as of
-> 2026-07-22. When code and manual disagree, the code wins — fix the manual.
-> The in-app page at `/broker/bot-manual` renders this exact source. Companion docs:
-> `docs/known-gaps.md` (open defects), ADR-0030 (Clerk authority), ADR-0026
-> (lifecycle authority), and the historical three-bot validation preserved under
-> `docs/archive/reports/three-bot-concurrency-and-emergency-flatten-2026-07-17.md`.
-
 ---
 
-## 0. Authority and implementation snapshot (2026-07-22)
+## 0. Authority and implementation snapshot (2026-07-29)
 
 This is the sole current operating manual. The **Trader** view is not a
 separate, competing manual: it renders the same backend-authored lifecycle,
@@ -24,15 +47,18 @@ trading verdict from raw data.
 | Concern | Current authority | Implementation boundary |
 |---|---|---|
 | Normal account broker writes and account journal | **Account Clerk** | `app/engine/live/account_clerk.py`, `account_clerk_operations.py`, `account_clerk_rpc.py` |
+| Admitted-order custody and safety composition | **Clerk journal and typed safety artifacts** | `account_custody_projection.py`, `account_epoch.py`, `account_safety.py`, `services/account_safety_snapshot.py` |
 | Duty phase, roster, durable desired state | **Lifecycle evaluator** | `app/engine/live/bot_lifecycle_evaluator.py` |
 | Bot process actuation and observed process facts | **Host live-run daemon** | `app/engine/live/host_daemon.py` |
 | Start and submit account proof | **Account Truth** today | `app/services/account_gate_promotion.py`; the `observation_lease` branch is shadow-only until its promotion evidence exists |
 | Cockpit and Trader presentation | **Python-authored surface; Angular renders it** | `app/services/operator_surface.py`, `app/services/account_cockpit.py`, and `Frontend/src/app/components/broker/` |
-| Concurrent starts | **Individual fresh roll-call offers** | `app/routers/live_instances.py`; the cohort launcher is retired |
+| Concurrent starts | **Individual fresh roll-call offers; repeat-churn guard per bot** | `app/routers/live_instances.py`, `account_artifacts.py`; the cohort launcher is retired |
 
 For an operator, the result is simple: act from Bot Control or Account Desk,
 read the backend-authored reason and receipt, and do not use an archived guide,
-script, or alternate UI as a broker-control path.
+script, or alternate UI as a broker-control path. The separate Alpaca desk has its
+own broker-neutral contract and Clerk; it is not a second route into this IBKR
+control plane.
 
 ## 1. Mental model — three planes
 
@@ -172,7 +198,28 @@ the difference matters enormously (§5.2):
   that carry a Clerk **intent** — it never invents an owner for unattributed flow.
 - **Account-truth fold** counts **all** fills including unattributed ones.
 
-### 3.5 Socket topology (why the data plane delegates cures)
+### 3.5 Custody is a receipt, not an order acknowledgement
+For normal IBKR paper strategy entries, the current Clerk path is asynchronous custody:
+the bot returns after **A0**, the fsynced Clerk admission receipt, while the Clerk-owned
+worker performs the later broker work. A0 is neither an IBKR order ID nor proof that an
+order was accepted by the broker. The later facts are A1 (broker write started), A2
+(broker identity correlated), and A3 (economic terminal outcome). The Account Desk
+transaction detail is the read surface for those facts; it preserves unknown facts and
+their separate source, arrival, and durable-record clocks.
+
+The qualified production topology permits eight account-wide normal-entry slots and
+zero asynchronous risk-reducing slots. A ninth normal entry is a typed refusal before
+A0. A caller timeout around A0 is **unknown**, not a refusal or permission to retry:
+read the exact custody record or replay the exact identity. A normal entry remains
+limited to one nonterminal intent per `(account_id, strategy_instance_id)`.
+
+Risk-reducing work must not be smuggled through this entry lane. In particular, native
+IBKR stock execution has no externally reachable atomic reduce-only primitive, so a
+server-derived exact close remains blocked while the account is suspended. Presented
+Account Safety actions and the Clerk decide whether any recovery action is available.
+Angular only displays those backend-authored facts and actions.
+
+### 3.6 Socket topology (why the data plane delegates cures)
 The Clerk RPC socket lives at
 `tempfile.gettempdir()/learn-ai-clerk/<sha256(artifacts_root + "\0" + account_id)>[:32].sock`
 (`account_clerk.py:725-734`). It's on the **host** `/tmp`. A containerized data plane
@@ -183,7 +230,7 @@ performs the host-local Clerk RPC. Deploy/start/stop use the same daemon boundar
 `SOCKET_MISSING` through the UI is therefore a host-delegation failure to escalate, not
 an instruction for the operator to run a direct socket command.
 
-### 3.6 Managing the Clerk
+### 3.7 Managing the Clerk
 - Status: `GET /api/accounts/{account_id}/clerk`.
 - Ensure/start (idempotent, adopts a healthy Clerk or spawns one, blocks on a
   generation handshake): `POST` daemon `…/clerk/ensure` — the data-plane reconcile /
@@ -352,14 +399,19 @@ coherence, preflight, and start-boundary are gated on `start=true`.
 | `ALREADY_RUNNING` / `STOPPING` | 409 | already live/shutting down | Wait. |
 | `START_SETTINGS_INCOMPLETE` | 409 | ledger `strategy_key` can't hydrate a Start | Ensure a valid strategy key in the ledger. |
 
-### 6.4 Restart-intensity (the concurrency-churn ceiling) — READ THIS
-`RestartIntensityPolicy` = **3** starts within a **5-minute** rolling window **per
-account** (`account_artifacts.py`). The 3rd start in the window **freezes the whole
-account** (`restart_intensity.threshold_breached`, surfaces as `ACCOUNT_FROZEN` on the
-next deploy/start). It is a **start-*rate* limit, not a concurrency cap** — you can run
-many bots concurrently; you just can't *start* more than 2 per 5 min. Stops are free
-(only starts count). Start one bot, review its evidence, then run a fresh roll call
-before the next start; there is no batch-launch bypass.
+### 6.4 Restart-intensity (the repeated-activation ceiling) — READ THIS
+`RestartIntensityPolicy` is **3 activations within a 5-minute rolling window for the
+same `strategy_instance_id`**, measured under the account's durable binding ledger
+(`account_artifacts.py::_restart_intensity_groups`). The third activation of that one
+bot freezes the account (`restart_intensity.threshold_breached`, then
+`ACCOUNT_FROZEN`). It is neither a fleet-concurrency cap nor a limit on one first start
+per distinct newly deployed bot. Eight distinct first deployments do not aggregate into
+one restart storm; repeatedly stopping and reactivating the same bot does.
+
+Every actual start still needs its own fresh roll-call offer and all ordinary admission
+proofs. Stops are free (only accepted activations count). Start sequentially whenever
+you need to observe evidence between launches; that is an operational practice, not a
+false claim that the third distinct bot is prohibited.
 
 The freeze is **transient/auto-expiring** (the window rolls off), and — since
 2026-07-17 — a *running* bot **pauses submits and survives** a restart-intensity freeze
@@ -429,13 +481,13 @@ for you.
 
 ## 8. Concurrency — recipes
 
-**Start several bots safely (respecting the rate ceiling):**
+**Start several bots safely (while avoiding repeated-activation churn):**
 1. Ensure the tree is clean in scope, the account is CLEAN/flat, fleet clean, no freeze.
 2. Deploy all N (`start:false`) — deploys don't count toward the rate limit.
 3. `roll-call` → get offers.
 4. Start one bot and verify its On duty and account evidence.
-5. Run a fresh roll call before the next start. Never batch or stagger starts through
-   a cohort launcher; it has been removed.
+5. Verify each bot's backend-authored On duty and account evidence before continuing.
+   Never batch or stagger starts through a cohort launcher; it has been removed.
 
 **Stop-and-replace (churn):** use **End day now** for a clean/re-offerable session
 close, then start a replacement (which counts toward the rate limit). A deliberate
@@ -544,7 +596,7 @@ Triggered by `submit.unmapped_diagnostic` / `unmapped_diagnostic`.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Start → `409 ACCOUNT_FROZEN` right after several quick starts | Restart-intensity (3/5 min) tripped | Wait ~5 min or reconcile + clear-freeze; start ≤2/5 min. |
+| Start → `409 ACCOUNT_FROZEN` after repeatedly restarting the same bot | Restart-intensity (3 activations/5 min for one bot) tripped | Wait ~5 min or reconcile + clear-freeze; do not churn the same bot. |
 | Start → `ROLL_CALL_OFFER_REQUIRED` | No fresh offer this session | Run `roll-call`, start from the offer. |
 | Deploy → `DirtyTreeError` naming a path you don't recognize | Stray file in scope (often test-artifact junk like `PythonDataService/PythonDataService/`) | Remove it; commit/stash real changes. |
 | Cure → `ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING` | Host-daemon delegation to the host-local Clerk failed | Retry from Account Desk only after the backend advises it; otherwise preserve the receipt and escalate. |
@@ -577,9 +629,10 @@ are two different truths (broker snapshot vs. journal fold). Cure the ledger; do
 "re-flatten" a position the broker doesn't hold.
 
 **12.4 A transient freeze used to kill healthy bots; now it pauses them.** Before the
-2026-07-17 fix, a restart-intensity freeze (caused by *your other* rapid starts)
-cascade-**halted** every running bot. Now they **pause submits and survive**. But the
-freeze still blocks *new* starts. Don't churn faster than 2 starts/5 min.
+2026-07-17 fix, a restart-intensity freeze cascade-**halted** every running bot. Now
+they **pause submits and survive**. The freeze still blocks new starts, but it is
+triggered by repeated activation of the same bot (three within five minutes), not by a
+fleet of distinct first starts.
 
 **12.5 A Clerk restart invalidates shadow lease proof.** Generation bumps revoke the
 observation lease. That matters only after its promotion; **Account Truth remains the
@@ -647,6 +700,89 @@ churn envelope you change code + ship it; don't expect a knob.
 - **Effective stop** — the force-flat time; you can't start after it.
 - **Sick bay** — a bot with an open condition (usually crash-recovery-required),
   ineligible for roll-call until cured.
+
+---
+
+## 14. Engineering appendix — implementation truth matrix (verified 2026-07-29)
+
+This appendix is for maintainers and reviewers. It is not a second operator procedure.
+Status describes the implementation at the verified revision, not design intent.
+
+| Claim / boundary | Production owner and registration | Contract / focused evidence | Human consumer | Status |
+|---|---|---|---|---|
+| IBKR Bot Control runtime | `host_daemon.py`, registered through `live_instances.py` and `main.py` | `/api/live-instances/*`; host-daemon tests | `/broker/bots`, `/broker/bots/:id` | current |
+| IBKR normal account writes | `account_clerk.py` plus RPC and journal modules; daemon supervises one Clerk/account | Clerk RPC schemas; Clerk/journal tests | Account Desk, Bot Control custody ribbon | current |
+| Lifecycle phase and control intent | `bot_lifecycle_evaluator.py`; router commands are requests, daemon reports facts | `LiveInstanceStatus`, lifecycle tests | Bot fleet and detail | current |
+| Account safety composition | `account_safety_snapshot.py`; source artifacts retain their own clocks | `AccountSafetySnapshot`, snapshot tests | Account Desk and Bot Control | current |
+| Custody A0→A3 | Clerk journal + `account_custody_projection.py`; strategy uses `submit_custody_v2` | transaction projection and custody qualification tests | Account Desk transaction history | current, eight-entry / zero-risk-reducing topology |
+| Reconciliation and contamination | `account_reconciliation.py`, `fleet.py`, journal exposure folds | reconciliation and `test_journal_exposure.py` | Account Desk, start admission | current |
+| Account recovery actions | presented-action services and Clerk/daemon delegation | presented-action schemas and recovery tests | Account Safety / Account Desk | current; no Angular verdict synthesis |
+| Trader/operator wording | `operator_surface.py`, operator guidance, presented action services | operator-surface and frontend surface tests | trader and operations lenses | current; backend authors judgment/prose |
+| Raw receipt identifiers | shared `receiptLabel` pipe at presentation boundary | pipe/component tests and frontend guards | all evidence surfaces | current; opaque IDs/refs remain exact |
+| IBKR activity narrative | host-runner callback WAL then broker-activity projector | activity schemas and publisher tests | Bot Control Activity | current; projector is a rebuildable projection |
+| Alpaca Broker System v2 reads/orders | broker contract registry → Alpaca adapter/Clerk, registered in `main.py` | `/api/brokers/alpaca/*`, committed OpenAPI, adapter/Clerk tests | `/brokers/alpaca` | current but separate from IBKR Bot Control |
+| Alpaca bot runner | `services/bot_runner.py`, `broker_bots.py` | `/api/brokers/{broker}/bots/*`, `test_bot_runner.py` | no equivalent Bot Control UI route | current but log-only; daemon-free and no order submission |
+| Legacy lifecycle projection | deleted runtime/routes/client wrappers; Python lifecycle-evidence fold remains | retirement guards and migration tests | none | retired runtime; opaque historical template IDs are not a revival |
+| Observation lease | `account_observation_lease.py` and promotion service | gate-promotion tests | Account Desk evidence | shadow-only; Account Truth is effective admission authority |
+
+### 14.1 Broker-specific boundary
+
+The phrase “Bot Control” in this manual primarily names the established IBKR
+host-daemon control plane. Alpaca is paper-only Broker System v2: its read and order
+routes are broker-neutral contract routes under `/api/brokers/alpaca`, its desk is
+`/brokers/alpaca`, and its daemon-free bot runner is presently log-only. Neither route
+is evidence that an Alpaca order may use the IBKR Clerk, roll-call, host daemon,
+reconciliation, or emergency-recovery controls. Do not generalize an IBKR-specific
+socket, client-ID, Account Truth, or recovery rule to Alpaca without a contract change.
+
+### 14.2 Current code-versus-ADR conflicts
+
+1. **ADR-0026 has stale superseded prose inside its accepted record.** Its original
+   §§3 and 5 say Pause/Resume/STOPPED are deleted, while the explicit 2026-07-21
+   amendment says `PAUSED`, `RUNNING`/Resume, and `STOPPED` remain durable commands;
+   current lifecycle and frontend code implement the amendment. Documentation/UI may
+   safely follow the amendment. The ADR needs an owner-approved consolidation; do not
+   revive the original “one start path — resume is deleted” language.
+2. **ADR-0033's initial synchronous-baseline text is amended by its own A0 cutover.**
+   The current strategy path uses `submit_custody_v2` and returns at A0; the initial
+   paragraph remains historical baseline context. The current code and “Strategy A0
+   cutover amendment” govern operation.
+3. **Crash-recovery admission is not closed under deploy-only staging.** Current code
+   blocks direct restart after `crashed`, `boot_liveness_unproven`, or
+   `ended_without_status`, but a later same-instance `start=false` deployment can
+   replace the latest binding before Start checks it. This is BUG-16 in the 2026-07-28
+   audit and remains an implementation safety conflict, not a documentation defect.
+
+### 14.3 ADR-to-machinery traceability and disposition
+
+| ADR family | Current machinery / reachability | Disposition |
+|---|---|---|
+| 0001, 0004, 0006, 0007 | file-backed artifacts, host daemon, durable bindings, daemon token, data-plane forwarding | essential safety complexity; retain |
+| 0002, 0005, 0009, 0011, 0021–0023, 0029 | adapter paper guard, Python readiness/sizing/session evidence, deploy posture | retain; several are IBKR-specific and must not be claimed for Alpaca |
+| 0008, 0010, 0013–0017, 0024–0027 | Clerk journal, durable intent/action receipts, authored surfaces/narratives/notices, lifecycle evaluator | essential product and safety complexity; retain |
+| 0018, 0019 | read-only session mirror and composed daemon diagnostics | essential observability; keep deferred items in `known-gaps.md` |
+| 0020 | strategy-validation selection design | proposed decision; verify an implementation claim before presenting it as a gate |
+| 0028 | proposed channel contract; Clerk/lifecycle authority explicitly superseded | preserve as proposal only; do not treat roadmap machinery as live authority |
+| 0030 | account-rooted Clerk, journal authority, legacy-name/read compatibility, lifecycle-projection deletion ledger | retain authority; qualify each compatibility reader before removal |
+| 0031 | FastAPI/OpenAPI snapshot and generated frontend contracts | essential boundary discipline; retain |
+| 0032 | broker-neutral contract, verbatim capture, Alpaca adapter/Clerk | active migration/product complexity; retain; IBKR v1 adapter remains unbuilt |
+| 0033 | A0–A3, epoch/safety composition, producer logs, qualification campaign | essential safety complexity; retain; reconcile its amendments into an ADR revision |
+
+### 14.4 Prioritized cleanup and simplification register
+
+| Priority | Mechanism / originating decision | Evidence and consumers | Preserve before change | Required proof and disposition |
+|---|---|---|---|---|
+| P0 | Same-instance deploy-only crash-recovery bypass (BUG-16; lifecycle binding model) | Latest-binding lookup can mask a blocking retired binding; deploy/start admission and Bot Control consume it | A blocking terminal outcome must prevent restart until a recovery proof or replacement exists | Regression for all three blocking sources through deploy `start=false` then Start; preserve historic binding readability and rollback. **Safety-critical; standalone fix PR.** |
+| P1 | Legacy `AccountOwner` names/readers (ADR-0030 compatibility ledger) | Historic wire/event/model names remain in Clerk-backed paths and artifact readers | Historic journals/events must remain readable and must never regain writer authority | Inventory persisted artifacts and dual-read consumers; migration fixture + cold-start/recovery tests; then consolidate or remove. **High risk.** |
+| P2 | Legacy `account_events.jsonl` repair/read compatibility (ADR-0033) | Historical forensic reader and repair endpoint remain after producer-log split | Pre-split evidence stays inspectable; forward writers never return | Prove no writer, migration-age/retention decision, corrupt-file recovery test; then deprecate reader/repair endpoint. **Medium risk.** |
+| P3 | Duplicate manual presentation paths | Markdown source is bundled and rendered twice (compiled article and optional raw Markdown) | One canonical source must remain byte-synchronized and accessible | Existing sync guard plus route/component test; keep both render modes only if accessibility/audit needs justify them. **Low risk; documentation/UI cleanup PR.** |
+| P4 | Observation-lease shadow branch (ADR-0030) | Shadow comparisons and history are retained while Account Truth gates admission | Promotion must never weaken account proof or let stale generation evidence admit a start | Promotion qualification evidence or explicit retirement plan, shadow-parity tests, artifact migration/readback test. **High risk; do not delete speculatively.** |
+| P5 | IBKR/Alpaca parallel control concepts | Separate host-daemon/Clerk and Broker v2 paths have intentionally different capabilities | Do not erase broker-specific safety, custody, or recovery semantics | Complete capability matrix and prove equivalent invariants before sharing code; otherwise retain clear separation. **High risk; architectural ADR required for consolidation.** |
+
+The apparent fan-out in the Clerk/daemon/journal path is mostly essential: it spans a
+single writer, durable artifacts, RPC/host boundary, recovery, and proof surfaces.
+The removal candidates above are prioritized only after their persisted-data and
+recovery qualifications, not because the implementation is large.
 
 ---
 

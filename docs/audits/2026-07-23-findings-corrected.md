@@ -1,11 +1,12 @@
 # Bot lifecycle findings — corrected & consolidated (2026-07-23)
 
-**Status:** authoritative. Supersedes the operator conclusions in
-`three-bot-lifecycle-2026-07-23.md` and the questions in
-`2026-07-23-codex-review-request.md`. Corrections come from an adversarial code
-review (Codex) that was independently verified against the preserved run
-artifacts. Where the operator's live-session conclusion and the code disagree,
-**the code wins and is cited.**
+> **STATUS: HISTORICAL CORRECTED FINDINGS — NOT OPERATING AUTHORITY.** This document
+> supersedes only the historical conclusions in `three-bot-lifecycle-2026-07-23.md`
+> and `2026-07-23-codex-review-request.md`; it does not supersede the current manual.
+> Use [`docs/bot-control-operator-manual.md`](../bot-control-operator-manual.md) for
+> current behavior and [`docs/known-gaps.md`](../known-gaps.md) for unresolved work.
+> The adversarial review and preserved run artifacts remain provenance; code remains
+> implementation evidence.
 
 ## TL;DR of corrections
 
