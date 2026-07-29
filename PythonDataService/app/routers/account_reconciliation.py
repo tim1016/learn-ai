@@ -858,7 +858,15 @@ async def execute_presented_recovery_action_endpoint(
             message=replay_error.message,
             snapshot=current_snapshot,
         ) from replay_error
-    pending_result = action_service.settle_pending_without_current_presentation(request)
+    try:
+        pending_result = action_service.settle_pending_without_current_presentation(request)
+    except PresentedActionRejectedError as exc:
+        current_snapshot = snapshot_service.snapshot(account_id=canonical_account_id)
+        raise _presented_action_rejection_http_error(
+            reason_code=exc.reason_code,
+            message=exc.message,
+            snapshot=current_snapshot,
+        ) from exc
     if pending_result is not None:
         return _presented_action_response(pending_result)
     current_snapshot = snapshot_service.snapshot(account_id=canonical_account_id)

@@ -234,6 +234,56 @@ async def test_abandoned_claim_is_returned_as_unknown_before_a_missing_presentat
     assert response.json()["replayed"] is False
 
 
+async def test_settle_pending_rejection_returns_snapshot_enriched_409(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import settings
+    from app.main import app
+    from app.security.data_plane_control import CONTROL_SECRET_HEADER
+    from app.services.presented_account_actions import PresentedActionRejectedError
+
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    action = _flatten_intention_action()
+    current_snapshot = SimpleNamespace(actions=(), snapshot_id="d" * 64, snapshot_version="d" * 64)
+
+    class _RejectingSettleService:
+        def replay_if_claimed(self, _request: object) -> None:
+            return None
+
+        def settle_pending_without_current_presentation(self, _request: object) -> None:
+            raise PresentedActionRejectedError(
+                "ACTION_ENVELOPE_MISMATCH",
+                "The action envelope no longer matches the pending attempt.",
+            )
+
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: object()
+    app.dependency_overrides[account_reconciliation.get_account_safety_snapshot_service] = lambda: SimpleNamespace(
+        snapshot=lambda **_kwargs: current_snapshot
+    )
+    app.dependency_overrides[account_reconciliation.get_presented_recovery_action_service] = (
+        lambda: _RejectingSettleService()
+    )
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={CONTROL_SECRET_HEADER: "test-control-secret"},
+        ) as client:
+            response = await client.post(
+                f"/api/accounts/{_ACCOUNT_ID}/presented-actions/recovery", json=_invocation(action)
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    # The pending-claim rejection must use the same snapshot-enriched 409 as the
+    # other presentation lanes, not escape to the generic exception handler.
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ACTION_ENVELOPE_MISMATCH"
+
+
 def test_known_host_clerk_rejection_is_not_reclassified_as_an_unknown_outcome() -> None:
     rejection = known_host_recovery_rejection(
         HostDaemonError(
