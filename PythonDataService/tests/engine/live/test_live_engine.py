@@ -602,6 +602,74 @@ async def test_live_engine_shutdown_event_unwedges_loop_when_bar_source_is_silen
     assert result.order_events == []
 
 
+class _ExhaustingBarSource:
+    """Bar source that exhausts (StopAsyncIteration) while a shutdown is pending.
+
+    Used to reproduce BUG-5: when the IBKR bar stream disconnects at the same
+    instant STOP is commanded, _next_bar_or_shutdown returns (None, False)
+    (source exhausted wins) instead of (None, True) (shutdown won).  Before
+    the fix, the flatten branch was guarded by `if shutdown_won:` so it was
+    skipped and open positions were left unmanaged.
+    """
+
+    def __init__(self, shutdown_event: asyncio.Event) -> None:
+        self._shutdown_event = shutdown_event
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        # Signal shutdown *while* the iterator is being awaited so
+        # StopAsyncIteration and the shutdown signal arrive simultaneously.
+        self._shutdown_event.set()
+        raise StopAsyncIteration
+
+
+@pytest.mark.asyncio
+async def test_live_engine_flattens_when_source_exhausts_while_stop_pending() -> None:
+    """Source exhaustion while STOP is pending must still trigger flatten (BUG-5).
+
+    Root cause: bar loop guarded flatten with `if shutdown_won:`.  When the
+    IBKR stream disconnects at the same time STOP is commanded,
+    StopAsyncIteration races shutdown_event.wait(); if the source wins,
+    shutdown_won=False and the flatten branch was skipped — leaving open
+    positions unmanaged.
+
+    Fix: also flatten when `shutdown_event.is_set()` at the moment the source
+    exhausts, regardless of which side of the race won.
+    """
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=756733,
+                symbol="SPY",
+                sec_type="STK",
+                quantity=100.0,
+                avg_cost=500.0,
+                fetched_at_ms=1,
+            ),
+        ],
+        fetched_at_ms=1,
+    )
+
+    shutdown_event = asyncio.Event()
+    engine = LiveEngine(None, LiveConfig(), broker=broker)
+
+    await asyncio.wait_for(
+        engine.run(IdleStrategy(), bars=_ExhaustingBarSource(shutdown_event), shutdown_event=shutdown_event),
+        timeout=5.0,
+    )
+
+    sell_orders = [o for o in broker.orders if o.action == "SELL"]
+    assert len(sell_orders) == 1, f"expected flatten order; got {broker.orders}"
+    assert sell_orders[0].symbol == "SPY"
+    assert sell_orders[0].quantity == 100
+
+
 class _FailingBarSource:
     """Async iterator whose ``__anext__`` raises a non-cancellation
     exception synchronously (no ``await``), so the wrapping task

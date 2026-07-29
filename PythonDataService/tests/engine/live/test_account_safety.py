@@ -14,7 +14,7 @@ from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.account_artifacts import advance_account_clerk_generation
 from app.engine.live.account_clerk import AccountClerk
 from app.engine.live.account_clerk_journal import AccountClerkJournal
-from app.engine.live.account_clerk_journal_models import AccountClerkIntentRejected
+from app.engine.live.account_clerk_journal_models import AccountClerkIntentRejected, AccountClerkJournalEntry
 from app.engine.live.account_epoch import (
     AccountEpochAuthority,
     AccountEpochOutageChanges,
@@ -43,6 +43,7 @@ from app.engine.live.account_safety import (
     account_safety_entry_admission_lock,
     account_safety_suspension_reservation,
     repair_account_safety_admission,
+    retired_owner_nonterminal_custody,
 )
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
@@ -914,3 +915,39 @@ def test_account_safety_blocks_current_bot_exempts_sibling_sid(tmp_path: Path) -
     # Siblings (SPY, QQQ, AAPL, …) must not be blocked
     for sibling_sid in ("dv-20260727-spy", "dv-20260727-qqq", "dv-20260727-aapl"):
         assert account_safety_blocks_current_bot(safety, sibling_sid) is False, sibling_sid
+
+
+def test_cancel_confirmed_entry_resolves_custody() -> None:
+    """cancel_confirmed must terminate retired-owner custody.
+
+    Root cause of the 2026-07-29 SUSPENDED→infinite-epoch-invalidation loop:
+    smoke-20260729-spy-2 crashed with SubmitUncertainHaltError; one of its
+    intents had cancel_submitting + cancel_confirmed (order never reached the
+    broker), but _custody_is_terminal did not check cancel_confirmed, so the
+    intent was retained as non-terminal custody forever.  The Clerk's
+    reconciliation loop kept re-invalidating the epoch (seq 819→835) without
+    ever lifting the safety suspension.
+    """
+    strategy_instance_id = "crashed-spy-2"
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-cancel-terminal",
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=strategy_instance_id,
+        run_id="run-crashed-spy-2",
+        bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
+        intent_id="intent-cancel-only",
+        order_ref=f"learn-ai/{strategy_instance_id}/v1:intent-cancel-only",
+        intent_kind="STRATEGY",
+        order_spec={"symbol": "SPY"},
+        owner_generation=1,
+        created_at_ms=NOW_MS,
+    )
+    entries = [
+        AccountClerkJournalEntry(seq=1, entry_kind="recorded", recorded_at_ms=NOW_MS, intent=intent),
+        AccountClerkJournalEntry(seq=2, entry_kind="cancel_submitting", recorded_at_ms=NOW_MS, intent=intent),
+        AccountClerkJournalEntry(seq=3, entry_kind="cancel_confirmed", recorded_at_ms=NOW_MS, intent=intent),
+    ]
+
+    retained = retired_owner_nonterminal_custody(entries, strategy_instance_id=strategy_instance_id)
+
+    assert retained == (), f"cancel_confirmed must terminate custody, got: {retained}"

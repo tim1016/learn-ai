@@ -1209,6 +1209,10 @@ class AccountSafetyAuthority:
 def _custody_is_terminal(entries: Iterable[AccountClerkJournalEntry]) -> bool:
     return any(
         entry.entry_kind == "custody_expired_before_submit"
+        # A confirmed broker cancel means the order was never filled and cannot
+        # create future exposure — the cancel handshake closed the Clerk's book
+        # on this intent before any position was opened.
+        or entry.entry_kind == "cancel_confirmed"
         or (
             entry.entry_kind == "reconciliation"
             and entry.reconciliation_verdict in {"RECOVER_ADOPT", "HALT"}

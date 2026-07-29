@@ -123,7 +123,7 @@ _ENGINE_TZ = ZoneInfo("America/New_York")
 LIVE_SOURCE_BAR_INTERVAL_MS = 60_000
 BAR_SOURCE_WATCHDOG_INTERVAL_S = 5.0
 BAR_SOURCE_FIRST_BAR_TIMEOUT_S = 120.0
-CLOCK_OUT_FLAT_EVIDENCE_TIMEOUT_S = 30.0
+CLOCK_OUT_FLAT_EVIDENCE_TIMEOUT_S = 90.0
 CLOCK_OUT_FLAT_EVIDENCE_POLL_S = 0.5
 
 
@@ -1436,15 +1436,16 @@ class LiveEngine:
             while True:
                 minute_bar, shutdown_won = await _next_bar_or_shutdown(source_iter, shutdown_event)
                 if minute_bar is None:
-                    if shutdown_won:
-                        # Graceful shutdown via SIGINT/SIGTERM. cancel_open_orders +
-                        # liquidate + submit happen via _flatten; the
-                        # existing finally block (post-break) flushes writers and
-                        # stops the broker event stream. ``last_bar.end_time``
-                        # gives the historical "use the last bar's time" behavior
-                        # when bars were flowing; the wall-clock fallback covers
-                        # the wedged-source case (issue surfaced 2026-05-13)
-                        # where no bar ever arrived.
+                    # Flatten whenever shutdown is signalled — either shutdown
+                    # won the race (source still live) OR the source exhausted
+                    # while a STOP was already pending.  The second case is the
+                    # BUG-5 gap: if the bar source disconnects at the same
+                    # instant STOP is received, shutdown_won=False and the
+                    # flatten was previously skipped, leaving positions open.
+                    needs_flatten = shutdown_won or (
+                        shutdown_event is not None and shutdown_event.is_set()
+                    )
+                    if needs_flatten:
                         fallback_time = last_bar.end_time if last_bar is not None else datetime.now(_ENGINE_TZ)
                         ctx.log(f"[SHUTDOWN] {fallback_time}: shutdown_event set; flattening and exiting")
                         flat_acks = await self._flatten(
@@ -1454,8 +1455,7 @@ class LiveEngine:
                             reconcile_owned_state=reconcile_owned_state_after_cancel,
                         )
                         submitted_order_ids.extend(ack.order_id for ack in flat_acks)
-                    # source exhausted (shutdown_won=False) OR shutdown finished —
-                    # either way the bar loop is done.
+                    # source exhausted OR shutdown finished — bar loop is done.
                     break
                 last_bar = minute_bar
                 bar_close_ms = int(minute_bar.end_time.timestamp() * 1000)
