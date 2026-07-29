@@ -1165,7 +1165,7 @@ async def test_drain_events_rejects_a_broker_event_outside_the_canonical_shape(t
     assert exc.value.reason_code == "ACCOUNT_CLERK_PROTOCOL_ERROR:MALFORMED_RESPONSE"
 
 
-def test_broker_write_lock_cancels_share_the_submit_queue_budget() -> None:
+def test_request_timeout_s_broker_write_lock_cancels_share_submit_budget() -> None:
     """cancel_exact_order and cancel_pending_a0 acquire the same _broker_write_lock
     as a submit, so a caller can queue behind up to eight serialized broker writes.
     They must get the submit-sized budget, not the 30s normal timeout, or an 8-bot

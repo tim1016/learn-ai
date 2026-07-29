@@ -12,6 +12,26 @@ from one tracer at the stated confidence.
 
 ---
 
+## Resolution status (PR #1289) — read this first
+
+This audit was authored as a findings list; two findings were then fixed in the same PR. **Do not re-apply
+them.** Current status:
+
+- **BUG-4 (broker-write-lock cancel timeouts) — FIXED.** `request_timeout_s` now gives both
+  `cancel_exact_order` and `cancel_pending_a0` the 240s submit-sized inner budget, **and** the outer
+  container→daemon HTTP hop (`host_daemon_client._CANCEL_TIMEOUT` = 260s) covers that inner budget on the
+  operator cancel path (without the outer bump the inner fix was inert — the 10s/130s HTTP reads timed out
+  first).
+- **BUG-10 (`ended_without_status` restart gate) — FIXED for the direct restart path.** The gate now consumes
+  `TERMINAL_RESTART_BLOCKING_BINDING_SOURCES`. A **pre-existing** deploy-only bypass remains (see **BUG-16**),
+  tracked as a follow-up — it affects `crashed`/`liveness` too and is not introduced by this PR.
+- **BUG-1, BUG-2, BUG-3 — OPERATIONAL, not code.** These are the actual launch blockers; run the pre-run
+  checklist. The remaining *code-side* risk for the run is **BUG-1** (A0 admission latency).
+- **BUG-5/6/7 (wind-down) — DEFERRED** (live bar-loop / stop state machine; need paper-broker validation).
+  BUG-7's original root-cause was mis-diagnosed and has been corrected below.
+
+---
+
 ## Headline: the #1285 "240s timeout" fix is inert on the live path
 
 Production IBKR bots do **not** use the RPC `operation="submit"` path (the one that got the 240s
@@ -79,18 +99,21 @@ Production IBKR bots do **not** use the RPC `operation="submit"` path (the one t
 
 ### TIER 2 — High
 
-**BUG-4 — `cancel_exact_order` has only a 30s RPC budget but holds `_broker_write_lock`** **[verified]**
+**BUG-4 — broker-write-lock cancels timed out under 8-bot contention (both layers)** **[verified] — RESOLVED in PR #1289**
 - Severity: HIGH · Confidence: high (refines/reattributes the earlier "cancel_namespace" claim)
-- Pathway: `account_clerk_rpc_protocol.py:290–306` maps `cancel_exact_order` → 30s NORMAL; `account_clerk.py:1313`
-  `async with self._broker_write_lock, self._cancel_operation_lock, ...`.
+- Pathway: `account_clerk_rpc_protocol.py:290–306` mapped `cancel_exact_order` **and** `cancel_pending_a0` → 30s
+  NORMAL; both hold `_broker_write_lock` (`account_clerk.py:1313`, `:1385`).
 - What goes wrong: under 8-bot A1 contention, up to 8 broker writes (25s each) sit ahead on `_broker_write_lock`
-  → ~200s worst case, exhausting the 30s budget after ~2 concurrent writes → RPC timeout → an uncertain cancel
-  that can durably block that bot's next submit. (Note: `cancel_namespace`, `recovery_flatten`,
-  `recovery_flatten_batch`, `fold_binding_retirements`, `record_binding_decision`, `drain_events` do **not**
-  take `_broker_write_lock` and are adequately budgeted — the earlier BLOCKER on `cancel_namespace` is
-  downgraded.)
-- Fix: promote `cancel_exact_order` to `ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S` (120s) or a fleet-size-aware
-  timeout. Small, safe change.
+  → ~200s worst case, exhausting the 30s budget → an uncertain cancel that can durably block that bot's next
+  submit. (Note: `cancel_namespace`, `recovery_flatten`, `recovery_flatten_batch`, `fold_binding_retirements`,
+  `record_binding_decision`, `drain_events` do **not** take `_broker_write_lock` and are adequately budgeted —
+  the earlier BLOCKER on `cancel_namespace` is downgraded.)
+- **Fix (landed): two layers.** (1) `request_timeout_s` returns the 240s submit-sized budget for both cancels.
+  (2) The operator cancel path also crosses container→daemon HTTP via `host_daemon_client`, whose outer reads
+  were 130s (`operator_exact_cancel`) / 10s (`operator_pending_cancel`) — **below** the 240s inner budget, so
+  they timed out first and the inner fix was inert on the operator path. Added `_CANCEL_TIMEOUT` (260s) and
+  wired both operator cancel forwards to it. The shared `_FLATTEN_TIMEOUT` / `_START_ADMISSION_TIMEOUT`
+  constants stay short (used by other operations).
 
 **BUG-5 — Stop on a crashed subprocess returns without flattening → position left open** **[single-pass, high]**
 - Severity: HIGH · Pathway: `live_instances.py stop_run` → `host_daemon.py:1831` `if current.process.poll() is
@@ -99,20 +122,31 @@ Production IBKR bots do **not** use the RPC `operation="submit"` path (the one t
 - Fix: when a dead process still has owned-position evidence, auto-route to the Clerk emergency workflow or
   write a durable incident, instead of silently returning `exited`.
 
-**BUG-6 — CLOCK_OUT leaves a bot alive-PAUSED with an open position if flat-evidence doesn't clear in 30s** **[single-pass, high]**
-- Severity: HIGH · Pathway: `live_instances.py end_day_now` → `live_engine.py:_complete_clock_out` →
-  `_await_fresh_flat_broker_evidence` (30s, `CLOCK_OUT_FLAT_EVIDENCE_TIMEOUT_S`) → on timeout writes
-  `CLOCK_OUT_BROKER_NOT_FLAT`, acks "failed", `shutdown_event` NOT set → bot stays up, desired state PAUSED,
-  no retry.
+**BUG-6 — CLOCK_OUT leaves a bot alive-PAUSED with an open position if flat-evidence doesn't clear in 30s** **[single-pass, high; deferred]**
+- Severity: HIGH · Pathway: `live_instances.py end_day_now` → `live_engine.py:_complete_clock_out` awaits
+  `_flatten(...)` (cancel + liquidate) **first**, then `_await_fresh_flat_broker_evidence` (30s,
+  `CLOCK_OUT_FLAT_EVIDENCE_TIMEOUT_S`) → on timeout writes `CLOCK_OUT_BROKER_NOT_FLAT`, acks "failed",
+  `shutdown_event` NOT set → bot stays up, desired state PAUSED, no retry.
+- Scope note (per review): the 30s deadline is created **inside** `_await_fresh_flat_broker_evidence`, i.e.
+  only *after* `_flatten` returns — so this is the genuine "flatten submitted but the broker is slow to confirm
+  the position is flat" case, not a serialization victim. The concurrent-fleet failure is BUG-7's cancel
+  timeout, not this window.
 - Fix: on `CLOCK_OUT_BROKER_NOT_FLAT`, escalate to hard STOP + recovery flatten rather than staying alive
   PAUSED with exposure.
 
-**BUG-7 — 8-bot end-day: serialized cancel starves later bots' 30s flat-evidence window** **[single-pass, medium-high]**
-- Severity: HIGH (wind-down) · Pathway: 8× CLOCK_OUT → each `_cancel_namespace_through_clerk` → single
-  per-account `cancel_operation_lock` (`account_clerk_operations.py:1289`, 25s each) → worst case ~200s while
-  each bot's outer `CLOCK_OUT_FLAT_EVIDENCE_TIMEOUT_S` is only 30s → later bots write NOT_FLAT and strand.
-- Fix: don't start the 30s flat-evidence window until the cancel actually completes, or wind down via
-  per-bot Stop instead of 8 concurrent CLOCK_OUTs.
+**BUG-7 — 8-bot end-day: serialized namespace-cancel exhausts the 25s cancel timeout → uncertain, CLOCK_OUT_FAILED** **[single-pass, medium-high; deferred] — diagnosis corrected per review**
+- Severity: HIGH (wind-down) · Corrected pathway: 8× CLOCK_OUT → each `_flatten` calls
+  `_cancel_namespace_through_clerk` → Clerk `cancel_namespace` serializes on `cancel_operation_lock`
+  (`account_clerk_operations.py`), and the broker cancel is wrapped in `asyncio.timeout(
+  ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S = 25s)` (`account_clerk_operations.py:1305`). If the first bot's
+  cancel occupies most of the 25s window, queued bots exhaust *that* timeout → `AccountClerkCancelNamespaceUncertainError`
+  → propagates out of `_flatten` → `_complete_clock_out` records a **`CLOCK_OUT_FAILED_*`** receipt and leaves
+  the namespace cancel in `uncertain_requires_reconciliation`.
+- Correction: the original writeup blamed serialized cancel *consuming the 30s flat-evidence window*. That is
+  wrong — the flat-evidence timer only starts after `_flatten` returns (see BUG-6). The real failure is the
+  25s cancel timeout under `cancel_operation_lock` serialization.
+- Fix: wind down via per-bot Stop instead of 8 concurrent CLOCK_OUTs, and/or make the cancel budget
+  fleet-size-aware so serialized cancels don't reach the 25s bound.
 
 **BUG-8 — `CLERK_ASYNC_ENTRY_QUEUE_FULL` on simultaneous burst → per-bot halt** **[suspected]**
 - Severity: HIGH · Confidence: suspected. Pathway: entry queue capacity 8 (`account_custody_topology.py:13`);
@@ -132,13 +166,35 @@ Production IBKR bots do **not** use the RPC `operation="submit"` path (the one t
   the first order that would exceed capacity mid-session — a silent `CLERK_ASYNC_ENTRY_QUEUE_FULL` if stale
   intents carried over from a prior session. See checklist CHK-3.
 
-**BUG-10 — `ended_without_status` crash leaves a RETIRED row that reads as "clean stopped" but is unreconciled; crash-recovery-override can't clear it** **[single-pass, high]**
-- Severity: MEDIUM · Pathway: `exit_taxonomy.py:39 TERMINAL_RESTART_BLOCKING_BINDING_SOURCES` includes
-  `ended_without_status` but is **never imported/consumed**; `account_registry.py:424
-  crash_retired_restart_blocking_binding` only checks `RECOVERY_REQUIRED_RETIRED_BINDING_SOURCES`
-  {process_crashed, boot_liveness_unproven}. A SIGKILL/OOM exit reads as clean-stopped though exposure is
-  unreconciled, and `record_crash_recovery_override_evidence` raises `CrashRecoveryNotRequiredError`.
-- Fix: consume `TERMINAL_RESTART_BLOCKING_BINDING_SOURCES` in `crash_retired_restart_blocking_binding`.
+**BUG-10 — `ended_without_status` (SIGKILL/OOM) did not block same-instance restart** **[single-pass, high] — RESOLVED in PR #1289 (direct path)**
+- Severity: MEDIUM · Pathway: `exit_taxonomy.py TERMINAL_RESTART_BLOCKING_BINDING_SOURCES` includes
+  `ended_without_status` but was **never consumed**; `crash_retired_restart_blocking_binding` only checked
+  `RECOVERY_REQUIRED_RETIRED_BINDING_SOURCES` {process_crashed, boot_liveness_unproven}. A SIGKILL/OOM exit
+  could restart the same instance with no recovery gate (the ops surface already flags it critical). Note: the
+  account-reconciliation surface *does* surface it as a critical "Retire & Replace required" condition, so the
+  original "reads as clean-stopped" wording overstated it — the gap was the start-admission gate, not the ops
+  surface.
+- **Fix (landed):** `crash_retired_restart_blocking_binding` now consumes `TERMINAL_RESTART_BLOCKING_BINDING_SOURCES`;
+  a same-id restart requires an audited recovery override or retire-and-replace. Both cure paths already work
+  (`record_crash_recovery_override_evidence` is source-agnostic). Also extracted `terminal_restart_failure_phrase`
+  so the operator message is accurate (not "crashed") for this source.
+- **Residual (BUG-16):** the gate reads only the *latest* binding, so a deploy-only stage can still mask it.
+
+**BUG-16 — deploy-only staging masks a blocking retirement (pre-existing gate bypass)** **[verified; pre-existing, NOT introduced by PR #1289]**
+- Severity: MEDIUM (safety-gate bypass) · Pathway: `latest_account_instance_binding` returns the single most
+  recent row regardless of `lifecycle_state` (`account_registry.py` `index_account_instance_bindings`). A
+  Deploy with `start=false` after a blocking terminal exit writes a newer `DEPLOYED` binding
+  (`_deploy_and_persist_lifecycle`), and the deploy route skips the crash-recovery precheck (it is guarded by
+  `if daemon_request.start` in `live_instances.py`). A subsequent Start then sees `latest == DEPLOYED`, so
+  `crash_retired_restart_blocking_binding` returns `None` and the same identity restarts without recovery proof.
+- Scope: affects `crashed`, `liveness_unproven`, **and** `ended_without_status` identically — it predates this
+  PR; BUG-10 inherits but does not create it. Retire-and-Replace (new instance id) is unaffected; only
+  deploy-to-**same**-instance-while-blocked bypasses the gate.
+- Fix options: (A) run the crash-recovery precheck before every `DEPLOYED` write on the deploy path (3-line
+  router change, but touches the frozen `live_instances.py` and blocks deploy-staging during crash review —
+  a workflow change requiring operator sign-off); (B) make the gate return the last *unresolved* blocking
+  retirement even when a later non-terminal row exists (more complex state logic). **Deferred to a follow-up
+  issue; not in PR #1289.**
 
 **BUG-11 — 30s broker-stream-silence watchdog could fire during A0/A1 pressure** **[single-pass, medium]**
 - Severity: MEDIUM · `account_clerk.py:163 _CRITICAL_BROKER_STREAM_SILENCE_MS = 30_000` vs a busy Clerk loop
@@ -182,8 +238,16 @@ unidentified state), then `POST <LIVE_RUNNER_DAEMON_URL>/accounts/{account_id}/c
 
 **CHK-3 — Stale nonterminal intents (fixes BUG-9):**
 `GET /api/accounts/{account_id}/transactions?lifecycle_state=uncertain_requires_reconciliation` and
-`...=recovery_action_required` → if any rows, they hold order-slots. Clear each via
-`POST /api/accounts/{account_id}/journal-cures` (Clerk must be running) before the session.
+`...=recovery_action_required` → if any rows, they hold order-slots. **A journal cure will NOT free the slot**
+(corrected per review): `POST /api/accounts/{account_id}/journal-cures` appends an `AccountClerkOperatorAdjustment`
+that adjusts the *namespace exposure ledger* projection — it is invisible to `_custody_status_for_entries` and
+writes no terminal custody event, so `nonterminal_async_custody_depths` still counts the slot. To actually
+release a slot, drive the intent to a terminal custody state:
+- `uncertain_requires_reconciliation` → run a reconciliation sweep (`POST /api/accounts/{account_id}/reconciliation`
+  or the `reconcile_now` presented action). If broker truth confirms the order's terminal status, `record_broker_event`
+  appends the matching `broker_event` which folds to `economic_terminal` and frees the slot.
+- `recovery_action_required` → execute the presented `cancel_pending` action (only if still pre-A1/queued) or the
+  `flatten` presented action, and await the terminal broker event.
 
 **CHK-4 — A0 latency sanity (informs BUG-1):**
 Run the custody qualification drills (or an 8-bot dry run) and confirm A0 admission p99 is comfortably under
@@ -214,8 +278,11 @@ the 10s deadline at 8-bot fsync load. If not, widen `ACCOUNT_CLERK_RPC_CUSTODY_R
 
 ## Recommended sequencing
 
-1. **Before the run:** execute CHK-1..CHK-4 for all 8 accounts. These alone prevent the two morning-launch
+1. **Landed in PR #1289:** BUG-4 (cancel timeouts, inner + outer) and BUG-10 (ended_without_status restart
+   gate, direct path). Do not re-apply.
+2. **Before the run:** execute CHK-1..CHK-4 for all 8 accounts. These alone prevent the two morning-launch
    blockers (BUG-2, BUG-3) and the mid-session slot exhaustion (BUG-9), and de-risk BUG-1.
-2. **Quick safe code fix worth landing first:** BUG-4 (timeout bump for `cancel_exact_order`).
-3. **Wind-down hardening (needed to end the day cleanly):** BUG-5, BUG-6, BUG-7.
-4. **Follow-ups:** BUG-1 deadline widening (if drills show A0 pressure), BUG-8, BUG-10..BUG-15.
+3. **Wind-down hardening (needed to end the day cleanly, deferred):** BUG-5, BUG-6, BUG-7 (validate against
+   the paper broker).
+4. **Follow-ups:** BUG-16 (deploy-only gate bypass — tracked issue), BUG-1 deadline widening (if drills show
+   A0 pressure), BUG-8, BUG-11..BUG-15.

@@ -513,7 +513,7 @@ def test_crash_retired_restart_recovery_allows_non_crash_retirement(tmp_path: Pa
     assert blocking_binding is None
 
 
-def test_ended_without_status_retirement_blocks_restart(tmp_path: Path) -> None:
+def test_crash_retired_restart_blocking_binding_blocks_ended_without_status(tmp_path: Path) -> None:
     """A SIGKILL/OOM exit leaves no run-status receipt, so exposure is unproven.
 
     Restarting the same instance must require recovery proof exactly like a
@@ -541,7 +541,9 @@ def test_ended_without_status_retirement_blocks_restart(tmp_path: Path) -> None:
     assert blocking_binding == retired
 
 
-def test_ended_without_status_restart_cleared_by_recovery_proof(tmp_path: Path) -> None:
+def test_crash_retired_restart_blocking_binding_ended_without_status_cleared_by_proof(
+    tmp_path: Path,
+) -> None:
     retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
         update={
             "lifecycle_state": "RETIRED",

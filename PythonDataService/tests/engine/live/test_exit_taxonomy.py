@@ -78,8 +78,8 @@ def test_terminal_restart_failure_phrase_is_accurate_per_source() -> None:
     """The operator message must not label an OOM/SIGKILL exit as a 'crash'."""
 
     assert (
-        "liveness is unproven"
-        in terminal_restart_failure_phrase(LIVENESS_UNPROVEN_REGISTRY_SOURCE)
+        terminal_restart_failure_phrase(LIVENESS_UNPROVEN_REGISTRY_SOURCE)
+        == "is not owned by the current host daemon and its liveness is unproven"
     )
     assert (
         terminal_restart_failure_phrase(ENDED_WITHOUT_STATUS_REGISTRY_SOURCE)
