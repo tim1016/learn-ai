@@ -191,6 +191,8 @@ describe('IbkrApiEvidencePanelComponent', () => {
     expect(text).toContain('DU1234567');
     expect(text).toContain('IB Gateway');
     expect(text).toContain('reqPositionsAsync');
+    expect(text).toContain('Broker Positions');
+    expect(text).not.toContain('broker.positions');
   });
 
   it('highlights serializer placeholders from backfill and live stream events', async () => {

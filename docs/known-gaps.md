@@ -23,7 +23,41 @@ committing effort.
 
 ## 1. Safety-critical (verified open against current code)
 
-No verified-open items remain in this section.
+### Bot Control / Account Clerk reconciliation (verified 2026-07-29)
+
+- **Same-instance deploy-only staging can bypass a terminal restart block
+  (safety-critical).** A blocking retired binding (`process_crashed`,
+  `boot_liveness_unproven`, or `ended_without_status`) is checked on the direct
+  restart path, but a newer `start=false` deploy can become the latest binding before
+  a later Start. The next Start then does not see the unresolved retirement. Preserve
+  the invariant: no same-identity restart after an unproven terminal outcome without a
+  recovery proof or Retire & Replace. Qualification: regression coverage for each
+  terminal source through deploy-only then Start, plus persisted-binding compatibility
+  and recovery rollback coverage. Source: `docs/audits/bot-control-8bot-call-graph-audit-2026-07-28.md`
+  BUG-16.
+
+- **Eight-bot A0 admission latency has no recorded production-load qualification
+  (high).** Normal paper entries return after the Clerk's fsynced A0 receipt while
+  later broker work runs asynchronously. The caller deadline is 10 s; deterministic
+  qualification exists, but a relevant production I/O load measurement has not been
+  recorded here. Preserve the invariant: A0 timeout is unknown, never a false retry
+  permission. Qualification: run and retain the broker-free custody campaign and an
+  appropriate paper-host load drill before relying on eight concurrent entry bursts.
+
+- **Eight-bot end-day cancellation remains unqualified (high).** Direct operator cancel
+  timeouts were raised in #1289, but the serialized namespace-cancel path used by
+  concurrent CLOCK_OUT needs paper-broker qualification before it is advertised as
+  fleet-safe. Preserve the invariant: a cancellation timeout is uncertain and cannot
+  be represented as a clean exit. Qualification: eight-bot paper wind-down with
+  terminal Clerk receipts and post-action reconciliation.
+
+- **Several audit findings need reachability qualification, not deletion (medium).**
+  Async entry-queue saturation, broker-stream-silence under custody load, concurrent
+  reconciliation-receipt publication, an enqueue-to-registration failure window, and
+  after-close `flatten_and_pause` actuation are recorded in the supporting 2026-07-28
+  call-graph audit. They are not proven dead or fixed by a search. Preserve their
+  respective fail-closed, durable-receipt, and no-false-actuation invariants; turn
+  each into a focused regression or paper qualification before cleanup.
 
 ### Resolved
 

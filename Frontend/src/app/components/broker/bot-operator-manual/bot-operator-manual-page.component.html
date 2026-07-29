@@ -17,8 +17,8 @@
       <h2 id="watchlist-title">Three defaults worth remembering</h2>
     </div>
     <ul>
-      <li><strong>Observe-only is the default.</strong> Confirm posture before expecting paper orders.</li>
-      <li><strong>Starts are rate-limited.</strong> Use no more than two individual starts per five minutes.</li>
+      <li><strong>Paper orders are the deploy default.</strong> Confirm the selected posture before expecting orders.</li>
+      <li><strong>Repeat starts are rate-limited.</strong> Do not activate the same bot three times within five minutes.</li>
       <li><strong>Graceful stop preserves tomorrow.</strong> A crash sends the bot to sick bay.</li>
     </ul>
   </aside>
@@ -76,7 +76,7 @@
     </summary>
     @if (manualOpen()) {
       <div class="manual-toolbar">
-        <span>Code-grounded reference · updated 2026-07-22</span>
+        <span>Canonical — sole current authority · verified at HEAD 2026-07-29</span>
         <a [href]="manualSource" target="_blank" rel="noopener">
           Open .md source <i class="pi pi-external-link" aria-hidden="true"></i>
         </a>

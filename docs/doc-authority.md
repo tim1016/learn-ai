@@ -6,11 +6,15 @@
 
 **2026-07-04 prune.** ~150 point-in-time working docs — completed implementation plans (`docs/superpowers/`, `docs/architecture/phases/`), session handoffs (`docs/handoffs/`), shipped-feature PRDs, and closed audit findings (`docs/audits/auto-research/findings/`, `docs/audits/vibe-coded-app-research/`) — were **hard-deleted to git history** rather than archived. Git history is their provenance record. Open defects lifted out of the deleted audit findings live in `docs/known-gaps.md`.
 
-**2026-07-22 Clerk/controller consolidation.** The old AccountOwner implementation
+**2026-07-29 Bot Control authority reconciliation.** The old AccountOwner implementation
 snapshot, former "single canonical" operator runbook, cockpit/cohort plans, obsolete
 runbooks, dated audits, and the five-bot handoff moved to `docs/archive/` with status
-banners. The active operator/trader implementation snapshot is now
-`docs/bot-control-operator-manual.md`, rendered in-app at `/broker/bot-manual`.
+banners. `docs/bot-control-operator-manual.md` is the **sole current operating and
+implementation-reference authority** for Bot Control and Account Clerk behavior,
+rendered in-app at `/broker/bot-manual`. It supersedes all older operating manuals,
+quick procedures, runbooks, controller/cockpit plans, AccountOwner snapshots, and
+point-in-time audits as behavior instructions. ADRs remain decision authority; code,
+contracts, and focused tests remain implementation evidence.
 
 **Note on AI rules:** Agent-facing rules live in `.claude/rules/` (Claude Code) — not in `.codex/` (no `.codex/` directory exists in this repo). `AGENTS.md` is the cross-agent entry point.
 
@@ -73,6 +77,8 @@ have their decision preserved here.
 | 0029 | Live-session authority and IBKR capability |
 | 0030 | Account Clerk authority is account-rooted and journal-canonical |
 | 0031 | Cross-stack boundary selection and generated contracts |
+| 0032 | Broker contract v2 and verbatim capture |
+| 0033 | Account custody clocks and safety composition |
 
 ---
 
@@ -81,7 +87,7 @@ have their decision preserved here.
 | Doc | Domain | Replaces / supersedes | Last reviewed |
 |---|---|---|---|
 | `docs/architecture/options-math-authorities.md` | Options math | `docs/architecture/options-routes-research.md` (cleanup record) | 2026-04-29 |
-| `docs/bot-control-operator-manual.md` | Bot Control + Account Clerk operator/trader implementation snapshot; source rendered at `/broker/bot-manual` | Former operator runbook, AccountOwner snapshot, cockpit guide, controller plans, and runbooks | 2026-07-22 |
+| `docs/bot-control-operator-manual.md` | **Sole current** Bot Control + Account Clerk operating and implementation-reference authority; source rendered at `/broker/bot-manual` | Former operator runbooks/quick procedures, AccountOwner snapshots, cockpit/cohort guides, controller plans, and point-in-time audits | 2026-07-29 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR — design rationale ("why") | — | — |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
@@ -113,6 +119,8 @@ have their decision preserved here.
 | `docs/audits/computational-fidelity-2026-04-22.md` | Timestamp ban motivation | Cited by `numerical-rigor.md` |
 | `docs/audits/computational-fidelity-2026-04-22-addendum.md` | Timestamp ban motivation | Addendum cited by same rule |
 | `docs/audits/structural-integrity-2026-04-22.md` | Known violation baseline | Historical context |
+| `docs/audits/bot-control-8bot-call-graph-audit-2026-07-28.md` | Eight-bot call-graph evidence | Supporting investigation only; its open findings are tracked in `docs/known-gaps.md`, and it is never an operator procedure |
+| `docs/audits/{three-bot-lifecycle-2026-07-23,2026-07-23-findings-corrected,eight-bot-deploy-ui-2026-07-27,deployment-validation-connectivity-incident-2026-07-27}.md` | Bot-control validation and incident provenance | Historical evidence only; use the Bot Control manual and `known-gaps.md` for current truth |
 | `docs/bars-open-attribute-fix.md` | IBKR bar handling | Surgical bug-fix note for `ib_async.RealTimeBar.open_` |
 | `docs/codex-phase-1-4-audit.md` | IBKR Phases 1-4 code audit | "Most recent code audit" per `ibkr-integration-authority.md` |
 | `docs/engine-phase-1-2-refined-plan.md` | Strategy Lab deprecation lineage | Keep until Strategy Lab is fully removed |
