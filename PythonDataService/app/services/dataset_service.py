@@ -295,7 +295,10 @@ def fetch_bars_chunks_raw(
     chunk_start = start
     chunk_idx = 0
 
-    while chunk_start < end:
+    # Polygon's date bounds are inclusive. ``<=`` is essential: with ``<``
+    # a one-day request made zero calls, and every multi-day request silently
+    # omitted its final date when it became the last chunk.
+    while chunk_start <= end:
         if cancel_check is not None and cancel_check():
             raise RunCancelledError(f"cancelled after chunk {chunk_idx} of {total_chunks}")
         chunk_end = min(chunk_start + timedelta(days=days_per_chunk), end)

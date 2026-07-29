@@ -50,6 +50,7 @@ from app.routers import (
     market_data_feed,
     market_monitor,
     monte_carlo,
+    offline_replay,
     options,
     portfolio,
     quantlib_options,
@@ -601,6 +602,11 @@ app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
 app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
 app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
+app.include_router(
+    offline_replay.router,
+    prefix="/api/offline-replay",
+    tags=["offline-replay"],
+)
 # LEAN Sidecar Lab — data-plane API in front of the launcher service.
 # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
 # algorithm source. See docs/architecture/lean-sidecar-lab.md.

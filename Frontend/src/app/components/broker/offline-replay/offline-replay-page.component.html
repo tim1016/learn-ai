@@ -1,0 +1,243 @@
+<section class="replay-page" aria-labelledby="offline-replay-title">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Market replay</p>
+      <h1 id="offline-replay-title">Offline bot trading</h1>
+      <p class="lede">
+        Run the production decision engine against recorded market minutes after
+        hours. SPY and TSLA stay synchronized, with one isolated simulated account
+        per bot.
+      </p>
+    </div>
+    <span class="safety-chip">
+      <i class="pi pi-shield" aria-hidden="true"></i>
+      Simulation only
+    </span>
+  </header>
+
+  @if (errorMessage(); as message) {
+    <p class="alert" role="alert">{{ message }}</p>
+  }
+
+  <section class="launch-card" aria-labelledby="launch-replay-title">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">New session</p>
+        <h2 id="launch-replay-title">Replay a completed NYSE day</h2>
+      </div>
+      <span class="strategy-label mono">EMA crossover signal</span>
+    </div>
+
+    <div class="launch-grid">
+      <label>
+        <span>Trading day</span>
+        <select
+          [value]="selectedSessionDateMs() ?? ''"
+          [disabled]="loading() || active()"
+          (change)="selectDate($event)"
+        >
+          @for (option of dateOptions(); track option.session.session_date_ms) {
+            <option [value]="option.session.session_date_ms">
+              {{ option.label }} · {{ cachedLabel(option.session) }}
+            </option>
+          }
+        </select>
+      </label>
+
+      <label>
+        <span>Visible playback</span>
+        <select
+          [value]="playbackMinutes()"
+          [disabled]="active()"
+          (change)="selectDuration($event)"
+        >
+          <option [value]="30">30 minutes</option>
+          <option [value]="60">60 minutes</option>
+        </select>
+      </label>
+
+      <label>
+        <span>Playback speed</span>
+        <select
+          [value]="speed()"
+          [disabled]="active()"
+          (change)="selectLaunchSpeed($event)"
+        >
+          <option [value]="1">1× · one bar per minute</option>
+          <option [value]="10">10× · one bar per 6 seconds</option>
+          <option [value]="60">60× · one bar per second</option>
+        </select>
+      </label>
+
+      <button
+        type="button"
+        class="primary-action"
+        [disabled]="selectedSessionDateMs() === null || loading() || acting() || active()"
+        (click)="launch()"
+      >
+        <i class="pi pi-play" aria-hidden="true"></i>
+        Launch SPY + TSLA
+      </button>
+    </div>
+
+    <div class="launch-contract">
+      <span><strong>SPY bot</strong> → SPY only</span>
+      <span><strong>TSLA bot</strong> → TSLA only</span>
+      <span><strong>$100,000</strong> simulated cash each</span>
+      <span><strong>225 min</strong> indicator initialization</span>
+    </div>
+  </section>
+
+  @if (currentSession(); as session) {
+    <section class="session-card" aria-labelledby="active-replay-title">
+      <div class="session-topline">
+        <div>
+          <p class="eyebrow">Latest session</p>
+          <h2 id="active-replay-title">
+            <app-timestamp-display
+              [value]="session.session_date_ms"
+              mode="date-et"
+              granularity="date"
+            />
+          </h2>
+        </div>
+        <span class="status-chip" [attr.data-status]="session.status">
+          {{ session.status | receiptLabel }}
+        </span>
+      </div>
+
+      <div class="timeline">
+        <div class="timeline-copy">
+          <span>
+            Playhead
+            <strong>
+              <app-timestamp-display
+                [value]="session.playhead_ms"
+                mode="et"
+                granularity="time"
+                fallback="Preparing data"
+              />
+            </strong>
+          </span>
+          <span>{{ visibleBarsProcessed() }} / {{ session.playback_minutes }} visible minutes</span>
+        </div>
+        <progress
+          [value]="progressPercent()"
+          max="100"
+          [attr.aria-label]="'Replay progress ' + progressPercent() + ' percent'"
+        ></progress>
+      </div>
+
+      @if (active()) {
+        <div class="transport" aria-label="Replay controls">
+          @if (session.status === 'paused') {
+            <button type="button" [disabled]="acting()" (click)="sendCommand('resume')">
+              <i class="pi pi-play" aria-hidden="true"></i> Resume
+            </button>
+            <button type="button" [disabled]="acting()" (click)="sendCommand('step')">
+              <i class="pi pi-step-forward" aria-hidden="true"></i> Step one minute
+            </button>
+          } @else {
+            <button
+              type="button"
+              [disabled]="acting() || session.status === 'preparing' || session.status === 'warming_up'"
+              (click)="sendCommand('pause')"
+            >
+              <i class="pi pi-pause" aria-hidden="true"></i> Pause
+            </button>
+          }
+
+          <div class="speed-buttons" aria-label="Playback speed">
+            @for (candidate of playbackSpeeds; track candidate) {
+              <button
+                type="button"
+                [class.active]="session.speed === candidate"
+                [disabled]="acting() || session.status === 'preparing'"
+                (click)="sendCommand('set_speed', candidate)"
+              >
+                {{ candidate }}×
+              </button>
+            }
+          </div>
+
+          <button
+            type="button"
+            class="stop-action"
+            [disabled]="acting()"
+            (click)="sendCommand('stop')"
+          >
+            <i class="pi pi-stop" aria-hidden="true"></i> Stop
+          </button>
+        </div>
+      }
+
+      @if (session.failure_code || session.failure_message) {
+        <div class="failure-summary" role="alert">
+          <strong>{{ session.failure_code | receiptLabel }}</strong>
+          <span>{{ session.failure_message }}</span>
+        </div>
+      }
+
+      <div class="bot-grid">
+        @for (bot of session.bots; track bot.symbol) {
+          <article class="bot-card" [attr.data-bot-status]="bot.status">
+            <div class="bot-heading">
+              <div>
+                <span class="symbol">{{ bot.symbol }}</span>
+                <span class="bot-name">{{ bot.symbol }} replay bot</span>
+              </div>
+              <span class="bot-status">{{ bot.status | receiptLabel }}</span>
+            </div>
+
+            <dl class="metrics">
+              <div>
+                <dt>Source bars</dt>
+                <dd>{{ bot.bars_processed | number }}</dd>
+              </div>
+              <div>
+                <dt>Decisions</dt>
+                <dd>{{ bot.decisions_emitted | number }}</dd>
+              </div>
+              <div>
+                <dt>Orders</dt>
+                <dd>{{ bot.orders_submitted | number }}</dd>
+              </div>
+              <div>
+                <dt>Fills</dt>
+                <dd>{{ bot.fills_observed | number }}</dd>
+              </div>
+              <div>
+                <dt>Open quantity</dt>
+                <dd>{{ bot.open_position_quantity | number }}</dd>
+              </div>
+              <div>
+                <dt>Sim equity</dt>
+                <dd>{{ bot.final_equity_usd | currency:'USD':'symbol':'1.2-2' }}</dd>
+              </div>
+            </dl>
+
+            @if (bot.failure_code || bot.failure_message) {
+              <div class="bot-failure" role="alert">
+                <strong>{{ bot.failure_code | receiptLabel }}</strong>
+                <span>{{ bot.failure_message }}</span>
+              </div>
+            }
+
+            @if (bot.data_sha256) {
+              <div class="receipt">
+                <span>Market-data SHA-256</span>
+                <code>{{ bot.data_sha256 }}</code>
+              </div>
+            }
+          </article>
+        }
+      </div>
+    </section>
+  } @else if (!loading()) {
+    <section class="empty-state">
+      <i class="pi pi-history" aria-hidden="true"></i>
+      <h2>No replay session yet</h2>
+      <p>Choose a completed market day and launch both bots.</p>
+    </section>
+  }
+</section>

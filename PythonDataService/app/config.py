@@ -1,5 +1,7 @@
 """Application configuration loaded from environment variables"""
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -99,6 +101,12 @@ class Settings(BaseSettings):
     # http://host.containers.internal:8090. See PythonDataService/CLAUDE.md.
     LEAN_LAUNCHER_URL: str = "http://127.0.0.1:8090"
     LEAN_LAUNCHER_TOKEN: str = ""
+
+    # Durable offline-hours market replay sessions and their per-bot evidence.
+    # Tests override this root; the default is stable regardless of process cwd.
+    OFFLINE_REPLAY_ROOT: str = str(
+        Path(__file__).resolve().parents[1] / "artifacts" / "offline_replays"
+    )
 
 
 settings = Settings()

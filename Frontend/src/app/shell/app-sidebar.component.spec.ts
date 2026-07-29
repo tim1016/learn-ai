@@ -34,7 +34,7 @@ describe('AppSidebarComponent', () => {
     expect(link?.getAttribute('href')).toBe('/broker/session-mirror');
   });
 
-  it('surfaces deploy and the operator manual beside bots in the Interactive Broker menu', () => {
+  it('surfaces deploy, offline replay, and the operator manual beside bots', () => {
     const fixture = setup();
 
     clickGroup(fixture, 'Interactive Broker');
@@ -42,6 +42,7 @@ describe('AppSidebarComponent', () => {
     const links = navLinks(fixture);
     expect(links.get('Deploy')).toBe('/broker/deploy');
     expect(links.get('Bots')).toBe('/broker/bots');
+    expect(links.get('Offline Replay')).toBe('/broker/offline-replay');
     expect(links.get('Bot Manual')).toBe('/broker/bot-manual');
   });
 

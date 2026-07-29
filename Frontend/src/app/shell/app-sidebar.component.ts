@@ -87,6 +87,7 @@ const NAV: NavGroup[] = [
       { label: 'Session Mirror', route: '/broker/session-mirror' },
       { label: 'Deploy', route: '/broker/deploy' },
       { label: 'Bots', route: '/broker/bots' },
+      { label: 'Offline Replay', route: '/broker/offline-replay' },
       { label: 'Bot Manual', route: '/broker/bot-manual' },
     ],
   },
