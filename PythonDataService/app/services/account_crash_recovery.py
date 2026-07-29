@@ -13,7 +13,7 @@ from app.engine.live.account_artifacts import (
     record_account_recovery_clearance,
 )
 from app.engine.live.account_registry import AccountInstanceBinding, crash_retired_restart_blocking_binding
-from app.engine.live.exit_taxonomy import LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
+from app.engine.live.exit_taxonomy import terminal_restart_failure_phrase
 from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.live_runs import GateResult
 
@@ -92,11 +92,7 @@ def crash_recovery_block_detail(
     strategy_instance_id: str,
     binding: AccountInstanceBinding,
 ) -> dict:
-    failure = (
-        "is not owned by the current host daemon and its liveness is unproven"
-        if binding.source in LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
-        else "crashed"
-    )
+    failure = terminal_restart_failure_phrase(binding.source)
     return {
         "reason_code": "CRASH_RECOVERY_REQUIRED",
         "message": (

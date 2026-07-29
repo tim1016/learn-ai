@@ -60,6 +60,12 @@ _CLERK_RELEASE_TIMEOUT = httpx.Timeout(6.0)
 # Emergency flatten round-trips to the broker synchronously (the daemon caps the
 # CLI at 120s); give the HTTP hop a little more so the daemon's own timeout wins.
 _FLATTEN_TIMEOUT = httpx.Timeout(130.0)
+# Operator cancels proxy to the daemon and then wait on the Clerk's broker-write
+# lock, whose inner RPC budget is the submit-sized 240s (up to eight serialized
+# 25s broker writes ahead of the caller). The outer HTTP read must cover that
+# inner budget plus transport margin, or it expires first and re-introduces the
+# OUTCOME_UNKNOWN timeout on the operator cancel path.
+_CANCEL_TIMEOUT = httpx.Timeout(260.0)
 
 
 class HostDaemonCircuitBreaker:
@@ -299,7 +305,7 @@ async def operator_exact_cancel(base_url: str, account_id: str, payload: dict) -
     return await _post_action(
         f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-exact-cancel",
         payload,
-        timeout=_FLATTEN_TIMEOUT,
+        timeout=_CANCEL_TIMEOUT,
     )
 
 
@@ -309,7 +315,7 @@ async def operator_pending_cancel(base_url: str, account_id: str, payload: dict)
     return await _post_action(
         f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-pending-cancel",
         payload,
-        timeout=_START_ADMISSION_TIMEOUT,
+        timeout=_CANCEL_TIMEOUT,
     )
 
 

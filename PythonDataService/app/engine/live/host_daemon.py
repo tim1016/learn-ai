@@ -1635,15 +1635,9 @@ class RunnerProcessManager:
             ) from exc
         if blocking_binding is None:
             return
-        from app.engine.live.exit_taxonomy import (
-            LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES,
-        )
+        from app.engine.live.exit_taxonomy import terminal_restart_failure_phrase
 
-        failure = (
-            "is not owned by the current host daemon and its liveness is unproven"
-            if blocking_binding.source in LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
-            else "crashed"
-        )
+        failure = terminal_restart_failure_phrase(blocking_binding.source)
         raise HostRunnerError(
             status.HTTP_409_CONFLICT,
             (

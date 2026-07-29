@@ -513,6 +513,72 @@ def test_crash_retired_restart_recovery_allows_non_crash_retirement(tmp_path: Pa
     assert blocking_binding is None
 
 
+def test_crash_retired_restart_blocking_binding_blocks_ended_without_status(tmp_path: Path) -> None:
+    """A SIGKILL/OOM exit leaves no run-status receipt, so exposure is unproven.
+
+    Restarting the same instance must require recovery proof exactly like a
+    crash — the ops surface already flags ``ended_without_status`` as critical,
+    but the start-admission gate must enforce it too.
+    """
+
+    active = _binding(recorded_at_ms=1_700_000_000_000)
+    retired = active.model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "recorded_at_ms": 1_700_000_010_000,
+            "source": "host_daemon.ended_without_status",
+        }
+    )
+    write_account_instance_binding(tmp_path, active)
+    write_account_instance_binding(tmp_path, retired)
+
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path,
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    )
+
+    assert blocking_binding == retired
+
+
+def test_crash_retired_restart_blocking_binding_ended_without_status_cleared_by_proof(
+    tmp_path: Path,
+) -> None:
+    retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": "host_daemon.ended_without_status",
+        }
+    )
+    write_account_instance_binding(tmp_path, retired)
+    record_account_recovery_clearance(
+        tmp_path,
+        recovery_proof=AccountRecoveryProof(
+            account_id="DU123456",
+            recovery_id="proof-ews-1",
+            requested_by="operator",
+            reconciliation_result="clean",
+            final_gate_result=GateResult(
+                gate_id="account.reconciliation",
+                status="pass",
+                source="test",
+                operator_reason="CLEAN",
+                operator_next_step=None,
+                evidence_at_ms=1_700_000_010_001,
+            ),
+            recorded_at_ms=1_700_000_010_001,
+        ),
+    )
+
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path,
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    )
+
+    assert blocking_binding is None
+
+
 def test_backfill_false_crash_registry_rows_repairs_disproven_latest_crash(tmp_path: Path) -> None:
     active = _binding(run_id="run-halt", recorded_at_ms=1_700_000_000_000)
     retired = active.model_copy(
