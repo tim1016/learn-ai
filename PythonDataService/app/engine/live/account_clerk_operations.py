@@ -146,6 +146,7 @@ class AccountClerkOperationDependencies:
     retry_recorded_intent_locked: Callable[
         [AccountOwnerSubmitIntent], Awaitable[AccountClerkBrokerAckReceipt]
     ]
+    epoch_transition_provenance: Callable[[], dict[str, object]]
     now_ms: Callable[[], int]
 
 
@@ -911,7 +912,11 @@ class AccountClerkOperationCoordinator:
                                 recorded_order_refs=(intent.order_ref,),
                             ),
                         )
-                        await asyncio.to_thread(deps.journal.append_broker_submitting, intent)
+                        await asyncio.to_thread(
+                            deps.journal.append_broker_submitting,
+                            intent,
+                            **deps.epoch_transition_provenance(),
+                        )
                         await asyncio.to_thread(
                             deps.journal.append_emergency_operation,
                             AccountClerkEmergencyOperationEvent(
@@ -923,10 +928,20 @@ class AccountClerkOperationCoordinator:
                         try:
                             ack = await deps.place_under_clerk_grant(spec, True)
                         except Exception as exc:
-                            await asyncio.to_thread(deps.journal.append_broker_uncertain, intent, exc)
+                            await asyncio.to_thread(
+                                deps.journal.append_broker_uncertain,
+                                intent,
+                                exc,
+                                **deps.epoch_transition_provenance(),
+                            )
                             raise
                         broker_acks.append(
-                            await asyncio.to_thread(deps.journal.append_broker_ack, intent, ack)
+                            await asyncio.to_thread(
+                                deps.journal.append_broker_ack,
+                                intent,
+                                ack,
+                                **deps.epoch_transition_provenance(),
+                            )
                         )
                         if recorded.intent_id != intent.intent_id:
                             raise RuntimeError("CLERK_EMERGENCY_RECORDING_IDENTITY_MISMATCH")
@@ -1210,7 +1225,12 @@ class AccountClerkOperationCoordinator:
                         await drain()
             except Exception as exc:
                 async with deps.intake_lock:
-                    await asyncio.to_thread(deps.journal.append_broker_uncertain, first, exc)
+                    await asyncio.to_thread(
+                        deps.journal.append_broker_uncertain,
+                        first,
+                        exc,
+                        **deps.epoch_transition_provenance(),
+                    )
                     self.state.recovery_flatten_namespace = None
                 raise
             try:
@@ -1220,14 +1240,28 @@ class AccountClerkOperationCoordinator:
                     broker_acks: list[AccountClerkBrokerAckReceipt] = []
                     for intent, spec in zip(intents, specs, strict=True):
                         deps.require_rpc_write_intake(intent)
-                        await asyncio.to_thread(deps.journal.append_broker_submitting, intent)
+                        await asyncio.to_thread(
+                            deps.journal.append_broker_submitting,
+                            intent,
+                            **deps.epoch_transition_provenance(),
+                        )
                         try:
                             ack = await deps.place_under_clerk_grant(spec, True)
                         except Exception as exc:
-                            await asyncio.to_thread(deps.journal.append_broker_uncertain, intent, exc)
+                            await asyncio.to_thread(
+                                deps.journal.append_broker_uncertain,
+                                intent,
+                                exc,
+                                **deps.epoch_transition_provenance(),
+                            )
                             raise
                         broker_acks.append(
-                            await asyncio.to_thread(deps.journal.append_broker_ack, intent, ack)
+                            await asyncio.to_thread(
+                                deps.journal.append_broker_ack,
+                                intent,
+                                ack,
+                                **deps.epoch_transition_provenance(),
+                            )
                         )
                     return tuple(
                         AccountClerkRecoveryFlattenReceipt(
@@ -1384,6 +1418,7 @@ class AccountClerkOperationCoordinator:
                 intent,
                 verdict=verdict.value,
                 reason=reason,
+                **deps.epoch_transition_provenance(),
             )
             if verdict is SubmitVerdict.RETRY_ONCE:
                 try:

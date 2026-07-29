@@ -57,7 +57,11 @@ from app.engine.live.account_clerk_reconciler import (
     _unresolved_intents,
     namespace_expected_exposure,
 )
-from app.engine.live.account_clerk_rpc import AccountClerkCallbackPersistenceError
+from app.engine.live.account_clerk_rpc import (
+    AccountClerkCallbackPersistenceError,
+    AccountClerkHostRpcClient,
+)
+from app.engine.live.account_effect_models import AccountEffectClass, AccountEffectEvidence
 from app.engine.live.account_owner import (
     MANUAL_OPERATOR_RUN_ID,
     MANUAL_OPERATOR_STRATEGY_INSTANCE_ID,
@@ -70,6 +74,7 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
     write_account_instance_binding,
 )
+from app.engine.live.account_safety import account_safety_admission_path
 from app.engine.live.order_identity import build_manual_order_namespace, build_order_ref
 from app.services.bot_deletion import (
     BotRetirementBindingTarget,
@@ -778,7 +783,7 @@ async def test_clerk_rejects_an_active_binding_while_retirement_is_pending(tmp_p
 
     _write_active_binding(tmp_path, "bot-a", "run-a")
     transition_path = stable_bot_retirement_transition_path(tmp_path, "bot-a")
-    transition_path.parent.mkdir(parents=True)
+    transition_path.parent.mkdir(parents=True, exist_ok=True)
     transition_path.write_text(
         BotRetirementTransitionRecord(
             strategy_instance_id="bot-a",
@@ -878,7 +883,7 @@ async def test_clerk_retry_revalidates_retirement_before_broker_write(tmp_path: 
     intent = _intent("bot-a", "run-a", "retired-retry")
     await clerk.record_intent(intent)
     transition_path = stable_bot_retirement_transition_path(tmp_path, "bot-a")
-    transition_path.parent.mkdir(parents=True)
+    transition_path.parent.mkdir(parents=True, exist_ok=True)
     transition_path.write_text(
         BotRetirementTransitionRecord(
             strategy_instance_id="bot-a",
@@ -1366,31 +1371,10 @@ async def test_clerk_records_manual_ticket_without_requiring_a_bot_binding(tmp_p
     repeated_recorded, repeated_acked = await clerk.submit_intent(intent)
     assert repeated_recorded == recorded
     assert repeated_acked == acked
-    [history_event] = [
-        event
-        for event in read_account_events(tmp_path, ACCOUNT)
-        if event["event_type"] == "account_clerk_manual_order_acked"
-    ]
-    assert history_event == {
-        "account_id": ACCOUNT,
-        "seq": 1,
-        "event_type": "account_clerk_manual_order_acked",
-        "ts_ms": START_MS + 1,
-        "receipt_id": f"account-clerk-manual-order-ack:{intent.order_ref}",
-        "broker": "ibkr",
-        "intent_id": intent.intent_id,
-        "order_ref": intent.order_ref,
-        "order_id": 101,
-        "perm_id": 201,
-        "exec_id": None,
-        "symbol": "SPY",
-        "action": "BUY",
-        "quantity": 1.0,
-        "order_type": "MKT",
-        "limit_price": None,
-        "status": "Submitted",
-        "acknowledged_at_ms": START_MS + 1,
-    }
+    # The manual acknowledgement remains only in the canonical Clerk journal.
+    # Account Desk derives its receipt at read time; it is not mirrored through
+    # the producer-operational history path.
+    assert read_account_events(tmp_path, ACCOUNT) == []
 
 
 @pytest.mark.asyncio
@@ -2445,8 +2429,12 @@ async def test_clerk_reconciler_resolves_uncertain_receipt_with_state_machine(
 
     assert resolution.verdict.value == expected
     events = read_account_events(tmp_path, ACCOUNT)
-    assert events[-1]["event_type"] == "account_clerk_reconciliation_resolved"
-    assert events[-1]["verdict"] == expected
+    [resolved] = [
+        event
+        for event in events
+        if event["event_type"] == "account_clerk_reconciliation_resolved"
+    ]
+    assert resolved["verdict"] == expected
     if probe == "PROVABLY_ABSENT":
         assert len(broker.calls) == 1
     if probe == "NOT_PROVABLE":
@@ -2527,6 +2515,46 @@ async def test_bot_rpc_reaches_clerk_without_a_bot_broker_adapter(tmp_path: Path
     assert len(broker.calls) == 1
 
 
+@pytest.mark.asyncio
+async def test_host_rpc_fences_and_repairs_stranded_account_safety_admission(
+    tmp_path: Path,
+) -> None:
+    """The versioned host-only seam is the production repair control surface."""
+
+    generation = _write_active_clerk_generation(tmp_path)
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_FakeBroker(),
+        clerk_generation=generation,
+        host_binding_capability="repair-host-capability",
+        now_ms=lambda: START_MS,
+    )
+    server = AccountClerkRpcServer(clerk)
+    anchor = account_safety_admission_path(tmp_path, ACCOUNT)
+    coordinator = anchor.with_name(f".{anchor.name}")
+    readers = coordinator / "readers"
+    readers.mkdir(parents=True)
+    (coordinator / "gate").write_text("stranded", encoding="utf-8")
+    (readers / "stranded-reader").write_text("stranded", encoding="utf-8")
+    await server.start()
+    try:
+        receipt = await AccountClerkHostRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            host_capability="repair-host-capability",
+        ).repair_account_safety_admission(
+            operation_id="s6-rpc-admission-repair-001",
+            authorized_by="daemon-host",
+        )
+    finally:
+        await server.close()
+
+    assert receipt.removed_markers == ("gate", "readers/stranded-reader")
+    assert not (coordinator / "gate").exists()
+    assert list(readers.iterdir()) == []
+
+
 def test_two_real_processes_cannot_acquire_account_clerk_authority_together(tmp_path: Path) -> None:
     context = multiprocessing.get_context("spawn")
     first_acquired = context.Event()
@@ -2566,6 +2594,7 @@ async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_af
 ) -> None:
     generation = _write_active_clerk_generation(tmp_path)
     events: list[str] = []
+    captured: dict[str, AccountClerk] = {}
 
     class _StoppedEvent:
         def set(self) -> None:
@@ -2614,8 +2643,8 @@ async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_af
                 await self._event_task
 
     class _Server:
-        def __init__(self, _clerk: AccountClerk, **_kwargs: object) -> None:
-            pass
+        def __init__(self, clerk: AccountClerk, **_kwargs: object) -> None:
+            captured["clerk"] = clerk
 
         async def start(self) -> None:
             events.append("socket_serve")
@@ -2654,6 +2683,13 @@ async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_af
     assert events.index("lock_acquired") < events.index("broker_connect") < events.index("socket_serve")
     assert events.index("socket_serve") < events.index("stream_started") < events.index("stream_stopped")
     assert events.index("broker_disconnect") < events.index("lock_released")
+    assert (await captured["clerk"].async_custody_health()).model_dump() == {
+        "enabled": True,
+        "entry_depth": 0,
+        "entry_capacity": 8,
+        "risk_reducing_depth": 0,
+        "risk_reducing_capacity": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -3002,11 +3038,6 @@ async def test_unattributed_broker_callback_is_persisted_and_blocks_new_account_
     finally:
         await server.close()
 
-    [alarm] = [
-        event
-        for event in read_account_events(tmp_path, ACCOUNT)
-        if event["event_type"] == "account_clerk_unattributed_broker_event"
-    ]
     [broker_event] = [
         entry
         for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
@@ -3014,7 +3045,11 @@ async def test_unattributed_broker_callback_is_persisted_and_blocks_new_account_
     ]
     assert broker_event.intent is None
     assert broker_event.event_account_id == ACCOUNT
-    assert alarm["reason"] == "BROKER_EVENT_WITHOUT_DURABLE_CLERK_INTENT"
+    assert not [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_unattributed_broker_event"
+    ]
     assert read_account_freeze(tmp_path, ACCOUNT) is not None
 
 
@@ -3082,12 +3117,16 @@ async def test_unattributed_callback_reasserts_guardrail_after_alarm_crash_windo
 
     assert duplicate.newly_recorded is False
     assert read_account_freeze(tmp_path, ACCOUNT) is not None
-    alarms = [
+    assert [
+        entry
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.entry_kind == "broker_event" and entry.intent is None
+    ]
+    assert not [
         account_event
         for account_event in read_account_events(tmp_path, ACCOUNT)
         if account_event["event_type"] == "account_clerk_unattributed_broker_event"
     ]
-    assert len(alarms) == 1
 
 
 @pytest.mark.asyncio
@@ -3262,6 +3301,54 @@ async def test_recover_inbox_rejects_conflicting_journal_row_without_broker_cont
     assert [entry.intent.intent_id for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [
         conflicting_intent.intent_id
     ]
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_rejects_conflicting_a0_effect_proof_without_broker_contact(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    intent = _intent("bot-a", "run-a", "effect-proof-intent")
+    evidence = AccountEffectEvidence(
+        classification_id="a" * 64,
+        effect_class=AccountEffectClass.EXACT_CLOSE,
+        reason_code="EXACT_CURRENT_POSITION_CLOSE",
+        account_id=ACCOUNT,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        projection_receipt_id="receipt-1",
+        projection_observed_at_ms=START_MS,
+        target_con_id=12345,
+        target_signed_quantity=1.0,
+        requested_quantity=1.0,
+        evaluated_at_ms=START_MS,
+    )
+    account_clerk_journal_module._append_jsonl(
+        journal_path,
+        AccountClerkJournalEntry(
+            seq=1,
+            recorded_at_ms=START_MS,
+            intent=intent,
+            async_custody_lane="risk_reducing",
+            effect_evidence=evidence,
+        ),
+    )
+    account_clerk_journal_module._append_jsonl(
+        inbox_path,
+        AccountClerkInboxEntry(
+            seq=1,
+            received_at_ms=START_MS,
+            intent=intent,
+            async_custody_lane="entry",
+        ),
+    )
+
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    with pytest.raises(AccountClerkJournalCorruptError, match="A0 admission proof differs"):
+        await clerk.recover_inbox()
+
     assert broker.calls == []
 
 

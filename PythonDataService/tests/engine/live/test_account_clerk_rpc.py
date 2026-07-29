@@ -28,6 +28,7 @@ from app.engine.live.account_clerk_cursor import (
     AccountClerkEventCursorRepo,
 )
 from app.engine.live.account_clerk_rpc import (
+    ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S,
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
@@ -527,8 +528,12 @@ def _write_active_clerk_generation(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_success_envelope_round_trips_over_real_unix_socket(tmp_path: Path) -> None:
+async def test_success_envelope_round_trips_over_real_unix_socket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _write_active_binding(tmp_path)
+    monkeypatch.setattr(account_clerk_rpc, "now_ms_utc", lambda: START_MS)
     server = AccountClerkRpcServer(
         AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
     )
@@ -545,6 +550,9 @@ async def test_success_envelope_round_trips_over_real_unix_socket(tmp_path: Path
     assert envelope.schema_version == ACCOUNT_CLERK_RPC_SCHEMA_VERSION
     assert envelope.outcome == "success"
     assert envelope.payload["broker_acked"]["order_id"] == 101
+    assert envelope.payload["recorded"]["clerk_request_received_at_ms"] == START_MS
+    assert envelope.payload["recorded"]["clerk_intake_admitted_at_ms"] is not None
+    assert envelope.payload["recorded"]["inbox_fsynced_at_ms"] is not None
 
 
 @pytest.mark.asyncio
@@ -1165,6 +1173,17 @@ async def test_drain_events_rejects_a_broker_event_outside_the_canonical_shape(t
             {"operation": "submit", "intent": _intent().model_dump(mode="json")},
             ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S,
             AccountClerkRpcRequestIdentity(intent_id="intent-1040", order_ref=_intent().order_ref),
+        ),
+        (
+            {
+                "operation": "submit_custody_v2",
+                "intent": _intent("custody-timeout-1040").model_dump(mode="json"),
+            },
+            ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S,
+            AccountClerkRpcRequestIdentity(
+                intent_id="custody-timeout-1040",
+                order_ref=_intent("custody-timeout-1040").order_ref,
+            ),
         ),
         (
             {"operation": "drain_events", "bot_order_namespace": "learn-ai/bot-a/v1"},

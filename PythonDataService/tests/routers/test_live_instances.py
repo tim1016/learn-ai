@@ -80,6 +80,7 @@ from app.services.mutation_attempt import MutationAttemptRepo
 from app.services.observation_lease_parity import (
     OBSERVATION_LEASE_GENERATION_AUTHORITY,
     OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+    record_observation_lease_shadow_comparison,
 )
 from app.services.start_admission_policy import StartAdmissionDecision
 from tests._fixtures.daemon_transport import as_typed_get
@@ -173,6 +174,7 @@ def _write_ledger(
     strategy_key: str | None = None,
     start_defaults: dict | None = None,
     live_config: dict | None = None,
+    clerk_readable: bool = False,
 ) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
@@ -187,7 +189,39 @@ def _write_ledger(
         payload["start_defaults"] = start_defaults
     if live_config is not None:
         payload["live_config"] = live_config
+    if clerk_readable:
+        payload.update(
+            {
+                "code_sha": "test-code-sha",
+                "strategy_spec_path": str(spec_path) if spec_path is not None else "/test/spec.json",
+                "strategy_spec_sha256": "test-spec-sha",
+                "qc_audit_copy_path": "/test/qc_audit.py",
+                "qc_audit_copy_sha256": "test-audit-sha",
+                "qc_cloud_backtest_id": "test-backtest",
+                "start_date_ms": created_at_ms,
+                "live_config": live_config or {},
+            }
+        )
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_write_ledger_preserves_explicit_spec_path_when_clerk_readable(tmp_path: Path) -> None:
+    root = tmp_path / "live_runs"
+    spec_path = tmp_path / "explicit.spec.json"
+
+    _write_ledger(
+        root,
+        "run-1",
+        "spy_ema_paper",
+        1_700_000_000_000,
+        spec_path=spec_path,
+        clerk_readable=True,
+    )
+
+    payload = json.loads(
+        (root / "run-1" / "run_ledger.json").read_text(encoding="utf-8")
+    )
+    assert payload["strategy_spec_path"] == str(spec_path)
 
 
 def _write_roll_call_offer(
@@ -289,24 +323,26 @@ def _qualify_clerk_gate_promotion(root: Path, *, account_id: str) -> int:
         ),
     )
     for recorded_at_ms in (1_704_209_400_000, 1_704_295_800_000, 1_704_382_200_000):
+        row = {
+            "event_type": "account_observation_lease_shadow_comparison",
+            "comparison_schema_version": OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+            "recorded_at_ms": recorded_at_ms,
+            "strategy_instance_id": "spy_ema_paper",
+            "run_id": "run-gate-proof",
+            "truth_gate_id": "account.account_truth",
+            "truth_source": "account_truth_snapshot",
+            "truth_status": "pass",
+            "lease_gate_id": "account.observation_lease",
+            "lease_source": "account_observation_lease",
+            "lease_status": "pass",
+            "lease_schema_version": 2,
+            "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
+        }
+        record_observation_lease_shadow_comparison(root, account_id, row)
         append_account_event(
             root,
             account_id,
-            {
-                "event_type": "account_observation_lease_shadow_comparison",
-                "comparison_schema_version": OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
-                "recorded_at_ms": recorded_at_ms,
-                "strategy_instance_id": "spy_ema_paper",
-                "run_id": "run-gate-proof",
-                "truth_gate_id": "account.account_truth",
-                "truth_source": "account_truth_snapshot",
-                "truth_status": "pass",
-                "lease_gate_id": "account.observation_lease",
-                "lease_source": "account_observation_lease",
-                "lease_status": "pass",
-                "lease_schema_version": 2,
-                "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
-            },
+            row,
         )
     record_clerk_restart_smoke(
         root,
@@ -773,8 +809,15 @@ def _write_execution(run_dir: Path, *, ts_ms: int, exec_id: str = "exec-repair-1
 
 @pytest.fixture
 def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from app.config import settings as app_settings
+
     root = tmp_path / "live_runs"
     root.mkdir()
+    # This module's default ASGI fixture exercises operator-surface behavior,
+    # not transport authentication. Dedicated coverage below sets a secret and
+    # supplies the corresponding header explicitly.
+    monkeypatch.setattr(app_settings, "DATA_PLANE_CONTROL_SECRET", "")
+    monkeypatch.setattr(app_settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", True)
     stub = SimpleNamespace(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
@@ -978,7 +1021,7 @@ async def test_surface_assembler_matches_pre_extraction_payload_golden(
 
 async def test_instance_status_running_exposes_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
-    _write_ledger(root, "run-live-aaa", "spy_ema_paper", 100)
+    _write_ledger(root, "run-live-aaa", "spy_ema_paper", 100, clerk_readable=True)
     _set_daemon(
         monkeypatch,
         process={"state": "running", "run_id": "run-live-aaa", "pid": 99, "started_at_ms": 100},
@@ -1003,7 +1046,7 @@ async def test_instance_status_does_not_fetch_broker_positions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, root = app_with_root
-    _write_ledger(root, "run-status", "spy_ema_paper", 100)
+    _write_ledger(root, "run-status", "spy_ema_paper", 100, clerk_readable=True)
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-status"})
     _forbid_broker_position_fetch(monkeypatch)
     _forbid_account_truth_refresh(monkeypatch)
@@ -1019,7 +1062,7 @@ async def test_surface_producer_does_not_fetch_broker_positions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _app, root = app_with_root
-    _write_ledger(root, "run-producer", "spy_ema_paper", 100)
+    _write_ledger(root, "run-producer", "spy_ema_paper", 100, clerk_readable=True)
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-producer"})
     _forbid_broker_position_fetch(monkeypatch)
     _forbid_account_truth_refresh(monkeypatch)
@@ -3136,7 +3179,7 @@ async def test_list_instances_merges_daemon_and_disk(app_with_root, monkeypatch:
 
 async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
-    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
+    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100, clerk_readable=True)
     _write_live_state(root, "spy_ema_paper", "run-ema-1", {"SPY": 5})
     _set_daemon(
         monkeypatch,
@@ -4038,7 +4081,7 @@ async def test_status_includes_namespace_attributed_broker_slice(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
-    _write_ledger(root, "run-brk", "spy_ema_paper", 100)
+    _write_ledger(root, "run-brk", "spy_ema_paper", 100, clerk_readable=True)
     live_state_dir = root.parent / "live_state" / "spy_ema_paper"
     live_state_dir.mkdir(parents=True)
     (live_state_dir / "live_state.json").write_text(
@@ -4324,6 +4367,7 @@ async def test_set_desired_state_actuates_live_binding(app_with_root, monkeypatc
     assert body["durable"]["state"] == "PAUSED"
     # 2. live actuation queued on the bound run
     assert body["actuation"]["actuated"] is True
+    assert body["actuation"]["effect_state"] == "QUEUED"
     assert body["actuation"]["run_id"] == "run-live-ccc"
     assert body["actuation"]["command_seq"] is not None
     assert body["mutation_attempt_id"].startswith("mutation-")
@@ -4335,6 +4379,46 @@ async def test_set_desired_state_actuates_live_binding(app_with_root, monkeypatc
     assert len(queued) == 1
 
 
+async def test_set_desired_state_records_lifecycle_refusal_without_outcome_unknown(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A known local refusal is a 409, never an ambiguous dispatch outcome."""
+    from app.engine.live.bot_lifecycle_evaluator import LifecycleTransitionRefusedError
+    from app.services import risk_reducing_lifecycle_intent
+
+    app, root = app_with_root
+    _write_ledger(root, "run-refused-pause", "spy_ema_paper", 100)
+
+    def refuse(*_args: object, **_kwargs: object) -> object:
+        raise LifecycleTransitionRefusedError("LIFECYCLE_TRANSITION_UNRESOLVED")
+
+    monkeypatch.setattr(
+        risk_reducing_lifecycle_intent.BotLifecycleEvaluator,
+        "set_desired_state",
+        refuse,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "pause", "updated_by": "operator", "reason": "risk"},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "LIFECYCLE_TRANSITION_REFUSED"
+    assert detail["refusal_code"] == "LIFECYCLE_TRANSITION_UNRESOLVED"
+    assert detail["mutation_dispatch_state"] == "EFFECT_NOT_OBSERVED"
+    attempt = MutationAttemptRepo(root.parent / "mutation_attempts").read(detail["mutation_attempt_id"])
+    assert attempt is not None
+    assert attempt.dispatch_state == "EFFECT_NOT_OBSERVED"
+    assert attempt.outcome == {
+        "reason_code": "LIFECYCLE_TRANSITION_REFUSED",
+        "refusal_code": "LIFECYCLE_TRANSITION_UNRESOLVED",
+    }
+
+
 async def test_flatten_and_pause_returns_durable_attempt_receipt(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4344,16 +4428,6 @@ async def test_flatten_and_pause_returns_durable_attempt_receipt(
         monkeypatch,
         process={"state": "running", "run_id": "run-flatten-live", "pid": 7},
     )
-    monkeypatch.setattr(
-        live_instances,
-        "evaluate_action",
-        lambda *_args, **_kwargs: type(
-            "EnabledGate",
-            (),
-            {"enabled": True, "disabled_reason_code": None},
-        )(),
-    )
-
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/live-instances/spy_ema_paper/flatten-and-pause")
 
@@ -4367,45 +4441,68 @@ async def test_flatten_and_pause_returns_durable_attempt_receipt(
     assert attempt.action == "flatten"
 
 
-async def test_desired_state_post_write_failure_marks_attempt_outcome_unknown(
+async def test_flatten_and_pause_keeps_pause_when_daemon_is_unreachable(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-flatten-outage", "spy_ema_paper", 100)
+
+    async def unavailable(*_args, **_kwargs):
+        raise host_daemon_client.HostDaemonError(503, "daemon unavailable")
+
+    monkeypatch.setattr(host_daemon_client, "fetch_instance_process", unavailable)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/spy_ema_paper/flatten-and-pause")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["durable"]["state"] == "PAUSED"
+    assert body["actuation"]["actuated"] is False
+    assert body["actuation"]["effect_state"] == "PENDING"
+    assert not list((root / "run-flatten-outage" / "commands").glob("*.FLATTEN.pending.json"))
+
+
+async def test_flatten_and_pause_rejects_non_pause_payload(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-flatten-invalid", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process=_running_process("run-flatten-invalid"))
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/flatten-and-pause",
+            json={"action": "resume"},
+        )
+
+    assert response.status_code == 422
+    assert DesiredStateRepo(stable_desired_state_path(root.parent, "spy_ema_paper")).read() is None
+
+
+async def test_pause_persists_intent_when_post_write_daemon_read_fails(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-failure", "spy_ema_paper", 100)
-    _set_daemon(
-        monkeypatch,
-        process={"state": "running", "run_id": "run-failure", "pid": 7},
-    )
-    original_fetch = host_daemon_client.fetch_instance_process
-    calls = 0
+    async def unavailable(*_args, **_kwargs):
+        raise host_daemon_client.HostDaemonError(503, "host daemon unreachable")
 
-    async def fail_post_write_fetch(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("post-write daemon failure")
-        return await original_fetch(*args, **kwargs)
+    monkeypatch.setattr(host_daemon_client, "fetch_instance_process", unavailable)
 
-    monkeypatch.setattr(
-        host_daemon_client,
-        "fetch_instance_process",
-        fail_post_write_fetch,
-    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "pause", "updated_by": "operator"},
+        )
 
-    with pytest.raises(RuntimeError, match="post-write daemon failure"):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            await client.post(
-                "/api/live-instances/spy_ema_paper/desired-state",
-                json={"action": "pause", "updated_by": "operator"},
-            )
-
+    assert response.status_code == 200
+    body = response.json()
+    assert body["durable"]["state"] == "PAUSED"
+    assert body["actuation"]["effect_state"] == "PENDING"
     attempt = MutationAttemptRepo(root.parent / "mutation_attempts").latest_for("spy_ema_paper")
     assert attempt is not None
-    assert attempt.dispatch_state == "OUTCOME_UNKNOWN"
-    assert attempt.outcome == {
-        "stage": "daemon_observation",
-        "error_type": "RuntimeError",
-    }
+    assert attempt.dispatch_state == "RESPONSE_CONFIRMED"
 
 
 async def test_resume_rejects_when_account_is_frozen(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4435,6 +4532,27 @@ async def test_resume_rejects_when_account_is_frozen(app_with_root, monkeypatch:
 
     assert response.status_code == 409
     assert response.json()["detail"]["disabled_reason_code"] == "ACCOUNT_FROZEN"
+
+
+async def test_resume_does_not_clear_the_stop_latch_when_daemon_is_unreachable(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-resume-outage", "spy_ema_paper", 100)
+    desired = DesiredStateRepo(stable_desired_state_path(root.parent, "spy_ema_paper"))
+    desired.set(DesiredState.STOPPED, updated_by="operator", reason="Stop", now_ms=100)
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/desired-state",
+            json={"action": "resume", "updated_by": "operator"},
+        )
+
+    assert response.status_code == 409
+    current = desired.read()
+    assert current is not None and current.desired_state is DesiredState.STOPPED
 
 
 async def test_resume_receipt_names_crash_recovery_next_rung(
@@ -4519,6 +4637,7 @@ async def test_set_desired_state_without_live_binding_is_durable_only(
     body = response.json()
     assert body["durable"]["state"] == "STOPPED"
     assert body["actuation"]["actuated"] is False
+    assert body["actuation"]["effect_state"] == "PENDING"
     assert "durable only" in body["actuation"]["detail"]
 
 
@@ -4567,7 +4686,7 @@ async def test_set_desired_state_enqueue_failure_is_durable_only(
     assert body["durable"]["state"] == "PAUSED"
     assert body["actuation"]["actuated"] is False
     assert body["actuation"]["run_id"] == "run-live-ddd"
-    assert "failed to enqueue live command" in body["actuation"]["detail"]
+    assert "pending reconciliation" in body["actuation"]["detail"]
 
 
 # ── deploy / create (ADR 0006) ───────────────────────────────────────
@@ -4832,34 +4951,30 @@ async def test_deploy_and_start_rejects_fleet_contamination_preflight(
 
 
 def _write_identity_source_run(root: Path, sid: str, symbol: str) -> None:
-    run_dir = root / f"run-{symbol.lower()}"
-    run_dir.mkdir(parents=True)
-    (run_dir / "run_ledger.json").write_text(
-        json.dumps(
-            {
-                "run_id": run_dir.name,
-                "strategy_instance_id": sid,
-                "created_at_ms": 1_700_000_000_000,
-                "live_config": {
-                    "symbol": "SPY",
-                    "sizing": {"kind": "FixedShares", "value": 1},
-                    "action": {
-                        "on_enter": [
-                            {
-                                "leg_id": "leg_1",
-                                "instrument": {"kind": "stock", "underlying": symbol},
-                                "position": "long",
-                                "qty_ratio": 1,
-                            }
-                        ],
-                        "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
+    run_id = f"run-{symbol.lower()}"
+    _write_ledger(
+        root,
+        run_id,
+        sid,
+        1_700_000_000_000,
+        live_config={
+            "symbol": "SPY",
+            "sizing": {"kind": "FixedShares", "value": 1},
+            "action": {
+                "on_enter": [
+                    {
+                        "leg_id": "leg_1",
+                        "instrument": {"kind": "stock", "underlying": symbol},
+                        "position": "long",
+                        "qty_ratio": 1,
+                    }
+                ],
+                "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
+            },
+        },
+        clerk_readable=True,
     )
-    _write_live_state(root, sid, run_dir.name, {})
+    _write_live_state(root, sid, run_id, {})
 
 
 async def test_deploy_and_start_rejects_unconfirmed_identity_incoherence(
@@ -4987,7 +5102,7 @@ async def test_deploy_and_start_rejects_unconfirmed_nonflat_exposure(
 ) -> None:
     app, root = app_with_root
     _set_connected_broker_account(monkeypatch, "DU111")
-    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000, clerk_readable=True)
     _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": 5})
     called = False
 
@@ -5024,7 +5139,7 @@ async def test_deploy_and_start_allows_confirmed_nonflat_exposure(
     app, root = app_with_root
     _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
-    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000, clerk_readable=True)
     _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": -3})
     captured: dict = {}
 
@@ -5085,7 +5200,7 @@ async def test_deploy_and_start_allows_flat_existing_exposure(app_with_root, mon
     app, root = app_with_root
     _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
-    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000, clerk_readable=True)
     _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": 0})
 
     async def fake_deploy(_base_url: str, _payload: dict) -> dict:
@@ -6473,30 +6588,21 @@ async def test_start_run_rolls_back_desired_state_when_daemon_rejects(
     assert repo.read() == previous
 
 
-async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stop_run_persists_durable_intent_and_queues_stop(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-abc", "spy_ema_paper", 100)
-    lifecycle_repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper"))
-    lifecycle_repo.set_phase(
-        BotLifecyclePhase.ON_DUTY,
-        now_ms=100,
-        updated_by="test",
-        active_run_id="run-abc",
-    )
-
-    async def fake_stop(_base_url: str, run_id: str, _payload: dict) -> dict:
-        proc = _running_process(run_id)
-        proc["state"] = "stopping"
-        return {"accepted": True, "process": proc}
-
-    monkeypatch.setattr(host_daemon_client, "stop_run", fake_stop)
+    _set_daemon(monkeypatch, process=_running_process("run-abc"))
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/live-instances/runs/run-abc/stop", json={"force": False})
 
     assert response.status_code == 200
     body = response.json()
-    assert body["process"]["state"] == "stopping"
+    assert body["durable"]["state"] == "STOPPED"
+    assert body["actuation"]["actuated"] is True
+    assert body["actuation"]["run_id"] == "run-abc"
     assert body["mutation_attempt_id"].startswith("mutation-")
     assert body["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
     hub = live_instances._SURFACE_HUBS.get("spy_ema_paper")
@@ -6504,10 +6610,10 @@ async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: 
     assert hub.latest.latest_mutation is not None
     assert hub.latest.latest_mutation.mutation_attempt_id == body["mutation_attempt_id"]
     assert hub.latest.latest_mutation.dispatch_state == "RESPONSE_CONFIRMED"
-    lifecycle = lifecycle_repo.read()
-    assert lifecycle is not None
-    assert lifecycle.phase == "ON_DUTY"
-    assert lifecycle.active_run_id == "run-abc"
+    queued = list((root / "run-abc" / "commands").glob("command.*.STOP.pending.json"))
+    assert len(queued) == 1
+    desired = DesiredStateRepo(stable_desired_state_path(root.parent, "spy_ema_paper")).read()
+    assert desired is not None and desired.desired_state is DesiredState.STOPPED
 
 
 async def test_end_day_now_queues_clerk_clock_out_without_optimistic_off_duty(
@@ -6568,6 +6674,28 @@ async def test_end_day_now_deduplicates_an_in_progress_clock_out(
     assert second.json()["stop_outcome"] == "clock_out_already_queued"
     pending = CommandChannel(root / "run-live" / "commands").read_pending()
     assert [(command.verb, command.seq) for command in pending] == [(CommandVerb.CLOCK_OUT, 1)]
+
+
+async def test_end_day_now_persists_paused_intent_when_daemon_cannot_be_observed(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-outage", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/spy_ema_paper/end-day-now", json={"force": False})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["durable"]["state"] == "PAUSED"
+    assert body["actuation"]["effect_state"] == "PENDING"
+    assert body["process"]["state"] == "unreachable"
+    assert body["stop_outcome"] == "durable_intent_pending"
+    durable = DesiredStateRepo(stable_desired_state_path(root.parent, "spy_ema_paper")).read()
+    assert durable is not None and durable.desired_state is DesiredState.PAUSED
+    assert durable.end_day_requested is True
 
 
 async def test_lifecycle_roster_updates_daily_projection(
@@ -6814,23 +6942,27 @@ async def test_start_run_outcome_unknown_returns_typed_409(app_with_root, monkey
     assert detail["mutation_dispatch_state"] == "OUTCOME_UNKNOWN"
 
 
-async def test_stop_run_outcome_unknown_returns_typed_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stop_run_accepts_durable_intent_when_daemon_outcome_is_unknown(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-abc", "spy_ema_paper", 100)
 
-    async def fake_stop(_base_url: str, _run_id: str, _payload: dict) -> dict:
+    async def unavailable(*_args, **_kwargs):
         raise _outcome_unknown_exc()
 
-    monkeypatch.setattr(host_daemon_client, "stop_run", fake_stop)
+    monkeypatch.setattr(host_daemon_client, "fetch_instance_process", unavailable)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/live-instances/runs/run-abc/stop", json={})
 
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    _assert_outcome_unknown_body(detail, endpoint="stop_run")
-    assert detail["mutation_attempt_id"].startswith("mutation-")
-    assert detail["mutation_dispatch_state"] == "OUTCOME_UNKNOWN"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["durable"]["state"] == "STOPPED"
+    assert body["actuation"]["actuated"] is False
+    assert body["actuation"]["effect_state"] == "PENDING"
+    assert body["mutation_attempt_id"].startswith("mutation-")
+    assert body["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
 
 
 @pytest.mark.parametrize("endpoint", ["stop", "end_day"])
@@ -6848,7 +6980,7 @@ async def test_cancelled_mutation_marks_attempt_outcome_unknown(
         raise asyncio.CancelledError()
 
     if endpoint == "stop":
-        monkeypatch.setattr(host_daemon_client, "stop_run", cancelled)
+        monkeypatch.setattr(host_daemon_client, "fetch_instance_process", cancelled)
         invocation = live_instances.stop_run(run_id, live_instances.HostRunnerStopRequest())
     elif endpoint == "end_day":
         _set_daemon(
@@ -6869,7 +7001,7 @@ async def test_cancelled_mutation_marks_attempt_outcome_unknown(
     assert attempt is not None
     assert attempt.dispatch_state == "OUTCOME_UNKNOWN"
     assert attempt.outcome == {
-        "stage": "end_day_response_assembly" if endpoint == "end_day" else "daemon_stop",
+        "stage": "end_day_response_assembly" if endpoint == "end_day" else "durable_intent_write",
         "error_type": "CancelledError",
     }
 

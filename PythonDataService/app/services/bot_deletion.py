@@ -17,6 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.engine.live.account_clerk_journal import AccountClerkJournal
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
     AccountInstanceBinding,
@@ -24,6 +25,12 @@ from app.engine.live.account_registry import (
     index_account_instance_bindings,
     read_account_instance_registry,
     write_fenced_lifecycle_retirement_binding,
+)
+from app.engine.live.account_safety import (
+    AccountSafetyAuthority,
+    RetiredOwnerCustody,
+    account_safety_admission_lock,
+    retired_owner_nonterminal_custody,
 )
 from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
 from app.engine.live.bot_lifecycle_fence import (
@@ -98,6 +105,10 @@ class BotRetirementTransitionRecord(BaseModel):
     schema_version: int = 1
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     targets: tuple[BotRetirementBindingTarget, ...]
+    # Preserving the exact Clerk identities makes retired custody explicit
+    # before the lifecycle becomes terminal. The Clerk later owns the epoch
+    # reconciliation that can release this account-wide suspension.
+    retained_custody: tuple[RetiredOwnerCustody, ...] = ()
     prepared_at_ms: int = Field(ge=0)
     updated_by: str = Field(min_length=1, max_length=128)
     reason: str = Field(min_length=1, max_length=500)
@@ -250,12 +261,18 @@ def retire_bot_lifecycle_and_bindings_under_operation_fence(
                 run_ids=run_ids,
                 now_ms=now_ms,
             )
+            retained_custody = _retirement_custody(
+                artifacts_root,
+                strategy_instance_id,
+                bindings,
+            )
             transition = BotRetirementTransitionRecord(
                 strategy_instance_id=strategy_instance_id,
                 targets=tuple(
                     BotRetirementBindingTarget(account_id=binding.account_id, run_id=binding.run_id)
                     for binding in bindings
                 ),
+                retained_custody=retained_custody,
                 prepared_at_ms=now_ms,
                 updated_by=updated_by,
                 reason=reason,
@@ -389,6 +406,30 @@ def _retirement_bindings(
     return list(targets.values())
 
 
+def _retirement_custody(
+    artifacts_root: Path,
+    strategy_instance_id: str,
+    bindings: Iterable[AccountInstanceBinding],
+) -> tuple[RetiredOwnerCustody, ...]:
+    """Snapshot nonterminal Clerk custody before a bot can become RETIRED."""
+
+    retained: list[RetiredOwnerCustody] = []
+    for account_id in sorted({binding.account_id for binding in bindings}):
+        entries = AccountClerkJournal(
+            artifacts_root=artifacts_root,
+            account_id=account_id,
+        ).snapshot()
+        retained.extend(
+            retired_owner_nonterminal_custody(
+                entries,
+                strategy_instance_id=strategy_instance_id,
+            )
+        )
+    return tuple(
+        sorted(set(retained), key=lambda item: (item.account_id, item.order_ref, item.intent_id))
+    )
+
+
 def _complete_retirement_transition_locked(
     artifacts_root: Path,
     path: Path,
@@ -412,6 +453,23 @@ def _complete_retirement_transition_locked(
         )
         for target in transition.targets
     ]
+    custody_by_account: dict[str, list[RetiredOwnerCustody]] = {}
+    for custody in transition.retained_custody:
+        custody_by_account.setdefault(custody.account_id, []).append(custody)
+    for account_id in sorted(custody_by_account):
+        with account_safety_admission_lock(artifacts_root, account_id):
+            safety_authority = AccountSafetyAuthority(
+                artifacts_root=artifacts_root,
+                account_id=account_id,
+                now_ms=lambda: transition.prepared_at_ms,
+            )
+            safety_authority.suspend_retired_owner_custody(custody_by_account[account_id])
+            # The deletion snapshot can precede a fill callback.  Reopening
+            # therefore needs a later Account Truth sweep even when the Clerk
+            # later sees that callback as economically terminal.
+            safety_authority.mark_broker_clearance_required(
+                detected_at_ms=transition.prepared_at_ms
+            )
     for binding in bindings:
         write_fenced_lifecycle_retirement_binding(
             artifacts_root,

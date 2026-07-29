@@ -71,6 +71,7 @@ class LifecycleDispositionReceipt(BaseModel):
     schema_version: Literal[1] = 1
     sequence: int = Field(ge=1)
     receipt_id: str = Field(min_length=1, max_length=256)
+    idempotency_key: str | None = Field(default=None, min_length=16, max_length=160)
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     action: LifecycleDispositionAction
     status: Literal["PENDING", "COMMITTED", "ABORTED"]
@@ -95,6 +96,7 @@ class LifecycleDisposition(BaseModel):
     receipt: LifecycleDispositionReceipt
     lifecycle_state: BotLifecycleStateRecord | None = None
     desired_state: DesiredStateRecord | None = None
+    replayed: bool = False
 
 
 class LifecycleStartAdmissionEvidence(BaseModel):
@@ -506,6 +508,8 @@ class BotLifecycleEvaluator:
         now_ms: int,
         updated_by: str,
         reason: str | None = None,
+        end_day_requested: bool = False,
+        idempotency_key: str | None = None,
         operation_fence_held: bool = False,
     ) -> LifecycleDisposition:
         with self._operation_fence(operation_fence_held):
@@ -515,7 +519,9 @@ class BotLifecycleEvaluator:
                 now_ms=now_ms,
                 updated_by=updated_by,
                 reason=reason,
+                end_day_requested=end_day_requested,
                 only_if_absent=False,
+                idempotency_key=idempotency_key,
             )
 
     def seed_default_desired_state_if_absent(
@@ -539,6 +545,7 @@ class BotLifecycleEvaluator:
                 updated_by=updated_by,
                 reason=reason,
                 only_if_absent=True,
+                idempotency_key=None,
             )
 
     def assert_start_latch_allows_start(self) -> DesiredStateRecord | None:
@@ -560,6 +567,8 @@ class BotLifecycleEvaluator:
         updated_by: str,
         reason: str | None,
         only_if_absent: bool,
+        idempotency_key: str | None,
+        end_day_requested: bool = False,
     ) -> LifecycleDisposition | None:
         with _file_lock(self._receipt_path):
             self._recover_pending_receipts_locked()
@@ -568,17 +577,43 @@ class BotLifecycleEvaluator:
             existing = self._desired_state_repo.read()
             if only_if_absent and existing is not None:
                 return None
+            if idempotency_key is not None:
+                prior = next(
+                    (
+                        receipt
+                        for receipt in reversed(self._read_receipts_locked())
+                        if receipt.idempotency_key == idempotency_key and receipt.status != "PENDING"
+                    ),
+                    None,
+                )
+                if prior is not None:
+                    if (
+                        prior.status != "COMMITTED"
+                        or prior.action is not action
+                        or prior.desired_state is not state
+                        or existing is None
+                        or existing.desired_state is not state
+                        or existing.end_day_requested is not end_day_requested
+                    ):
+                        raise LifecycleTransitionRefusedError("IDEMPOTENCY_KEY_REUSED")
+                    return LifecycleDisposition(
+                        receipt=prior,
+                        desired_state=existing,
+                        replayed=True,
+                    )
             pending = self._append_pending_locked(
                 action=action,
                 now_ms=now_ms,
                 updated_by=updated_by,
                 reason=reason,
+                idempotency_key=idempotency_key,
             )
             try:
                 record = self._desired_state_repo.set(
                     state,
                     updated_by=updated_by,
                     reason=reason,
+                    end_day_requested=end_day_requested,
                     now_ms=now_ms,
                     disposition_id=pending.receipt_id,
                     disposition_action=action.value,
@@ -658,11 +693,13 @@ class BotLifecycleEvaluator:
         updated_by: str,
         reason: str | None,
         admission: LifecycleStartAdmissionEvidence | None = None,
+        idempotency_key: str | None = None,
     ) -> LifecycleDispositionReceipt:
         sequence = self._next_sequence_locked()
         pending = LifecycleDispositionReceipt(
             sequence=sequence,
             receipt_id=f"{self._strategy_instance_id}:{sequence}",
+            idempotency_key=idempotency_key,
             strategy_instance_id=self._strategy_instance_id,
             action=action,
             status="PENDING",

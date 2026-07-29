@@ -200,8 +200,31 @@ async def test_reconcile_classifies_flatten_with_no_positions(
     app, root = app_with_root
     _write_attempt(root, _attempt(action="flatten"))
     _stub_daemon_process(monkeypatch, {"state": "running", "run_id": "run-1"})
-    # Wire an empty broker view via the live_state sidecar — broker
-    # is derived from that path in instance_broker.
+    # The legacy sidecar fallback is valid only when its run ledger proves
+    # the account identity. Keep the fixture on that compatibility path;
+    # an incomplete ledger must instead produce NOT_PROVABLE.
+    run_dir = root / "run-1"
+    run_dir.mkdir()
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-1",
+                "code_sha": "test-code-sha",
+                "strategy_instance_id": "spy_ema_paper",
+                "created_at_ms": 1_700_000_000_000,
+                "strategy_spec_path": "/test/spec.json",
+                "strategy_spec_sha256": "test-spec-sha",
+                "qc_audit_copy_path": "/test/qc_audit.py",
+                "qc_audit_copy_sha256": "test-audit-sha",
+                "qc_cloud_backtest_id": "test-backtest",
+                "account_id": "DU111",
+                "start_date_ms": 1_700_000_000_000,
+                "live_config": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Wire an empty broker view via the account-identified sidecar.
     live_state_dir = root.parent / "live_state" / "spy_ema_paper"
     live_state_dir.mkdir(parents=True, exist_ok=True)
     (live_state_dir / "live_state.json").write_text(

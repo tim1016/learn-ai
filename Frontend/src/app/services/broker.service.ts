@@ -1,10 +1,10 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import { presentedActionInvocation } from '../api/broker-models';
 import type {
   AccountAcceptExposureOverrideRequest,
   AccountAcceptExposureOverrideResponse,
-  AccountEmergencyFlattenResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
   AccountEventSequenceRepairReceipt,
@@ -12,8 +12,6 @@ import type {
   JournalCurePreview,
   JournalCureReceipt,
   JournalCureRequest,
-  OperatorRecoveryFlattenRequest,
-  OperatorRecoveryFlattenResponse,
   LegacyStaleClaimCandidatesResponse,
   LegacyStaleClaimRetireRequest,
   LegacyStaleClaimRetirementReceipt,
@@ -38,6 +36,9 @@ import type {
 } from '../api/clerk-transaction-history.types';
 import type {
   AccountTruthResponse,
+  AccountSafetySnapshot,
+  PresentedOperatorAction,
+  PresentedOperatorActionResult,
   DataPlaneHealth,
   DiagnosticReport,
   ExpirationsResponse,
@@ -147,6 +148,55 @@ export class BrokerService {
   accountTruth(): Promise<AccountTruthResponse> {
     return firstValueFrom(
       this.http.get<AccountTruthResponse>(`${this.base}/account-truth`),
+    );
+  }
+
+  accountSafetySnapshot(accountId: string): Promise<AccountSafetySnapshot> {
+    return firstValueFrom(
+      this.http.get<AccountSafetySnapshot>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/safety-snapshot`,
+      ),
+    );
+  }
+
+  presentLifecycleAction(
+    accountId: string,
+    actionId: 'pause' | 'stop' | 'end_day' | 'resume' | 'start' | 'deploy',
+    strategyInstanceId: string,
+    runId?: string,
+  ): Promise<PresentedOperatorAction> {
+    const params: Record<string, string> = { strategy_instance_id: strategyInstanceId };
+    if (runId !== undefined) params['run_id'] = runId;
+    return firstValueFrom(
+      this.http.get<PresentedOperatorAction>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-lifecycle-actions/${encodeURIComponent(actionId)}`,
+        { params },
+      ),
+    );
+  }
+
+  executePresentedReconcileNow(
+    accountId: string,
+    action: PresentedOperatorAction,
+  ): Promise<PresentedOperatorActionResult> {
+    return firstValueFrom(
+      this.http.post<PresentedOperatorActionResult>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-actions/reconcile-now`,
+        presentedActionInvocation(action),
+      ),
+    );
+  }
+
+  executePresentedRecoveryAction(
+    accountId: string,
+    action: PresentedOperatorAction,
+    confirmationToken?: string,
+  ): Promise<PresentedOperatorActionResult> {
+    return firstValueFrom(
+      this.http.post<PresentedOperatorActionResult>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/presented-actions/recovery`,
+        presentedActionInvocation(action, confirmationToken),
+      ),
     );
   }
 
@@ -344,30 +394,6 @@ export class BrokerService {
       this.http.post<JournalCureReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-cures`,
         payload,
-      ),
-    );
-  }
-
-  submitOperatorRecoveryFlatten(
-    accountId: string,
-    payload: OperatorRecoveryFlattenRequest,
-  ): Promise<OperatorRecoveryFlattenResponse> {
-    return firstValueFrom(
-      this.http.post<OperatorRecoveryFlattenResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/operator-recovery-flatten`,
-        payload,
-      ),
-    );
-  }
-
-  emergencyFlattenAccount(
-    accountId: string,
-    request: { account: string; confirmation_token: 'FLATTEN'; idempotency_key: string },
-  ): Promise<AccountEmergencyFlattenResponse> {
-    return firstValueFrom(
-      this.http.post<AccountEmergencyFlattenResponse>(
-        `${this.accountsBase}/${encodeURIComponent(accountId)}/emergency-flatten`,
-        request,
       ),
     );
   }

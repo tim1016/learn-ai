@@ -236,115 +236,6 @@
         "title": "AccountClearFreezeResponse",
         "type": "object"
       },
-      "AccountClerkBrokerAckReceipt": {
-        "additionalProperties": false,
-        "description": "Receipt #2, appended by the Clerk only after the paper broker acks.",
-        "properties": {
-          "account_id": {
-            "minLength": 1,
-            "title": "Account Id",
-            "type": "string"
-          },
-          "bot_order_namespace": {
-            "minLength": 1,
-            "title": "Bot Order Namespace",
-            "type": "string"
-          },
-          "broker_ack": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IbkrOrderAck"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "exec_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exec Id"
-          },
-          "intent_id": {
-            "minLength": 1,
-            "title": "Intent Id",
-            "type": "string"
-          },
-          "journal_seq": {
-            "minimum": 1.0,
-            "title": "Journal Seq",
-            "type": "integer"
-          },
-          "order_id": {
-            "minimum": 0.0,
-            "title": "Order Id",
-            "type": "integer"
-          },
-          "order_ref": {
-            "minLength": 1,
-            "title": "Order Ref",
-            "type": "string"
-          },
-          "perm_id": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Perm Id"
-          },
-          "recorded_at_ms": {
-            "maximum": 9.223372036854776e+18,
-            "minimum": 0.0,
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "run_id": {
-            "minLength": 1,
-            "title": "Run Id",
-            "type": "string"
-          },
-          "status": {
-            "const": "broker_acked",
-            "default": "broker_acked",
-            "title": "Status"
-          },
-          "strategy_instance_id": {
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
-          },
-          "trace_id": {
-            "minLength": 1,
-            "title": "Trace Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "trace_id",
-          "account_id",
-          "strategy_instance_id",
-          "run_id",
-          "bot_order_namespace",
-          "intent_id",
-          "order_ref",
-          "journal_seq",
-          "recorded_at_ms",
-          "order_id"
-        ],
-        "title": "AccountClerkBrokerAckReceipt",
-        "type": "object"
-      },
       "AccountClerkHealth": {
         "description": "Daemon-observed health for the sole clerk of one paper account.",
         "properties": {
@@ -415,107 +306,6 @@
           "lease_valid"
         ],
         "title": "AccountClerkHealth",
-        "type": "object"
-      },
-      "AccountClerkRecordedReceipt": {
-        "additionalProperties": false,
-        "description": "Durable receipt #1 returned before any future broker contact.",
-        "properties": {
-          "account_id": {
-            "minLength": 1,
-            "title": "Account Id",
-            "type": "string"
-          },
-          "bot_order_namespace": {
-            "minLength": 1,
-            "title": "Bot Order Namespace",
-            "type": "string"
-          },
-          "intent_id": {
-            "minLength": 1,
-            "title": "Intent Id",
-            "type": "string"
-          },
-          "journal_seq": {
-            "minimum": 1.0,
-            "title": "Journal Seq",
-            "type": "integer"
-          },
-          "order_ref": {
-            "minLength": 1,
-            "title": "Order Ref",
-            "type": "string"
-          },
-          "recorded_at_ms": {
-            "maximum": 9.223372036854776e+18,
-            "minimum": 0.0,
-            "title": "Recorded At Ms",
-            "type": "integer"
-          },
-          "run_id": {
-            "minLength": 1,
-            "title": "Run Id",
-            "type": "string"
-          },
-          "status": {
-            "const": "recorded",
-            "default": "recorded",
-            "title": "Status"
-          },
-          "strategy_instance_id": {
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
-          },
-          "trace_id": {
-            "minLength": 1,
-            "title": "Trace Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "trace_id",
-          "account_id",
-          "strategy_instance_id",
-          "run_id",
-          "bot_order_namespace",
-          "intent_id",
-          "order_ref",
-          "journal_seq",
-          "recorded_at_ms"
-        ],
-        "title": "AccountClerkRecordedReceipt",
-        "type": "object"
-      },
-      "AccountClerkRecoveryFlattenReceipt": {
-        "additionalProperties": false,
-        "description": "Durable outcome of one Clerk-owned recovery liquidation.",
-        "properties": {
-          "broker_acked": {
-            "$ref": "#/components/schemas/AccountClerkBrokerAckReceipt"
-          },
-          "cancelled_order_ids": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Cancelled Order Ids",
-            "type": "array"
-          },
-          "recorded": {
-            "$ref": "#/components/schemas/AccountClerkRecordedReceipt"
-          },
-          "status": {
-            "const": "recovery_flattened",
-            "default": "recovery_flattened",
-            "title": "Status"
-          }
-        },
-        "required": [
-          "recorded",
-          "broker_acked",
-          "cancelled_order_ids"
-        ],
-        "title": "AccountClerkRecoveryFlattenReceipt",
         "type": "object"
       },
       "AccountClerkRestartSmokeRequest": {
@@ -899,55 +689,98 @@
         "title": "AccountConditionRow",
         "type": "object"
       },
-      "AccountEmergencyFlattenResponse": {
+      "AccountEffectPurpose": {
+        "description": "The limited target shapes a caller may ask the server to verify.",
+        "enum": [
+          "EXACT_CANCEL",
+          "EXACT_CLOSE"
+        ],
+        "title": "AccountEffectPurpose",
+        "type": "string"
+      },
+      "AccountEffectRequest": {
         "additionalProperties": false,
-        "description": "Receipt returned after the Clerk re-observes the account flat.",
+        "description": "Untrusted requested target; never itself proves a safe effect.",
         "properties": {
-          "accepted": {
-            "title": "Accepted",
-            "type": "boolean"
-          },
-          "account_id": {
-            "maxLength": 32,
-            "minLength": 2,
-            "title": "Account Id",
-            "type": "string"
-          },
-          "audit_run_id": {
-            "maxLength": 128,
-            "minLength": 2,
-            "title": "Audit Run Id",
-            "type": "string"
-          },
-          "completed_at_ms": {
-            "minimum": 0.0,
-            "title": "Completed At Ms",
-            "type": "integer"
-          },
-          "idempotency_key": {
+          "expected_signed_quantity": {
             "anyOf": [
               {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Signed Quantity"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/AccountEffectPurpose"
+          },
+          "target_con_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Con Id"
+          },
+          "target_order_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Order Id"
+          },
+          "target_order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Idempotency Key"
-          },
-          "idempotency_replayed": {
-            "default": false,
-            "title": "Idempotency Replayed",
-            "type": "boolean"
+            "title": "Target Order Ref"
           }
         },
         "required": [
-          "accepted",
-          "account_id",
-          "audit_run_id",
-          "completed_at_ms"
+          "purpose"
         ],
-        "title": "AccountEmergencyFlattenResponse",
+        "title": "AccountEffectRequest",
+        "type": "object"
+      },
+      "AccountEpoch": {
+        "additionalProperties": false,
+        "description": "The Clerk boot and monotonic proof sequence behind one fact.",
+        "properties": {
+          "clerk_boot_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Clerk Boot Id",
+            "type": "string"
+          },
+          "epoch_seq": {
+            "minimum": 1.0,
+            "title": "Epoch Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "clerk_boot_id",
+          "epoch_seq"
+        ],
+        "title": "AccountEpoch",
         "type": "object"
       },
       "AccountEventEvidenceRef": {
@@ -1082,10 +915,36 @@
         "type": "object"
       },
       "AccountEventRow": {
-        "description": "One backend-classified journal event for a desk view.",
+        "description": "One backend-classified operational-history row for a desk view.",
         "properties": {
+          "arrived_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arrived At Ms"
+          },
+          "event_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event At Ms"
+          },
           "event_id": {
-            "maxLength": 256,
+            "maxLength": 512,
             "minLength": 1,
             "title": "Event Id",
             "type": "string"
@@ -1130,6 +989,49 @@
                 "type": "null"
               }
             ]
+          },
+          "producer": {
+            "default": "legacy_account_events",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Producer",
+            "type": "string"
+          },
+          "producer_boot_id": {
+            "default": "historical",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Producer Boot Id",
+            "type": "string"
+          },
+          "producer_seq": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Producer Seq",
+            "type": "integer"
+          },
+          "provenance": {
+            "default": "legacy_account_events",
+            "enum": [
+              "legacy_account_events",
+              "producer_operational_log",
+              "clerk_journal"
+            ],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 9.223372036854776e+18,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded At Ms"
           },
           "schema_version": {
             "const": 1,
@@ -1204,7 +1106,7 @@
         "type": "object"
       },
       "AccountEventsResponse": {
-        "description": "Cursor page from the immutable account event journal.",
+        "description": "Cursor page from a merged operational history projection.",
         "properties": {
           "account_id": {
             "maxLength": 64,
@@ -1427,7 +1329,7 @@
         "title": "AccountObservationView",
         "type": "object"
       },
-      "AccountOwnerSubmitIntent": {
+      "AccountOwnerSubmitIntent-Input": {
         "additionalProperties": false,
         "description": "Durable runner intent accepted by AccountOwner intake.",
         "properties": {
@@ -1445,6 +1347,101 @@
             "minimum": 0.0,
             "title": "Created At Ms",
             "type": "integer"
+          },
+          "effect_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEffectRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "intent_id": {
+            "minLength": 1,
+            "title": "Intent Id",
+            "type": "string"
+          },
+          "intent_kind": {
+            "minLength": 1,
+            "title": "Intent Kind",
+            "type": "string"
+          },
+          "order_ref": {
+            "minLength": 1,
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "order_spec": {
+            "title": "Order Spec",
+            "type": "object"
+          },
+          "owner_generation": {
+            "minimum": 0.0,
+            "title": "Owner Generation",
+            "type": "integer"
+          },
+          "run_id": {
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "trace_id": {
+            "minLength": 1,
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "account_id",
+          "strategy_instance_id",
+          "run_id",
+          "bot_order_namespace",
+          "intent_id",
+          "order_ref",
+          "intent_kind",
+          "order_spec",
+          "owner_generation",
+          "created_at_ms"
+        ],
+        "title": "AccountOwnerSubmitIntent",
+        "type": "object"
+      },
+      "AccountOwnerSubmitIntent-Output": {
+        "additionalProperties": false,
+        "description": "Durable runner intent accepted by AccountOwner intake.",
+        "properties": {
+          "account_id": {
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "bot_order_namespace": {
+            "minLength": 1,
+            "title": "Bot Order Namespace",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "effect_request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEffectRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "intent_id": {
             "minLength": 1,
@@ -1734,7 +1731,7 @@
             "$ref": "#/components/schemas/OperatorConfirmationCopy"
           },
           "intent": {
-            "$ref": "#/components/schemas/AccountOwnerSubmitIntent"
+            "$ref": "#/components/schemas/AccountOwnerSubmitIntent-Output"
           }
         },
         "required": [
@@ -1828,6 +1825,391 @@
           "generated_at_ms"
         ],
         "title": "AccountRosterVerdictSummary",
+        "type": "object"
+      },
+      "AccountSafetySnapshot": {
+        "additionalProperties": false,
+        "description": "Read-only safety spine shared by Deploy, Bot Control, and Account Desk.",
+        "properties": {
+          "account_epoch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEpoch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "actions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PresentedOperatorAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "blockers": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/OperatorBlocker"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "custody": {
+            "$ref": "#/components/schemas/AccountSafetySnapshotCustody"
+          },
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AccountReconciliationEvidenceRef"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "exposure": {
+            "$ref": "#/components/schemas/AccountSafetySnapshotExposure"
+          },
+          "generated_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Generated At Ms",
+            "type": "integer"
+          },
+          "outage_diff": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outage Diff"
+          },
+          "posture": {
+            "enum": [
+              "PAPER_EXECUTION",
+              "UNSAFE",
+              "UNKNOWN"
+            ],
+            "title": "Posture",
+            "type": "string"
+          },
+          "reason_code": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reconciliation_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Id"
+          },
+          "reconciliation_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "CLEAN",
+                  "NOT_PROVEN"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation State"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          },
+          "snapshot_id": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "snapshot_version": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Version",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/AccountSafetySnapshotSource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "verdict": {
+            "enum": [
+              "CLEAN",
+              "RECONCILING",
+              "SUSPENDED",
+              "CONTAMINATED",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          },
+          "verdict_reason": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Verdict Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "snapshot_version",
+          "snapshot_id",
+          "generated_at_ms",
+          "account_id",
+          "posture",
+          "verdict",
+          "reason_code",
+          "verdict_reason",
+          "sources",
+          "custody",
+          "exposure"
+        ],
+        "title": "AccountSafetySnapshot",
+        "type": "object"
+      },
+      "AccountSafetySnapshotCustody": {
+        "additionalProperties": false,
+        "properties": {
+          "a0_custody_accepted_count": {
+            "minimum": 0.0,
+            "title": "A0 Custody Accepted Count",
+            "type": "integer"
+          },
+          "a1_broker_write_started_count": {
+            "minimum": 0.0,
+            "title": "A1 Broker Write Started Count",
+            "type": "integer"
+          },
+          "a2_broker_known_count": {
+            "minimum": 0.0,
+            "title": "A2 Broker Known Count",
+            "type": "integer"
+          },
+          "a3_economic_terminal_count": {
+            "minimum": 0.0,
+            "title": "A3 Economic Terminal Count",
+            "type": "integer"
+          },
+          "clerk_journal_last_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Journal Last Seq"
+          },
+          "retired_owner_custody_count": {
+            "minimum": 0.0,
+            "title": "Retired Owner Custody Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "retired_owner_custody_count",
+          "a0_custody_accepted_count",
+          "a1_broker_write_started_count",
+          "a2_broker_known_count",
+          "a3_economic_terminal_count"
+        ],
+        "title": "AccountSafetySnapshotCustody",
+        "type": "object"
+      },
+      "AccountSafetySnapshotExposure": {
+        "additionalProperties": false,
+        "properties": {
+          "execution_count": {
+            "minimum": 0.0,
+            "title": "Execution Count",
+            "type": "integer"
+          },
+          "open_order_count": {
+            "minimum": 0.0,
+            "title": "Open Order Count",
+            "type": "integer"
+          },
+          "position_count": {
+            "minimum": 0.0,
+            "title": "Position Count",
+            "type": "integer"
+          },
+          "unmanaged_or_unknown_count": {
+            "minimum": 0.0,
+            "title": "Unmanaged Or Unknown Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "open_order_count",
+          "execution_count",
+          "position_count",
+          "unmanaged_or_unknown_count"
+        ],
+        "title": "AccountSafetySnapshotExposure",
+        "type": "object"
+      },
+      "AccountSafetySnapshotSource": {
+        "additionalProperties": false,
+        "description": "One independently ageing source; assembly never restamps it.",
+        "properties": {
+          "age_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Ms"
+          },
+          "as_of_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Ms"
+          },
+          "critical": {
+            "default": true,
+            "title": "Critical",
+            "type": "boolean"
+          },
+          "epoch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountEpoch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epoch_relation": {
+            "default": "UNATTESTED",
+            "enum": [
+              "CURRENT",
+              "PRE_EPOCH",
+              "UNATTESTED",
+              "MISMATCH"
+            ],
+            "title": "Epoch Relation",
+            "type": "string"
+          },
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AccountReconciliationEvidenceRef"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "hard_ttl_ms": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hard Ttl Ms"
+          },
+          "reason_code": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reconciliation_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Id"
+          },
+          "reconciliation_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "CLEAN",
+                  "NOT_PROVEN"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation State"
+          },
+          "source": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "FRESH",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "state",
+          "reason_code"
+        ],
+        "title": "AccountSafetySnapshotSource",
         "type": "object"
       },
       "AccountServiceBinding": {
@@ -6268,7 +6650,7 @@
           "start_request": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/HostRunnerStartRequest"
+                "$ref": "#/components/schemas/HostRunnerStartRequest-Output"
               },
               {
                 "type": "null"
@@ -10463,6 +10845,287 @@
         "title": "ClearHoldRequest",
         "type": "object"
       },
+      "ClerkCustodyDurations": {
+        "additionalProperties": false,
+        "description": "Measured same-clock durations for one Clerk-owned intent.",
+        "properties": {
+          "a0_to_broker_write_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "A0 To Broker Write Ms"
+          },
+          "broker_return_to_first_callback_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Return To First Callback Ms"
+          },
+          "broker_write_to_return_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Write To Return Ms"
+          },
+          "intake_to_a0_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intake To A0 Ms"
+          },
+          "request_to_intake_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request To Intake Ms"
+          },
+          "terminal_age_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Age Ms"
+          }
+        },
+        "title": "ClerkCustodyDurations",
+        "type": "object"
+      },
+      "ClerkCustodyTimeline": {
+        "additionalProperties": false,
+        "description": "Distinct source, arrival, and durable clocks for one intent lifecycle.",
+        "properties": {
+          "a0_custody_accepted_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "A0 Custody Accepted At Ms"
+          },
+          "broker_ack_recorded_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Ack Recorded At Ms"
+          },
+          "broker_call_returned_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Call Returned At Ms"
+          },
+          "broker_write_started_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Write Started At Ms"
+          },
+          "clerk_intake_admitted_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Intake Admitted At Ms"
+          },
+          "clerk_request_received_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Request Received At Ms"
+          },
+          "durations": {
+            "$ref": "#/components/schemas/ClerkCustodyDurations"
+          },
+          "earliest_broker_source_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Earliest Broker Source At Ms"
+          },
+          "economic_terminal_recorded_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Economic Terminal Recorded At Ms"
+          },
+          "first_callback_arrived_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Callback Arrived At Ms"
+          },
+          "first_callback_recorded_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Callback Recorded At Ms"
+          },
+          "inbox_fsynced_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inbox Fsynced At Ms"
+          },
+          "intent_created_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Created At Ms"
+          }
+        },
+        "title": "ClerkCustodyTimeline",
+        "type": "object"
+      },
+      "ClerkCustodyWindowSummary": {
+        "additionalProperties": false,
+        "description": "Server-folded custody stages for one bounded projected evidence window.\n\nCounts describe only the response's immutable receipt window; they never\nclaim to be account-wide truth and are not a permission or safety verdict.",
+        "properties": {
+          "a0_custody_accepted_count": {
+            "minimum": 0.0,
+            "title": "A0 Custody Accepted Count",
+            "type": "integer"
+          },
+          "a1_broker_write_started_count": {
+            "minimum": 0.0,
+            "title": "A1 Broker Write Started Count",
+            "type": "integer"
+          },
+          "a2_broker_known_count": {
+            "minimum": 0.0,
+            "title": "A2 Broker Known Count",
+            "type": "integer"
+          },
+          "a3_economic_terminal_count": {
+            "minimum": 0.0,
+            "title": "A3 Economic Terminal Count",
+            "type": "integer"
+          },
+          "record_count": {
+            "minimum": 0.0,
+            "title": "Record Count",
+            "type": "integer"
+          },
+          "uncertain_count": {
+            "minimum": 0.0,
+            "title": "Uncertain Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "record_count",
+          "a0_custody_accepted_count",
+          "a1_broker_write_started_count",
+          "a2_broker_known_count",
+          "a3_economic_terminal_count",
+          "uncertain_count"
+        ],
+        "title": "ClerkCustodyWindowSummary",
+        "type": "object"
+      },
       "ClerkOrderInstruction": {
         "additionalProperties": false,
         "description": "Typed, receipt-supplied order fields; never a client-side inference.",
@@ -10737,6 +11400,9 @@
             "title": "Canonical Fallback Required",
             "type": "boolean"
           },
+          "custody_summary": {
+            "$ref": "#/components/schemas/ClerkCustodyWindowSummary"
+          },
           "feed_detail": {
             "maxLength": 512,
             "minLength": 1,
@@ -10820,6 +11486,7 @@
           "feed_state",
           "feed_headline",
           "feed_detail",
+          "custody_summary",
           "rows"
         ],
         "title": "ClerkTransactionHistoryResponse",
@@ -10852,6 +11519,16 @@
             ],
             "title": "Commission Status",
             "type": "string"
+          },
+          "custody_timeline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClerkCustodyTimeline"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "events": {
             "items": {
@@ -13923,6 +14600,74 @@
         "title": "EmergencyFlattenRequest",
         "type": "object"
       },
+      "EndDayIntentResponse": {
+        "description": "End-day receipt with durable PAUSED intent and a separate clock-out effect.",
+        "properties": {
+          "actuation": {
+            "$ref": "#/components/schemas/IntentActuation"
+          },
+          "command_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
+          "durable": {
+            "$ref": "#/components/schemas/DesiredStateRecordResponse"
+          },
+          "mutation_attempt_id": {
+            "title": "Mutation Attempt Id",
+            "type": "string"
+          },
+          "mutation_dispatch_state": {
+            "enum": [
+              "PREPARED",
+              "DISPATCHING",
+              "RESPONSE_CONFIRMED",
+              "OUTCOME_UNKNOWN",
+              "EFFECT_CONFIRMED",
+              "EFFECT_NOT_OBSERVED",
+              "NOT_PROVABLE",
+              "EVIDENCE_CONFLICT"
+            ],
+            "title": "Mutation Dispatch State",
+            "type": "string"
+          },
+          "process": {
+            "$ref": "#/components/schemas/InstanceProcessView"
+          },
+          "rung_receipt": {
+            "$ref": "#/components/schemas/MutationRungReceipt"
+          },
+          "rung_receipt_warnings": {
+            "items": {
+              "$ref": "#/components/schemas/MutationRungReceipt"
+            },
+            "title": "Rung Receipt Warnings",
+            "type": "array"
+          },
+          "stop_outcome": {
+            "title": "Stop Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "durable",
+          "actuation",
+          "rung_receipt",
+          "mutation_attempt_id",
+          "mutation_dispatch_state",
+          "process",
+          "stop_outcome"
+        ],
+        "title": "EndDayIntentResponse",
+        "type": "object"
+      },
       "EngineBacktestJobRequest": {
         "description": "Body of POST /api/jobs-internal/engine-backtest.\n\nMirrors the existing synchronous EngineBacktestRequest shape but\naccepts it as a ``backtest`` sub-object so the field validation\nremains the single source of truth. The .NET JobsApi forwards the\nEngine Lab POST body verbatim plus an injected ``job_id``.",
         "properties": {
@@ -16907,7 +17652,7 @@
           "request": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/HostRunnerStartRequest"
+                "$ref": "#/components/schemas/HostRunnerStartRequest-Output"
               },
               {
                 "type": "null"
@@ -17391,7 +18136,7 @@
         "title": "HostRunnerProcessStatus",
         "type": "object"
       },
-      "HostRunnerStartRequest": {
+      "HostRunnerStartRequest-Input": {
         "description": "Request body for starting one existing run from the host daemon.",
         "properties": {
           "hydrate_policy": {
@@ -17430,6 +18175,94 @@
             "minimum": 0.0,
             "title": "Max Orders Per Day",
             "type": "integer"
+          },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "readonly": {
+            "default": true,
+            "title": "Readonly",
+            "type": "boolean"
+          },
+          "roll_call_offer_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roll Call Offer Id"
+          },
+          "strategy": {
+            "default": "spy_ema_crossover",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "title": "Strategy",
+            "type": "string"
+          }
+        },
+        "title": "HostRunnerStartRequest",
+        "type": "object"
+      },
+      "HostRunnerStartRequest-Output": {
+        "description": "Request body for starting one existing run from the host daemon.",
+        "properties": {
+          "hydrate_policy": {
+            "default": "require",
+            "enum": [
+              "require",
+              "optional",
+              "disabled"
+            ],
+            "title": "Hydrate Policy",
+            "type": "string"
+          },
+          "ibkr_host": {
+            "default": "127.0.0.1",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Ibkr Host",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "max_orders_per_day": {
+            "default": 2000,
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Max Orders Per Day",
+            "type": "integer"
+          },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "readonly": {
             "default": true,
@@ -17479,6 +18312,16 @@
               }
             ],
             "title": "Idempotency Key"
+          },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "HostRunnerStopRequest",
@@ -18590,6 +19433,19 @@
             ],
             "description": "Optional caller-supplied UUID for idempotent retries. If a POST arrives with a client_order_id we've already seen, the original ack is returned and no second order is placed. Phase 3b feature; set None on Phase 3a callers.",
             "title": "Client Order Id"
+          },
+          "con_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional IBKR contract identifier. Clerk exact-close recovery requires this to match the server-proved current position so the broker execution cannot resolve a same-symbol contract.",
+            "title": "Con Id"
           },
           "confirm_paper": {
             "description": "Required True. Defense-in-depth on top of IBKR_MODE and the DU account-id sentinel.",
@@ -20866,7 +21722,7 @@
         "type": "object"
       },
       "IntentActuation": {
-        "description": "Result of actuating durable intent against the live binding (ADR 0004).\n\n``actuated`` is true only when a command was queued on a live run. With no\nlive binding the durable write still gates the next start.",
+        "description": "Result of actuating durable intent against the live binding (ADR 0004).\n\n``actuated`` is true only when a command was queued on a live run. With no\nlive binding the durable write still gates the next start. ``effect_state``\nkeeps accepted intent distinct from its observed runtime effect: a durable\nrequest remains ``PENDING`` until the engine can observe it, while a queued\ncommand is only queued, not proof that the engine has applied it.",
         "properties": {
           "actuated": {
             "title": "Actuated",
@@ -20885,6 +21741,15 @@
           },
           "detail": {
             "title": "Detail",
+            "type": "string"
+          },
+          "effect_state": {
+            "default": "PENDING",
+            "enum": [
+              "QUEUED",
+              "PENDING"
+            ],
+            "title": "Effect State",
             "type": "string"
           },
           "run_id": {
@@ -23501,6 +24366,16 @@
             ],
             "title": "Parent Run Id"
           },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "qc_audit_copy_path": {
             "minLength": 1,
             "title": "Qc Audit Copy Path",
@@ -23533,7 +24408,7 @@
             "type": "integer"
           },
           "start_options": {
-            "$ref": "#/components/schemas/HostRunnerStartRequest"
+            "$ref": "#/components/schemas/HostRunnerStartRequest-Input"
           },
           "strategy_instance_id": {
             "default": "",
@@ -26336,7 +27211,7 @@
         "description": "Provenance-bearing request for the Clerk's existing operator flatten lane.",
         "properties": {
           "intent": {
-            "$ref": "#/components/schemas/AccountOwnerSubmitIntent"
+            "$ref": "#/components/schemas/AccountOwnerSubmitIntent-Input"
           },
           "request_provenance": {
             "maxLength": 256,
@@ -26350,20 +27225,6 @@
           "request_provenance"
         ],
         "title": "OperatorRecoveryFlattenRequest",
-        "type": "object"
-      },
-      "OperatorRecoveryFlattenResponse": {
-        "additionalProperties": false,
-        "description": "Durable receipt returned by the Clerk-owned operator recovery lane.",
-        "properties": {
-          "recovery_flatten": {
-            "$ref": "#/components/schemas/AccountClerkRecoveryFlattenReceipt"
-          }
-        },
-        "required": [
-          "recovery_flatten"
-        ],
-        "title": "OperatorRecoveryFlattenResponse",
         "type": "object"
       },
       "OperatorSurface": {
@@ -29480,6 +30341,642 @@
           "prediction_set_id"
         ],
         "title": "PredictionRef",
+        "type": "object"
+      },
+      "PresentedOperatorAction": {
+        "additionalProperties": false,
+        "description": "Closed, snapshot-bound operator action; never an executable URL or command.",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "reconcile_now",
+              "cancel_exact",
+              "cancel_pending",
+              "flatten",
+              "pause",
+              "stop",
+              "end_day",
+              "resume",
+              "start",
+              "deploy"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "availability": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
+          "confirmation": {
+            "$ref": "#/components/schemas/OperatorConfirmationCopy"
+          },
+          "disposition": {
+            "enum": [
+              "fix_here",
+              "wait"
+            ],
+            "title": "Disposition",
+            "type": "string"
+          },
+          "effect_class": {
+            "enum": [
+              "EVIDENCE_REFRESH",
+              "RISK_REDUCING_BROKER",
+              "RISK_REDUCING_LIFECYCLE",
+              "RISK_INCREASING_LIFECYCLE"
+            ],
+            "title": "Effect Class",
+            "type": "string"
+          },
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AccountReconciliationEvidenceRef"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "expires_at_ms": {
+            "minimum": 0.0,
+            "title": "Expires At Ms",
+            "type": "integer"
+          },
+          "finished_copy": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Finished Copy",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 160,
+            "minLength": 16,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "issued_at_ms": {
+            "minimum": 0.0,
+            "title": "Issued At Ms",
+            "type": "integer"
+          },
+          "preconditions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PresentedOperatorActionPrecondition"
+            },
+            "title": "Preconditions",
+            "type": "array"
+          },
+          "presentation_token": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Presentation Token"
+          },
+          "snapshot_id": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "snapshot_version": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Version",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/PresentedOperatorActionTarget"
+          }
+        },
+        "required": [
+          "action_id",
+          "target",
+          "snapshot_id",
+          "snapshot_version",
+          "effect_class",
+          "idempotency_key",
+          "issued_at_ms",
+          "expires_at_ms",
+          "confirmation",
+          "availability",
+          "disposition",
+          "finished_copy"
+        ],
+        "title": "PresentedOperatorAction",
+        "type": "object"
+      },
+      "PresentedOperatorActionEffectReceipt": {
+        "additionalProperties": false,
+        "description": "Typed evidence returned by a broker-affecting presented action.\n\nThis is intentionally a compact cross-process receipt reference rather\nthan a second mutable broker model. The full Clerk journal receipt remains\ncanonical; these immutable identifiers let every UI host link the action\nattempt, Clerk custody row, and any post-action reconciliation receipt.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "clerk_journal_seq": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Journal Seq"
+          },
+          "intent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Id"
+          },
+          "kind": {
+            "enum": [
+              "A0_CANCELLED",
+              "EXACT_CANCEL_CONFIRMED",
+              "RECOVERY_FLATTEN_SUBMITTED",
+              "ACCOUNT_FLATTEN_OBSERVED",
+              "FLATTEN_INTENTION_RECORDED"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "account_id",
+          "recorded_at_ms"
+        ],
+        "title": "PresentedOperatorActionEffectReceipt",
+        "type": "object"
+      },
+      "PresentedOperatorActionInvocation": {
+        "additionalProperties": false,
+        "description": "The browser may return only this closed, signed-by-snapshot envelope.",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "reconcile_now",
+              "cancel_exact",
+              "cancel_pending",
+              "flatten",
+              "pause",
+              "stop",
+              "end_day",
+              "resume",
+              "start",
+              "deploy"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation Token"
+          },
+          "expires_at_ms": {
+            "minimum": 0.0,
+            "title": "Expires At Ms",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 160,
+            "minLength": 16,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "issued_at_ms": {
+            "minimum": 0.0,
+            "title": "Issued At Ms",
+            "type": "integer"
+          },
+          "presentation_token": {
+            "maxLength": 64,
+            "minLength": 64,
+            "title": "Presentation Token",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "snapshot_version": {
+            "maxLength": 64,
+            "minLength": 16,
+            "title": "Snapshot Version",
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/PresentedOperatorActionTarget"
+          }
+        },
+        "required": [
+          "action_id",
+          "target",
+          "snapshot_id",
+          "snapshot_version",
+          "idempotency_key",
+          "issued_at_ms",
+          "expires_at_ms",
+          "presentation_token"
+        ],
+        "title": "PresentedOperatorActionInvocation",
+        "type": "object"
+      },
+      "PresentedOperatorActionPrecondition": {
+        "additionalProperties": false,
+        "description": "One server-owned fact that must still hold when an action executes.",
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "expected_value": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Expected Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "expected_value"
+        ],
+        "title": "PresentedOperatorActionPrecondition",
+        "type": "object"
+      },
+      "PresentedOperatorActionRejection": {
+        "additionalProperties": false,
+        "description": "Typed refusal for a closed presented action; never an inferred UI error.",
+        "properties": {
+          "message": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "reason_code": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          },
+          "snapshot_version": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Version"
+          }
+        },
+        "required": [
+          "reason_code",
+          "message"
+        ],
+        "title": "PresentedOperatorActionRejection",
+        "type": "object"
+      },
+      "PresentedOperatorActionRejectionResponse": {
+        "additionalProperties": false,
+        "description": "FastAPI HTTP-error envelope for a presented-action refusal.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/PresentedOperatorActionRejection"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "PresentedOperatorActionRejectionResponse",
+        "type": "object"
+      },
+      "PresentedOperatorActionResult": {
+        "additionalProperties": false,
+        "description": "Durable dispatch result; acceptance and observed effect stay distinct.",
+        "properties": {
+          "action_attempt_id": {
+            "maxLength": 160,
+            "minLength": 16,
+            "title": "Action Attempt Id",
+            "type": "string"
+          },
+          "action_id": {
+            "enum": [
+              "reconcile_now",
+              "cancel_exact",
+              "cancel_pending",
+              "flatten",
+              "pause",
+              "stop",
+              "end_day",
+              "resume",
+              "start",
+              "deploy"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "effect_receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionEffectReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finished_copy": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Finished Copy",
+            "type": "string"
+          },
+          "reconciliation_receipt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountReconciliationReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "refreshed_snapshot_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed Snapshot Id"
+          },
+          "replayed": {
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "ACCEPTED",
+              "IN_PROGRESS",
+              "PENDING_PROOF",
+              "OUTCOME_UNKNOWN"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "action_attempt_id",
+          "state",
+          "replayed",
+          "finished_copy"
+        ],
+        "title": "PresentedOperatorActionResult",
+        "type": "object"
+      },
+      "PresentedOperatorActionTarget": {
+        "additionalProperties": false,
+        "description": "Closed account/intent/order identity bound into one action.\n\nThe browser may echo these fields only as part of the signed envelope. A\ntarget kind makes the broker-affecting variants unambiguous: an exact\ncancel cannot drift to a reused broker id, an A0 cancel cannot pretend a\nbroker write occurred, and a recovery flatten retains the exact server\nauthored namespace/position identity that must be re-proven at dispatch.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "expected_signed_quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Signed Quantity"
+          },
+          "kind": {
+            "default": "ACCOUNT",
+            "enum": [
+              "ACCOUNT",
+              "EXACT_ORDER",
+              "A0_INTENT",
+              "RECOVERY_NAMESPACE",
+              "ACCOUNT_EMERGENCY"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "recovery_intent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Intent Id"
+          },
+          "recovery_order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Order Ref"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          },
+          "target_con_id": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Con Id"
+          },
+          "target_intent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Intent Id"
+          },
+          "target_intent_order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Intent Order Ref"
+          },
+          "target_order_id": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Order Id"
+          },
+          "target_order_ref": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Order Ref"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "PresentedOperatorActionTarget",
         "type": "object"
       },
       "PricingCompareRequest": {
@@ -33404,6 +34901,16 @@
         "properties": {
           "action": {
             "$ref": "#/components/schemas/DesiredStateAction"
+          },
+          "presented_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "reason": {
             "default": "",
@@ -40281,7 +41788,8 @@
     },
     "/api/accounts/{account_id}/emergency-flatten": {
       "post": {
-        "description": "Authorize and dispatch one Clerk-owned account-wide paper flatten.",
+        "deprecated": true,
+        "description": "Retire raw emergency writes in favor of the signed safety action envelope.",
         "operationId": "emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post",
         "parameters": [
           {
@@ -40321,15 +41829,15 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "410": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccountEmergencyFlattenResponse"
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Raw emergency writes are retired; use a presented action."
           },
           "422": {
             "content": {
@@ -41241,7 +42749,8 @@
     },
     "/api/accounts/{account_id}/operator-recovery-flatten": {
       "post": {
-        "description": "Run a retired-namespace flatten through the host-local Clerk lane.",
+        "deprecated": true,
+        "description": "Retire raw recovery writes in favor of the signed safety action envelope.",
         "operationId": "operator_recovery_flatten_endpoint_api_accounts__account_id__operator_recovery_flatten_post",
         "parameters": [
           {
@@ -41281,15 +42790,15 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "410": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OperatorRecoveryFlattenResponse"
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Raw recovery writes are retired; use a presented action."
           },
           "422": {
             "content": {
@@ -41303,6 +42812,299 @@
           }
         },
         "summary": "Operator Recovery Flatten Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/presented-actions/reconcile-now": {
+      "post": {
+        "description": "Execute only the currently presented Reconcile Now envelope.",
+        "operationId": "execute_presented_reconcile_action_endpoint_api_accounts__account_id__presented_actions_reconcile_now_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionResult"
+                }
+              }
+            },
+            "description": "Action was durably claimed but its external outcome is not proven."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
+                }
+              }
+            },
+            "description": "The presented action is stale, unavailable, or does not match its target."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Presented Reconcile Action Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/presented-actions/recovery": {
+      "post": {
+        "description": "Run one signed Cancel or Flatten action through the existing Clerk lanes.",
+        "operationId": "execute_presented_recovery_action_endpoint_api_accounts__account_id__presented_actions_recovery_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresentedOperatorActionInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionResult"
+                }
+              }
+            },
+            "description": "Action is durable, but current broker proof is still required."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
+                }
+              }
+            },
+            "description": "The action is stale, unavailable, or no longer targets current evidence."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Presented Recovery Action Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/presented-lifecycle-actions/{action_id}": {
+      "get": {
+        "description": "Present one exact lifecycle action; it is not an executable command.",
+        "operationId": "present_lifecycle_action_endpoint_api_accounts__account_id__presented_lifecycle_actions__action_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "action_id",
+            "required": true,
+            "schema": {
+              "enum": [
+                "pause",
+                "stop",
+                "end_day",
+                "resume",
+                "start",
+                "deploy"
+              ],
+              "title": "Action Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 160,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorAction"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresentedOperatorActionRejectionResponse"
+                }
+              }
+            },
+            "description": "Current account safety proof does not permit this action."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Present Lifecycle Action Endpoint",
         "tags": [
           "accounts"
         ]
@@ -41549,6 +43351,65 @@
           }
         },
         "summary": "Backfill False Crash Registry Rows Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/safety-snapshot": {
+      "get": {
+        "description": "Return the broker-free, versioned account safety composition.",
+        "operationId": "account_safety_snapshot_endpoint_api_accounts__account_id__safety_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSafetySnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Account Safety Snapshot Endpoint",
         "tags": [
           "accounts"
         ]
@@ -48573,7 +50434,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/HostRunnerStartRequest"
+                "$ref": "#/components/schemas/HostRunnerStartRequest-Input"
               }
             }
           },
@@ -48610,7 +50471,7 @@
     },
     "/api/live-instances/runs/{run_id}/stop": {
       "post": {
-        "description": "Stop the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).\n\nSame token-forwarding rationale as :func:`start_run`.",
+        "description": "Retire direct daemon Stop in favour of durable, instance-scoped intent.",
         "operationId": "stop_run_api_live_instances_runs__run_id__stop_post",
         "parameters": [
           {
@@ -48654,7 +50515,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HostRunnerActionResponse"
+                  "$ref": "#/components/schemas/SetInstanceDesiredStateResponse"
                 }
               }
             },
@@ -49520,7 +51381,7 @@
     },
     "/api/live-instances/{strategy_instance_id}/desired-state": {
       "post": {
-        "description": "The single operator intent knob (ADR 0004).\n\n1. Write durable intent first (the crash-proof guarantee).\n2. If a live binding exists, enqueue the matching actuation command on the\n   bound run so the running engine actuates immediately and acks.\n3. With no live binding, the durable write alone gates the next start.\n\nThe engine command dispatcher persists intent as a *reconciling* writer, so\nlive actuation leaves ``desired_state.json`` at the same semantic state \u2014\n\"paused-but-still-trading\" is structurally hard to create.",
+        "description": "Persist operator intent and separately report any observed runtime effect.",
         "operationId": "set_instance_desired_state_api_live_instances__strategy_instance_id__desired_state_post",
         "parameters": [
           {
@@ -49590,7 +51451,7 @@
     },
     "/api/live-instances/{strategy_instance_id}/end-day-now": {
       "post": {
-        "description": "Queue Clerk-owned clean exit; only broker evidence can finish the day.",
+        "description": "Persist a safe clock-out intent before attempting a live command.",
         "operationId": "end_day_now_api_live_instances__strategy_instance_id__end_day_now_post",
         "parameters": [
           {
@@ -49641,7 +51502,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HostRunnerActionResponse"
+                  "$ref": "#/components/schemas/EndDayIntentResponse"
                 }
               }
             },
@@ -49667,7 +51528,7 @@
     },
     "/api/live-instances/{strategy_instance_id}/flatten-and-pause": {
       "post": {
-        "description": "VCR-0007 / Phase 6A / ADR 0010 \u2014 composed panic-button endpoint.\n\nThe cockpit's \"Flatten and pause\" affordance is the only path that\ncomposes durable PAUSE with a one-shot FLATTEN_NOW; the underlying\nprimitives (``set_instance_desired_state`` and ``write_from_operator``)\nstay pure. Order is strictly:\n\n1. Write ``desired_state = PAUSED`` to the durable sidecar. If this\n   fails, abort BEFORE enqueueing the one-shot \u2014 leaving a live FLATTEN\n   behind an unpersisted PAUSE would re-open the bug VCR-0007 named.\n2. If a live binding exists, enqueue ``FLATTEN_NOW`` on the bound run.\n   The bar loop honours ``desired_state = PAUSED`` and refuses new\n   entries even if the one-shot fails to enqueue.\n\nThe endpoint returns the structured response shape the existing\ndesired-state endpoint uses so the cockpit can reuse its renderer.",
+        "description": "Persist signed Pause first, then best-effort enqueue Flatten.",
         "operationId": "flatten_and_pause_instance_api_live_instances__strategy_instance_id__flatten_and_pause_post",
         "parameters": [
           {
@@ -50694,7 +52555,7 @@
       },
       "post": {
         "deprecated": true,
-        "description": "DEPRECATED (#400 cutover): superseded by the instance-addressed intent knob\n``POST /api/live-instances/{id}/desired-state``, which writes durable intent\n*and* actuates the live binding. Run-addressed routes are evidence-only;\noperator mutations move to the instance console. Kept temporarily for\nback-compat \u2014 slated for removal once the cutover is signed off.",
+        "description": "Retire unsigned run-addressed writes in favour of signed instance intent.",
         "operationId": "set_desired_state_api_live_runs__run_id__desired_state_post",
         "parameters": [
           {
@@ -50723,22 +52584,13 @@
             }
           }
         ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetDesiredStateRequest"
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
-          "200": {
+          "410": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DesiredStateRecordResponse"
+                  "title": "Response Set Desired State Api Live Runs  Run Id  Desired State Post",
+                  "type": "null"
                 }
               }
             },

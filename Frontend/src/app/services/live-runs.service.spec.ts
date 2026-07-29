@@ -9,6 +9,7 @@ import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type { HostRunnerActionResponse, HostRunnerHealth } from '../api/live-runs.types';
 import type {
   CrashRecoveryOverrideResponse,
+  SetInstanceDesiredStateResponse,
 } from '../api/live-instances.types';
 
 /**
@@ -38,6 +39,27 @@ describe('LiveRunsService start/stop proxy', () => {
       log_path: '/x',
       message: 'active',
     },
+  };
+  const stopped: SetInstanceDesiredStateResponse = {
+    durable: { state: 'STOPPED', updated_at_ms: 1, updated_by: 'operator', version: 1 },
+    actuation: { actuated: false, effect_state: 'PENDING', detail: 'durable intent accepted' },
+    rung_receipt: {
+      code: 'mutation.scoped_all_clear',
+      tier: 'info',
+      title: 'Pending',
+      message: 'Pending',
+      rung_id: null,
+      source_codes: [],
+      forensic_facts: {},
+      actionability: 'no_remedy',
+      resolution: 'Reconcile',
+      remedy_status: null,
+      action: { kind: 'none', label: null, target: null },
+      occurred_at_ms: 1,
+    },
+    rung_receipt_warnings: [],
+    mutation_attempt_id: 'mutation-stop',
+    mutation_dispatch_state: 'RESPONSE_CONFIRMED',
   };
 
   beforeEach(() => {
@@ -82,9 +104,9 @@ describe('LiveRunsService start/stop proxy', () => {
     const req = httpMock.expectOne('/api/live-instances/runs/run-abc/stop');
     expect(req.request.method).toBe('POST');
     expect(req.request.url.startsWith('http')).toBe(false);
-    req.flush(accepted);
+    req.flush(stopped);
 
-    await expect(promise).resolves.toEqual(accepted);
+    await expect(promise).resolves.toEqual(stopped);
   });
 
   it('encodes the run id in the proxy path', async () => {
@@ -92,7 +114,7 @@ describe('LiveRunsService start/stop proxy', () => {
 
     const req = httpMock.expectOne('/api/live-instances/runs/run%2Fwith%20space/stop');
     expect(req.request.method).toBe('POST');
-    req.flush(accepted);
+    req.flush(stopped);
 
     await promise;
   });

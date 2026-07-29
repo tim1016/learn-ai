@@ -19,10 +19,12 @@ from app.engine.live.account_clerk import (
     AccountClerkBrokerAckReceipt,
     AccountClerkCancelNamespaceReceipt,
     AccountClerkCancelNamespaceUncertainError,
+    AccountClerkCustodyStatus,
     AccountClerkEmergencyFlattenIncompleteError,
     AccountClerkEmergencyFlattenReceipt,
     AccountClerkGenerationFencedError,
     AccountClerkIntentRejected,
+    AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
     account_clerk_socket_path,
     read_account_clerk_journal,
@@ -32,8 +34,13 @@ from app.engine.live.account_clerk_cursor import (
     AccountClerkEventCursorRepo,
 )
 from app.engine.live.account_clerk_journal import normalize_broker_event
-from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
+from app.engine.live.account_clerk_journal_models import (
+    AccountClerkAsyncCustodyHealth,
+    AccountClerkEmergencyAuthorization,
+    AccountClerkPendingCancelReceipt,
+)
 from app.engine.live.account_clerk_rpc_protocol import (
+    ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S,
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
@@ -69,6 +76,7 @@ from app.engine.live.account_clerk_rpc_protocol import (
 from app.engine.live.account_clerk_rpc_protocol import (
     WRITE_OPERATIONS as _WRITE_OPERATIONS,
 )
+from app.engine.live.account_epoch import AccountEpochState
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
@@ -77,9 +85,11 @@ from app.engine.live.account_registry import (
     index_account_instance_bindings,
     read_account_instance_registry,
 )
+from app.engine.live.account_safety import AccountSafetyAdmissionRepairReceipt
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.services.bot_deletion import BotDeletionCorruptError, bot_retirement_is_pending
 from app.services.journal_cures import JournalCureError, JournalCureHandler
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +185,72 @@ class AccountClerkRpcClient:
                 request_identity=request_identity({"intent": intent.model_dump(mode="json")}),
             ) from exc
 
+    async def submit_custody_v2(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> tuple[AccountClerkRecordedReceipt, AccountClerkCustodyStatus]:
+        """Request disabled-by-default A0 custody by immutable identity.
+
+        A response timeout is deliberately ambiguous: the caller must use
+        :meth:`read_custody_v2` or replay this exact identity before it infers
+        acceptance or refusal. A thread already fsyncing a journal row cannot
+        be safely preempted by cancelling the socket request.
+        """
+
+        request = {"operation": "submit_custody_v2", "intent": intent.model_dump(mode="json")}
+        payload = await self._request(request)
+        try:
+            return (
+                AccountClerkRecordedReceipt.model_validate(payload["recorded"]),
+                AccountClerkCustodyStatus.model_validate(payload["custody"]),
+            )
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="submit_custody_v2",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def read_custody_v2(self, intent: AccountOwnerSubmitIntent) -> AccountClerkCustodyStatus | None:
+        """Read the durable outcome for one asynchronous custody identity."""
+
+        request = {"operation": "read_custody_v2", "intent": intent.model_dump(mode="json")}
+        payload = await self._request(request)
+        try:
+            value = payload["custody"]
+            return AccountClerkCustodyStatus.model_validate(value) if value is not None else None
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="read_custody_v2",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def custody_health_v2(self) -> AccountClerkAsyncCustodyHealth:
+        """Read explicit queue capacity and depth rather than inferring pressure."""
+
+        request = {"operation": "custody_health_v2"}
+        payload = await self._request(request)
+        try:
+            return AccountClerkAsyncCustodyHealth.model_validate(payload["custody_health"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="custody_health_v2",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def epoch_health_v1(self) -> AccountEpochState | None:
+        """Read the Clerk-owned shadow account epoch and would-block reason."""
+
+        request = {"operation": "epoch_health_v1"}
+        payload = await self._request(request)
+        try:
+            value = payload["epoch_health"]
+            return AccountEpochState.model_validate(value) if value is not None else None
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="epoch_health_v1",
+                request_identity=request_identity(request),
+            ) from exc
+
     async def authorize_emergency_flatten(
         self,
         *,
@@ -261,6 +337,38 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="cancel_namespace",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def cancel_pending_a0(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkPendingCancelReceipt:
+        """Cancel a still-queued A0 intent without a broker write."""
+
+        request = {"operation": "cancel_pending_a0", "intent": intent.model_dump(mode="json")}
+        payload = await self._request(request)
+        try:
+            return AccountClerkPendingCancelReceipt.model_validate(payload["cancelled_before_submit"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="cancel_pending_a0",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def cancel_exact_order(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Run the Clerk's exact current-order cancel lifecycle."""
+
+        request = {"operation": "cancel_exact_order", "intent": intent.model_dump(mode="json")}
+        payload = await self._request(request)
+        try:
+            return AccountClerkCancelNamespaceReceipt.model_validate(payload["cancel_confirmed"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="cancel_exact_order",
                 request_identity=request_identity(request),
             ) from exc
 
@@ -575,6 +683,29 @@ class AccountClerkHostRpcClient(AccountClerkRpcClient):
             }
         )
 
+    async def repair_account_safety_admission(
+        self,
+        *,
+        operation_id: str,
+        authorized_by: str,
+    ) -> AccountSafetyAdmissionRepairReceipt:
+        """Fence admission and repair markers through the authenticated Clerk host."""
+
+        request = {
+            "operation": "repair_account_safety_admission",
+            "operation_id": operation_id,
+            "authorized_by": authorized_by,
+            "host_capability": self._host_capability,
+        }
+        payload = await self._request(request)
+        try:
+            return AccountSafetyAdmissionRepairReceipt.model_validate(payload["admission_repair"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="repair_account_safety_admission",
+                request_identity=request_identity(request),
+            ) from exc
+
 
 class AccountClerkRpcServer:
     """Clerk-process RPC server; the broker stays exclusively behind this seam."""
@@ -620,6 +751,7 @@ class AccountClerkRpcServer:
         # but before the socket is published. No bot can race a recovery
         # classification into a broker write.
         await self._clerk.recover_account_state()
+        await self._clerk.start_async_custody()
         self._server = await asyncio.start_unix_server(self._handle, path=str(self._socket_path))
         self._socket_path.chmod(0o600)
 
@@ -630,6 +762,7 @@ class AccountClerkRpcServer:
         self._closing = True
         self._clerk.close_normal_submit_intake()
         await self._clerk.wait_for_broker_writes_quiesced()
+        await self._clerk.stop_async_custody()
         await self._flush_broker_callbacks()
         if self._callback_worker is not None:
             self._callback_worker.cancel()
@@ -725,12 +858,43 @@ class AccountClerkRpcServer:
             raise _AccountClerkRpcRequestRejected("CLERK_RPC_CLOSED")
         if operation == "submit":
             intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
-            recorded, broker_acked = await self._clerk.submit_intent(intent)
+            recorded, broker_acked = await self._clerk.submit_intent(
+                intent,
+                clerk_request_received_at_ms=now_ms_utc(),
+            )
             return AccountClerkRpcSuccessEnvelope(
                 payload={
                     "recorded": recorded.model_dump(mode="json"),
                     "broker_acked": broker_acked.model_dump(mode="json"),
                 }
+            )
+        if operation == "submit_custody_v2":
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
+            recorded, custody = await self._clerk.submit_async_custody(
+                intent,
+                clerk_request_received_at_ms=now_ms_utc(),
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={
+                    "recorded": recorded.model_dump(mode="json"),
+                    "custody": custody.model_dump(mode="json"),
+                }
+            )
+        if operation == "read_custody_v2":
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
+            custody = await self._clerk.async_custody_status(intent)
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"custody": custody.model_dump(mode="json") if custody is not None else None}
+            )
+        if operation == "custody_health_v2":
+            custody_health = await self._clerk.async_custody_health()
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"custody_health": custody_health.model_dump(mode="json")}
+            )
+        if operation == "epoch_health_v1":
+            health = self._clerk.epoch_health()
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"epoch_health": health.model_dump(mode="json") if health is not None else None}
             )
         if operation == "emergency_flatten_account":
             receipt = await self._clerk.emergency_flatten_account(
@@ -813,6 +977,18 @@ class AccountClerkRpcServer:
             return AccountClerkRpcSuccessEnvelope(
                 payload={"cancel_confirmed": receipt.model_dump(mode="json")}
             )
+        if operation == "cancel_pending_a0":
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
+            receipt = await self._clerk.cancel_pending_a0(intent)
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"cancelled_before_submit": receipt.model_dump(mode="json")}
+            )
+        if operation == "cancel_exact_order":
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
+            receipt = await self._clerk.cancel_exact_order(intent)
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"cancel_confirmed": receipt.model_dump(mode="json")}
+            )
         if operation == "operator_adjustment":
             cure_request = JournalCureRequest.model_validate(request_object(request, "request"))
             if self._operator_adjustment_handler is None:
@@ -829,6 +1005,15 @@ class AccountClerkRpcServer:
             )
             return AccountClerkRpcSuccessEnvelope(
                 payload={"binding_decision": recorded.model_dump(mode="json")}
+            )
+        if operation == "repair_account_safety_admission":
+            receipt = await self._clerk.prepare_and_repair_account_safety_admission(
+                operation_id=required_string(request, "operation_id"),
+                authorized_by=required_string(request, "authorized_by"),
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"admission_repair": receipt.model_dump(mode="json")}
             )
         if operation == "fold_binding_retirements":
             folded = await self._clerk.fold_binding_retirement_proposals()
@@ -982,6 +1167,7 @@ class AccountClerkRpcServer:
 
 
 __all__ = [
+    "ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S",
     "ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S",
     "ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S",
     "ACCOUNT_CLERK_RPC_SCHEMA_VERSION",

@@ -126,6 +126,14 @@ class AccountDirectoryService:
             bindings=known_accounts[canonical_account_id],
         )
 
+    def effective_posture(self, *, account_id: str) -> AccountEffectivePosture:
+        """Return the one backend-authored execution posture for a known account."""
+
+        canonical_account_id = normalize_account_id(account_id)
+        if canonical_account_id not in self._known_accounts():
+            raise UnknownAccountError(f"unknown account: {canonical_account_id}")
+        return self._effective_posture(canonical_account_id)
+
     def _service_status_for_known_account(
         self,
         account_id: str,

@@ -15,21 +15,42 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.broker.ibkr.client import IbkrClientIdInUseError
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.live.account_artifacts import (
+    AccountArtifactError,
     AccountOwnerGeneration,
+    account_artifact_file_path,
     append_account_event,
-    read_account_events,
     read_account_freeze,
+    read_legacy_account_events,
     write_account_owner_generation,
 )
 from app.engine.live.account_classifier import AccountClassifierDecision
+from app.engine.live.account_effect_models import AccountEffectRequest
 from app.engine.live.account_owner_fence import (
     AccountOwnerWriteFenceError,
     account_owner_write_grant,
 )
 from app.engine.live.account_registry import evaluate_account_instance_binding
+from app.engine.live.live_state_sidecar import _file_lock
+from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.live_runs import GateResult
 
 AccountOwnerRuntimePhase = Literal["accepting", "reconnecting", "draining", "frozen"]
+CustodyStage = Literal[
+    "A0_CUSTODY_ACCEPTED",
+    "A1_BROKER_WRITE_STARTED",
+    "A2_BROKER_KNOWN",
+    "A3_ECONOMIC_TERMINAL",
+]
+CustodyLifecycleState = Literal[
+    "queued",
+    "submitting",
+    "broker_known",
+    "economic_terminal",
+    "expired_before_submit",
+    "recovery_action_required",
+    "submission_hold",
+    "uncertain_requires_reconciliation",
+]
 
 # A manual ticket belongs to the account Clerk rather than to a deployed bot.
 # These values remain inside its durable intent shape so manual broker events
@@ -38,6 +59,7 @@ AccountOwnerRuntimePhase = Literal["accepting", "reconnecting", "draining", "fro
 MANUAL_ORDER_INTENT_KIND = "MANUAL_ORDER"
 MANUAL_OPERATOR_STRATEGY_INSTANCE_ID = "manual-operator"
 MANUAL_OPERATOR_RUN_ID = "manual-ticket"
+ACCOUNT_OWNER_INFLIGHT_FILENAME = "account_owner_inflight.json"
 
 
 class AccountOwnerSubmitIntent(BaseModel):
@@ -54,6 +76,9 @@ class AccountOwnerSubmitIntent(BaseModel):
     order_ref: str = Field(min_length=1)
     intent_kind: str = Field(min_length=1)
     order_spec: dict
+    # This is only an untrusted request shape. AccountEffectClassifier derives
+    # the actual effect from durable account evidence at both write boundaries.
+    effect_request: AccountEffectRequest | None = None
     owner_generation: int = Field(ge=0)
     created_at_ms: int = Field(ge=0)
 
@@ -65,8 +90,36 @@ class AccountOwnerSubmitIntent(BaseModel):
         return self
 
 
+class _AccountOwnerInflightSubmission(BaseModel):
+    """Typed pre-broker record used only by AccountOwner reconnect recovery."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    order_ref: str = Field(min_length=1, max_length=256)
+    diagnostics: dict
+    order_spec: dict
+    prepared_at_ms: int = Field(ge=0)
+
+
+class _AccountOwnerInflightState(BaseModel):
+    """One producer-local safety artifact, never an Account Desk authority."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    submissions: tuple[_AccountOwnerInflightSubmission, ...] = ()
+
+
 @dataclass(frozen=True)
 class AccountOwnerSubmitResult:
+    """Outcome from the legacy synchronous AccountOwner submit boundary.
+
+    ``accepted`` means the paper broker has acknowledged the order.  It must
+    never be used for an asynchronous Clerk A0 receipt: callers that opt into
+    that boundary receive :class:`AccountClerkCustodyAccepted` instead.
+    """
+
     status: Literal["accepted", "rejected", "failed", "uncertain"]
     trace_id: str
     account_id: str
@@ -80,6 +133,35 @@ class AccountOwnerSubmitResult:
     exec_id: str | None = None
     reason: str | None = None
     diagnostics: dict | None = None
+
+
+@dataclass(frozen=True)
+class AccountClerkCustodyAccepted:
+    """A durable Clerk A0 admission, explicitly not a broker acknowledgement.
+
+    ``custody_stage`` is the latest observed Clerk fold, so an idempotent
+    replay may legitimately report A1, A2, or A3.  The type itself proves A0
+    was recorded for this immutable identity.
+    """
+
+    status: Literal["custody_accepted"]
+    trace_id: str
+    account_id: str
+    strategy_instance_id: str
+    run_id: str
+    intent_id: str
+    order_ref: str
+    owner_generation: int
+    journal_seq: int
+    recorded_at_ms: int
+    custody_stage: CustodyStage
+    custody_lifecycle_state: CustodyLifecycleState
+
+    @property
+    def is_economically_or_admission_terminal(self) -> bool:
+        """Whether this returned fold has no active Clerk-custody wait state."""
+
+        return self.custody_lifecycle_state in {"economic_terminal", "expired_before_submit"}
 
 
 class AccountOwnerSubmitRejected(RuntimeError):
@@ -255,6 +337,10 @@ class AccountOwner:
         self._set_phase("draining")
         for prepared in self._prepared_without_terminal():
             outcome = await _maybe_await(classify_inflight(prepared))
+            if outcome == "accepted":
+                order_ref = (prepared.get("diagnostics") or {}).get("order_ref")
+                if isinstance(order_ref, str) and order_ref:
+                    self._clear_prepared_submission(order_ref=order_ref)
             append_account_event(
                 self._artifacts_root,
                 self._account_id,
@@ -295,13 +381,18 @@ class AccountOwner:
 
     async def record_prepared_for_test(self, intent: AccountOwnerSubmitIntent) -> None:
         spec = IbkrOrderSpec.model_validate(intent.order_spec)
+        diagnostics = self._diagnostics(intent)
+        self._record_prepared_submission(
+            diagnostics=diagnostics,
+            order_spec=spec.model_dump(),
+        )
         append_account_event(
             self._artifacts_root,
             intent.account_id,
             {
                 "event_type": "account_owner_submit_prepared",
                 "created_at_ms": intent.created_at_ms,
-                "diagnostics": self._diagnostics(intent),
+                "diagnostics": diagnostics,
                 "order_spec": spec.model_dump(),
             },
         )
@@ -340,6 +431,10 @@ class AccountOwner:
         if spec.order_ref != intent.order_ref:
             self._reject(intent, "ORDER_SPEC_REF_MISMATCH", diagnostics)
 
+        self._record_prepared_submission(
+            diagnostics=diagnostics,
+            order_spec=spec.model_dump(),
+        )
         append_account_event(
             self._artifacts_root,
             intent.account_id,
@@ -355,6 +450,7 @@ class AccountOwner:
             intent,
             diagnostics,
             reason="OWNER_GENERATION_STALE_AT_BROKER_WRITE",
+            clear_prepared_submission=True,
         )
 
         try:
@@ -375,6 +471,7 @@ class AccountOwner:
                     "current_owner_generation": exc.current_owner_generation,
                     "grant_owner_generation": exc.grant_owner_generation,
                 },
+                clear_prepared_submission=True,
             )
         except Exception as exc:
             reason = f"BROKER_SUBMIT_UNCERTAIN:{type(exc).__name__}"
@@ -401,6 +498,7 @@ class AccountOwner:
                 "diagnostics": terminal_diagnostics,
             },
         )
+        self._clear_prepared_submission(order_ref=intent.order_ref)
         return self._result(
             intent,
             "accepted",
@@ -415,6 +513,8 @@ class AccountOwner:
         intent: AccountOwnerSubmitIntent,
         reason: str,
         diagnostics: dict,
+        *,
+        clear_prepared_submission: bool = False,
     ) -> None:
         append_account_event(
             self._artifacts_root,
@@ -426,6 +526,8 @@ class AccountOwner:
                 "diagnostics": diagnostics,
             },
         )
+        if clear_prepared_submission:
+            self._clear_prepared_submission(order_ref=intent.order_ref)
         raise AccountOwnerSubmitRejected(reason=reason, diagnostics=diagnostics)
 
     def _ensure_current_generation(
@@ -434,6 +536,7 @@ class AccountOwner:
         diagnostics: dict,
         *,
         reason: str,
+        clear_prepared_submission: bool = False,
     ) -> None:
         current_generation = self._current_owner_generation_provider()
         if intent.owner_generation != current_generation:
@@ -441,6 +544,7 @@ class AccountOwner:
                 intent,
                 reason,
                 diagnostics | {"current_owner_generation": current_generation},
+                clear_prepared_submission=clear_prepared_submission,
             )
 
     def _diagnostics(self, intent: AccountOwnerSubmitIntent) -> dict:
@@ -503,20 +607,121 @@ class AccountOwner:
         )
         return generation
 
+    def _inflight_path(self) -> Path:
+        return account_artifact_file_path(
+            self._artifacts_root,
+            self._account_id,
+            ACCOUNT_OWNER_INFLIGHT_FILENAME,
+        )
+
+    def _read_inflight_state(self) -> _AccountOwnerInflightState:
+        path = self._inflight_path()
+        if not path.exists():
+            return _AccountOwnerInflightState(account_id=self._account_id)
+        try:
+            state = _AccountOwnerInflightState.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise AccountArtifactError("AccountOwner inflight recovery artifact is unreadable") from exc
+        if state.account_id != self._account_id:
+            raise AccountArtifactError("AccountOwner inflight recovery artifact belongs to another account")
+        return state
+
+    def _record_prepared_submission(self, *, diagnostics: dict, order_spec: dict) -> None:
+        order_ref = diagnostics.get("order_ref")
+        if not isinstance(order_ref, str) or not order_ref:
+            raise AccountArtifactError("AccountOwner prepared submission is missing order_ref")
+        path = self._inflight_path()
+        with _file_lock(path):
+            current = self._read_or_migrate_inflight_state_locked(path)
+            replacement = _AccountOwnerInflightSubmission(
+                order_ref=order_ref,
+                diagnostics=diagnostics,
+                order_spec=order_spec,
+                prepared_at_ms=time.time_ns() // 1_000_000,
+            )
+            submissions = {
+                item.order_ref: item
+                for item in current.submissions
+            }
+            submissions[order_ref] = replacement
+            atomic_write_pydantic_artifact(
+                path,
+                _AccountOwnerInflightState(
+                    account_id=self._account_id,
+                    submissions=tuple(submissions[key] for key in sorted(submissions)),
+                ),
+            )
+
+    def _clear_prepared_submission(self, *, order_ref: str) -> None:
+        path = self._inflight_path()
+        with _file_lock(path):
+            current = self._read_or_migrate_inflight_state_locked(path)
+            remaining = tuple(
+                item for item in current.submissions if item.order_ref != order_ref
+            )
+            if remaining == current.submissions:
+                return
+            atomic_write_pydantic_artifact(
+                path,
+                _AccountOwnerInflightState(account_id=self._account_id, submissions=remaining),
+            )
+
     def _prepared_without_terminal(self) -> list[dict]:
-        events = read_account_events(self._artifacts_root, self._account_id)
+        path = self._inflight_path()
+        with _file_lock(path):
+            state = self._read_or_migrate_inflight_state_locked(path)
+        return [
+            {
+                "event_type": "account_owner_submit_prepared",
+                "diagnostics": item.diagnostics,
+                "order_spec": item.order_spec,
+                "recorded_at_ms": item.prepared_at_ms,
+            }
+            for item in state.submissions
+        ]
+
+    def _read_or_migrate_inflight_state_locked(self, path: Path) -> _AccountOwnerInflightState:
+        """Seed immutable pre-split recovery rows once under the artifact lock."""
+
+        if path.exists():
+            return self._read_inflight_state()
+        events = read_legacy_account_events(self._artifacts_root, self._account_id)
         terminal_refs = {
             (event.get("diagnostics") or {}).get("order_ref")
             for event in events
             if str(event.get("event_type") or "").startswith("account_owner_submit_")
             and event.get("event_type") != "account_owner_submit_prepared"
         }
-        return [
-            event
-            for event in events
-            if event.get("event_type") == "account_owner_submit_prepared"
-            and (event.get("diagnostics") or {}).get("order_ref") not in terminal_refs
-        ]
+        submissions: dict[str, _AccountOwnerInflightSubmission] = {}
+        for event in events:
+            if event.get("event_type") != "account_owner_submit_prepared":
+                continue
+            diagnostics = event.get("diagnostics")
+            order_spec = event.get("order_spec")
+            prepared_at_ms = event.get("recorded_at_ms", event.get("created_at_ms"))
+            order_ref = diagnostics.get("order_ref") if isinstance(diagnostics, dict) else None
+            if (
+                not isinstance(order_ref, str)
+                or not order_ref
+                or order_ref in terminal_refs
+                or not isinstance(order_spec, dict)
+                or not isinstance(prepared_at_ms, int)
+                or isinstance(prepared_at_ms, bool)
+                or prepared_at_ms < 0
+            ):
+                continue
+            submissions[order_ref] = _AccountOwnerInflightSubmission(
+                order_ref=order_ref,
+                diagnostics=diagnostics,
+                order_spec=order_spec,
+                prepared_at_ms=prepared_at_ms,
+            )
+        state = _AccountOwnerInflightState(
+            account_id=self._account_id,
+            submissions=tuple(submissions[key] for key in sorted(submissions)),
+        )
+        atomic_write_pydantic_artifact(path, state)
+        return state
 
     def _result(
         self,
@@ -562,9 +767,12 @@ async def _maybe_await(value):
 
 
 __all__ = [
+    "AccountClerkCustodyAccepted",
     "AccountOwner",
     "AccountOwnerSubmitIntent",
     "AccountOwnerSubmitRejected",
     "AccountOwnerSubmitResult",
     "ClientIdInUseError",
+    "CustodyLifecycleState",
+    "CustodyStage",
 ]

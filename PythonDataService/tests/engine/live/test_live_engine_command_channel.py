@@ -18,14 +18,15 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.ibkr.models import IbkrPositionsSnapshot
+from app.broker.ibkr.models import IbkrOrderEvent, IbkrPositionsSnapshot
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Position
-from app.engine.live.account_owner import AccountOwnerSubmitResult
+from app.engine.live.account_owner import AccountClerkCustodyAccepted, AccountOwnerSubmitResult
 from app.engine.live.account_registry import bot_order_namespace_for_instance
 from app.engine.live.clock_out import clock_out_is_in_progress, read_clock_out_receipt
 from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
+from app.engine.live.desired_state import DesiredState, DesiredStateRecord
 from app.engine.live.engine_runtime import CommandLoopBlock
 from app.engine.live.halt import PoisonedHaltTrigger, read_poisoned_flag
 from app.engine.live.live_engine import LiveEngine
@@ -113,6 +114,71 @@ async def test_command_poll_loop_refreshes_heartbeat_after_poll_cycle(
 
 
 @pytest.mark.asyncio
+async def test_a0_custody_callback_projects_one_fill_without_fake_broker_ack() -> None:
+    broker = FakeBroker()
+
+    async def submitter(intent) -> AccountClerkCustodyAccepted:
+        return AccountClerkCustodyAccepted(
+            status="custody_accepted",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            journal_seq=12,
+            recorded_at_ms=1_784_000_000_000,
+            custody_stage="A0_CUSTODY_ACCEPTED",
+            custody_lifecycle_state="queued",
+        )
+
+    portfolio = LivePortfolio(
+        broker,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="custody-bot",
+        run_id="run-custody",
+        bot_order_namespace=bot_order_namespace_for_instance("custody-bot"),
+        owner_generation_provider=lambda: 1,
+    )
+    portfolio.submit_market_order("SPY", 2, _bar(0).time, tag="A0-entry")
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        strategy_instance_id="custody-bot",
+    )
+
+    assert await engine._submit_pending_with_meta(portfolio) == []
+    [pending] = portfolio.custody_pending_orders
+    event = IbkrOrderEvent(
+        account_id="DU123",
+        order_id=811,
+        perm_id=9811,
+        event_type="fill",
+        status="Filled",
+        order_ref=pending.order_ref,
+        symbol="SPY",
+        side="BUY",
+        fill_quantity=2,
+        avg_fill_price=501.25,
+        last_fill_price=501.25,
+        exec_id="exec-custody-811",
+        ts_ms=1_784_000_000_100,
+    )
+
+    engine._adopt_custody_callback_metadata(event)
+    converted = engine._convert_ibkr_fill(event)
+
+    assert converted is not None
+    assert converted.order_id == 811
+    assert converted.fill_quantity == 2
+    assert converted.tag == "A0-entry"
+    assert portfolio.custody_pending_orders == ()
+
+
+@pytest.mark.asyncio
 async def test_command_poll_loop_acks_pending_pause(tmp_path: Path) -> None:
     """Operator writes PAUSE; engine poll task picks it up within
     one tick, dispatches, and acks. After ack, read_pending is empty.
@@ -153,6 +219,177 @@ async def test_command_poll_loop_acks_pending_pause(tmp_path: Path) -> None:
     assert ack_payload["verb"] == "PAUSE"
     assert ack_payload["outcome"]["status"] == "success"
     assert len(durable_writes) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_resume_command_is_acked_without_overwriting_newer_pause_intent() -> None:
+    class _QueuedResumeChannel:
+        def __init__(self) -> None:
+            self.acked = asyncio.Event()
+            self.outcome: dict | None = None
+
+        def read_pending(self) -> list[Command]:
+            return [] if self.acked.is_set() else [Command(seq=1, verb=CommandVerb.RESUME)]
+
+        def ack(self, _command: Command, *, outcome: dict) -> None:
+            self.outcome = outcome
+            self.acked.set()
+
+    channel = _QueuedResumeChannel()
+    durable_writes: list[tuple[object, str]] = []
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        command_channel=channel,  # type: ignore[arg-type]
+        desired_state_reader=lambda: DesiredState.PAUSED,
+        desired_state_writer=lambda state, reason: durable_writes.append((state, reason)),
+    )
+    shutdown_event = asyncio.Event()
+    task = asyncio.create_task(engine._command_poll_loop(shutdown_event))  # type: ignore[attr-defined]
+    try:
+        await asyncio.wait_for(channel.acked.wait(), timeout=0.2)
+    finally:
+        shutdown_event.set()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert engine._paused is True
+    assert durable_writes == []
+    assert channel.outcome == {
+        "status": "superseded",
+        "reason_code": "DURABLE_INTENT_SUPERSEDED",
+        "effect": "RESUME skipped because durable intent is PAUSED",
+    }
+
+
+@pytest.mark.asyncio
+async def test_stopped_durable_intent_acks_pending_stop_before_exiting() -> None:
+    """A recovered STOP command remains auditable even after its durable intent wins.
+
+    The command might survive a process crash between persisting STOPPED and
+    writing the acknowledgement.  The restarted poll loop must write that ack
+    before it observes the durable shutdown and exits.
+    """
+
+    class _QueuedStopChannel:
+        def __init__(self) -> None:
+            self.acked = asyncio.Event()
+            self.outcome: dict | None = None
+
+        def read_pending(self) -> list[Command]:
+            return [] if self.acked.is_set() else [Command(seq=1, verb=CommandVerb.STOP)]
+
+        def ack(self, _command: Command, *, outcome: dict) -> None:
+            self.outcome = outcome
+            self.acked.set()
+
+    channel = _QueuedStopChannel()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        command_channel=channel,  # type: ignore[arg-type]
+        desired_state_reader=lambda: DesiredState.STOPPED,
+        desired_state_writer=lambda _state, _reason: None,
+    )
+    shutdown_event = asyncio.Event()
+
+    await asyncio.wait_for(engine._command_poll_loop(shutdown_event), timeout=0.2)  # type: ignore[attr-defined]
+
+    assert channel.acked.is_set()
+    assert channel.outcome == {"status": "success", "effect": "shutdown_signalled"}
+    assert shutdown_event.is_set()
+
+
+def test_outage_time_end_day_marker_queues_audited_clock_out(tmp_path: Path) -> None:
+    """A durable end-day request must become a run-local CLOCK_OUT after recovery."""
+    channel = CommandChannel(tmp_path / "commands")
+    end_day = DesiredStateRecord(
+        desired_state=DesiredState.PAUSED,
+        updated_at_ms=1_784_000_000_000,
+        updated_by="operator",
+        reason="end-day-now",
+        end_day_requested=True,
+    )
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        command_channel=channel,
+        desired_state_reader=lambda: end_day,
+        desired_state_writer=lambda _state, _reason: None,
+        run_id="run-end-day",
+        strategy_instance_id="bot-end-day",
+    )
+
+    engine._apply_durable_desired_state(asyncio.Event())
+
+    [command] = channel.read_pending()
+    assert command.verb is CommandVerb.CLOCK_OUT
+    assert engine._dispatch_command(
+        command,
+        asyncio.Event(),
+        durable_state=DesiredState.PAUSED,
+    ) == {
+        "status": "accepted",
+        "effect": "clock_out_queued",
+    }
+    assert engine._paused is True
+    assert engine._end_day_intent_active is True
+
+
+@pytest.mark.parametrize(
+    ("desired_state", "initial_paused", "expected_paused", "expected_shutdown"),
+    [
+        (DesiredState.PAUSED, False, True, False),
+        (DesiredState.RUNNING, True, False, False),
+        (DesiredState.STOPPED, False, False, True),
+    ],
+)
+def test_durable_desired_state_actuates_without_a_daemon_command(
+    desired_state: DesiredState,
+    initial_paused: bool,
+    expected_paused: bool,
+    expected_shutdown: bool,
+) -> None:
+    """A durable outage-time intent reaches the still-running engine once."""
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        desired_state_reader=lambda: desired_state,
+    )
+    engine._paused = initial_paused
+    shutdown_event = asyncio.Event()
+
+    engine._apply_durable_desired_state(shutdown_event)
+
+    assert engine._paused is expected_paused
+    assert shutdown_event.is_set() is expected_shutdown
+
+
+def test_unreadable_durable_desired_state_pauses_without_stopping() -> None:
+    """Corrupt outage-time control evidence must never be treated as RUNNING."""
+
+    def unreadable() -> DesiredState:
+        raise OSError("desired_state.json is unreadable")
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        desired_state_reader=unreadable,
+    )
+    shutdown_event = asyncio.Event()
+
+    engine._apply_durable_desired_state(shutdown_event)
+
+    assert engine._paused is True
+    assert shutdown_event.is_set() is False
 
 
 @pytest.mark.parametrize(

@@ -10,6 +10,7 @@ existing IBKR paper-order boundary asynchronously.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 from app.broker.ibkr.account import fetch_account_summary, fetch_positions
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
+from app.broker.ibkr.order_history import list_completed_orders
 from app.broker.ibkr.orders import (
     cancel_paper_order,
     executions_for_reconnect_recovery,
@@ -43,6 +45,11 @@ from app.engine.execution.order_sizer import (
 )
 from app.engine.execution.portfolio import Position
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
+from app.engine.live.account_custody_projection import (
+    CustodyEntryPendingError,
+    CustodyPendingOrder,
+    CustodyProjection,
+)
 from app.engine.live.account_owner_fence import (
     require_account_clerk_write_grant,
 )
@@ -81,6 +88,17 @@ def _describe_policy_value(policy: object) -> str:
 
 logger = logging.getLogger(__name__)
 ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES: Counter[str] = Counter()
+
+
+def _log_shadow_comparison_writer_failure(task: asyncio.Task[None]) -> None:
+    """Surface a detached bounded writer failure without blocking shutdown."""
+
+    if task.cancelled():
+        return
+    try:
+        task.result()
+    except Exception:
+        logger.exception("account observation lease shadow comparison writer failed")
 
 
 class LiveBrokerEventStreamError(RuntimeError):
@@ -200,6 +218,21 @@ class AccountTruthBlockError(SubmitGateBlockError):
         reason = getattr(gate_result, "operator_reason", None)
         super().__init__(f"AccountTruthBlockError(reason={reason!r})")
         self.gate_result = gate_result
+
+
+class AccountSuspendedEntryPauseError(RuntimeError):
+    """Non-terminal pause while retired-owner exposure suspends account entries.
+
+    This is deliberately not a ``ControlledLiveHaltError``. A sibling bot did
+    not create the unmanaged exposure, so it drops this bar's pending entry
+    and remains on duty while the account Clerk obtains the required proof.
+    """
+
+    def __init__(self, *, gate_result: object) -> None:
+        reason = getattr(gate_result, "operator_reason", None)
+        super().__init__(f"AccountSuspendedEntryPauseError(reason={reason!r})")
+        self.gate_result = gate_result
+        self.reason = str(reason)
 
 
 class AccountLiveSessionBlockError(SubmitGateBlockError):
@@ -531,6 +564,32 @@ class IbkrBrokerAdapter(BrokerAdapter):
             await self._wait_for_terminal_fills(targeted_set)
         return targeted
 
+    async def cancel_exact_open_order(self, *, order_id: int, order_ref: str) -> list[int]:
+        """Cancel exactly one current broker order proved by Clerk.
+
+        A broker reference is an attribution token, not a broker primary key.
+        The Clerk therefore hands the adapter both identities.  Resolve them
+        together immediately before the broker call and fail closed if the
+        broker no longer exposes exactly that row.
+        """
+
+        self._enforce_account_owner_write_fence("broker.cancel_exact_open_order")
+        open_orders = await list_open_orders(self._client)
+        matching = [
+            order
+            for order in open_orders
+            if int(order.order_id) == order_id and order.order_ref == order_ref
+        ]
+        if len(matching) != 1:
+            raise RuntimeError("BROKER_EXACT_CANCEL_TARGET_NOT_CURRENT")
+
+        await cancel_paper_order(self._client, order_id)
+        while any(int(order.order_id) == order_id for order in await list_open_orders(self._client)):
+            await asyncio.sleep(0.05)
+        if self._event_task is not None:
+            await self._wait_for_terminal_fills({order_id})
+        return [order_id]
+
     async def probe_intent_status(self, intent_id: str, order_ref: str) -> str:
         """Return ``PRESENT`` only when IBKR still echoes this exact order ref.
 
@@ -560,6 +619,11 @@ class IbkrBrokerAdapter(BrokerAdapter):
         """Read current broker orders for Clerk startup reconciliation only."""
 
         return list(await list_open_orders(self._client))
+
+    async def list_completed_orders(self) -> list[object]:
+        """Read terminal broker orders for Account Epoch reconciliation."""
+
+        return list(await list_completed_orders(self._client))
 
     async def probe_namespace_cancel_status(self, bot_order_namespace: str) -> str:
         """Prove whether a fenced namespace still has broker open orders.
@@ -730,9 +794,12 @@ class LivePortfolio:
     """Portfolio-shaped live state with broker-backed account snapshots."""
 
     broker: BrokerAdapter
+    SHADOW_COMPARISON_QUEUE_CAPACITY: ClassVar[int] = 64
+    SHADOW_COMPARISON_DRAIN_TIMEOUT_S: ClassVar[float] = 1.0
     cash: Decimal = Decimal(0)
     net_liquidation: Decimal = Decimal(0)
     positions: dict[str, Position] = field(default_factory=dict)
+    account_net_positions: dict[str, Position] = field(default_factory=dict)
     pending_orders: list[Order] = field(default_factory=list)
     reference_price: dict[str, Decimal] = field(default_factory=dict)
     total_fees: Decimal = Decimal(0)
@@ -790,6 +857,10 @@ class LivePortfolio:
     # submit is refused before any broker call. The provider must read cached
     # Account Truth only; it must not sweep IBKR from the submit path.
     account_truth_gate_provider: GateResultProvider | None = None
+    # S6 retired-owner custody is a direct account-level entry permission. It
+    # is deliberately independent of the Account Truth / Clerk-proof rollout
+    # resolver: a promoted observation lease may never bypass a suspension.
+    account_safety_gate_provider: GateResultProvider | None = None
     # Running bots may complete a bounded continuous account-truth outage,
     # but must stop adding exposure after the grace window.  Admission uses
     # the same gate without this runtime grace.
@@ -809,12 +880,18 @@ class LivePortfolio:
     account_gate_authority_provider: (
         Callable[[], Literal["account_truth", "observation_lease"]] | None
     ) = None
-    # Durable account-event writer owned by the engine. It records every
-    # paired shadow comparison at an actual submit boundary so parity evidence
-    # survives child-process restarts without introducing a second scheduler.
+    # Durable account-event writer owned by the engine. It records paired
+    # shadow comparisons at actual submit boundaries through the bounded
+    # local writer below, so its wait never delays a broker submit.
     account_observation_lease_shadow_comparison_observer: (
-        Callable[[GateResult, GateResult], object] | None
+        Callable[[GateResult, GateResult], Awaitable[None] | None] | None
     ) = None
+    _shadow_comparison_queue: asyncio.Queue[tuple[GateResult, GateResult]] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _shadow_comparison_writer: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     # S5: one account-level live-session verdict gates all normal broker
     # actions, including liquidation because it ultimately drains through this
     # same submit path.  It intentionally has no bot-specific override.
@@ -853,6 +930,7 @@ class LivePortfolio:
     # value type (existing tests construct ``Order`` directly).
     _intent_by_order_id: dict[int, str] = field(default_factory=dict)
     _last_minted_intent_id: str | None = None
+    _custody_projection: CustodyProjection = field(default_factory=CustodyProjection)
 
     def __post_init__(self) -> None:
         """ADR 0008 / Stage 6 — enforce the durable AccountOwner invariant.
@@ -881,6 +959,18 @@ class LivePortfolio:
             "IntentWal lane. Pass account_owner_submitter plus a non-empty "
             "bot_order_namespace so AccountOwner remains the sole writer."
         )
+
+    @property
+    def custody_pending_orders(self) -> tuple[CustodyPendingOrder, ...]:
+        """Current bot-local A0 admissions, ordered by local order identity."""
+
+        return self._custody_projection.pending_orders
+
+    @property
+    def custody_projection(self) -> CustodyProjection:
+        """Expose the ephemeral A0-to-callback join to the live engine."""
+
+        return self._custody_projection
 
     def drop_pending_before_submit(self, *, drop_reason: DropReason, ts_ms: int) -> None:
         """Append drop events for WAL-identified pending orders, then clear memory."""
@@ -918,7 +1008,15 @@ class LivePortfolio:
                 quantity=int(pos.quantity),
                 average_price=Decimal(str(pos.avg_cost)),
             )
-        self.positions = refreshed
+        self.account_net_positions = refreshed
+        self.positions = {
+            symbol: Position(
+                symbol=position.symbol,
+                quantity=position.quantity,
+                average_price=position.average_price,
+            )
+            for symbol, position in refreshed.items()
+        }
 
     def retain_owned_position_quantities(
         self,
@@ -942,7 +1040,7 @@ class LivePortfolio:
         owns the same symbol; the Clerk quantity remains authoritative.
         """
 
-        account_net_positions = self.positions
+        account_net_positions = self.account_net_positions
         owned: dict[str, Position] = {}
         for raw_symbol, raw_quantity in owned_position_quantities.items():
             symbol = raw_symbol.upper()
@@ -971,14 +1069,87 @@ class LivePortfolio:
         return self.positions[sym]
 
     def total_value(self) -> Decimal:
-        has_open_positions = any(pos.quantity != 0 for pos in self.positions.values())
+        valuation_positions = self.account_net_positions or self.positions
+        has_open_positions = any(pos.quantity != 0 for pos in valuation_positions.values())
         if self.net_liquidation and (not has_open_positions or not self.reference_price):
             return self.net_liquidation
         value = self.cash
-        for sym, pos in self.positions.items():
+        for sym, pos in valuation_positions.items():
             price = self.reference_price.get(sym, pos.average_price)
             value += pos.market_value(price)
         return value
+
+    def _enqueue_shadow_comparison(self, truth_gate: GateResult, lease_gate: GateResult) -> None:
+        if self.account_observation_lease_shadow_comparison_observer is None:
+            return
+        if self._shadow_comparison_queue is None:
+            self._shadow_comparison_queue = asyncio.Queue(maxsize=self.SHADOW_COMPARISON_QUEUE_CAPACITY)
+            self._shadow_comparison_writer = asyncio.create_task(
+                self._write_shadow_comparisons(),
+                name="observation-lease-shadow-comparison-writer",
+            )
+        try:
+            self._shadow_comparison_queue.put_nowait((truth_gate, lease_gate))
+        except asyncio.QueueFull:
+            logger.error(
+                "account observation lease shadow comparison queue is full; observation dropped",
+                extra={"capacity": self._shadow_comparison_queue.maxsize},
+            )
+
+    async def _write_shadow_comparisons(self) -> None:
+        assert self._shadow_comparison_queue is not None
+        assert self.account_observation_lease_shadow_comparison_observer is not None
+        queue = self._shadow_comparison_queue
+        while True:
+            truth_gate, lease_gate = await queue.get()
+            try:
+                observation = self.account_observation_lease_shadow_comparison_observer(
+                    truth_gate,
+                    lease_gate,
+                )
+                if inspect.isawaitable(observation):
+                    await observation
+            except Exception:
+                logger.exception("account observation lease shadow comparison write failed")
+            finally:
+                queue.task_done()
+            if (current_task := asyncio.current_task()) is not None and current_task.cancelling():
+                raise asyncio.CancelledError
+
+    async def drain_shadow_comparisons(self) -> None:
+        """Bound shutdown on the non-authoritative parity writer."""
+
+        if self._shadow_comparison_queue is None or self._shadow_comparison_writer is None:
+            return
+        queue = self._shadow_comparison_queue
+        writer = self._shadow_comparison_writer
+        try:
+            await asyncio.wait_for(
+                queue.join(),
+                timeout=self.SHADOW_COMPARISON_DRAIN_TIMEOUT_S,
+            )
+        except TimeoutError:
+            logger.error(
+                "account observation lease shadow comparison drain timed out; pending observations dropped",
+                extra={"pending": queue.qsize()},
+            )
+        finally:
+            writer.cancel()
+            try:
+                completed, _ = await asyncio.wait(
+                    {writer},
+                    timeout=self.SHADOW_COMPARISON_DRAIN_TIMEOUT_S,
+                )
+                if writer not in completed:
+                    logger.error(
+                        "account observation lease shadow comparison writer did not cancel before shutdown",
+                    )
+                    writer.add_done_callback(_log_shadow_comparison_writer_failure)
+                else:
+                    _log_shadow_comparison_writer_failure(writer)
+            finally:
+                self._shadow_comparison_writer = None
+                self._shadow_comparison_queue = None
 
     def _next_id(self) -> int:
         self._next_order_id += 1
@@ -1181,7 +1352,19 @@ class LivePortfolio:
 
     def record_broker_fill(self, event: OrderEvent) -> None:
         """Update the local cache from a broker-reported fill event."""
-        pos = self.get_position(event.symbol)
+        self._record_fill_on_position(self.get_position(event.symbol), event)
+        account_position = self.account_net_positions.setdefault(
+            event.symbol.upper(),
+            Position(symbol=event.symbol.upper()),
+        )
+        self._record_fill_on_position(account_position, event)
+        self.cash -= Decimal(event.fill_quantity) * event.fill_price
+        self.cash -= event.fee
+        self.net_liquidation = Decimal(0)
+        self.total_fees += event.fee
+
+    @staticmethod
+    def _record_fill_on_position(pos: Position, event: OrderEvent) -> None:
         new_qty = pos.quantity + event.fill_quantity
         if pos.quantity == 0 or (pos.quantity > 0) == (event.fill_quantity > 0):
             if new_qty != 0:
@@ -1193,10 +1376,6 @@ class LivePortfolio:
         pos.quantity = new_qty
         if pos.quantity == 0:
             pos.average_price = Decimal(0)
-        self.cash -= Decimal(event.fill_quantity) * event.fill_price
-        self.cash -= event.fee
-        self.net_liquidation = Decimal(0)
-        self.total_fees += event.fee
 
     async def submit_pending_orders(self) -> list[IbkrOrderAck]:
         """Submit all locally queued orders through the paper-order boundary.
@@ -1255,6 +1434,19 @@ class LivePortfolio:
                     raise TransientAccountFreezePauseError(evidence=freeze_evidence)
                 raise AccountFreezeBlockError(evidence=freeze_evidence)
 
+        if self.account_safety_gate_provider is not None:
+            safety_gate = self.account_safety_gate_provider()
+            if (
+                safety_gate is not None
+                and getattr(safety_gate, "status", None) != "pass"
+                and not self._pending_orders_reduce_exposure_only()
+            ):
+                self.drop_pending_before_submit(
+                    drop_reason="account_suspended",
+                    ts_ms=now_ms_utc(),
+                )
+                raise AccountSuspendedEntryPauseError(gate_result=safety_gate)
+
         if self.account_registry_gate_provider is not None:
             registry_gate = self.account_registry_gate_provider()
             if registry_gate is not None and getattr(registry_gate, "status", None) != "pass":
@@ -1302,10 +1494,7 @@ class LivePortfolio:
             and self.account_observation_lease_shadow_comparison_observer is not None
         ):
             try:
-                self.account_observation_lease_shadow_comparison_observer(
-                    account_truth_gate,
-                    lease_gate,
-                )
+                self._enqueue_shadow_comparison(account_truth_gate, lease_gate)
             except Exception:
                 logger.exception("account observation lease shadow comparison write failed")
         if (
@@ -1364,6 +1553,17 @@ class LivePortfolio:
                     else "account_truth_block"
                 )
                 self.drop_pending_before_submit(drop_reason=drop_reason, ts_ms=submitted_at_ms)
+                if (
+                    account_gate_authority == "account_truth"
+                    and getattr(account_verification_gate, "operator_reason", None)
+                    in {
+                        "ACCOUNT_SAFETY_RETIRED_OWNER_LIVE_EXPOSURE",
+                        "ACCOUNT_TRUTH_RETIRED_OWNER_LIVE_EXPOSURE",
+                    }
+                ):
+                    raise AccountSuspendedEntryPauseError(
+                        gate_result=account_verification_gate,
+                    )
                 raise AccountTruthBlockError(gate_result=account_verification_gate)
             elif outage_reason and requires_durable and self.account_truth_outage_started_at_ms is None:
                 self.account_truth_outage_started_at_ms = submitted_at_ms
@@ -1502,7 +1702,11 @@ class LivePortfolio:
                     AccountClerkRpcTimeoutError,
                     AccountClerkRpcUnavailableError,
                 )
-                from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitRejected
+                from app.engine.live.account_owner import (
+                    AccountClerkCustodyAccepted,
+                    AccountOwnerSubmitIntent,
+                    AccountOwnerSubmitRejected,
+                )
                 from app.utils.timestamps import now_ms_utc
 
                 if not self.account_id or not self.strategy_instance_id or not self.run_id:
@@ -1543,6 +1747,12 @@ class LivePortfolio:
                         reason=exc.reason,
                     ) from exc
                 except AccountClerkRpcRejectedError as exc:
+                    if exc.reason == "CLERK_ASYNC_ENTRY_PENDING":
+                        raise CustodyEntryPendingError(
+                            intent_id=intent_id,
+                            order_ref=order_ref,
+                            reason=exc.reason,
+                        ) from exc
                     raise SubmitUncertainHaltError(
                         intent_id=intent_id,
                         order_ref=order_ref,
@@ -1582,6 +1792,32 @@ class LivePortfolio:
                         retry_count=0,
                         reason=exc.reason_code,
                     ) from exc
+                if isinstance(result, AccountClerkCustodyAccepted):
+                    if (
+                        result.trace_id != str(trace_id)
+                        or result.intent_id != intent_id
+                        or result.order_ref != order_ref
+                        or result.account_id != self.account_id
+                        or result.strategy_instance_id != self.strategy_instance_id
+                        or result.run_id != self.run_id
+                        or result.owner_generation != int(owner_generation)
+                    ):
+                        raise SubmitUncertainHaltError(
+                            intent_id=intent_id,
+                            order_ref=order_ref,
+                            probe_result="custody_protocol_error",
+                            retry_count=0,
+                            reason="ACCOUNT_CLERK_CUSTODY_RECEIPT_IDENTITY_MISMATCH",
+                        )
+                    self._custody_projection.record_a0_admission(
+                        order=order,
+                        intent_id=intent_id,
+                        order_ref=order_ref,
+                        journal_seq=result.journal_seq,
+                        recorded_at_ms=result.recorded_at_ms,
+                        current_lifecycle_is_terminal=result.is_economically_or_admission_terminal,
+                    )
+                    continue
                 if getattr(result, "status", None) != "accepted":
                     reason = str(getattr(result, "reason", None) or "AccountOwner submit was not accepted")
                     raise SubmitUncertainHaltError(

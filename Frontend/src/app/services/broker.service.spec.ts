@@ -151,6 +151,98 @@ describe('BrokerService diagnostics endpoints', () => {
     await expect(promise).resolves.toMatchObject({ enabled: true });
   });
 
+  it('posts only the closed presented reconciliation envelope', async () => {
+    const action = {
+      action_id: 'reconcile_now' as const,
+      target: { account_id: 'DU 123' },
+      snapshot_id: 'a'.repeat(64),
+      snapshot_version: 'b'.repeat(64),
+      evidence_refs: [],
+      effect_class: 'EVIDENCE_REFRESH' as const,
+      idempotency_key: 'c'.repeat(64),
+      issued_at_ms: 1_780_000_000_000,
+      expires_at_ms: 1_780_000_060_000,
+      presentation_token: 'd'.repeat(64),
+      preconditions: [],
+      confirmation: { title: 'Title', body: 'Body', consequence: 'Consequence', confirm_label: 'Confirm', required_token: '' },
+      availability: 'AVAILABLE' as const,
+      disposition: 'fix_here' as const,
+      finished_copy: 'Finished.',
+    };
+    const promise = service.executePresentedReconcileNow('DU 123', action);
+    const req = http.expectOne('/api/accounts/DU%20123/presented-actions/reconcile-now');
+
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({
+      action_id: action.action_id,
+      target: action.target,
+      snapshot_id: action.snapshot_id,
+      snapshot_version: action.snapshot_version,
+      idempotency_key: action.idempotency_key,
+      issued_at_ms: action.issued_at_ms,
+      expires_at_ms: action.expires_at_ms,
+      presentation_token: action.presentation_token,
+    });
+    req.flush({
+      action_id: 'reconcile_now',
+      action_attempt_id: action.idempotency_key,
+      state: 'ACCEPTED',
+      replayed: false,
+      finished_copy: action.finished_copy,
+      reconciliation_receipt: null,
+      refreshed_snapshot_id: 'd'.repeat(64),
+    });
+
+    await expect(promise).resolves.toMatchObject({ state: 'ACCEPTED' });
+  });
+
+  it('posts a typed recovery confirmation only with the presented envelope', async () => {
+    const action = {
+      action_id: 'flatten' as const,
+      target: { account_id: 'DU 123', kind: 'ACCOUNT' as const },
+      snapshot_id: 'a'.repeat(64),
+      snapshot_version: 'b'.repeat(64),
+      evidence_refs: [],
+      effect_class: 'RISK_REDUCING_BROKER' as const,
+      idempotency_key: 'c'.repeat(64),
+      issued_at_ms: 1_780_000_000_000,
+      expires_at_ms: 1_780_000_060_000,
+      presentation_token: 'd'.repeat(64),
+      preconditions: [],
+      confirmation: { title: 'Title', body: 'Body', consequence: 'Consequence', confirm_label: 'Confirm', required_token: 'FLATTEN' },
+      availability: 'AVAILABLE' as const,
+      disposition: 'fix_here' as const,
+      finished_copy: 'Finished.',
+    };
+    const promise = service.executePresentedRecoveryAction('DU 123', action, 'FLATTEN');
+    const req = http.expectOne('/api/accounts/DU%20123/presented-actions/recovery');
+
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({
+      action_id: action.action_id,
+      target: action.target,
+      snapshot_id: action.snapshot_id,
+      snapshot_version: action.snapshot_version,
+      idempotency_key: action.idempotency_key,
+      issued_at_ms: action.issued_at_ms,
+      expires_at_ms: action.expires_at_ms,
+      presentation_token: action.presentation_token,
+      confirmation_token: 'FLATTEN',
+    });
+    req.flush({
+      action_id: 'flatten',
+      action_attempt_id: action.idempotency_key,
+      state: 'PENDING_PROOF',
+      replayed: false,
+      finished_copy: 'Flatten intention recorded.',
+      effect_receipt: { kind: 'FLATTEN_INTENTION_RECORDED', account_id: 'DU 123', recorded_at_ms: 1_780_000_000_000 },
+      reconciliation_receipt: null,
+      refreshed_snapshot_id: null,
+    });
+
+    await expect(promise).resolves.toMatchObject({ state: 'PENDING_PROOF' });
+  });
+
   it('posts what-if previews to the non-submitting endpoint', async () => {
     const spec = {
       symbol: 'SPY',

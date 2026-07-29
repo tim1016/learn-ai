@@ -13,6 +13,7 @@ import type {
   SizingPreset,
   SizingProvenance,
 } from './live-runs.types';
+import type { PresentedOperatorActionInvocation } from './broker-models';
 import type { DesiredStateView } from './live-runs-controls.types';
 import type { ActionPlan } from './action-plan.types';
 import type { BotLifecycleChartView } from './bot-lifecycle-chart.types';
@@ -1243,10 +1244,12 @@ export interface InstanceDesiredStateRequest {
   action: DesiredStateAction;
   reason?: string;
   updated_by?: string;
+  presented_action?: PresentedOperatorActionInvocation | null;
 }
 
 export interface IntentActuation {
   actuated: boolean;
+  effect_state?: 'QUEUED' | 'PENDING';
   run_id?: string | null;
   command_seq?: number | null;
   detail: string;

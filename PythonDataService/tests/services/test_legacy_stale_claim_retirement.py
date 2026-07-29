@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ import pytest
 from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import IbkrAccountSummary, IbkrConnectionHealth, IbkrPositionsSnapshot
-from app.engine.live.account_artifacts import read_account_events
+from app.engine.live.account_artifacts import ACCOUNT_EVENTS_FILENAME, read_account_events
 from app.engine.live.account_clerk_journal import AccountClerkJournal
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import AccountInstanceBinding, write_account_instance_binding
@@ -25,6 +26,8 @@ from app.services.legacy_stale_claim_retirement import (
     LEGACY_STALE_CLAIM_RETIRED_EVENT,
     LegacyStaleClaimRetirementError,
     LegacyStaleClaimRetirementService,
+    _record_retired_claim_receipt,
+    retired_legacy_claim_keys,
 )
 
 _ACCOUNT_ID = "DUM284968"
@@ -262,6 +265,39 @@ async def test_retire_records_receipt_and_excludes_only_retired_legacy_claim(tmp
     assert collect_fleet_position_explanations(tmp_path / "live_runs") == {}
 
 
+async def test_retire_allows_a_claim_that_differs_from_a_prior_receipt_only_by_namespace(
+    tmp_path: Path,
+) -> None:
+    _seed_claim(tmp_path)
+    assert _record_retired_claim_receipt(
+        tmp_path,
+        LegacyStaleClaimRetirementReceipt(
+            receipt_id="legacy-retirement-other-namespace",
+            account_id=_ACCOUNT_ID,
+            strategy_instance_id=_SID,
+            run_id=_RUN_ID,
+            bot_order_namespace="learn-ai/other-namespace/v1",
+            symbol="SPY",
+            claimed_quantity=1,
+            requested_by="test.operator",
+            retired_at_ms=_NOW_MS - 1,
+        ),
+    )
+    service = LegacyStaleClaimRetirementService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
+
+    receipt = await service.retire(
+        account_id=_ACCOUNT_ID,
+        strategy_instance_id=_SID,
+        run_id=_RUN_ID,
+        symbol="SPY",
+        requested_by="test.operator",
+        account_truth=_truth(),
+        fetch_run_process=_dead_process,
+    )
+
+    assert receipt.bot_order_namespace == _NAMESPACE
+
+
 async def test_retire_rejects_a_concurrent_duplicate_receipt(tmp_path: Path) -> None:
     _seed_claim(tmp_path)
     service = LegacyStaleClaimRetirementService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
@@ -349,3 +385,28 @@ async def test_retiring_four_dum284968_shaped_legacy_claims_clears_flat_broker_c
     )
     assert after["verdict"] == "clean"
     assert after["residual"] == {}
+
+
+def test_legacy_retirement_receipts_are_snapshotted_once(tmp_path: Path) -> None:
+    legacy_path = tmp_path / "accounts" / _ACCOUNT_ID / ACCOUNT_EVENTS_FILENAME
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "event_type": LEGACY_STALE_CLAIM_RETIRED_EVENT,
+                "strategy_instance_id": _SID,
+                "run_id": _RUN_ID,
+                "symbol": "spy",
+                "bot_order_namespace": _NAMESPACE,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    first = retired_legacy_claim_keys(tmp_path, _ACCOUNT_ID)
+    legacy_path.write_text("{truncated", encoding="utf-8")
+    second = retired_legacy_claim_keys(tmp_path, _ACCOUNT_ID)
+
+    assert first == {(_SID, _RUN_ID, "SPY", _NAMESPACE)}
+    assert second == first

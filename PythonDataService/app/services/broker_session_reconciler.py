@@ -21,6 +21,7 @@ from app.schemas.broker_session import (
     GatewaySocketRow,
 )
 from app.schemas.live_runs import (
+    AccountClerkHealth,
     HostRunnerInstance,
     HostRunnerInstancesStatus,
     HostRunnerProcessState,
@@ -65,6 +66,7 @@ def reconcile_broker_session_snapshot(
     runtime_index: dict[str, RuntimeIndexEntry],
     data_plane_health: IbkrConnectionHealth | None,
     as_of_ms: int,
+    account_clerks: list[AccountClerkHealth] | None = None,
     socket_probe_available: bool = True,
     stale_after_ms: int = 25_000,
 ) -> BrokerSessionReconciliationResult:
@@ -77,7 +79,7 @@ def reconcile_broker_session_snapshot(
     for socket in socket_rows:
         if _is_gvproxy_socket(socket):
             gvproxy_socket_rows.append(socket)
-        elif _is_account_clerk_socket(socket):
+        elif _is_current_account_clerk_socket(socket, account_clerks or []):
             account_clerk_socket_rows.append(socket)
         else:
             visible_socket_rows.append(socket)
@@ -458,8 +460,43 @@ def _account_clerk_global_event(
     )
 
 
-def _is_account_clerk_socket(socket: GatewaySocketRow) -> bool:
-    return "app.engine.live.account_clerk" in socket.argv
+def _is_current_account_clerk_socket(
+    socket: GatewaySocketRow,
+    account_clerks: list[AccountClerkHealth],
+) -> bool:
+    """Return true only for a socket proved by the current Clerk lease.
+
+    A process naming the Clerk module is not enough: a stale generation or
+    second process must remain a visible ``GHOST_SOCKET`` so the operator can
+    investigate it. The daemon's health observation is the current managed
+    lease evidence, and the socket must agree on PID, account, and generation.
+    """
+
+    identity = _account_clerk_socket_identity(socket)
+    if identity is None:
+        return False
+    pid, account_id, generation = identity
+    return any(
+        clerk.pid == pid
+        and clerk.account_id == account_id
+        and clerk.generation == generation
+        and clerk.status == "RUNNING"
+        and clerk.lease_valid
+        for clerk in account_clerks
+    )
+
+
+def _account_clerk_socket_identity(socket: GatewaySocketRow) -> tuple[int, str, int] | None:
+    """Parse the exact Clerk identity from a probed process argv."""
+
+    if socket.pid is None or "app.engine.live.account_clerk" not in socket.argv:
+        return None
+    try:
+        account_id = socket.argv[socket.argv.index("--account-id") + 1]
+        generation = int(socket.argv[socket.argv.index("--generation") + 1])
+    except (IndexError, ValueError):
+        return None
+    return socket.pid, account_id, generation
 
 
 def _last_known_runtime_rows(

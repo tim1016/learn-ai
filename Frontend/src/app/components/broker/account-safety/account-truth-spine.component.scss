@@ -1,0 +1,21 @@
+:host { display: block; }
+
+.truth-spine__header,
+.truth-spine__facts,
+.truth-spine__blocker {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.truth-spine__eyebrow { margin: 0 0 0.25rem; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.truth-spine__reason { margin: 1rem 0 0; }
+.truth-spine__facts { margin: 1rem 0; }
+.truth-spine__facts div { min-width: 10rem; }
+.truth-spine__facts dt { color: var(--p-text-muted-color); font-size: 0.8rem; }
+.truth-spine__facts dd { margin: 0.25rem 0 0; }
+.truth-spine__source,
+.truth-spine__stale { color: var(--p-text-muted-color); }
+.truth-spine__blocker { border-inline-start: 3px solid var(--p-orange-400); padding-inline-start: 0.75rem; }
+.truth-spine__blocker span { flex-basis: 100%; }

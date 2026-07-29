@@ -8,22 +8,30 @@ keeps the proven Account Truth path active and reports exactly what is missing.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from app.engine.live.account_artifacts import (
     AccountClerkLeaseUnavailableError,
+    account_artifact_file_path,
     append_account_event,
-    read_account_events,
     read_active_accepting_account_clerk_generation,
+    read_legacy_account_events,
 )
 from app.engine.live.account_identity import normalize_account_id
+from app.engine.live.live_state_sidecar import _file_lock
+from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.live_runs import GateResult
 from app.services.observation_lease_parity import (
     AccountObservationLeaseParityReport,
     assess_observation_lease_shadow_parity_from_artifacts,
 )
+
+logger = logging.getLogger(__name__)
 
 AccountGateAuthority = Literal["account_truth", "observation_lease"]
 AccountGatePromotionState = Literal[
@@ -36,6 +44,7 @@ AccountGatePromotionState = Literal[
 ACCOUNT_CLERK_RESTART_SMOKE_EVENT = "account_clerk_restart_smoke_confirmed"
 ACCOUNT_CLERK_RESTART_SMOKE_SCHEMA_VERSION = 1
 CLERK_RESTART_SMOKE_CONFIRMATION = "CLERK_RESTART_SMOKE"
+ACCOUNT_CLERK_RESTART_SMOKE_FILENAME = "account_clerk_restart_smoke.json"
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,17 @@ class ClerkRestartSmokeEvidence:
 
     recorded_at_ms: int
     clerk_generation: int
+
+
+class _ClerkRestartSmokeArtifact(BaseModel):
+    """Typed smoke evidence, including the one-time empty legacy snapshot."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    recorded_at_ms: int | None = Field(default=None, ge=0)
+    clerk_generation: int | None = Field(default=None, ge=1)
 
 
 @dataclass(frozen=True)
@@ -238,6 +258,16 @@ def record_clerk_restart_smoke(
         recorded_at_ms=recorded_at_ms,
         clerk_generation=generation,
     )
+    path = _restart_smoke_path(artifacts_root, canonical_account_id)
+    with _file_lock(path):
+        atomic_write_pydantic_artifact(
+            path,
+            _ClerkRestartSmokeArtifact(
+                account_id=canonical_account_id,
+                recorded_at_ms=evidence.recorded_at_ms,
+                clerk_generation=evidence.clerk_generation,
+            ),
+        )
     append_account_event(
         artifacts_root,
         canonical_account_id,
@@ -273,30 +303,74 @@ def _current_restart_smoke(
 
     if active_generation is None:
         return None
-    latest: ClerkRestartSmokeEvidence | None = None
-    for event in read_account_events(artifacts_root, account_id):
-        if event.get("event_type") != ACCOUNT_CLERK_RESTART_SMOKE_EVENT:
-            continue
-        if event.get("schema_version") != ACCOUNT_CLERK_RESTART_SMOKE_SCHEMA_VERSION:
-            continue
-        recorded_at_ms = event.get("recorded_at_ms")
-        clerk_generation = event.get("clerk_generation")
-        if (
-            not isinstance(recorded_at_ms, int)
-            or isinstance(recorded_at_ms, bool)
-            or recorded_at_ms < 0
-            or not isinstance(clerk_generation, int)
-            or isinstance(clerk_generation, bool)
-            or clerk_generation != active_generation
-        ):
-            continue
-        candidate = ClerkRestartSmokeEvidence(
-            recorded_at_ms=recorded_at_ms,
-            clerk_generation=clerk_generation,
+    artifact_path = _restart_smoke_path(artifacts_root, account_id)
+    with _file_lock(artifact_path):
+        if artifact_path.exists():
+            try:
+                artifact = _ClerkRestartSmokeArtifact.model_validate_json(
+                    artifact_path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "clerk restart smoke artifact for %s is unreadable; treating as absent "
+                    "so promotion stays gated: %s",
+                    account_id,
+                    exc,
+                )
+                return None
+            if (
+                artifact.account_id != account_id
+                or artifact.clerk_generation != active_generation
+                or artifact.recorded_at_ms is None
+            ):
+                return None
+            return ClerkRestartSmokeEvidence(
+                recorded_at_ms=artifact.recorded_at_ms,
+                clerk_generation=artifact.clerk_generation,
+            )
+
+        # Only immutable pre-split evidence may seed this one-time snapshot.
+        # Forward producer history is never consulted for promotion.
+        latest: ClerkRestartSmokeEvidence | None = None
+        for event in read_legacy_account_events(artifacts_root, account_id):
+            if event.get("event_type") != ACCOUNT_CLERK_RESTART_SMOKE_EVENT:
+                continue
+            if event.get("schema_version") != ACCOUNT_CLERK_RESTART_SMOKE_SCHEMA_VERSION:
+                continue
+            recorded_at_ms = event.get("recorded_at_ms")
+            clerk_generation = event.get("clerk_generation")
+            if (
+                not isinstance(recorded_at_ms, int)
+                or isinstance(recorded_at_ms, bool)
+                or recorded_at_ms < 0
+                or not isinstance(clerk_generation, int)
+                or isinstance(clerk_generation, bool)
+                or clerk_generation != active_generation
+            ):
+                continue
+            candidate = ClerkRestartSmokeEvidence(
+                recorded_at_ms=recorded_at_ms,
+                clerk_generation=clerk_generation,
+            )
+            if latest is None or candidate.recorded_at_ms > latest.recorded_at_ms:
+                latest = candidate
+        atomic_write_pydantic_artifact(
+            artifact_path,
+            _ClerkRestartSmokeArtifact(
+                account_id=account_id,
+                recorded_at_ms=None if latest is None else latest.recorded_at_ms,
+                clerk_generation=None if latest is None else latest.clerk_generation,
+            ),
         )
-        if latest is None or candidate.recorded_at_ms > latest.recorded_at_ms:
-            latest = candidate
-    return latest
+        return latest
+
+
+def _restart_smoke_path(artifacts_root: Path, account_id: str) -> Path:
+    return account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_CLERK_RESTART_SMOKE_FILENAME,
+    )
 
 
 def _resolution(

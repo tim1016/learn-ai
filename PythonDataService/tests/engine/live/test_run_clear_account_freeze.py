@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
 
+import app.engine.live.account_artifacts as account_artifacts
 from app.engine.live.account_artifacts import (
     AccountAuditedOverride,
     AccountFreezeEvidence,
     AccountRecoveryProof,
+    clear_account_freeze,
     read_account_events,
     read_account_freeze,
     write_account_freeze,
@@ -208,3 +211,49 @@ def test_clear_account_freeze_cli_refuses_contradictory_recovery_proof(
     assert read_account_freeze(tmp_path, ACCOUNT_ID) is not None
     event_types = [event["event_type"] for event in read_account_events(tmp_path, ACCOUNT_ID)]
     assert event_types == ["account_freeze_recorded"]
+
+
+def test_clear_cannot_overwrite_a_concurrent_refreeze(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_account_freeze(tmp_path, _freeze())
+    clear_ready = threading.Event()
+    allow_clear_write = threading.Event()
+    original_write = account_artifacts._atomic_write_json_locked
+
+    def pause_clear(path: Path, payload: dict) -> None:
+        if payload.get("cleared_at_ms") is not None and not clear_ready.is_set():
+            clear_ready.set()
+            assert allow_clear_write.wait(timeout=2)
+        original_write(path, payload)
+
+    monkeypatch.setattr(account_artifacts, "_atomic_write_json_locked", pause_clear)
+    clear_thread = threading.Thread(
+        target=clear_account_freeze,
+        kwargs={"artifacts_root": tmp_path, "recovery_proof": _recovery_proof()},
+    )
+    refreeze_thread = threading.Thread(
+        target=write_account_freeze,
+        args=(
+            tmp_path,
+            AccountFreezeEvidence(
+                account_id=ACCOUNT_ID,
+                reason="watchdog.callback_stream_lost",
+                source="watchdog",
+                recorded_at_ms=1_700_000_020_000,
+                operator_next_step="RECONCILE",
+            ),
+        ),
+    )
+
+    clear_thread.start()
+    assert clear_ready.wait(timeout=2)
+    refreeze_thread.start()
+    allow_clear_write.set()
+    clear_thread.join(timeout=2)
+    refreeze_thread.join(timeout=2)
+
+    current = read_account_freeze(tmp_path, ACCOUNT_ID)
+    assert current is not None
+    assert current.reason == "watchdog.callback_stream_lost"

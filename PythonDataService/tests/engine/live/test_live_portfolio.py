@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -13,17 +14,27 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
+from app.engine.execution.order import Direction, OrderEvent
 from app.engine.live.account_artifacts import (
     RESTART_INTENSITY_REASON,
     RESTART_INTENSITY_SOURCE,
     AccountFreezeEvidence,
 )
-from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitRejected, AccountOwnerSubmitResult
+from app.engine.live.account_owner import (
+    AccountClerkCustodyAccepted,
+    AccountOwnerSubmitIntent,
+    AccountOwnerSubmitRejected,
+    AccountOwnerSubmitResult,
+    CustodyLifecycleState,
+    CustodyStage,
+)
 from app.engine.live.live_portfolio import (
     AccountFreezeBlockError,
     AccountLiveSessionBlockError,
     AccountRegistryBlockError,
+    AccountSuspendedEntryPauseError,
     AccountTruthBlockError,
+    CustodyPendingOrder,
     LivePortfolio,
     SessionPolicyBlockError,
     SubmitUncertainHaltError,
@@ -117,6 +128,58 @@ async def test_refresh_from_broker_loads_account_and_positions() -> None:
     assert portfolio.total_value() == Decimal("100000.0")
     assert portfolio.get_position("SPY").quantity == 12
     assert portfolio.get_position("SPY").average_price == Decimal("500.25")
+
+
+@pytest.mark.asyncio
+async def test_recorded_owned_fill_keeps_sibling_inventory_in_account_valuation() -> None:
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[
+            IbkrPosition(
+                account_id="DU123",
+                con_id=756733,
+                symbol="SPY",
+                sec_type="STK",
+                quantity=1.0,
+                avg_cost=500.0,
+                fetched_at_ms=1,
+            ),
+            IbkrPosition(
+                account_id="DU123",
+                con_id=320227571,
+                symbol="QQQ",
+                sec_type="STK",
+                quantity=7.0,
+                avg_cost=600.0,
+                fetched_at_ms=1,
+            ),
+        ],
+        fetched_at_ms=1,
+    )
+    portfolio = LivePortfolio(broker)
+    await portfolio.refresh_from_broker()
+    portfolio.retain_owned_position_quantities({"SPY": 1})
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.update_reference_price("QQQ", Decimal("600"))
+
+    portfolio.record_broker_fill(
+        OrderEvent(
+            order_id=1,
+            symbol="SPY",
+            time=datetime(2026, 5, 4, 14, 45, tzinfo=UTC),
+            fill_price=Decimal("510"),
+            fill_quantity=1,
+            direction=Direction.LONG,
+            fee=Decimal("0"),
+        )
+    )
+
+    assert set(portfolio.positions) == {"SPY"}
+    assert portfolio.positions["SPY"].quantity == 2
+    assert portfolio.account_net_positions["QQQ"].quantity == 7
+    assert portfolio.total_value() == Decimal("104690")
 
 
 def test_set_holdings_uses_reference_price_for_integer_share_count() -> None:
@@ -463,6 +526,42 @@ async def test_submit_pending_orders_blocks_when_account_truth_rejects_unexplain
     assert exc.value.gate_result == gate
     assert gate.gate_id == "account.account_truth"
     assert gate.operator_reason == "ACCOUNT_TRUTH_UNKNOWN_POSITIONS"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_pauses_healthy_sibling_for_retired_owner_suspension() -> None:
+    broker = FakeBroker()
+    suspended_gate = GateResult(
+        gate_id="account.safety",
+        status="block",
+        source="account_safety",
+        operator_reason="ACCOUNT_SAFETY_RETIRED_OWNER_LIVE_EXPOSURE",
+        operator_next_step="RECONCILE_NOW",
+        evidence_at_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(
+        broker,
+        account_safety_gate_provider=lambda: suspended_gate,
+        account_observation_lease_gate_provider=lambda: GateResult(
+            gate_id="account.observation_lease",
+            status="pass",
+            source="account_observation_lease",
+            operator_reason="",
+            operator_next_step="",
+            evidence_at_ms=_NOW_MS,
+        ),
+        account_gate_authority="observation_lease",
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountSuspendedEntryPauseError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == suspended_gate
     assert broker.orders == []
     assert list(portfolio.drain_pending()) == []
 
@@ -1047,6 +1146,8 @@ async def test_submit_pending_orders_logs_observation_lease_shadow_divergence_wi
 ) -> None:
     broker = FakeBroker()
     comparisons: list[tuple[GateResult, GateResult]] = []
+    observation_started = asyncio.Event()
+    allow_observation_to_finish = asyncio.Event()
     truth_gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
     lease_gate = GateResult(
         gate_id="account.observation_lease",
@@ -1056,13 +1157,17 @@ async def test_submit_pending_orders_logs_observation_lease_shadow_divergence_wi
         operator_next_step="RECONCILE_NOW",
         evidence_at_ms=_NOW_MS,
     )
+
+    async def observe_comparison(truth: GateResult, lease: GateResult) -> None:
+        observation_started.set()
+        await allow_observation_to_finish.wait()
+        comparisons.append((truth, lease))
+
     portfolio = LivePortfolio(
         broker,
         account_truth_gate_provider=lambda: truth_gate,
         account_observation_lease_gate_provider=lambda: lease_gate,
-        account_observation_lease_shadow_comparison_observer=lambda truth, lease: comparisons.append(
-            (truth, lease)
-        ),
+        account_observation_lease_shadow_comparison_observer=observe_comparison,
     )
     portfolio.net_liquidation = Decimal("100000")
     portfolio.update_reference_price("SPY", Decimal("500"))
@@ -1072,7 +1177,62 @@ async def test_submit_pending_orders_logs_observation_lease_shadow_divergence_wi
 
     assert len(acks) == 1
     assert "account observation lease shadow divergence" in caplog.text
+    await asyncio.wait_for(observation_started.wait(), timeout=0.1)
+    allow_observation_to_finish.set()
+    await portfolio.drain_shadow_comparisons()
     assert comparisons == [(truth_gate, lease_gate)]
+
+
+@pytest.mark.asyncio
+async def test_shadow_comparison_drain_is_bounded_when_observer_resists_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(LivePortfolio, "SHADOW_COMPARISON_DRAIN_TIMEOUT_S", 0.01)
+    broker = FakeBroker()
+    observation_started = asyncio.Event()
+    cancellation_swallowed = asyncio.Event()
+    release_observer = asyncio.Event()
+    truth_gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
+    lease_gate = GateResult(
+        gate_id="account.observation_lease",
+        status="block",
+        source="account_observation_lease",
+        operator_reason="ACCOUNT_OBSERVATION_LEASE_ABSENT",
+        operator_next_step="RECONCILE_NOW",
+        evidence_at_ms=_NOW_MS,
+    )
+
+    async def cancellation_resistant_observer(_truth: GateResult, _lease: GateResult) -> None:
+        observation_started.set()
+        try:
+            await release_observer.wait()
+        except asyncio.CancelledError:
+            cancellation_swallowed.set()
+            await release_observer.wait()
+            raise RuntimeError("observer cleanup failed")
+
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: truth_gate,
+        account_observation_lease_gate_provider=lambda: lease_gate,
+        account_observation_lease_shadow_comparison_observer=cancellation_resistant_observer,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    await portfolio.submit_pending_orders()
+    await asyncio.wait_for(observation_started.wait(), timeout=0.1)
+    writer = portfolio._shadow_comparison_writer
+    assert writer is not None
+
+    await asyncio.wait_for(portfolio.drain_shadow_comparisons(), timeout=0.1)
+
+    assert cancellation_swallowed.is_set()
+    assert portfolio._shadow_comparison_writer is None
+    release_observer.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(writer, timeout=0.1)
 
 
 @pytest.mark.asyncio
@@ -1335,6 +1495,98 @@ async def test_submit_pending_orders_routes_to_account_owner_when_enabled() -> N
     assert captured[0].owner_generation == 3
     assert captured[0].order_spec["symbol"] == "SPY"
     assert acks[0].order_id == 44
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_records_a0_custody_without_fabricating_broker_ack() -> None:
+    broker = FakeBroker()
+
+    async def submitter(intent: AccountOwnerSubmitIntent) -> AccountClerkCustodyAccepted:
+        return AccountClerkCustodyAccepted(
+            status="custody_accepted",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            journal_seq=19,
+            recorded_at_ms=_NOW_MS,
+            custody_stage="A0_CUSTODY_ACCEPTED",
+            custody_lifecycle_state="queued",
+        )
+
+    portfolio = LivePortfolio(
+        broker,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="spy_ema_paper",
+        run_id="run-alpha",
+        bot_order_namespace="learn-ai/spy_ema_paper/v1",
+        owner_generation_provider=lambda: 3,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    assert await portfolio.submit_pending_orders() == []
+    [pending] = portfolio.custody_pending_orders
+    assert isinstance(pending, CustodyPendingOrder)
+    assert pending.journal_seq == 19
+    assert pending.recorded_at_ms == _NOW_MS
+    assert pending.order.symbol == "SPY"
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage", "lifecycle", "has_pending_projection"),
+    [
+        ("A1_BROKER_WRITE_STARTED", "submitting", True),
+        ("A2_BROKER_KNOWN", "broker_known", True),
+        ("A3_ECONOMIC_TERMINAL", "economic_terminal", False),
+    ],
+)
+async def test_custody_replay_at_later_lifecycle_never_becomes_a_fake_broker_ack(
+    stage: CustodyStage,
+    lifecycle: CustodyLifecycleState,
+    has_pending_projection: bool,
+) -> None:
+    broker = FakeBroker()
+
+    async def submitter(intent: AccountOwnerSubmitIntent) -> AccountClerkCustodyAccepted:
+        return AccountClerkCustodyAccepted(
+            status="custody_accepted",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            journal_seq=20,
+            recorded_at_ms=_NOW_MS,
+            custody_stage=stage,
+            custody_lifecycle_state=lifecycle,
+        )
+
+    portfolio = LivePortfolio(
+        broker,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="spy_ema_paper",
+        run_id="run-alpha",
+        bot_order_namespace="learn-ai/spy_ema_paper/v1",
+        owner_generation_provider=lambda: 3,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    assert await portfolio.submit_pending_orders() == []
+    assert bool(portfolio.custody_pending_orders) is has_pending_projection
     assert broker.orders == []
 
 

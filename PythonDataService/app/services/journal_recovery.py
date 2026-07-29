@@ -313,8 +313,6 @@ class JournalRecoveryService:
             "event_type": "account_clerk_journal_quarantined",
             "receipt_id": receipt.receipt_id,
             "quarantined_journal_name": receipt.quarantined_journal_name,
-            "quarantined_inbox_name": state.quarantined_inbox_name,
-            "missing_artifacts": state.missing_artifacts,
             "recorded_at_ms": receipt.recorded_at_ms,
         }, only_if_receipt_absent=True)
 

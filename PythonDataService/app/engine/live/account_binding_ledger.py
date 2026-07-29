@@ -187,6 +187,7 @@ def fold_binding_retirement_proposals(
     *,
     account_id: str,
     read_current_binding: Callable[[str], dict[str, object] | None],
+    before_legacy_retirement: Callable[[dict[str, object]], None] | None = None,
     write_legacy_retirement: Callable[[dict[str, object]], None],
 ) -> BindingRetirementFoldResult:
     """Fold outstanding daemon proposals under the Clerk's serialized ledger lock.
@@ -219,6 +220,8 @@ def fold_binding_retirement_proposals(
                     ),
                     source=proposal.source,
                 )
+                if before_legacy_retirement is not None:
+                    before_legacy_retirement(retirement)
                 _append_command_locked(path, retirement, entry_kind="decision")
                 write_legacy_retirement(retirement)
                 applied += 1

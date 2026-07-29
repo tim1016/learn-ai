@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.schemas.broker_session import GatewaySocketRow
 from app.schemas.live_runs import (
+    AccountClerkHealth,
     HostRunnerInstance,
     HostRunnerInstancesStatus,
     HostRunnerProcessState,
@@ -480,6 +481,18 @@ def test_snapshot_reconciler_lifts_account_clerk_to_global_infrastructure() -> N
         runtime_index={},
         data_plane_health=None,
         as_of_ms=AS_OF_MS,
+        account_clerks=[
+            AccountClerkHealth(
+                account_id="DUM284968",
+                generation=78,
+                pid=12757,
+                status="RUNNING",
+                started_at_ms=AS_OF_MS - 1_000,
+                renewed_at_ms=AS_OF_MS - 100,
+                valid_until_ms=AS_OF_MS + 10_000,
+                lease_valid=True,
+            )
+        ],
     )
 
     assert result.rows == []
@@ -490,6 +503,50 @@ def test_snapshot_reconciler_lifts_account_clerk_to_global_infrastructure() -> N
     assert event.current is True
     assert event.severity == "info"
     assert "write-authority infrastructure" in event.summary
+
+
+def test_snapshot_reconciler_keeps_stale_clerk_generation_visible_as_ghost() -> None:
+    result = reconcile_broker_session_snapshot(
+        socket_rows=[
+            GatewaySocketRow(
+                pid=12757,
+                command="Python",
+                argv=[
+                    "/usr/bin/python",
+                    "-m",
+                    "app.engine.live.account_clerk",
+                    "--account-id",
+                    "DUM284968",
+                    "--generation",
+                    "77",
+                ],
+                local_port=51085,
+                remote_host="127.0.0.1",
+                remote_port=4002,
+            )
+        ],
+        registry_snapshot=_registry(),
+        runtime_index={},
+        data_plane_health=None,
+        as_of_ms=AS_OF_MS,
+        account_clerks=[
+            AccountClerkHealth(
+                account_id="DUM284968",
+                generation=78,
+                pid=12757,
+                status="RUNNING",
+                started_at_ms=AS_OF_MS - 1_000,
+                renewed_at_ms=AS_OF_MS - 100,
+                valid_until_ms=AS_OF_MS + 10_000,
+                lease_valid=True,
+            )
+        ],
+    )
+
+    assert result.global_events == []
+    assert len(result.rows) == 1
+    assert result.rows[0].identity_type == "ghost"
+    assert result.rows[0].attention_codes == ["GHOST_SOCKET"]
 
 
 def test_reconciler_authors_row_display_labels() -> None:

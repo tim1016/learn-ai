@@ -3,7 +3,6 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import type {
   AccountAcceptExposureOverrideResponse,
   AccountClearFreezeResponse,
-  AccountEmergencyFlattenResponse,
   AccountEventSequenceRepairReceipt,
   AccountRecoveryFlattenCandidate,
   BindingLedgerBaselineReceipt,
@@ -14,16 +13,17 @@ import type {
   JournalCureRequest,
   LegacyStaleClaimCandidate,
   LegacyStaleClaimRetirementReceipt,
-  OperatorRecoveryFlattenResponse,
 } from '../../../api/account-reconciliation.types';
+import type { PresentedOperatorAction, PresentedOperatorActionResult } from '../../../api/broker-models';
 import type { AccountClerkRestoreReceipt, JournalRecoveryReceipt } from '../../../api/account-cockpit.types';
 import type { OperatorConfirmationCopy } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
-import { extractServerMessage } from '../operation-error';
+import { extractServerMessage, extractServerReasonCode } from '../operation-error';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
+import { AccountSafetySnapshotStore } from '../account-safety/account-safety-snapshot.store';
 
 export type AccountDeskRecoveryCommand =
   | 'reconcile'
@@ -53,6 +53,7 @@ export interface AccountDeskRecoveryConfirmation {
   readonly journalCure: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest } | null;
   readonly legacyCandidate: LegacyStaleClaimCandidate | null;
   readonly recoveryFlatten: AccountRecoveryFlattenCandidate | null;
+  readonly presentedAction: PresentedOperatorAction | null;
   readonly emergencyOperationId: string | null;
   readonly restoreOperationId: string | null;
 }
@@ -64,8 +65,8 @@ export type AccountDeskRecoverySuccess =
   | { readonly kind: 'exposure_override'; readonly receipt: AccountAcceptExposureOverrideResponse }
   | { readonly kind: 'journal_cure'; readonly receipt: JournalCureReceipt }
   | { readonly kind: 'legacy_retire'; readonly receipt: LegacyStaleClaimRetirementReceipt }
-  | { readonly kind: 'recovery_flatten'; readonly receipt: OperatorRecoveryFlattenResponse }
-  | { readonly kind: 'emergency_flatten'; readonly receipt: AccountEmergencyFlattenResponse }
+  | { readonly kind: 'recovery_flatten'; readonly receipt: PresentedOperatorActionResult }
+  | { readonly kind: 'emergency_flatten'; readonly receipt: PresentedOperatorActionResult }
   | { readonly kind: 'restore_clerk'; readonly receipt: AccountClerkRestoreReceipt }
   | { readonly kind: 'journal_recovery'; readonly receipt: JournalRecoveryReceipt }
   | { readonly kind: 'binding_ledger_baseline'; readonly receipt: BindingLedgerBaselineReceipt }
@@ -82,6 +83,7 @@ export class AccountDeskRecoveryStore {
   private readonly surface = inject(AccountDeskSurfaceStore);
   private readonly events = inject(AccountDeskEventsStore);
   private readonly directory = inject(AccountDeskDirectoryStore);
+  private readonly accountSafety = inject(AccountSafetySnapshotStore);
   private requestGeneration = 0;
   private readonly accountKey = signal<string | null>(null);
   private readonly confirmationState = signal<AccountDeskRecoveryConfirmation | null>(null);
@@ -139,7 +141,18 @@ export class AccountDeskRecoveryStore {
         (value) => value.intent.intent_id === event.move.target && value.intent.account_id === accountId,
       );
       if (candidate === undefined) return;
-      this.openConfirmation(accountId, command, candidate.confirmation, { recoveryFlatten: candidate });
+      const action = this.presentedRecoveryAction(
+        accountId,
+        (value) => value.target.recovery_intent_id === candidate.intent.intent_id,
+      );
+      if (action === null) {
+        this.requireFreshPresentedRecoveryAction();
+        return;
+      }
+      this.openConfirmation(accountId, command, confirmationCopy(action), {
+        recoveryFlatten: candidate,
+        presentedAction: action,
+      });
       return;
     }
     this.openConfirmation(accountId, command, confirmation);
@@ -181,6 +194,7 @@ export class AccountDeskRecoveryStore {
       journalCure: null,
       legacyCandidate: null,
       recoveryFlatten: null,
+      presentedAction: null,
       emergencyOperationId: null,
       restoreOperationId: null,
     });
@@ -250,6 +264,7 @@ export class AccountDeskRecoveryStore {
       journalCure: null,
       legacyCandidate: null,
       recoveryFlatten: null,
+      presentedAction: null,
       emergencyOperationId: null,
       restoreOperationId: null,
     });
@@ -274,16 +289,25 @@ export class AccountDeskRecoveryStore {
       journalCure: null,
       legacyCandidate: null,
       recoveryFlatten: null,
+      presentedAction: null,
       emergencyOperationId: null,
       restoreOperationId: null,
     });
     this.errorMessageState.set(null);
   }
 
-  requestEmergencyFlatten(confirmation: OperatorConfirmationCopy): void {
+  requestEmergencyFlatten(_confirmation: OperatorConfirmationCopy): void {
     const accountId = this.accountKey();
-    if (this.busyState() || accountId === null || confirmation.required_token !== 'FLATTEN') return;
-    this.openConfirmation(accountId, 'emergency_flatten', confirmation);
+    if (this.busyState() || accountId === null) return;
+    const action = this.presentedRecoveryAction(
+      accountId,
+      (value) => value.target.kind === 'ACCOUNT_EMERGENCY',
+    );
+    if (action === null) {
+      this.requireFreshPresentedRecoveryAction();
+      return;
+    }
+    this.openConfirmation(accountId, 'emergency_flatten', confirmationCopy(action), { presentedAction: action });
   }
 
   refreshLegacyCandidates(): void {
@@ -321,6 +345,21 @@ export class AccountDeskRecoveryStore {
       success = await this.execute(confirmation);
     } catch (error) {
       if (this.isCurrent(confirmation.accountId, generation)) {
+        const refreshPresentedAction = confirmation.presentedAction !== null && extractServerReasonCode(error) !== null;
+        if (refreshPresentedAction) {
+          this.confirmationState.set(null);
+          try {
+            await this.refreshDeskEvidence(confirmation.accountId, generation);
+          } catch {
+            if (!this.isCurrent(confirmation.accountId, generation)) return;
+            this.errorMessageState.set(
+              'The recovery action was refused and fresh desk evidence is unavailable. Retry the desk refresh before trying again.',
+            );
+            this.busyState.set(false);
+            return;
+          }
+          if (!this.isCurrent(confirmation.accountId, generation)) return;
+        }
         this.errorMessageState.set(
           recoveryErrorMessage(error, 'Account recovery was not accepted. Review the current proof and try again.'),
         );
@@ -332,12 +371,7 @@ export class AccountDeskRecoveryStore {
     this.successState.set(success);
     this.confirmationState.set(null);
     try {
-      await Promise.all([
-        this.surface.load(confirmation.accountId),
-        this.events.load(confirmation.accountId),
-        this.directory.loadServiceStatus(confirmation.accountId),
-        this.loadLegacyCandidates(confirmation.accountId, generation),
-      ]);
+      await this.refreshDeskEvidence(confirmation.accountId, generation);
     } catch {
       if (!this.isCurrent(confirmation.accountId, generation)) return;
       this.errorMessageState.set('Account recovery was accepted, but fresh desk evidence is unavailable. Retry to refresh it.');
@@ -354,6 +388,7 @@ export class AccountDeskRecoveryStore {
       readonly journalCure?: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest };
       readonly legacyCandidate?: LegacyStaleClaimCandidate;
       readonly recoveryFlatten?: AccountRecoveryFlattenCandidate;
+      readonly presentedAction?: PresentedOperatorAction;
     } = {},
   ): void {
     this.confirmationState.set({
@@ -370,6 +405,7 @@ export class AccountDeskRecoveryStore {
       journalCure: details.journalCure ?? null,
       legacyCandidate: details.legacyCandidate ?? null,
       recoveryFlatten: details.recoveryFlatten ?? null,
+      presentedAction: details.presentedAction ?? null,
       emergencyOperationId: command === 'emergency_flatten' ? crypto.randomUUID() : null,
       restoreOperationId: (command === 'restore_clerk' || command === 'journal_recovery') ? crypto.randomUUID() : null,
     });
@@ -421,25 +457,24 @@ export class AccountDeskRecoveryStore {
           }),
         };
       case 'recovery_flatten':
-        if (confirmation.recoveryFlatten === null) throw new Error('Recovery flatten confirmation is incomplete.');
+        if (confirmation.presentedAction === null) throw new Error('Recovery flatten presentation is incomplete.');
         return {
           kind: 'recovery_flatten',
-          receipt: await this.broker.submitOperatorRecoveryFlatten(confirmation.accountId, {
-            intent: confirmation.recoveryFlatten.intent,
-            request_provenance: 'account-desk/recovery-flatten',
-          }),
+          receipt: await this.broker.executePresentedRecoveryAction(
+            confirmation.accountId,
+            confirmation.presentedAction,
+            confirmation.requiredToken === '' ? undefined : confirmation.providedToken,
+          ),
         };
       case 'emergency_flatten':
-        if (confirmation.providedToken !== 'FLATTEN' || confirmation.emergencyOperationId === null) {
-          throw new Error('Emergency flatten confirmation is incomplete.');
-        }
+        if (confirmation.presentedAction === null) throw new Error('Emergency flatten presentation is incomplete.');
         return {
           kind: 'emergency_flatten',
-          receipt: await this.broker.emergencyFlattenAccount(confirmation.accountId, {
-            account: confirmation.accountId,
-            confirmation_token: 'FLATTEN',
-            idempotency_key: confirmation.emergencyOperationId,
-          }),
+          receipt: await this.broker.executePresentedRecoveryAction(
+            confirmation.accountId,
+            confirmation.presentedAction,
+            confirmation.requiredToken === '' ? undefined : confirmation.providedToken,
+          ),
         };
       case 'restore_clerk':
         if (confirmation.providedToken !== 'RESTORE' || confirmation.restoreOperationId === null) {
@@ -498,9 +533,42 @@ export class AccountDeskRecoveryStore {
     }
   }
 
+  private async refreshDeskEvidence(accountId: string, generation: number): Promise<void> {
+    await Promise.all([
+      this.surface.load(accountId),
+      this.accountSafety.refresh(accountId),
+      this.events.load(accountId),
+      this.directory.loadServiceStatus(accountId),
+      this.loadLegacyCandidates(accountId, generation),
+    ]);
+  }
+
   private isCurrent(accountId: string, generation: number): boolean {
     return this.accountKey() === accountId && this.requestGeneration === generation;
   }
+
+  private presentedRecoveryAction(
+    accountId: string,
+    matches: (action: PresentedOperatorAction) => boolean,
+  ): PresentedOperatorAction | null {
+    const snapshot = this.accountSafety.stateFor(accountId).snapshot;
+    return (snapshot?.actions ?? []).find(
+      (action) => action.availability === 'AVAILABLE' && matches(action),
+    ) ?? null;
+  }
+
+  private requireFreshPresentedRecoveryAction(): void {
+    this.errorMessageState.set(
+      'This recovery action is not present in current Account Safety evidence. Refresh Account Safety before continuing.',
+    );
+  }
+}
+
+function confirmationCopy(action: PresentedOperatorAction): OperatorConfirmationCopy {
+  return {
+    ...action.confirmation,
+    required_token: action.confirmation.required_token ?? '',
+  };
 }
 
 function recoveryCommandForAnchor(anchor: string): Exclude<AccountDeskRecoveryCommand, 'automation'> | null {

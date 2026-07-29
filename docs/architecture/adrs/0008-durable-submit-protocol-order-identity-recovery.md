@@ -109,3 +109,12 @@ ADR 0014 now introduces `run_dir/broker_callbacks.jsonl` as the authoritative ra
 - `PythonDataService/app/engine/live/run.py` — `_recovery_flatten`; `bot_order_namespace` construction. Account-wide emergency flatten is Clerk-owned (ADR 0030).
 - `CONTEXT.md` — identity ladder, owned-orphan vs outside-mutation, submit-uncertain halt, uniform ownership ladder.
 - ADR 0001 — substrate decision this ADR reaffirms.
+
+## Custody-clock amendment (2026-07-27, #1243)
+
+ADR 0033 instruments the existing synchronous Clerk path without changing this
+ADR's retry or acknowledgement semantics. A0 is the fsynced Clerk receipt;
+the current RPC still waits for the existing acknowledgement receipt. Clock
+evidence distinguishes broker/source time, local callback arrival, and durable
+record time, and journal sequence remains a fold cursor rather than a causal
+clock. The same-identity retry rule in this ADR remains binding.

@@ -15,6 +15,7 @@ from app.broker.ibkr.event_codes import (
     BrokerSessionEventSeverity,
 )
 from app.operator.notices.schema import OperatorNotice
+from app.schemas.live_runs import AccountClerkHealth
 
 BrokerSessionDisplaySeverity = Literal["ok", "info", "warning", "critical", "neutral"]
 BrokerSessionIdentityType = Literal[
@@ -127,6 +128,10 @@ class GatewaySocketsSnapshot(BaseModel):
     fetched_at_ms: int = Field(ge=0)
     gateway_port: int = Field(ge=1, le=65535)
     sockets: list[GatewaySocketRow] = Field(default_factory=list)
+    # A Clerk socket is infrastructure only when this same host observation
+    # proves its PID, account, and generation against the active lease. The
+    # mirror must show every other Clerk-shaped socket as a ghost.
+    account_clerks: list[AccountClerkHealth] = Field(default_factory=list)
 
 
 class BrokerSessionRegistryClaim(BaseModel):

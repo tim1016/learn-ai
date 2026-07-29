@@ -11,6 +11,12 @@
     </p>
   }
 
+  @if (lifecycleIntentNotice(); as notice) {
+    <p class="pending-banner" role="status" aria-live="polite">
+      <strong>{{ notice.title }}</strong> {{ notice.detail }}
+    </p>
+  }
+
   @if (startupAutomationDisplay(); as automation) {
     @if (automation.phase !== 'idle') {
       <section
@@ -61,6 +67,13 @@
         <button type="button" [attr.aria-pressed]="activeLens() === 'operations'" (click)="activeLens.set('operations')">Operations</button>
       </div>
     </header>
+
+    <app-account-truth-spine [accountState]="accountSafetyState()" />
+    <app-bot-custody-ribbon
+      [accountId]="custodyAccountId()"
+      [strategyInstanceId]="s.strategy_instance_id"
+      [accountSafetyState]="accountSafetyState()"
+    />
 
     @if (activeLens() === 'trader') {
       <app-trader-view

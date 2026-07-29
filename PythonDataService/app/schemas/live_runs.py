@@ -25,6 +25,7 @@ from app.operator.notices.schema import (
 from app.schemas.account_condition_actions import AccountCureAction
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
+from app.schemas.presented_operator_action import PresentedOperatorActionInvocation
 
 
 class RunState(StrEnum):
@@ -454,6 +455,7 @@ class HostRunnerStartRequest(BaseModel):
     ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
     roll_call_offer_id: str | None = Field(default=None, min_length=1, max_length=128)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
+    presented_action: PresentedOperatorActionInvocation | None = None
 
     @field_validator("ibkr_host")
     @classmethod
@@ -466,6 +468,7 @@ class HostRunnerStopRequest(BaseModel):
 
     force: bool = False
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
+    presented_action: PresentedOperatorActionInvocation | None = None
 
 
 class MutationOutcomeUnknownResponse(BaseModel):
@@ -813,6 +816,7 @@ class LiveInstanceDeployRequest(HostRunnerDeployBaseRequest):
     inherited_exposure_positions: dict[str, int] = Field(default_factory=dict)
     inherited_exposure_source: str | None = None
     exposure_coherence_confirmation: ExposureCoherenceConfirmation | None = None
+    presented_action: PresentedOperatorActionInvocation | None = None
 
     @model_validator(mode="after")
     def _validate_legacy_extras(self) -> LiveInstanceDeployRequest:
@@ -954,6 +958,7 @@ class SetDesiredStateRequest(BaseModel):
     action: DesiredStateAction
     reason: str = Field(default="", max_length=1024)
     updated_by: str = Field(default="operator", max_length=256)
+    presented_action: PresentedOperatorActionInvocation | None = None
 
 
 class DesiredStateRecordResponse(BaseModel):
@@ -3305,13 +3310,23 @@ class IntentActuation(BaseModel):
     """Result of actuating durable intent against the live binding (ADR 0004).
 
     ``actuated`` is true only when a command was queued on a live run. With no
-    live binding the durable write still gates the next start.
+    live binding the durable write still gates the next start. ``effect_state``
+    keeps accepted intent distinct from its observed runtime effect: a durable
+    request remains ``PENDING`` until the engine can observe it, while a queued
+    command is only queued, not proof that the engine has applied it.
     """
 
     actuated: bool
+    effect_state: Literal["QUEUED", "PENDING"] = "PENDING"
     run_id: str | None = None
     command_seq: int | None = None
     detail: str
+
+    @model_validator(mode="after")
+    def _derive_effect_state(self) -> IntentActuation:
+        if self.actuated and self.effect_state != "QUEUED":
+            return self.model_copy(update={"effect_state": "QUEUED"})
+        return self
 
 
 class SetInstanceDesiredStateResponse(BaseModel):
@@ -3323,6 +3338,14 @@ class SetInstanceDesiredStateResponse(BaseModel):
     rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
     mutation_attempt_id: str
     mutation_dispatch_state: MutationAttemptDispatchState
+
+
+class EndDayIntentResponse(SetInstanceDesiredStateResponse):
+    """End-day receipt with durable PAUSED intent and a separate clock-out effect."""
+
+    process: InstanceProcessView
+    command_id: str | None = None
+    stop_outcome: str
 
 
 class ReconcileAckResponse(BaseModel):

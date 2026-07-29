@@ -6,10 +6,11 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.broker.ibkr.account_truth_freshness import critical_source_freshness_blocks
 from app.engine.live.account_artifacts import (
@@ -18,12 +19,12 @@ from app.engine.live.account_artifacts import (
     AccountClerkLeaseUnavailableError,
     AccountFreezeEvidence,
     AccountRecoveryProof,
-    account_artifacts_root,
+    account_artifact_file_path,
     append_account_event,
     clear_account_freeze,
-    read_account_events,
     read_account_freeze,
     read_active_accepting_account_clerk_generation,
+    read_legacy_account_events,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_observation_lease import (
@@ -32,8 +33,13 @@ from app.engine.live.account_observation_lease import (
 )
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
-    has_account_recovery_evidence_after,
+    account_recovery_evidence_exists_after,
     read_account_instance_registry,
+)
+from app.engine.live.account_safety import (
+    AccountSafetyAuthority,
+    account_safety_admission_lock,
+    retired_owner_broker_custody_from_account_truth,
 )
 from app.engine.live.exit_taxonomy import (
     CRASH_RETIRED_BINDING_SOURCES,
@@ -72,12 +78,14 @@ from app.schemas.operator_blocker import OperatorConfirmationCopy
 from app.services.account_desk_guidance import author_account_desk_blockers
 from app.services.account_recovery_flatten_candidates import recovery_flatten_candidates
 from app.services.account_truth_snapshot import AccountTruthSnapshot, assess_account_truth
+from app.utils.advisory_lock import advisory_file_lock
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 ACCOUNT_RECONCILIATION_RECEIPT_FILENAME = "account_reconciliation_receipt.json"
 ACCOUNT_RECONCILIATION_POLICY_FILENAME = "account_reconciliation_policy.json"
+ACCOUNT_RECONCILIATION_INVALIDATION_FILENAME = "account_reconciliation_invalidation.json"
 ACCOUNT_RECONCILIATION_INVALIDATED_EVENT = "account_reconciliation_invalidated"
 DEFAULT_ACCOUNT_RECONCILIATION_TTL_MS = 5 * 60 * 1000
 MAX_EVIDENCE_REF_DETAIL_LENGTH = 512
@@ -89,6 +97,22 @@ CLEARABLE_EXPOSURE_RESOLUTIONS = frozenset({"flat", "accepted_override"})
 class _ReceiptInvalidation:
     recorded_at_ms: int
     execution_ids: tuple[str, ...]
+
+
+class _AccountReconciliationInvalidationArtifact(BaseModel):
+    """Typed data-plane state that blocks a stale reconciliation receipt.
+
+    This is intentionally not reconstructed from Account Desk history.  It is
+    a per-account safety artifact whose only authority is to invalidate the
+    latest reconciliation proof after a newly observed broker execution.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    recorded_at_ms: int = Field(ge=0)
+    execution_ids: tuple[str, ...] = ()
 
 
 def _active_clerk_generation_fence(
@@ -116,19 +140,164 @@ class AccountReconciliationService:
         self._ttl_ms = ttl_ms
 
     def receipt_path(self, account_id: str) -> Path:
-        return (
-            account_artifacts_root(self._artifacts_root, normalize_account_id(account_id))
-            / ACCOUNT_RECONCILIATION_RECEIPT_FILENAME
+        return account_artifact_file_path(
+            self._artifacts_root,
+            normalize_account_id(account_id),
+            ACCOUNT_RECONCILIATION_RECEIPT_FILENAME,
         )
 
     def automation_policy_path(self, account_id: str) -> Path:
-        return (
-            account_artifacts_root(self._artifacts_root, normalize_account_id(account_id))
-            / ACCOUNT_RECONCILIATION_POLICY_FILENAME
+        return account_artifact_file_path(
+            self._artifacts_root,
+            normalize_account_id(account_id),
+            ACCOUNT_RECONCILIATION_POLICY_FILENAME,
+        )
+
+    def invalidation_path(self, account_id: str) -> Path:
+        return account_artifact_file_path(
+            self._artifacts_root,
+            normalize_account_id(account_id),
+            ACCOUNT_RECONCILIATION_INVALIDATION_FILENAME,
+        )
+
+    def _read_invalidation_artifact(
+        self,
+        account_id: str,
+    ) -> _AccountReconciliationInvalidationArtifact | None:
+        existing = self._read_invalidation_artifact_unmigrated(account_id)
+        if existing is not None:
+            return existing
+        legacy = self._legacy_receipt_invalidation(account_id)
+        if legacy is None:
+            return None
+        path = self.invalidation_path(account_id)
+        lock_target = path.with_suffix(path.suffix + ".lock")
+        with advisory_file_lock(lock_target):
+            current = self._read_invalidation_artifact_unmigrated(account_id)
+            if current is not None:
+                return current
+            atomic_write_pydantic_artifact(path, legacy)
+            return legacy
+
+    def _read_invalidation_artifact_unmigrated(
+        self,
+        account_id: str,
+    ) -> _AccountReconciliationInvalidationArtifact | None:
+        """Read only the typed artifact while its migration lock may be held."""
+
+        path = self.invalidation_path(account_id)
+        if not path.exists():
+            return None
+        try:
+            artifact = _AccountReconciliationInvalidationArtifact.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            raise AccountArtifactError("account reconciliation invalidation is unreadable") from exc
+        if artifact.account_id != normalize_account_id(account_id):
+            raise AccountArtifactError("account reconciliation invalidation belongs to another account")
+        return artifact
+
+    def _legacy_receipt_invalidation(
+        self,
+        account_id: str,
+    ) -> _AccountReconciliationInvalidationArtifact | None:
+        """Seed one typed invalidation from immutable pre-split safety events."""
+
+        canonical_account_id = normalize_account_id(account_id)
+        latest_recorded_at_ms: int | None = None
+        execution_ids: set[str] = set()
+        for event in read_legacy_account_events(self._artifacts_root, canonical_account_id):
+            if event.get("event_type") != ACCOUNT_RECONCILIATION_INVALIDATED_EVENT:
+                continue
+            recorded_at_ms = event.get("recorded_at_ms")
+            if (
+                not isinstance(recorded_at_ms, int)
+                or isinstance(recorded_at_ms, bool)
+                or recorded_at_ms < 0
+            ):
+                raise AccountArtifactError("legacy account reconciliation invalidation has an invalid timestamp")
+            latest_recorded_at_ms = max(recorded_at_ms, latest_recorded_at_ms or recorded_at_ms)
+            event_execution_ids = event.get("execution_ids")
+            if isinstance(event_execution_ids, list):
+                execution_ids.update(
+                    execution_id
+                    for execution_id in event_execution_ids
+                    if isinstance(execution_id, str) and execution_id
+                )
+        if latest_recorded_at_ms is None:
+            return None
+        return _AccountReconciliationInvalidationArtifact(
+            account_id=canonical_account_id,
+            recorded_at_ms=latest_recorded_at_ms,
+            execution_ids=tuple(sorted(execution_ids)),
+        )
+
+    def _read_receipt_invalidation(
+        self,
+        account_id: str,
+        *,
+        receipt: AccountReconciliationReceipt | None,
+    ) -> _ReceiptInvalidation | None:
+        if receipt is None:
+            return None
+        invalidation = self._read_invalidation_artifact(account_id)
+        if invalidation is None or invalidation.recorded_at_ms <= receipt.generated_at_ms:
+            return None
+        return _ReceiptInvalidation(
+            recorded_at_ms=invalidation.recorded_at_ms,
+            execution_ids=invalidation.execution_ids,
+        )
+
+    def _record_receipt_invalidation(
+        self,
+        *,
+        account_id: str,
+        execution_ids: set[str],
+        recorded_at_ms: int,
+    ) -> _AccountReconciliationInvalidationArtifact:
+        path = self.invalidation_path(account_id)
+        lock_target = path.with_suffix(path.suffix + ".lock")
+        with advisory_file_lock(lock_target):
+            current = self._read_invalidation_artifact_unmigrated(account_id)
+            if current is None:
+                current = self._legacy_receipt_invalidation(account_id)
+            merged_ids = set(() if current is None else current.execution_ids) | execution_ids
+            artifact = _AccountReconciliationInvalidationArtifact(
+                account_id=account_id,
+                recorded_at_ms=max(recorded_at_ms, 0 if current is None else current.recorded_at_ms),
+                execution_ids=tuple(sorted(merged_ids)),
+            )
+            atomic_write_pydantic_artifact(path, artifact)
+        return artifact
+
+    def observe_latest_receipt(self, account_id: str) -> AccountReconciliationReceipt | None:
+        """Read a parseable receipt without treating its identity as trusted.
+
+        The Account Safety projection uses this observation only to expose an
+        identity mismatch as a fail-closed condition. All reconciliation and
+        operator-action callers must use :meth:`read_latest_receipt`, which
+        validates account ownership before returning evidence for a decision.
+        """
+
+        canonical_account_id = normalize_account_id(account_id)
+        return read_pydantic_artifact(
+            self.receipt_path(canonical_account_id),
+            AccountReconciliationReceipt,
         )
 
     def read_latest_receipt(self, account_id: str) -> AccountReconciliationReceipt | None:
-        return read_pydantic_artifact(self.receipt_path(account_id), AccountReconciliationReceipt)
+        canonical_account_id = normalize_account_id(account_id)
+        receipt = self.observe_latest_receipt(canonical_account_id)
+        if receipt is None:
+            return None
+        if (
+            receipt.account_id != canonical_account_id
+            or receipt.requested_account_id != canonical_account_id
+            or receipt.connected_account_id != canonical_account_id
+        ):
+            raise AccountArtifactError("account reconciliation receipt belongs to another account")
+        return receipt
 
     def read_automation_policy(self, account_id: str) -> AccountReconciliationAutomationPolicy:
         canonical_account_id = normalize_account_id(account_id)
@@ -137,6 +306,8 @@ class AccountReconciliationService:
             AccountReconciliationAutomationPolicy,
         )
         if policy is not None:
+            if policy.account_id != canonical_account_id:
+                raise AccountArtifactError("account reconciliation policy belongs to another account")
             return policy
         return AccountReconciliationAutomationPolicy(
             account_id=canonical_account_id,
@@ -208,6 +379,18 @@ class AccountReconciliationService:
         if canonical_account_id is None:
             return None
         observed_at_ms = now_ms_utc() if now_ms is None else now_ms
+        # Account Truth is the canonical broker-attribution projection. Fold
+        # its retired-owner evidence into durable entry permission before any
+        # promoted observation lease could authorize a new account entry.
+        with account_safety_admission_lock(self._artifacts_root, canonical_account_id):
+            AccountSafetyAuthority(
+                artifacts_root=self._artifacts_root,
+                account_id=canonical_account_id,
+                now_ms=lambda: observed_at_ms,
+            ).observe_broker_retired_owner_custody(
+                retired_owner_broker_custody_from_account_truth(account_truth),
+                observed_at_ms=account_truth.generated_at_ms,
+            )
         self._observe_observation_lease(
             account_id=canonical_account_id,
             account_truth=account_truth,
@@ -221,8 +404,9 @@ class AccountReconciliationService:
             if receipt is not None
             else set()
         )
-        recorded_execution_ids = _recorded_invalidated_execution_ids(
-            read_account_events(self._artifacts_root, canonical_account_id)
+        existing_invalidation = self._read_invalidation_artifact(canonical_account_id)
+        recorded_execution_ids = set(
+            () if existing_invalidation is None else existing_invalidation.execution_ids
         )
         unreceipted_executions = [
             execution
@@ -250,6 +434,11 @@ class AccountReconciliationService:
         ]
 
         if new_executions:
+            self._record_receipt_invalidation(
+                account_id=canonical_account_id,
+                execution_ids={execution.exec_id for execution in new_executions},
+                recorded_at_ms=observed_at_ms,
+            )
             append_account_event(
                 self._artifacts_root,
                 canonical_account_id,
@@ -576,8 +765,8 @@ class AccountReconciliationService:
         if freeze is None:
             raise AccountArtifactError(f"account freeze does not exist for {canonical_account_id!r}")
         receipt = self.read_latest_receipt(canonical_account_id)
-        receipt_invalidation = _latest_receipt_invalidation(
-            read_account_events(self._artifacts_root, canonical_account_id),
+        receipt_invalidation = self._read_receipt_invalidation(
+            canonical_account_id,
             receipt=receipt,
         )
         clear_blocker = _clear_freeze_blocker(
@@ -715,8 +904,15 @@ class AccountReconciliationService:
             account_id=canonical_account_id,
             generated_at_ms=generated_at_ms,
         )
+        # This read is presentation-only: it feeds the operator's recent
+        # observation timeline, never a gate or recovery decision.
+        from app.engine.live.account_artifacts import read_account_events
+
         account_events = read_account_events(self._artifacts_root, canonical_account_id)
-        receipt_invalidation = _latest_receipt_invalidation(account_events, receipt=receipt)
+        receipt_invalidation = self._read_receipt_invalidation(
+            canonical_account_id,
+            receipt=receipt,
+        )
         latest_bindings = _latest_bindings(bindings)
         active_bindings = [
             binding
@@ -762,7 +958,11 @@ class AccountReconciliationService:
                 ),
                 *_terminal_binding_conditions(
                     latest_bindings,
-                    account_events=account_events,
+                    has_recovery_evidence_after=lambda recorded_at_ms: account_recovery_evidence_exists_after(
+                        self._artifacts_root,
+                        account_id=canonical_account_id,
+                        recorded_at_ms=recorded_at_ms,
+                    ),
                 ),
                 *(
                     _freeze_conditions(
@@ -969,50 +1169,10 @@ def _bounded_observation_reason(value: str, *, fallback: str) -> str:
     return reason[: MAX_ACCOUNT_OBSERVATION_REASON_LENGTH - len(suffix)] + suffix
 
 
-def _recorded_invalidated_execution_ids(account_events: list[dict]) -> set[str]:
-    execution_ids: set[str] = set()
-    for event in account_events:
-        if event.get("event_type") != ACCOUNT_RECONCILIATION_INVALIDATED_EVENT:
-            continue
-        raw_ids = event.get("execution_ids")
-        if isinstance(raw_ids, list):
-            execution_ids.update(value for value in raw_ids if isinstance(value, str))
-    return execution_ids
-
-
 def _all_executions_bot_owned(executions: list[AccountTruthExecutionRow]) -> bool:
     return bool(executions) and all(
         execution.owner.owner_class == "bot" for execution in executions
     )
-
-
-def _latest_receipt_invalidation(
-    account_events: list[dict],
-    *,
-    receipt: AccountReconciliationReceipt | None,
-) -> _ReceiptInvalidation | None:
-    if receipt is None:
-        return None
-    latest: _ReceiptInvalidation | None = None
-    for event in account_events:
-        if event.get("event_type") != ACCOUNT_RECONCILIATION_INVALIDATED_EVENT:
-            continue
-        recorded_at_ms = event.get("recorded_at_ms")
-        if not isinstance(recorded_at_ms, int) or recorded_at_ms <= receipt.generated_at_ms:
-            continue
-        raw_ids = event.get("execution_ids")
-        execution_ids = (
-            tuple(value for value in raw_ids if isinstance(value, str))
-            if isinstance(raw_ids, list)
-            else ()
-        )
-        candidate = _ReceiptInvalidation(
-            recorded_at_ms=recorded_at_ms,
-            execution_ids=execution_ids,
-        )
-        if latest is None or candidate.recorded_at_ms > latest.recorded_at_ms:
-            latest = candidate
-    return latest
 
 
 def _receipt_valid_until_ms(
@@ -1309,7 +1469,7 @@ def _reconciliation_conditions(
 def _terminal_binding_conditions(
     bindings: list[AccountInstanceBinding],
     *,
-    account_events: list[dict],
+    has_recovery_evidence_after: Callable[[int], bool],
 ) -> list[AccountConditionRow]:
     conditions: list[AccountConditionRow] = []
     for binding in bindings:
@@ -1321,7 +1481,7 @@ def _terminal_binding_conditions(
             | LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
         ):
             continue
-        if has_account_recovery_evidence_after(account_events, binding.recorded_at_ms):
+        if has_recovery_evidence_after(binding.recorded_at_ms):
             continue
         if binding.source in CRASH_RETIRED_BINDING_SOURCES:
             conditions.append(

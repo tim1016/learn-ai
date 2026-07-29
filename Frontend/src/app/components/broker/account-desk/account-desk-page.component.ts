@@ -16,10 +16,8 @@ import { ButtonModule } from "primeng/button";
 import { MessageModule } from "primeng/message";
 import { PanelModule } from "primeng/panel";
 
-import type { AccountTriageVerdictMove } from "../../../api/account-reconciliation.types";
 import type { AccountDeskLens } from "../../../api/operator-blocker.types";
 import { PageHeaderComponent } from "../../../shared/page-header/page-header.component";
-import { fmtDurationRemaining } from "../format";
 import { AccountDeskHoldingsStore } from "./account-desk-holdings-store.service";
 import {
   AccountDeskLensSelectComponent,
@@ -40,8 +38,9 @@ import { AccountDeskRecoveryConfirmDialogComponent } from "./account-desk-recove
 import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
 import { AccountDeskTransactionHistoryStore } from "./account-desk-transaction-history-store.service";
 import { AccountDeskTraderEventsComponent } from "./account-desk-trader-events.component";
-import { AccountDeskVerdictComponent } from "./account-desk-verdict.component";
 import { accountDeskFragmentTarget } from "./account-desk-legacy-fragments";
+import { AccountTruthSpineComponent } from "../account-safety/account-truth-spine.component";
+import { AccountSafetySnapshotStore } from "../account-safety/account-safety-snapshot.store";
 
 /** Account-id route host for the shared verdict spine and the later desk lenses. */
 @Component({
@@ -50,7 +49,7 @@ import { accountDeskFragmentTarget } from "./account-desk-legacy-fragments";
   imports: [
     AccountDeskAccountSwitcherComponent,
     AccountDeskGuidanceComponent,
-    AccountDeskVerdictComponent,
+    AccountTruthSpineComponent,
     AccountDeskOperatorWorkspaceComponent,
     AccountDeskLensSelectComponent,
     AccountDeskTraderEventsComponent,
@@ -80,29 +79,22 @@ export class AccountDeskPageComponent {
   readonly fleet = inject(AccountDeskFleetStore);
   readonly recovery = inject(AccountDeskRecoveryStore);
   readonly transactions = inject(AccountDeskTransactionHistoryStore);
+  readonly accountSafety = inject(AccountSafetySnapshotStore);
   readonly lens = signal<AccountDeskLens>("trader");
   readonly lensOptions: AccountDeskLensOption[] = [
     { label: "Trader", value: "trader" },
     { label: "Operator", value: "operator" },
   ];
-  private readonly nowMs = signal(Date.now());
   private readonly pendingFocusAnchor = signal<string | null>(null);
 
   readonly triage = this.store.triage;
   readonly loading = this.store.loading;
   readonly error = this.store.error;
-  readonly showingStaleLastGood = this.store.showingStaleLastGood;
-  readonly headlineMetrics = this.holdings.headlineMetrics;
   readonly displayAccountId = this.store.accountId;
+  readonly accountSafetyState = computed(() => this.accountSafety.stateFor(this.store.accountId()));
   readonly pageTitle = computed(() => {
     const accountId = this.store.accountId();
     return accountId === null ? 'Account desk' : `Account desk · ${accountId}`;
-  });
-  readonly freshnessCountdown = computed(() => {
-    const validUntilMs = this.triage()?.account_observation.valid_until_ms;
-    return validUntilMs === null || validUntilMs === undefined
-      ? null
-      : fmtDurationRemaining(validUntilMs - this.nowMs());
   });
 
   constructor() {
@@ -136,6 +128,7 @@ export class AccountDeskPageComponent {
           this.recovery.load(accountId);
           void this.directory.loadRoster();
           void this.directory.loadServiceStatus(accountId);
+          void this.accountSafety.refresh(accountId);
         }
       });
     this.route.fragment
@@ -152,11 +145,6 @@ export class AccountDeskPageComponent {
           replaceUrl: true,
         });
       });
-    const intervalId = window.setInterval(
-      () => this.nowMs.set(Date.now()),
-      1_000,
-    );
-    this.destroyRef.onDestroy(() => window.clearInterval(intervalId));
   }
 
   selectLens(lens: AccountDeskLens): void {
@@ -171,6 +159,8 @@ export class AccountDeskPageComponent {
 
   retry(): void {
     this.store.retry();
+    const accountId = this.store.accountId();
+    if (accountId !== null) void this.accountSafety.refresh(accountId);
   }
 
   switchAccount(accountId: string): void {
@@ -179,9 +169,4 @@ export class AccountDeskPageComponent {
     }
   }
 
-  followPrimaryMove(move: AccountTriageVerdictMove): void {
-    void this.router.navigate([move.route], {
-      fragment: move.fragment ?? undefined,
-    });
-  }
 }

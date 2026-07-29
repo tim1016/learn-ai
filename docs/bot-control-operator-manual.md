@@ -413,8 +413,8 @@ reads as absent. A live freeze projects a `FROZEN` triage verdict.
 ### 7.3 The three flatten/cure remedies — pick the right one
 | Situation | Remedy | Places broker orders? |
 |---|---|---|
-| Broker **holds** positions, no surviving run, no exact candidate | **Emergency flatten** — `POST /api/accounts/{id}/emergency-flatten` | Yes — market-closes **every** position. Paper-only, `confirm`, account match, type **`FLATTEN`**. Suppressed when an exact recovery candidate exists. |
-| One retired namespace, one instrument, broker **still holds** it, journal-proven exact order | **Operator recovery flatten** — `POST /api/accounts/{id}/operator-recovery-flatten` | Yes — **one** exact server-authored order. Preferred over emergency when available. |
+| Broker **holds** positions, no surviving run, no exact candidate | **Snapshot-bound emergency Flatten** — Account Safety action panel | Yes — the signed action rechecks current evidence, requires **`FLATTEN`**, and never reports the account flat without a fresh reconciliation receipt. It is suppressed when an exact candidate exists. |
+| One retired namespace, one instrument, broker **still holds** it, journal-proven exact order | **Snapshot-bound recovery Flatten** — Account Safety action panel | Yes — one exact server-authored order, bound to the current namespace, contract ID, and signed quantity. The raw recovery endpoint is retired. |
 | Broker **flat** but a retired namespace's journal still claims a position | **Journal cure** — `POST /api/accounts/{id}/journal-cures` | **No** — appends an immutable compensating adjustment. |
 
 **Journal cure specifics** (the clean≠flat fix): preview with
@@ -607,9 +607,10 @@ reported path to the platform owner and retry only after a clean preflight.
 
 **12.10 Emergency flatten is blunt and account-wide.** It market-closes *every* position
 and is suppressed when an exact per-namespace recovery candidate exists. Prefer the
-surgical **operator recovery flatten** when a candidate is offered. Both are paper-only;
-the typed `FLATTEN` token is client-side UX friction, not a server contract — the real
-guard is the fresh-paper-evidence + non-zero-position + no-exact-candidate declaration.
+surgical **snapshot-bound recovery Flatten** when a candidate is offered. Both are
+operator-confirmed broker actions and must be submitted from the Account Safety action panel: the server validates
+the signed action, typed `FLATTEN` confirmation, current proof, and post-action reconciliation
+before it reports any position or account flat.
 
 **12.11 Unattributed broker events freeze the account.** A fill callback with no Clerk
 intent (manual order, foreign flow, an out-of-band tool) is recorded but triggers an

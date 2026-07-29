@@ -47,6 +47,7 @@ def _trade_namespace(*, account="DU1234567", order_id, status_str="Submitted"):
         totalQuantity=10.0,
         lmtPrice=0.0,
         tif="DAY",
+        orderRef=None,
     )
     order_status = SimpleNamespace(
         status=status_str, filled=0.0, remaining=10.0, avgFillPrice=0.0,
@@ -209,6 +210,42 @@ async def test_cancel_open_orders_empty_when_runner_owns_nothing() -> None:
     cancelled = await adapter.cancel_open_orders()
 
     assert cancelled == []
+    assert cancel_calls == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_exact_open_order_requires_both_broker_id_and_reference() -> None:
+    client, cancel_calls = _client(owned_open_id=100, foreign_open_id=999)
+    open_trades = list(await client.ib.reqAllOpenOrdersAsync())
+    open_trades[0].order.orderRef = "learn-ai/bot-a/v1:target"
+    open_trades[1].order.orderRef = "learn-ai/bot-a/v1:target"
+    adapter = IbkrBrokerAdapter(client)
+
+    with _owner_grant("broker.cancel_exact_open_order"):
+        cancelled = await adapter.cancel_exact_open_order(
+            order_id=100,
+            order_ref="learn-ai/bot-a/v1:target",
+        )
+
+    assert cancelled == [100]
+    assert cancel_calls == [100]
+
+
+@pytest.mark.asyncio
+async def test_cancel_exact_open_order_refuses_a_reference_collision_without_matching_id() -> None:
+    client, cancel_calls = _client(owned_open_id=100, foreign_open_id=999)
+    open_trades = list(await client.ib.reqAllOpenOrdersAsync())
+    open_trades[1].order.orderRef = "learn-ai/bot-a/v1:target"
+    adapter = IbkrBrokerAdapter(client)
+
+    with pytest.raises(RuntimeError, match="BROKER_EXACT_CANCEL_TARGET_NOT_CURRENT"), _owner_grant(
+        "broker.cancel_exact_open_order"
+    ):
+        await adapter.cancel_exact_open_order(
+            order_id=100,
+            order_ref="learn-ai/bot-a/v1:target",
+        )
+
     assert cancel_calls == []
 
 

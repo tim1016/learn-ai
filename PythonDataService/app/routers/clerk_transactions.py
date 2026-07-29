@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.schemas.clerk_transaction_projection import (
+    ClerkCustodyWindowSummary,
     ClerkTransactionHistoryResponse,
     ClerkTransactionRow,
     TransactionOrigin,
@@ -61,6 +62,14 @@ async def get_clerk_transaction_history(
             high_water_journal_seq=None,
             lag_records=None,
             lag_is_lower_bound=False,
+            custody_summary=ClerkCustodyWindowSummary(
+                record_count=0,
+                a0_custody_accepted_count=0,
+                a1_broker_write_started_count=0,
+                a2_broker_known_count=0,
+                a3_economic_terminal_count=0,
+                uncertain_count=0,
+            ),
             rows=[],
             next_cursor=None,
         )

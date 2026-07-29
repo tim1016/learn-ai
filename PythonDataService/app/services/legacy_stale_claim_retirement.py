@@ -13,10 +13,13 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
+    account_artifact_file_path,
     append_account_event,
-    read_account_events,
+    read_legacy_account_events,
 )
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import read_account_instance_registry
@@ -24,6 +27,7 @@ from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.live_state_sidecar import (
     LiveStateSidecarCorruptError,
     LiveStateSidecarRepo,
+    _file_lock,
     stable_live_state_path,
 )
 from app.engine.live.run_ledger import LiveRunLedger, read_ledger
@@ -32,11 +36,13 @@ from app.schemas.account_reconciliation import (
     LegacyStaleClaimRetirementReceipt,
 )
 from app.schemas.account_truth import AccountTruthPositionRow, AccountTruthResponse
+from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.schemas.live_runs import HostRunnerProcessStatus
 from app.schemas.operator_blocker import OperatorConfirmationCopy
 from app.utils.timestamps import now_ms_utc
 
 LEGACY_STALE_CLAIM_RETIRED_EVENT = "legacy_stale_claim_retired"
+LEGACY_STALE_CLAIM_RETIREMENTS_FILENAME = "legacy_stale_claim_retirements.json"
 _SAFE_PROCESS_STATES = frozenset({"exited"})
 _KNOWN_ELSEWHERE_OWNER_CLASSES = frozenset({"bot", "manual"})
 RunProcessFetcher = Callable[
@@ -74,6 +80,17 @@ class LegacyStaleClaim:
     def claim_id(self) -> str:
         payload = "\x1f".join((*self.key, str(self.claimed_quantity))).encode("utf-8")
         return f"legacy-claim-{hashlib.sha256(payload).hexdigest()[:24]}"
+
+
+class _LegacyStaleClaimRetirementsArtifact(BaseModel):
+    """Typed retirement receipts that control legacy sidecar exclusion."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    receipts: tuple[LegacyStaleClaimRetirementReceipt, ...] = ()
+    legacy_claim_keys: tuple[tuple[str, str, str, str], ...] = ()
 
 
 class LegacyStaleClaimRetirementService:
@@ -143,6 +160,11 @@ class LegacyStaleClaimRetirementService:
             requested_by=requested_by,
             retired_at_ms=retired_at_ms,
         )
+        if not _record_retired_claim_receipt(self._artifacts_root, receipt):
+            raise LegacyStaleClaimRetirementError(
+                "LEGACY_CLAIM_ALREADY_RETIRED",
+                "A retirement receipt already exists for this legacy claim.",
+            )
         appended = await asyncio.to_thread(
             append_account_event,
             self._artifacts_root,
@@ -164,10 +186,10 @@ class LegacyStaleClaimRetirementService:
             only_if_receipt_absent=True,
         )
         if not appended:
-            raise LegacyStaleClaimRetirementError(
-                "LEGACY_CLAIM_ALREADY_RETIRED",
-                "A retirement receipt already exists for this legacy claim.",
-            )
+            # A pre-state migration may have written the producer receipt
+            # before this typed artifact. The state above is authoritative;
+            # this is therefore a successful durable replay, not a failure.
+            return receipt
         return receipt
 
     def claims_for_account(self, account_id: str) -> list[LegacyStaleClaim]:
@@ -363,8 +385,22 @@ def retired_legacy_claim_keys(
 ) -> frozenset[tuple[str, str, str, str]]:
     """Fold receipt events into the exact claims hidden from legacy sidecar sums."""
 
+    path = _retirement_artifact_path(artifacts_root, account_id)
+    with _file_lock(path):
+        artifact = _read_or_migrate_retirement_artifact_locked(artifacts_root, account_id, path)
+    return frozenset(
+        (*(_retired_claim_key(receipt) for receipt in artifact.receipts), *artifact.legacy_claim_keys)
+    )
+
+
+def _legacy_retired_claim_keys(
+    artifacts_root: Path,
+    account_id: str,
+) -> tuple[tuple[str, str, str, str], ...]:
+    """Extract only valid immutable pre-split retirement identities once."""
+
     keys: set[tuple[str, str, str, str]] = set()
-    for event in read_account_events(artifacts_root, account_id):
+    for event in read_legacy_account_events(artifacts_root, account_id):
         if event.get("event_type") != LEGACY_STALE_CLAIM_RETIRED_EVENT:
             continue
         values = (
@@ -376,7 +412,97 @@ def retired_legacy_claim_keys(
         if all(isinstance(value, str) and value for value in values):
             strategy_instance_id, run_id, symbol, namespace = values
             keys.add((strategy_instance_id, run_id, symbol.upper(), namespace))
-    return frozenset(keys)
+    return tuple(sorted(keys))
+
+
+def _retirement_artifact_path(artifacts_root: Path, account_id: str) -> Path:
+    return account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        LEGACY_STALE_CLAIM_RETIREMENTS_FILENAME,
+    )
+
+
+def _read_retired_claim_receipts(
+    artifacts_root: Path,
+    account_id: str,
+) -> tuple[LegacyStaleClaimRetirementReceipt, ...]:
+    path = _retirement_artifact_path(artifacts_root, account_id)
+    if not path.exists():
+        return ()
+    return _read_retirement_artifact(path, account_id).receipts
+
+
+def _read_retirement_artifact(
+    path: Path,
+    account_id: str,
+) -> _LegacyStaleClaimRetirementsArtifact:
+    try:
+        artifact = _LegacyStaleClaimRetirementsArtifact.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise LegacyStaleClaimRetirementError(
+            "LEGACY_CLAIM_RETIREMENT_ARTIFACT_UNREADABLE",
+            "The typed legacy-claim retirement artifact cannot be read.",
+        ) from exc
+    if artifact.account_id != account_id:
+        raise LegacyStaleClaimRetirementError(
+            "LEGACY_CLAIM_RETIREMENT_ARTIFACT_ACCOUNT_MISMATCH",
+            "The typed legacy-claim retirement artifact belongs to another account.",
+        )
+    return artifact
+
+
+def _read_or_migrate_retirement_artifact_locked(
+    artifacts_root: Path,
+    account_id: str,
+    path: Path,
+) -> _LegacyStaleClaimRetirementsArtifact:
+    """Materialize the compatibility snapshot, including an empty marker, once."""
+
+    if path.exists():
+        return _read_retirement_artifact(path, account_id)
+    artifact = _LegacyStaleClaimRetirementsArtifact(
+        account_id=account_id,
+        legacy_claim_keys=_legacy_retired_claim_keys(artifacts_root, account_id),
+    )
+    atomic_write_pydantic_artifact(path, artifact)
+    return artifact
+
+
+def _record_retired_claim_receipt(
+    artifacts_root: Path,
+    receipt: LegacyStaleClaimRetirementReceipt,
+) -> bool:
+    path = _retirement_artifact_path(artifacts_root, receipt.account_id)
+    with _file_lock(path):
+        artifact = _read_or_migrate_retirement_artifact_locked(
+            artifacts_root,
+            receipt.account_id,
+            path,
+        )
+        existing = artifact.receipts
+        if any(_retired_claim_key(item) == _retired_claim_key(receipt) for item in existing):
+            return False
+        atomic_write_pydantic_artifact(
+            path,
+            _LegacyStaleClaimRetirementsArtifact(
+                account_id=receipt.account_id,
+                receipts=(*existing, receipt),
+                legacy_claim_keys=artifact.legacy_claim_keys,
+            ),
+        )
+    return True
+
+
+def _retired_claim_key(receipt: LegacyStaleClaimRetirementReceipt) -> tuple[str, str, str, str]:
+    return (
+        receipt.strategy_instance_id,
+        receipt.run_id,
+        receipt.symbol.upper(),
+        receipt.bot_order_namespace,
+    )
 
 
 __all__ = [

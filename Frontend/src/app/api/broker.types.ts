@@ -165,7 +165,8 @@ export interface paths {
         put?: never;
         /**
          * Emergency Flatten Account Endpoint
-         * @description Authorize and dispatch one Clerk-owned account-wide paper flatten.
+         * @deprecated
+         * @description Retire raw emergency writes in favor of the signed safety action envelope.
          */
         post: operations["emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post"];
         delete?: never;
@@ -435,9 +436,70 @@ export interface paths {
         put?: never;
         /**
          * Operator Recovery Flatten Endpoint
-         * @description Run a retired-namespace flatten through the host-local Clerk lane.
+         * @deprecated
+         * @description Retire raw recovery writes in favor of the signed safety action envelope.
          */
         post: operations["operator_recovery_flatten_endpoint_api_accounts__account_id__operator_recovery_flatten_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/presented-actions/reconcile-now": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Presented Reconcile Action Endpoint
+         * @description Execute only the currently presented Reconcile Now envelope.
+         */
+        post: operations["execute_presented_reconcile_action_endpoint_api_accounts__account_id__presented_actions_reconcile_now_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/presented-actions/recovery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Presented Recovery Action Endpoint
+         * @description Run one signed Cancel or Flatten action through the existing Clerk lanes.
+         */
+        post: operations["execute_presented_recovery_action_endpoint_api_accounts__account_id__presented_actions_recovery_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/presented-lifecycle-actions/{action_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Present Lifecycle Action Endpoint
+         * @description Present one exact lifecycle action; it is not an executable command.
+         */
+        get: operations["present_lifecycle_action_endpoint_api_accounts__account_id__presented_lifecycle_actions__action_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -518,6 +580,26 @@ export interface paths {
          * @description Repair latest crash-retired registry rows disproven by durable run status.
          */
         post: operations["backfill_false_crash_registry_rows_endpoint_api_accounts__account_id__registry_backfill_false_crashes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/safety-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Account Safety Snapshot Endpoint
+         * @description Return the broker-free, versioned account safety composition.
+         */
+        get: operations["account_safety_snapshot_endpoint_api_accounts__account_id__safety_snapshot_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3341,9 +3423,7 @@ export interface paths {
         put?: never;
         /**
          * Stop Run
-         * @description Stop the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).
-         *
-         *     Same token-forwarding rationale as :func:`start_run`.
+         * @description Retire direct daemon Stop in favour of durable, instance-scoped intent.
          */
         post: operations["stop_run_api_live_instances_runs__run_id__stop_post"];
         delete?: never;
@@ -3576,16 +3656,7 @@ export interface paths {
         put?: never;
         /**
          * Set Instance Desired State
-         * @description The single operator intent knob (ADR 0004).
-         *
-         *     1. Write durable intent first (the crash-proof guarantee).
-         *     2. If a live binding exists, enqueue the matching actuation command on the
-         *        bound run so the running engine actuates immediately and acks.
-         *     3. With no live binding, the durable write alone gates the next start.
-         *
-         *     The engine command dispatcher persists intent as a *reconciling* writer, so
-         *     live actuation leaves ``desired_state.json`` at the same semantic state —
-         *     "paused-but-still-trading" is structurally hard to create.
+         * @description Persist operator intent and separately report any observed runtime effect.
          */
         post: operations["set_instance_desired_state_api_live_instances__strategy_instance_id__desired_state_post"];
         delete?: never;
@@ -3605,7 +3676,7 @@ export interface paths {
         put?: never;
         /**
          * End Day Now
-         * @description Queue Clerk-owned clean exit; only broker evidence can finish the day.
+         * @description Persist a safe clock-out intent before attempting a live command.
          */
         post: operations["end_day_now_api_live_instances__strategy_instance_id__end_day_now_post"];
         delete?: never;
@@ -3625,22 +3696,7 @@ export interface paths {
         put?: never;
         /**
          * Flatten And Pause Instance
-         * @description VCR-0007 / Phase 6A / ADR 0010 — composed panic-button endpoint.
-         *
-         *     The cockpit's "Flatten and pause" affordance is the only path that
-         *     composes durable PAUSE with a one-shot FLATTEN_NOW; the underlying
-         *     primitives (``set_instance_desired_state`` and ``write_from_operator``)
-         *     stay pure. Order is strictly:
-         *
-         *     1. Write ``desired_state = PAUSED`` to the durable sidecar. If this
-         *        fails, abort BEFORE enqueueing the one-shot — leaving a live FLATTEN
-         *        behind an unpersisted PAUSE would re-open the bug VCR-0007 named.
-         *     2. If a live binding exists, enqueue ``FLATTEN_NOW`` on the bound run.
-         *        The bar loop honours ``desired_state = PAUSED`` and refuses new
-         *        entries even if the one-shot fails to enqueue.
-         *
-         *     The endpoint returns the structured response shape the existing
-         *     desired-state endpoint uses so the cockpit can reuse its renderer.
+         * @description Persist signed Pause first, then best-effort enqueue Flatten.
          */
         post: operations["flatten_and_pause_instance_api_live_instances__strategy_instance_id__flatten_and_pause_post"];
         delete?: never;
@@ -3925,11 +3981,7 @@ export interface paths {
         /**
          * Set Desired State
          * @deprecated
-         * @description DEPRECATED (#400 cutover): superseded by the instance-addressed intent knob
-         *     ``POST /api/live-instances/{id}/desired-state``, which writes durable intent
-         *     *and* actuates the live binding. Run-addressed routes are evidence-only;
-         *     operator mutations move to the instance console. Kept temporarily for
-         *     back-compat — slated for removal once the cutover is signed off.
+         * @description Retire unsigned run-addressed writes in favour of signed instance intent.
          */
         post: operations["set_desired_state_api_live_runs__run_id__desired_state_post"];
         delete?: never;
@@ -5619,43 +5671,6 @@ export interface components {
             triage: components["schemas"]["AccountTriageResponse"];
         };
         /**
-         * AccountClerkBrokerAckReceipt
-         * @description Receipt #2, appended by the Clerk only after the paper broker acks.
-         */
-        AccountClerkBrokerAckReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            broker_ack?: components["schemas"]["IbkrOrderAck"] | null;
-            /** Exec Id */
-            exec_id?: string | null;
-            /** Intent Id */
-            intent_id: string;
-            /** Journal Seq */
-            journal_seq: number;
-            /** Order Id */
-            order_id: number;
-            /** Order Ref */
-            order_ref: string;
-            /** Perm Id */
-            perm_id?: number | null;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Status
-             * @default broker_acked
-             * @constant
-             */
-            status?: "broker_acked";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Trace Id */
-            trace_id: string;
-        };
-        /**
          * AccountClerkHealth
          * @description Daemon-observed health for the sole clerk of one paper account.
          */
@@ -5676,52 +5691,6 @@ export interface components {
             status: string;
             /** Valid Until Ms */
             valid_until_ms?: number | null;
-        };
-        /**
-         * AccountClerkRecordedReceipt
-         * @description Durable receipt #1 returned before any future broker contact.
-         */
-        AccountClerkRecordedReceipt: {
-            /** Account Id */
-            account_id: string;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Intent Id */
-            intent_id: string;
-            /** Journal Seq */
-            journal_seq: number;
-            /** Order Ref */
-            order_ref: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Status
-             * @default recorded
-             * @constant
-             */
-            status?: "recorded";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Trace Id */
-            trace_id: string;
-        };
-        /**
-         * AccountClerkRecoveryFlattenReceipt
-         * @description Durable outcome of one Clerk-owned recovery liquidation.
-         */
-        AccountClerkRecoveryFlattenReceipt: {
-            broker_acked: components["schemas"]["AccountClerkBrokerAckReceipt"];
-            /** Cancelled Order Ids */
-            cancelled_order_ids: number[];
-            recorded: components["schemas"]["AccountClerkRecordedReceipt"];
-            /**
-             * Status
-             * @default recovery_flattened
-             * @constant
-             */
-            status?: "recovery_flattened";
         };
         /**
          * AccountClerkRestartSmokeRequest
@@ -5884,25 +5853,35 @@ export interface components {
             title: string;
         };
         /**
-         * AccountEmergencyFlattenResponse
-         * @description Receipt returned after the Clerk re-observes the account flat.
+         * AccountEffectPurpose
+         * @description The limited target shapes a caller may ask the server to verify.
+         * @enum {string}
          */
-        AccountEmergencyFlattenResponse: {
-            /** Accepted */
-            accepted: boolean;
-            /** Account Id */
-            account_id: string;
-            /** Audit Run Id */
-            audit_run_id: string;
-            /** Completed At Ms */
-            completed_at_ms: number;
-            /** Idempotency Key */
-            idempotency_key?: string | null;
-            /**
-             * Idempotency Replayed
-             * @default false
-             */
-            idempotency_replayed?: boolean;
+        AccountEffectPurpose: "EXACT_CANCEL" | "EXACT_CLOSE";
+        /**
+         * AccountEffectRequest
+         * @description Untrusted requested target; never itself proves a safe effect.
+         */
+        AccountEffectRequest: {
+            /** Expected Signed Quantity */
+            expected_signed_quantity?: number | null;
+            purpose: components["schemas"]["AccountEffectPurpose"];
+            /** Target Con Id */
+            target_con_id?: number | null;
+            /** Target Order Id */
+            target_order_id?: number | null;
+            /** Target Order Ref */
+            target_order_ref?: string | null;
+        };
+        /**
+         * AccountEpoch
+         * @description The Clerk boot and monotonic proof sequence behind one fact.
+         */
+        AccountEpoch: {
+            /** Clerk Boot Id */
+            clerk_boot_id: string;
+            /** Epoch Seq */
+            epoch_seq: number;
         };
         /**
          * AccountEventEvidenceRef
@@ -5955,9 +5934,13 @@ export interface components {
         };
         /**
          * AccountEventRow
-         * @description One backend-classified journal event for a desk view.
+         * @description One backend-classified operational-history row for a desk view.
          */
         AccountEventRow: {
+            /** Arrived At Ms */
+            arrived_at_ms?: number | null;
+            /** Event At Ms */
+            event_at_ms?: number | null;
             /** Event Id */
             event_id: string;
             /** Evidence Refs */
@@ -5972,6 +5955,29 @@ export interface components {
             /** Operator Detail */
             operator_detail: string;
             operator_order_receipt?: components["schemas"]["AccountEventOperatorOrderReceipt"] | null;
+            /**
+             * Producer
+             * @default legacy_account_events
+             */
+            producer?: string;
+            /**
+             * Producer Boot Id
+             * @default historical
+             */
+            producer_boot_id?: string;
+            /**
+             * Producer Seq
+             * @default 1
+             */
+            producer_seq?: number;
+            /**
+             * Provenance
+             * @default legacy_account_events
+             * @enum {string}
+             */
+            provenance?: "legacy_account_events" | "producer_operational_log" | "clerk_journal";
+            /** Recorded At Ms */
+            recorded_at_ms?: number | null;
             /**
              * Schema Version
              * @default 1
@@ -6006,7 +6012,7 @@ export interface components {
         };
         /**
          * AccountEventsResponse
-         * @description Cursor page from the immutable account event journal.
+         * @description Cursor page from a merged operational history projection.
          */
         AccountEventsResponse: {
             /** Account Id */
@@ -6100,13 +6106,43 @@ export interface components {
          * AccountOwnerSubmitIntent
          * @description Durable runner intent accepted by AccountOwner intake.
          */
-        AccountOwnerSubmitIntent: {
+        "AccountOwnerSubmitIntent-Input": {
             /** Account Id */
             account_id: string;
             /** Bot Order Namespace */
             bot_order_namespace: string;
             /** Created At Ms */
             created_at_ms: number;
+            effect_request?: components["schemas"]["AccountEffectRequest"] | null;
+            /** Intent Id */
+            intent_id: string;
+            /** Intent Kind */
+            intent_kind: string;
+            /** Order Ref */
+            order_ref: string;
+            /** Order Spec */
+            order_spec: Record<string, never>;
+            /** Owner Generation */
+            owner_generation: number;
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Trace Id */
+            trace_id: string;
+        };
+        /**
+         * AccountOwnerSubmitIntent
+         * @description Durable runner intent accepted by AccountOwner intake.
+         */
+        "AccountOwnerSubmitIntent-Output": {
+            /** Account Id */
+            account_id: string;
+            /** Bot Order Namespace */
+            bot_order_namespace: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            effect_request?: components["schemas"]["AccountEffectRequest"] | null;
             /** Intent Id */
             intent_id: string;
             /** Intent Kind */
@@ -6229,7 +6265,7 @@ export interface components {
          */
         AccountRecoveryFlattenCandidate: {
             confirmation: components["schemas"]["OperatorConfirmationCopy"];
-            intent: components["schemas"]["AccountOwnerSubmitIntent"];
+            intent: components["schemas"]["AccountOwnerSubmitIntent-Output"];
         };
         /**
          * AccountRosterRow
@@ -6268,6 +6304,134 @@ export interface components {
              * @enum {string}
              */
             state: "FROZEN" | "NOT_PROVEN" | "NEEDS_ATTENTION" | "CLEAN";
+        };
+        /**
+         * AccountSafetySnapshot
+         * @description Read-only safety spine shared by Deploy, Bot Control, and Account Desk.
+         */
+        AccountSafetySnapshot: {
+            account_epoch?: components["schemas"]["AccountEpoch"] | null;
+            /** Account Id */
+            account_id: string;
+            /**
+             * Actions
+             * @default []
+             */
+            actions?: components["schemas"]["PresentedOperatorAction"][];
+            /**
+             * Blockers
+             * @default []
+             */
+            blockers?: components["schemas"]["OperatorBlocker"][];
+            custody: components["schemas"]["AccountSafetySnapshotCustody"];
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: components["schemas"]["AccountReconciliationEvidenceRef"][];
+            exposure: components["schemas"]["AccountSafetySnapshotExposure"];
+            /** Generated At Ms */
+            generated_at_ms: number;
+            /** Outage Diff */
+            outage_diff?: Record<string, never> | null;
+            /**
+             * Posture
+             * @enum {string}
+             */
+            posture: "PAPER_EXECUTION" | "UNSAFE" | "UNKNOWN";
+            /** Reason Code */
+            reason_code: string;
+            /** Reconciliation Id */
+            reconciliation_id?: string | null;
+            /** Reconciliation State */
+            reconciliation_state?: ("CLEAN" | "NOT_PROVEN") | null;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Snapshot Version */
+            snapshot_version: string;
+            /** Sources */
+            sources: components["schemas"]["AccountSafetySnapshotSource"][];
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "CLEAN" | "RECONCILING" | "SUSPENDED" | "CONTAMINATED" | "STALE" | "UNAVAILABLE";
+            /** Verdict Reason */
+            verdict_reason: string;
+        };
+        /** AccountSafetySnapshotCustody */
+        AccountSafetySnapshotCustody: {
+            /** A0 Custody Accepted Count */
+            a0_custody_accepted_count: number;
+            /** A1 Broker Write Started Count */
+            a1_broker_write_started_count: number;
+            /** A2 Broker Known Count */
+            a2_broker_known_count: number;
+            /** A3 Economic Terminal Count */
+            a3_economic_terminal_count: number;
+            /** Clerk Journal Last Seq */
+            clerk_journal_last_seq?: number | null;
+            /** Retired Owner Custody Count */
+            retired_owner_custody_count: number;
+        };
+        /** AccountSafetySnapshotExposure */
+        AccountSafetySnapshotExposure: {
+            /** Execution Count */
+            execution_count: number;
+            /** Open Order Count */
+            open_order_count: number;
+            /** Position Count */
+            position_count: number;
+            /** Unmanaged Or Unknown Count */
+            unmanaged_or_unknown_count: number;
+        };
+        /**
+         * AccountSafetySnapshotSource
+         * @description One independently ageing source; assembly never restamps it.
+         */
+        AccountSafetySnapshotSource: {
+            /** Age Ms */
+            age_ms?: number | null;
+            /** As Of Ms */
+            as_of_ms?: number | null;
+            /**
+             * Critical
+             * @default true
+             */
+            critical?: boolean;
+            epoch?: components["schemas"]["AccountEpoch"] | null;
+            /**
+             * Epoch Relation
+             * @default UNATTESTED
+             * @enum {string}
+             */
+            epoch_relation?: "CURRENT" | "PRE_EPOCH" | "UNATTESTED" | "MISMATCH";
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: components["schemas"]["AccountReconciliationEvidenceRef"][];
+            /** Hard Ttl Ms */
+            hard_ttl_ms?: number | null;
+            /** Reason Code */
+            reason_code: string;
+            /** Reconciliation Id */
+            reconciliation_id?: string | null;
+            /** Reconciliation State */
+            reconciliation_state?: ("CLEAN" | "NOT_PROVEN") | null;
+            /** Source */
+            source: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "FRESH" | "STALE" | "UNAVAILABLE";
         };
         /**
          * AccountServiceBinding
@@ -8221,7 +8385,7 @@ export interface components {
              * @enum {string}
              */
             readiness_verdict?: "READY" | "BLOCKED" | "DEGRADED" | "UNKNOWN";
-            start_request?: components["schemas"]["HostRunnerStartRequest"] | null;
+            start_request?: components["schemas"]["HostRunnerStartRequest-Output"] | null;
             /** Status Detail */
             status_detail?: string | null;
             /** Status Label */
@@ -9936,6 +10100,76 @@ export interface components {
             reason?: string;
         };
         /**
+         * ClerkCustodyDurations
+         * @description Measured same-clock durations for one Clerk-owned intent.
+         */
+        ClerkCustodyDurations: {
+            /** A0 To Broker Write Ms */
+            a0_to_broker_write_ms?: number | null;
+            /** Broker Return To First Callback Ms */
+            broker_return_to_first_callback_ms?: number | null;
+            /** Broker Write To Return Ms */
+            broker_write_to_return_ms?: number | null;
+            /** Intake To A0 Ms */
+            intake_to_a0_ms?: number | null;
+            /** Request To Intake Ms */
+            request_to_intake_ms?: number | null;
+            /** Terminal Age Ms */
+            terminal_age_ms?: number | null;
+        };
+        /**
+         * ClerkCustodyTimeline
+         * @description Distinct source, arrival, and durable clocks for one intent lifecycle.
+         */
+        ClerkCustodyTimeline: {
+            /** A0 Custody Accepted At Ms */
+            a0_custody_accepted_at_ms?: number | null;
+            /** Broker Ack Recorded At Ms */
+            broker_ack_recorded_at_ms?: number | null;
+            /** Broker Call Returned At Ms */
+            broker_call_returned_at_ms?: number | null;
+            /** Broker Write Started At Ms */
+            broker_write_started_at_ms?: number | null;
+            /** Clerk Intake Admitted At Ms */
+            clerk_intake_admitted_at_ms?: number | null;
+            /** Clerk Request Received At Ms */
+            clerk_request_received_at_ms?: number | null;
+            durations?: components["schemas"]["ClerkCustodyDurations"];
+            /** Earliest Broker Source At Ms */
+            earliest_broker_source_at_ms?: number | null;
+            /** Economic Terminal Recorded At Ms */
+            economic_terminal_recorded_at_ms?: number | null;
+            /** First Callback Arrived At Ms */
+            first_callback_arrived_at_ms?: number | null;
+            /** First Callback Recorded At Ms */
+            first_callback_recorded_at_ms?: number | null;
+            /** Inbox Fsynced At Ms */
+            inbox_fsynced_at_ms?: number | null;
+            /** Intent Created At Ms */
+            intent_created_at_ms?: number | null;
+        };
+        /**
+         * ClerkCustodyWindowSummary
+         * @description Server-folded custody stages for one bounded projected evidence window.
+         *
+         *     Counts describe only the response's immutable receipt window; they never
+         *     claim to be account-wide truth and are not a permission or safety verdict.
+         */
+        ClerkCustodyWindowSummary: {
+            /** A0 Custody Accepted Count */
+            a0_custody_accepted_count: number;
+            /** A1 Broker Write Started Count */
+            a1_broker_write_started_count: number;
+            /** A2 Broker Known Count */
+            a2_broker_known_count: number;
+            /** A3 Economic Terminal Count */
+            a3_economic_terminal_count: number;
+            /** Record Count */
+            record_count: number;
+            /** Uncertain Count */
+            uncertain_count: number;
+        };
+        /**
          * ClerkOrderInstruction
          * @description Typed, receipt-supplied order fields; never a client-side inference.
          */
@@ -10024,6 +10258,7 @@ export interface components {
         ClerkTransactionHistoryResponse: {
             /** Canonical Fallback Required */
             canonical_fallback_required: boolean;
+            custody_summary: components["schemas"]["ClerkCustodyWindowSummary"];
             /** Feed Detail */
             feed_detail: string;
             /** Feed Headline */
@@ -10068,6 +10303,7 @@ export interface components {
              * @enum {string}
              */
             commission_status?: "unknown" | "reported";
+            custody_timeline?: components["schemas"]["ClerkCustodyTimeline"] | null;
             /** Events */
             events?: components["schemas"]["ClerkTransactionEventRow"][];
             /** Exec Id */
@@ -11629,6 +11865,29 @@ export interface components {
             idempotency_key: string;
         };
         /**
+         * EndDayIntentResponse
+         * @description End-day receipt with durable PAUSED intent and a separate clock-out effect.
+         */
+        EndDayIntentResponse: {
+            actuation: components["schemas"]["IntentActuation"];
+            /** Command Id */
+            command_id?: string | null;
+            durable: components["schemas"]["DesiredStateRecordResponse"];
+            /** Mutation Attempt Id */
+            mutation_attempt_id: string;
+            /**
+             * Mutation Dispatch State
+             * @enum {string}
+             */
+            mutation_dispatch_state: "PREPARED" | "DISPATCHING" | "RESPONSE_CONFIRMED" | "OUTCOME_UNKNOWN" | "EFFECT_CONFIRMED" | "EFFECT_NOT_OBSERVED" | "NOT_PROVABLE" | "EVIDENCE_CONFLICT";
+            process: components["schemas"]["InstanceProcessView"];
+            rung_receipt: components["schemas"]["MutationRungReceipt"];
+            /** Rung Receipt Warnings */
+            rung_receipt_warnings?: components["schemas"]["MutationRungReceipt"][];
+            /** Stop Outcome */
+            stop_outcome: string;
+        };
+        /**
          * EngineBacktestJobRequest
          * @description Body of POST /api/jobs-internal/engine-backtest.
          *
@@ -13081,7 +13340,7 @@ export interface components {
             enabled: boolean;
             /** Gate Results */
             gate_results?: components["schemas"]["GateResult"][];
-            request?: components["schemas"]["HostRunnerStartRequest"] | null;
+            request?: components["schemas"]["HostRunnerStartRequest-Output"] | null;
             /** Run Id */
             run_id?: string | null;
         };
@@ -13234,7 +13493,7 @@ export interface components {
          * HostRunnerStartRequest
          * @description Request body for starting one existing run from the host daemon.
          */
-        HostRunnerStartRequest: {
+        "HostRunnerStartRequest-Input": {
             /**
              * Hydrate Policy
              * @default require
@@ -13253,6 +13512,44 @@ export interface components {
              * @default 2000
              */
             max_orders_per_day?: number;
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
+            /**
+             * Readonly
+             * @default true
+             */
+            readonly?: boolean;
+            /** Roll Call Offer Id */
+            roll_call_offer_id?: string | null;
+            /**
+             * Strategy
+             * @default spy_ema_crossover
+             */
+            strategy?: string;
+        };
+        /**
+         * HostRunnerStartRequest
+         * @description Request body for starting one existing run from the host daemon.
+         */
+        "HostRunnerStartRequest-Output": {
+            /**
+             * Hydrate Policy
+             * @default require
+             * @enum {string}
+             */
+            hydrate_policy?: "require" | "optional" | "disabled";
+            /**
+             * Ibkr Host
+             * @default 127.0.0.1
+             */
+            ibkr_host?: string;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /**
+             * Max Orders Per Day
+             * @default 2000
+             */
+            max_orders_per_day?: number;
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
             /**
              * Readonly
              * @default true
@@ -13278,6 +13575,7 @@ export interface components {
             force?: boolean;
             /** Idempotency Key */
             idempotency_key?: string | null;
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
         };
         /**
          * IbkrAccountSummary
@@ -13724,6 +14022,11 @@ export interface components {
              * @description Optional caller-supplied UUID for idempotent retries. If a POST arrives with a client_order_id we've already seen, the original ack is returned and no second order is placed. Phase 3b feature; set None on Phase 3a callers.
              */
             client_order_id?: string | null;
+            /**
+             * Con Id
+             * @description Optional IBKR contract identifier. Clerk exact-close recovery requires this to match the server-proved current position so the broker execution cannot resolve a same-symbol contract.
+             */
+            con_id?: number | null;
             /**
              * Confirm Paper
              * @description Required True. Defense-in-depth on top of IBKR_MODE and the DU account-id sentinel.
@@ -14815,7 +15118,10 @@ export interface components {
          * @description Result of actuating durable intent against the live binding (ADR 0004).
          *
          *     ``actuated`` is true only when a command was queued on a live run. With no
-         *     live binding the durable write still gates the next start.
+         *     live binding the durable write still gates the next start. ``effect_state``
+         *     keeps accepted intent distinct from its observed runtime effect: a durable
+         *     request remains ``PENDING`` until the engine can observe it, while a queued
+         *     command is only queued, not proof that the engine has applied it.
          */
         IntentActuation: {
             /** Actuated */
@@ -14824,6 +15130,12 @@ export interface components {
             command_seq?: number | null;
             /** Detail */
             detail: string;
+            /**
+             * Effect State
+             * @default PENDING
+             * @enum {string}
+             */
+            effect_state?: "QUEUED" | "PENDING";
             /** Run Id */
             run_id?: string | null;
         };
@@ -16094,6 +16406,7 @@ export interface components {
             live_config?: Record<string, never>;
             /** Parent Run Id */
             parent_run_id?: string | null;
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
             /** Qc Audit Copy Path */
             qc_audit_copy_path: string;
             /** Qc Cloud Backtest Id */
@@ -16107,7 +16420,7 @@ export interface components {
             start?: boolean;
             /** Start Date Ms */
             start_date_ms: number;
-            start_options?: components["schemas"]["HostRunnerStartRequest"];
+            start_options?: components["schemas"]["HostRunnerStartRequest-Input"];
             /**
              * Strategy Instance Id
              * @default
@@ -17223,16 +17536,9 @@ export interface components {
          * @description Provenance-bearing request for the Clerk's existing operator flatten lane.
          */
         OperatorRecoveryFlattenRequest: {
-            intent: components["schemas"]["AccountOwnerSubmitIntent"];
+            intent: components["schemas"]["AccountOwnerSubmitIntent-Input"];
             /** Request Provenance */
             request_provenance: string;
-        };
-        /**
-         * OperatorRecoveryFlattenResponse
-         * @description Durable receipt returned by the Clerk-owned operator recovery lane.
-         */
-        OperatorRecoveryFlattenResponse: {
-            recovery_flatten: components["schemas"]["AccountClerkRecoveryFlattenReceipt"];
         };
         /**
          * OperatorSurface
@@ -18717,6 +19023,209 @@ export interface components {
             lookup?: "exact_bar_close" | "next_after_bar_close";
             /** Prediction Set Id */
             prediction_set_id: string;
+        };
+        /**
+         * PresentedOperatorAction
+         * @description Closed, snapshot-bound operator action; never an executable URL or command.
+         */
+        PresentedOperatorAction: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "reconcile_now" | "cancel_exact" | "cancel_pending" | "flatten" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "AVAILABLE" | "UNAVAILABLE";
+            confirmation: components["schemas"]["OperatorConfirmationCopy"];
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "fix_here" | "wait";
+            /**
+             * Effect Class
+             * @enum {string}
+             */
+            effect_class: "EVIDENCE_REFRESH" | "RISK_REDUCING_BROKER" | "RISK_REDUCING_LIFECYCLE" | "RISK_INCREASING_LIFECYCLE";
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: components["schemas"]["AccountReconciliationEvidenceRef"][];
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Finished Copy */
+            finished_copy: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Issued At Ms */
+            issued_at_ms: number;
+            /**
+             * Preconditions
+             * @default []
+             */
+            preconditions?: components["schemas"]["PresentedOperatorActionPrecondition"][];
+            /** Presentation Token */
+            presentation_token?: string | null;
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Snapshot Version */
+            snapshot_version: string;
+            target: components["schemas"]["PresentedOperatorActionTarget"];
+        };
+        /**
+         * PresentedOperatorActionEffectReceipt
+         * @description Typed evidence returned by a broker-affecting presented action.
+         *
+         *     This is intentionally a compact cross-process receipt reference rather
+         *     than a second mutable broker model. The full Clerk journal receipt remains
+         *     canonical; these immutable identifiers let every UI host link the action
+         *     attempt, Clerk custody row, and any post-action reconciliation receipt.
+         */
+        PresentedOperatorActionEffectReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Clerk Journal Seq */
+            clerk_journal_seq?: number | null;
+            /** Intent Id */
+            intent_id?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "A0_CANCELLED" | "EXACT_CANCEL_CONFIRMED" | "RECOVERY_FLATTEN_SUBMITTED" | "ACCOUNT_FLATTEN_OBSERVED" | "FLATTEN_INTENTION_RECORDED";
+            /** Operation Id */
+            operation_id?: string | null;
+            /** Order Ref */
+            order_ref?: string | null;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /**
+         * PresentedOperatorActionInvocation
+         * @description The browser may return only this closed, signed-by-snapshot envelope.
+         */
+        PresentedOperatorActionInvocation: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "reconcile_now" | "cancel_exact" | "cancel_pending" | "flatten" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            /** Confirmation Token */
+            confirmation_token?: string | null;
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Issued At Ms */
+            issued_at_ms: number;
+            /** Presentation Token */
+            presentation_token: string;
+            /** Snapshot Id */
+            snapshot_id: string;
+            /** Snapshot Version */
+            snapshot_version: string;
+            target: components["schemas"]["PresentedOperatorActionTarget"];
+        };
+        /**
+         * PresentedOperatorActionPrecondition
+         * @description One server-owned fact that must still hold when an action executes.
+         */
+        PresentedOperatorActionPrecondition: {
+            /** Code */
+            code: string;
+            /** Expected Value */
+            expected_value: string;
+        };
+        /**
+         * PresentedOperatorActionRejection
+         * @description Typed refusal for a closed presented action; never an inferred UI error.
+         */
+        PresentedOperatorActionRejection: {
+            /** Message */
+            message: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
+            /** Snapshot Version */
+            snapshot_version?: string | null;
+        };
+        /**
+         * PresentedOperatorActionRejectionResponse
+         * @description FastAPI HTTP-error envelope for a presented-action refusal.
+         */
+        PresentedOperatorActionRejectionResponse: {
+            detail: components["schemas"]["PresentedOperatorActionRejection"];
+        };
+        /**
+         * PresentedOperatorActionResult
+         * @description Durable dispatch result; acceptance and observed effect stay distinct.
+         */
+        PresentedOperatorActionResult: {
+            /** Action Attempt Id */
+            action_attempt_id: string;
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "reconcile_now" | "cancel_exact" | "cancel_pending" | "flatten" | "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            effect_receipt?: components["schemas"]["PresentedOperatorActionEffectReceipt"] | null;
+            /** Finished Copy */
+            finished_copy: string;
+            reconciliation_receipt?: components["schemas"]["AccountReconciliationReceipt"] | null;
+            /** Refreshed Snapshot Id */
+            refreshed_snapshot_id?: string | null;
+            /** Replayed */
+            replayed: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ACCEPTED" | "IN_PROGRESS" | "PENDING_PROOF" | "OUTCOME_UNKNOWN";
+        };
+        /**
+         * PresentedOperatorActionTarget
+         * @description Closed account/intent/order identity bound into one action.
+         *
+         *     The browser may echo these fields only as part of the signed envelope. A
+         *     target kind makes the broker-affecting variants unambiguous: an exact
+         *     cancel cannot drift to a reused broker id, an A0 cancel cannot pretend a
+         *     broker write occurred, and a recovery flatten retains the exact server
+         *     authored namespace/position identity that must be re-proven at dispatch.
+         */
+        PresentedOperatorActionTarget: {
+            /** Account Id */
+            account_id: string;
+            /** Expected Signed Quantity */
+            expected_signed_quantity?: number | null;
+            /**
+             * Kind
+             * @default ACCOUNT
+             * @enum {string}
+             */
+            kind?: "ACCOUNT" | "EXACT_ORDER" | "A0_INTENT" | "RECOVERY_NAMESPACE" | "ACCOUNT_EMERGENCY";
+            /** Recovery Intent Id */
+            recovery_intent_id?: string | null;
+            /** Recovery Order Ref */
+            recovery_order_ref?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Strategy Instance Id */
+            strategy_instance_id?: string | null;
+            /** Target Con Id */
+            target_con_id?: number | null;
+            /** Target Intent Id */
+            target_intent_id?: string | null;
+            /** Target Intent Order Ref */
+            target_intent_order_ref?: string | null;
+            /** Target Order Id */
+            target_order_id?: number | null;
+            /** Target Order Ref */
+            target_order_ref?: string | null;
         };
         /**
          * PricingCompareRequest
@@ -20539,6 +21048,7 @@ export interface components {
          */
         SetDesiredStateRequest: {
             action: components["schemas"]["DesiredStateAction"];
+            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
             /**
              * Reason
              * @default
@@ -23850,13 +24360,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
-            200: {
+            /** @description Raw emergency writes are retired; use a presented action. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AccountEmergencyFlattenResponse"];
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24322,13 +24832,169 @@ export interface operations {
             };
         };
         responses: {
+            /** @description Raw recovery writes are retired; use a presented action. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_presented_reconcile_action_endpoint_api_accounts__account_id__presented_actions_reconcile_now_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresentedOperatorActionInvocation"];
+            };
+        };
+        responses: {
             /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["OperatorRecoveryFlattenResponse"];
+                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
+                };
+            };
+            /** @description Action was durably claimed but its external outcome is not proven. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
+                };
+            };
+            /** @description The presented action is stale, unavailable, or does not match its target. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_presented_recovery_action_endpoint_api_accounts__account_id__presented_actions_recovery_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresentedOperatorActionInvocation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
+                };
+            };
+            /** @description Action is durable, but current broker proof is still required. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionResult"];
+                };
+            };
+            /** @description The action is stale, unavailable, or no longer targets current evidence. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    present_lifecycle_action_endpoint_api_accounts__account_id__presented_lifecycle_actions__action_id__get: {
+        parameters: {
+            query: {
+                strategy_instance_id: string;
+                run_id?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                action_id: "pause" | "stop" | "end_day" | "resume" | "start" | "deploy";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorAction"];
+                };
+            };
+            /** @description Current account safety proof does not permit this action. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresentedOperatorActionRejectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -24465,6 +25131,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountFalseCrashBackfillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_safety_snapshot_endpoint_api_accounts__account_id__safety_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSafetySnapshot"];
                 };
             };
             /** @description Validation Error */
@@ -28537,7 +29236,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["HostRunnerStartRequest"];
+                "application/json": components["schemas"]["HostRunnerStartRequest-Input"];
             };
         };
         responses: {
@@ -28584,7 +29283,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HostRunnerActionResponse"];
+                    "application/json": components["schemas"]["SetInstanceDesiredStateResponse"];
                 };
             };
             /** @description Validation Error */
@@ -29022,7 +29721,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HostRunnerActionResponse"];
+                    "application/json": components["schemas"]["EndDayIntentResponse"];
                 };
             };
             /** @description Validation Error */
@@ -29515,19 +30214,15 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SetDesiredStateRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            200: {
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DesiredStateRecordResponse"];
+                    "application/json": null;
                 };
             };
             /** @description Validation Error */

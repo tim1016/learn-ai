@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from app.engine.live.account_artifacts import AccountArtifactError, append_account_event
+from app.engine.live.account_artifacts import ACCOUNT_EVENTS_FILENAME, AccountArtifactError, append_account_event
 from app.services.observation_lease_parity import (
     assess_observation_lease_shadow_parity,
     assess_observation_lease_shadow_parity_from_artifacts,
     observation_lease_shadow_parity_archive_payload,
+    record_observation_lease_shadow_comparison,
 )
 
 
@@ -201,11 +203,11 @@ def test_assess_observation_lease_shadow_parity_does_not_count_weekend_compariso
     assert report.cutover_ready is False
 
 
-def test_assess_observation_lease_shadow_parity_from_artifacts_replays_canonical_journal(
+def test_assess_observation_lease_shadow_parity_from_artifacts_replays_typed_promotion_evidence(
     tmp_path: Path,
 ) -> None:
     for recorded_at_ms in (1_704_209_400_000, 1_704_295_800_000, 1_704_382_200_000):
-        append_account_event(
+        record_observation_lease_shadow_comparison(
             tmp_path,
             "DU123",
             _comparison(recorded_at_ms=recorded_at_ms),
@@ -214,6 +216,35 @@ def test_assess_observation_lease_shadow_parity_from_artifacts_replays_canonical
     report = assess_observation_lease_shadow_parity_from_artifacts(tmp_path, "DU123")
 
     assert report.cutover_ready is True
+
+
+def test_assess_from_artifacts_ignores_forward_producer_display_rows(tmp_path: Path) -> None:
+    for recorded_at_ms in (1_704_209_400_000, 1_704_295_800_000, 1_704_382_200_000):
+        append_account_event(tmp_path, "DU123", _comparison(recorded_at_ms=recorded_at_ms))
+
+    report = assess_observation_lease_shadow_parity_from_artifacts(tmp_path, "DU123")
+
+    assert report.comparison_count == 0
+    assert report.cutover_ready is False
+
+
+def test_legacy_shadow_history_is_snapshotted_once_before_promotion(tmp_path: Path) -> None:
+    legacy_path = tmp_path / "accounts" / "DU123" / ACCOUNT_EVENTS_FILENAME
+    legacy_path.parent.mkdir(parents=True)
+    legacy_path.write_text(
+        "".join(
+            json.dumps(_comparison(recorded_at_ms=recorded_at_ms)) + "\n"
+            for recorded_at_ms in (1_704_209_400_000, 1_704_295_800_000, 1_704_382_200_000)
+        ),
+        encoding="utf-8",
+    )
+
+    first = assess_observation_lease_shadow_parity_from_artifacts(tmp_path, "DU123")
+    legacy_path.write_text("{truncated", encoding="utf-8")
+    second = assess_observation_lease_shadow_parity_from_artifacts(tmp_path, "DU123")
+
+    assert first.cutover_ready is True
+    assert second.cutover_ready is True
 
 
 def test_observation_lease_parity_archive_uses_empty_snapshot_for_missing_journal(
@@ -232,12 +263,12 @@ def test_observation_lease_parity_archive_uses_empty_snapshot_for_missing_journa
     assert payload["cutover_ready"] is False
 
 
-def test_observation_lease_parity_archive_rejects_symlinked_journal(tmp_path: Path) -> None:
+def test_observation_lease_parity_archive_rejects_symlinked_typed_history(tmp_path: Path) -> None:
     account_dir = tmp_path / "accounts" / "DU123"
     account_dir.mkdir(parents=True)
-    outside_journal = tmp_path / "outside-account-events.jsonl"
-    outside_journal.write_text("{}\n", encoding="utf-8")
-    (account_dir / "account_events.jsonl").symlink_to(outside_journal)
+    outside_history = tmp_path / "outside-shadow-history.json"
+    outside_history.write_text("{}", encoding="utf-8")
+    (account_dir / "account_observation_lease_shadow_history.json").symlink_to(outside_history)
 
     with pytest.raises(AccountArtifactError, match="path traversal"):
         observation_lease_shadow_parity_archive_payload(tmp_path, "DU123")

@@ -136,3 +136,18 @@ def test_write_leaves_no_tmp_artifact(tmp_path: Path) -> None:
     leftovers = list(path.parent.glob("*.tmp"))
     assert leftovers == []
     assert path.exists()
+
+
+def test_end_day_marker_is_durable_and_ordinary_state_change_clears_it(tmp_path: Path) -> None:
+    repo = DesiredStateRepo(stable_desired_state_path(tmp_path, "x"))
+
+    end_day = repo.set(
+        DesiredState.PAUSED,
+        updated_by="operator",
+        now_ms=1,
+        end_day_requested=True,
+    )
+    resumed = repo.set(DesiredState.RUNNING, updated_by="operator", now_ms=2)
+
+    assert end_day.end_day_requested is True
+    assert resumed.end_day_requested is False

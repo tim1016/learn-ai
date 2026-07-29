@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -13,6 +14,7 @@ import app.engine.live.account_owner as account_owner_module
 from app.broker.ibkr.client import IbkrClientIdInUseError
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
+    ACCOUNT_EVENTS_FILENAME,
     AccountFreezeEvidence,
     AccountOwnerGeneration,
     read_account_events,
@@ -399,9 +401,13 @@ async def test_account_owner_refuses_old_owner_after_takeover_advances_persisted
     assert exc.value.reason == "OWNER_GENERATION_MISMATCH"
     assert old_owner_broker.calls == []
     events = read_account_events(tmp_path, ACCOUNT)
-    assert events[-1]["event_type"] == "account_owner_submit_rejected"
-    assert events[-1]["reason"] == "OWNER_GENERATION_MISMATCH"
-    assert events[-1]["diagnostics"]["current_owner_generation"] == GENERATION + 1
+    [rejection] = [
+        event
+        for event in events
+        if event["event_type"] == "account_owner_submit_rejected"
+    ]
+    assert rejection["reason"] == "OWNER_GENERATION_MISMATCH"
+    assert rejection["diagnostics"]["current_owner_generation"] == GENERATION + 1
 
     result = await new_owner.submit(_intent(generation=GENERATION + 1))
 
@@ -458,6 +464,31 @@ async def test_account_owner_rejects_before_broker_when_account_frozen(tmp_path:
         await owner.submit(_intent())
 
     assert exc.value.reason == "ACCOUNT_FROZEN"
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_account_owner_early_rejection_preserves_prior_inflight_recovery_evidence(tmp_path: Path) -> None:
+    broker = _Broker()
+    owner = _owner(tmp_path, broker)
+    prior = _intent("prior-crash-after-broker-boundary")
+    await owner.record_prepared_for_test(prior)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id=ACCOUNT,
+            reason="watchdog.flatten_failed",
+            source="watchdog",
+            recorded_at_ms=1,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+
+    with pytest.raises(AccountOwnerSubmitRejected) as rejected:
+        await owner.submit(prior)
+
+    assert rejected.value.reason == "ACCOUNT_FROZEN"
+    assert [prepared["diagnostics"]["order_ref"] for prepared in owner._prepared_without_terminal()] == [prior.order_ref]
     assert broker.calls == []
 
 
@@ -581,6 +612,61 @@ async def test_account_owner_reconnect_drains_prepared_intent_as_uncertain(tmp_p
     assert events[-1]["generation"] == GENERATION
     assert isinstance(events[-1]["recorded_at_ms"], int)
     assert any(event["event_type"] == "account_owner_reconnect_drain_uncertain" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_account_owner_reconnect_clears_typed_prepared_state_after_acceptance(tmp_path: Path) -> None:
+    owner = _owner(tmp_path, _Broker())
+    intent = _intent()
+    await owner.record_prepared_for_test(intent)
+
+    await owner.handle_reconnect(
+        reconnect=lambda _client_id: None,
+        classify_inflight=lambda _event: "accepted",
+        reconcile=lambda: _continue_decision(),
+        client_id_range=(10,),
+    )
+
+    assert owner._prepared_without_terminal() == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_prepared_owner_submission_is_seeded_once_after_accepted_drain(
+    tmp_path: Path,
+) -> None:
+    owner = _owner(tmp_path, _Broker())
+    intent = _intent()
+    legacy_path = tmp_path / "accounts" / ACCOUNT / ACCOUNT_EVENTS_FILENAME
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "event_type": "account_owner_submit_prepared",
+                "diagnostics": owner._diagnostics(intent),
+                "order_spec": intent.order_spec,
+                "created_at_ms": intent.created_at_ms,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    classified: list[dict] = []
+
+    await owner.handle_reconnect(
+        reconnect=lambda _client_id: None,
+        classify_inflight=lambda event: classified.append(event) or "accepted",
+        reconcile=lambda: _continue_decision(),
+        client_id_range=(10,),
+    )
+    legacy_path.write_text("{truncated", encoding="utf-8")
+    await owner.handle_reconnect(
+        reconnect=lambda _client_id: None,
+        classify_inflight=lambda event: classified.append(event) or "accepted",
+        reconcile=lambda: _continue_decision(),
+        client_id_range=(10,),
+    )
+
+    assert len(classified) == 1
 
 
 @pytest.mark.asyncio

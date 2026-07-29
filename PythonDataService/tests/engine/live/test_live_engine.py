@@ -13,8 +13,13 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_engine import LiveEngine
-from app.engine.live.live_portfolio import AccountFreezeBlockError, AccountRegistryBlockError
+from app.engine.live.live_portfolio import (
+    AccountFreezeBlockError,
+    AccountRegistryBlockError,
+    LivePortfolio,
+)
 from app.engine.strategy.base import Strategy
+from app.schemas.live_runs import GateResult
 from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
 
 
@@ -153,6 +158,32 @@ async def test_live_engine_pauses_not_halts_on_transient_restart_intensity_freez
     await engine.run(MinuteHookEntryStrategy(), iter_bars([_bar(m, "500", "500") for m in range(30, 33)]))
 
     assert broker.orders == []
+
+
+@pytest.mark.asyncio
+async def test_live_engine_keeps_healthy_sibling_alive_when_account_safety_suspends_entry() -> None:
+    """S6: retired-owner custody is a pause, never a sibling terminal halt."""
+
+    broker = FakeBroker()
+    engine = LiveEngine(None, LiveConfig(), broker=broker)
+    portfolio = LivePortfolio(
+        broker,
+        account_safety_gate_provider=lambda: GateResult(
+            gate_id="account.safety",
+            status="block",
+            source="account_safety",
+            operator_reason="ACCOUNT_SAFETY_RETIRED_OWNER_LIVE_EXPOSURE",
+            operator_next_step="RECONCILE_NOW",
+            evidence_at_ms=1_700_000_000_000,
+        ),
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    assert await engine._submit_pending_with_meta(portfolio) == []
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
 
 
 @pytest.mark.asyncio
@@ -312,6 +343,7 @@ async def test_live_engine_seeds_only_clerk_owned_positions_from_account_snapsho
     )
 
     assert result.open_positions == {"SPY": 1}
+    assert result.final_equity == Decimal("104700")
     assert broker.orders == []
 
 

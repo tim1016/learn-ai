@@ -375,9 +375,11 @@ class AccountClerkSupervisor:
         for account_id, clerk in clerks:
             lease = read_account_clerk_lease(self.artifacts_root, account_id)
             running = clerk.process.poll() is None
+            process_pid = clerk.process.pid
+            lease_matches_process = lease is not None and lease.pid == process_pid
             lease_valid = bool(
                 running
-                and lease is not None
+                and lease_matches_process
                 and lease.generation == clerk.generation
                 and lease.status == "RUNNING"
                 and lease.valid_until_ms > now_ms
@@ -386,8 +388,8 @@ class AccountClerkSupervisor:
                 AccountClerkHealth(
                     account_id=account_id,
                     generation=clerk.generation,
-                    pid=lease.pid if lease is not None else clerk.process.pid,
-                    status=(lease.status if lease is not None else "UNAVAILABLE") if running else "EXITED",
+                    pid=process_pid,
+                    status=(lease.status if lease_matches_process else "UNAVAILABLE") if running else "EXITED",
                     started_at_ms=clerk.started_at_ms,
                     renewed_at_ms=lease.renewed_at_ms if lease is not None else None,
                     valid_until_ms=lease.valid_until_ms if lease is not None else None,

@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     append_account_event,
-    read_account_events,
     read_account_freeze,
+    read_account_freeze_evidence,
     write_account_freeze,
 )
 from app.engine.live.account_clerk import (
@@ -23,6 +23,7 @@ from app.engine.live.account_clerk import (
     AccountClerkGenerationFencedError,
     AccountClerkJournalEntry,
 )
+from app.engine.live.account_clerk_journal_models import async_custody_reconciliation_is_held
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.submit_state_machine import BrokerProbe, SubmitVerdict
@@ -94,6 +95,9 @@ class AccountClerkReconciler:
         return self._unhealthy
 
     async def reconcile_once(self) -> tuple[ReconciliationResolution, ...]:
+        # The epoch fence resolves first: an uncertain A1 must not be retried
+        # until fresh account facts durably establish the current proof horizon.
+        await self._clerk.reconcile_epoch_if_required()
         entries = await self._clerk.reconciliation_snapshot()
         self._reassert_missing_halt_freeze(entries)
         resolutions: list[ReconciliationResolution] = []
@@ -129,8 +133,11 @@ class AccountClerkReconciler:
         halt = _latest_unresolved_halt(entries)
         if halt is None:
             return
-        events = read_account_events(self._clerk._artifacts_root, self._clerk._account_id)
-        if _halt_freeze_was_cleared(events, halt):
+        freeze_evidence = read_account_freeze_evidence(
+            self._clerk._artifacts_root,
+            self._clerk._account_id,
+        )
+        if _halt_freeze_was_cleared(freeze_evidence, halt):
             return
         self._write_halt_freeze()
 
@@ -338,18 +345,17 @@ def _latest_unresolved_halt(
 
 
 def _halt_freeze_was_cleared(
-    account_events: list[dict],
+    freeze_evidence: AccountFreezeEvidence | None,
     halt: AccountClerkJournalEntry,
 ) -> bool:
     """A later audited clear is not the crash window this repair owns."""
 
-    return any(
-        event.get("event_type") == "account_freeze_cleared"
-        and event.get("source") == "account_clerk_reconciler"
-        and event.get("reason") == "ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE"
-        and isinstance(event.get("cleared_at_ms"), int)
-        and event["cleared_at_ms"] >= halt.recorded_at_ms
-        for event in account_events
+    return (
+        freeze_evidence is not None
+        and freeze_evidence.source == "account_clerk_reconciler"
+        and freeze_evidence.reason == "ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE"
+        and freeze_evidence.cleared_at_ms is not None
+        and freeze_evidence.cleared_at_ms >= halt.recorded_at_ms
     )
 
 
@@ -369,6 +375,7 @@ def _unresolved_intents(
     retries: dict[str, int] = defaultdict(int)
     submitting_at: dict[str, tuple[int, int]] = {}
     uncertainty_at: dict[str, tuple[int, int]] = {}
+    entries_by_intent_id: dict[str, list[AccountClerkJournalEntry]] = defaultdict(list)
     for entry in entries:
         # A callback with no durable Clerk intent is deliberately retained as
         # account truth, but it is never an intent-reconciliation candidate.
@@ -376,6 +383,7 @@ def _unresolved_intents(
         if entry.intent is None:
             continue
         intent_id = entry.intent.intent_id
+        entries_by_intent_id[intent_id].append(entry)
         if entry.entry_kind == "recorded":
             recorded[intent_id] = entry.intent
         elif entry.entry_kind == "broker_submitting":
@@ -392,6 +400,11 @@ def _unresolved_intents(
     candidates: dict[str, tuple[AccountOwnerSubmitIntent, int]] = {}
     for intent_id, intent in recorded.items():
         if intent_id in terminal:
+            continue
+        if async_custody_reconciliation_is_held(entries_by_intent_id[intent_id]):
+            # A0-only work belongs to the bounded async lane; expired and
+            # explicit-hold receipts require a later operator workflow. The
+            # legacy reconciler resumes only after durable A1 evidence.
             continue
         if intent.intent_kind == "EMERGENCY_FLATTEN":
             # Emergency flatten writes through its own poisoned-run escape

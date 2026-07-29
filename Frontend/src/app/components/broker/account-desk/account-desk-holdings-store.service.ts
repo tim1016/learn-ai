@@ -7,6 +7,7 @@ import {
   inject,
   runInInjectionContext,
   signal,
+  untracked,
 } from '@angular/core';
 
 import type {
@@ -199,7 +200,7 @@ export class AccountDeskHoldingsStore {
     } catch (error) {
       if (generation !== this.requestGeneration) return;
       this.errorState.set(error);
-      this.closeStreams();
+      this.closeStreams({ preservePositionTicks: true });
     } finally {
       if (generation === this.requestGeneration) this.loadingState.set(false);
     }
@@ -261,15 +262,31 @@ export class AccountDeskHoldingsStore {
     const holdings = this.holdingsState();
     if (!accountId || holdings === null) return;
     const expectedConIds = new Set(holdings.positions.positions.map((position) => position.con_id));
-    const next = new Map<number, IbkrPnLTick>();
+    // ``brokerSse`` intentionally bounds its event buffer. Keep the most
+    // recent tick per position outside that transport buffer so a zero-position
+    // close cannot be evicted and make a stale snapshot holding reappear.
+    // ``openStreams`` clears this overlay whenever a fresh positions snapshot
+    // succeeds, which is the only event allowed to replace it.
+    // The stream effect owns this projection. Read the existing overlay
+    // without making it an effect dependency: this method may write the
+    // overlay after folding a tick, and tracking that write would schedule a
+    // feedback loop even when the SSE buffer has not advanced.
+    const current = untracked(() => this.positionTicks());
+    let next: Map<number, IbkrPnLTick> | null = null;
     for (const tick of stream.data()) {
       if (!isPnlTickForAccount(tick, accountId, expectedConIds)) {
         this.clearForIdentityFailure('The position P&L stream could not attest this route. Live holdings are unavailable.');
         return;
       }
-      if (tick.con_id !== null) next.set(tick.con_id, tick);
+      if (tick.con_id === null) continue;
+      // `effect` reruns when this signal changes. Preserve the existing map
+      // when the bounded SSE buffer contains only ticks already folded into
+      // the overlay; writing an equivalent new Map here would self-invalidate
+      // the effect indefinitely and leave the test worker spinning.
+      if ((next?.get(tick.con_id) ?? current.get(tick.con_id)) === tick) continue;
+      (next ??= new Map(current)).set(tick.con_id, tick);
     }
-    this.positionTicks.set(next);
+    if (next !== null) this.positionTicks.set(next);
   }
 
   private openStreams(positions: readonly IbkrPosition[]): void {
@@ -298,7 +315,7 @@ export class AccountDeskHoldingsStore {
 
   private stopStreaming(message: string): void {
     this.unavailableMessageState.set(message);
-    this.closeStreams();
+    this.closeStreams({ preservePositionTicks: true });
   }
 
   private clearForIdentityFailure(message: string): void {
@@ -317,13 +334,13 @@ export class AccountDeskHoldingsStore {
     this.closeStreams();
   }
 
-  private closeStreams(): void {
+  private closeStreams({ preservePositionTicks = false }: { preservePositionTicks?: boolean } = {}): void {
     this.accountStream()?.close();
     this.positionStream()?.close();
     this.accountStream.set(null);
     this.positionStream.set(null);
     this.accountTickState.set(null);
-    this.positionTicks.set(new Map());
+    if (!preservePositionTicks) this.positionTicks.set(new Map());
   }
 }
 

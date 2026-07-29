@@ -1,7 +1,6 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 
 import type {
-  ClerkTransactionDetail,
   ClerkTransactionFilters,
   ClerkTransactionHistoryResponse,
   ClerkTransactionSummary,
@@ -65,12 +64,6 @@ export class AccountDeskTransactionHistoryStore {
     // request is not stranded behind it.
     this.loadingState.set(false);
     void this.fetchPage(null, true);
-  }
-
-  transactionDetail(transactionId: string): Promise<ClerkTransactionDetail> {
-    const accountId = this.accountKey();
-    if (accountId === null) return Promise.reject(new Error('No account is selected.'));
-    return this.broker.accountTransaction(accountId, transactionId);
   }
 
   private async fetchPage(cursor: string | null, replace: boolean): Promise<void> {

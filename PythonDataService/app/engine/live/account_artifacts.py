@@ -7,8 +7,8 @@ import logging
 import os
 import re
 import time
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -21,10 +21,11 @@ from app.schemas.live_runs import GateResult
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
 ACCOUNT_EVENTS_FILENAME = "account_events.jsonl"
 ACCOUNT_EVENTS_SEQUENCE_FILENAME = "account_events.seq"
-ACCOUNT_EVENTS_MUTEX_FILENAME = ".account_events.mutex"
 ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACCOUNT_CLERK_GENERATION_FILENAME = "clerk_generation.json"
 ACCOUNT_CLERK_LEASE_FILENAME = "clerk_lease.json"
+ACCOUNT_RECOVERY_CLEARANCE_FILENAME = "account_recovery_clearance.json"
+ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME = "account_restart_intensity_clearance.json"
 ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES = frozenset(
     {
         "account_recovery_proof_recorded",
@@ -52,13 +53,13 @@ ACCOUNT_EVENT_TIMESTAMP_FIELDS: frozenset[str] = frozenset(
         "window_start_ms",
         "window_end_ms",
         "evidence_at_ms",
+        "event_at_ms",
+        "arrived_at_ms",
         *ACCOUNT_EVENT_TS_FIELD_PRECEDENCE,
     )
 )
 
 _ACCOUNT_ID_RE = re.compile(r"^[A-Z][A-Z0-9]+$")
-_ACCOUNT_EVENT_MUTEX_TIMEOUT_SECONDS = 10.0
-_ACCOUNT_EVENT_MUTEX_POLL_SECONDS = 0.01
 logger = logging.getLogger(__name__)
 
 
@@ -243,6 +244,23 @@ class AccountAuditedOverride(BaseModel):
     affected_order_refs: tuple[str, ...] = ()
 
 
+class AccountRecoveryClearance(BaseModel):
+    """The latest typed proof that permits a crash-retired bot to restart.
+
+    This artifact is deliberately separate from the operator history and the
+    active-freeze artifact. A crash-retired binding can require a recovery
+    decision even when no unresolved-exposure freeze was ever created.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    source: Literal["account_recovery_proof", "account_audited_override"]
+    evidence_id: str = Field(min_length=1, max_length=128)
+    cleared_at_ms: int = Field(ge=0)
+
+
 class RestartIntensityPolicy(BaseModel):
     """Durable account restart-intensity threshold."""
 
@@ -398,6 +416,22 @@ def write_account_freeze(artifacts_root: Path, evidence: AccountFreezeEvidence) 
 
 
 def read_account_freeze(artifacts_root: Path, account_id: str) -> AccountFreezeEvidence | None:
+    evidence = read_account_freeze_evidence(artifacts_root, account_id)
+    if evidence is None or evidence.cleared_at_ms is not None:
+        return None
+    return evidence
+
+
+def read_account_freeze_evidence(
+    artifacts_root: Path,
+    account_id: str,
+) -> AccountFreezeEvidence | None:
+    """Read the typed freeze artifact, including a recorded clearance.
+
+    Safety gates use this artifact for recovery provenance rather than
+    reconstructing it from the non-authoritative operator history.
+    """
+
     path = _existing_account_artifact_file_path(
         artifacts_root,
         account_id,
@@ -406,8 +440,8 @@ def read_account_freeze(artifacts_root: Path, account_id: str) -> AccountFreezeE
     if path is None:
         return None
     evidence = AccountFreezeEvidence.model_validate_json(path.read_text(encoding="utf-8"))
-    if evidence.cleared_at_ms is not None:
-        return None
+    if evidence.account_id != account_id:
+        raise AccountArtifactError("account freeze evidence belongs to another account")
     return evidence
 
 
@@ -426,30 +460,23 @@ def clear_account_freeze(
         account_id,
         ACCOUNT_FREEZE_FILENAME,
     )
-    if not path.is_file():
-        raise AccountArtifactError(f"account freeze does not exist for {account_id!r}")
-    evidence = AccountFreezeEvidence.model_validate_json(path.read_text(encoding="utf-8"))
     if recovery_proof is not None:
         cleared_at_ms = recovery_proof.recorded_at_ms
         cleared_reason = f"recovery:{recovery_proof.recovery_id}"
         cleared_source = "account_recovery_proof"
         if recovery_proof.reconciliation_result != "clean" or recovery_proof.final_gate_result.status != "pass":
             raise AccountArtifactError("recovery proof must have clean reconciliation and passing final gate")
-        _append_account_event(
-            artifacts_root,
-            account_id,
-            {
-                "event_type": "account_recovery_proof_recorded",
-                "account_id": account_id,
-                "recovery_id": recovery_proof.recovery_id,
-                "requested_action": recovery_proof.requested_action,
-                "requested_by": recovery_proof.requested_by,
-                "broker_evidence": recovery_proof.broker_evidence,
-                "reconciliation_result": recovery_proof.reconciliation_result,
-                "final_gate_result": recovery_proof.final_gate_result.model_dump(mode="json"),
-                "recorded_at_ms": recovery_proof.recorded_at_ms,
-            },
-        )
+        recovery_event = {
+            "event_type": "account_recovery_proof_recorded",
+            "account_id": account_id,
+            "recovery_id": recovery_proof.recovery_id,
+            "requested_action": recovery_proof.requested_action,
+            "requested_by": recovery_proof.requested_by,
+            "broker_evidence": recovery_proof.broker_evidence,
+            "reconciliation_result": recovery_proof.reconciliation_result,
+            "final_gate_result": recovery_proof.final_gate_result.model_dump(mode="json"),
+            "recorded_at_ms": recovery_proof.recorded_at_ms,
+        }
     else:
         assert audited_override is not None
         effective_now_ms = time.time_ns() // 1_000_000 if now_ms is None else now_ms
@@ -460,87 +487,286 @@ def clear_account_freeze(
         cleared_at_ms = effective_now_ms
         cleared_reason = f"override:{audited_override.override_id}:{audited_override.approved_decision}"
         cleared_source = "account_audited_override"
-        _append_account_event(
-            artifacts_root,
-            account_id,
-            {
-                "event_type": "account_audited_override_recorded",
-                "account_id": account_id,
-                "override_id": audited_override.override_id,
-                "approved_decision": audited_override.approved_decision,
-                "reason": audited_override.reason,
-                "approved_by": audited_override.approved_by,
-                "approved_at_ms": audited_override.approved_at_ms,
-                "valid_until_ms": audited_override.valid_until_ms,
-                "prior_evidence": audited_override.prior_evidence,
-                "next_reconciliation_step": audited_override.next_reconciliation_step,
-                "strategy_instance_id": audited_override.strategy_instance_id,
-                "run_id": audited_override.run_id,
-                "bot_order_namespace": audited_override.bot_order_namespace,
-                "affected_order_refs": list(audited_override.affected_order_refs),
-            },
-        )
-    cleared = evidence.model_copy(
-        update={
-            "cleared_at_ms": cleared_at_ms,
-            "cleared_reason": cleared_reason,
-            "cleared_source": cleared_source,
+        recovery_event = {
+            "event_type": "account_audited_override_recorded",
+            "account_id": account_id,
+            "override_id": audited_override.override_id,
+            "approved_decision": audited_override.approved_decision,
+            "reason": audited_override.reason,
+            "approved_by": audited_override.approved_by,
+            "approved_at_ms": audited_override.approved_at_ms,
+            "valid_until_ms": audited_override.valid_until_ms,
+            "prior_evidence": audited_override.prior_evidence,
+            "next_reconciliation_step": audited_override.next_reconciliation_step,
+            "strategy_instance_id": audited_override.strategy_instance_id,
+            "run_id": audited_override.run_id,
+            "bot_order_namespace": audited_override.bot_order_namespace,
+            "affected_order_refs": list(audited_override.affected_order_refs),
         }
-    )
-    _atomic_write_json(path, cleared.model_dump())
-    _append_account_event(
+    with _file_lock(path):
+        if not path.is_file():
+            raise AccountArtifactError(f"account freeze does not exist for {account_id!r}")
+        evidence = AccountFreezeEvidence.model_validate_json(path.read_text(encoding="utf-8"))
+        cleared = evidence.model_copy(
+            update={
+                "cleared_at_ms": cleared_at_ms,
+                "cleared_reason": cleared_reason,
+                "cleared_source": cleared_source,
+            }
+        )
+        _atomic_write_json_locked(path, cleared.model_dump())
+        try:
+            record_account_recovery_clearance(
+                artifacts_root,
+                recovery_proof=recovery_proof,
+                audited_override=audited_override,
+                cleared_at_ms=cleared_at_ms,
+            )
+        except Exception:
+            # The cleared freeze is the authority transition. A clearance
+            # write failure keeps restart permission conservatively blocked;
+            # it must not turn a committed unfreeze into a false failure.
+            logger.exception(
+                "account freeze cleared but recovery clearance could not be recorded",
+                extra={"account_id": account_id, "cleared_at_ms": cleared_at_ms},
+            )
+    if evidence.pauses_healthy_runs:
+        try:
+            _record_restart_intensity_clearance(artifacts_root, account_id, cleared_at_ms)
+        except Exception:
+            # A retained cutoff only prevents a false re-freeze; a failed write
+            # keeps the account conservatively subject to restart-intensity, never
+            # a false unblock.
+            logger.exception(
+                "account freeze cleared but restart-intensity cutoff could not be retained",
+                extra={"account_id": account_id, "cleared_at_ms": cleared_at_ms},
+            )
+    cleared_event = {
+        "event_type": "account_freeze_cleared",
+        "account_id": account_id,
+        "reason": evidence.reason,
+        "source": evidence.source,
+        "recorded_at_ms": evidence.recorded_at_ms,
+        "cleared_at_ms": cleared_at_ms,
+        "cleared_reason": cleared_reason,
+        "cleared_source": cleared_source,
+    }
+    for event in (recovery_event, cleared_event):
+        try:
+            _append_account_event(artifacts_root, account_id, event)
+        except Exception:
+            # Operator history mirrors the committed authority change. Keep a
+            # failed mirror visible in structured logs without lying that the
+            # freeze remains active.
+            logger.exception(
+                "account freeze clearance history mirror failed",
+                extra={"account_id": account_id, "event_type": event["event_type"]},
+            )
+
+
+def read_account_recovery_clearance(
+    artifacts_root: Path,
+    account_id: str,
+) -> AccountRecoveryClearance | None:
+    """Read the dedicated restart-clearance artifact without display history."""
+
+    path = _existing_account_artifact_file_path(
         artifacts_root,
         account_id,
-        {
-            "event_type": "account_freeze_cleared",
-            "account_id": account_id,
-            "reason": evidence.reason,
-            "source": evidence.source,
-            "recorded_at_ms": evidence.recorded_at_ms,
-            "cleared_at_ms": cleared_at_ms,
-            "cleared_reason": cleared_reason,
-            "cleared_source": cleared_source,
-        },
+        ACCOUNT_RECOVERY_CLEARANCE_FILENAME,
     )
+    if path is None:
+        return None
+    clearance = AccountRecoveryClearance.model_validate_json(path.read_text(encoding="utf-8"))
+    if clearance.account_id != account_id:
+        raise AccountArtifactError("account recovery clearance belongs to another account")
+    return clearance
+
+
+def record_account_recovery_clearance(
+    artifacts_root: Path,
+    *,
+    recovery_proof: AccountRecoveryProof | None = None,
+    audited_override: AccountAuditedOverride | None = None,
+    cleared_at_ms: int | None = None,
+) -> AccountRecoveryClearance:
+    """Persist qualified recovery evidence before mirroring it to the desk."""
+
+    if (recovery_proof is None) == (audited_override is None):
+        raise AccountArtifactError("provide exactly one recovery_proof or audited_override")
+    if recovery_proof is not None:
+        if recovery_proof.reconciliation_result != "clean" or recovery_proof.final_gate_result.status != "pass":
+            raise AccountArtifactError("recovery proof must have clean reconciliation and passing final gate")
+        candidate = AccountRecoveryClearance(
+            account_id=recovery_proof.account_id,
+            source="account_recovery_proof",
+            evidence_id=recovery_proof.recovery_id,
+            cleared_at_ms=recovery_proof.recorded_at_ms if cleared_at_ms is None else cleared_at_ms,
+        )
+    else:
+        assert audited_override is not None
+        candidate_cleared_at_ms = (
+            audited_override.approved_at_ms if cleared_at_ms is None else cleared_at_ms
+        )
+        if audited_override.valid_until_ms < candidate_cleared_at_ms:
+            raise AccountArtifactError("audited override is stale")
+        if audited_override.approved_decision == "freeze":
+            raise AccountArtifactError("freeze override cannot clear an account freeze")
+        candidate = AccountRecoveryClearance(
+            account_id=audited_override.account_id,
+            source="account_audited_override",
+            evidence_id=audited_override.override_id,
+            cleared_at_ms=candidate_cleared_at_ms,
+        )
+
+    path = _account_artifact_file_path(
+        artifacts_root,
+        candidate.account_id,
+        ACCOUNT_RECOVERY_CLEARANCE_FILENAME,
+    )
+    with _file_lock(path):
+        existing = read_account_recovery_clearance(artifacts_root, candidate.account_id)
+        if existing is not None and existing.cleared_at_ms >= candidate.cleared_at_ms:
+            return existing
+        _atomic_write_json_locked(path, candidate.model_dump())
+    return candidate
+
+
+def read_or_migrate_account_recovery_clearance(
+    artifacts_root: Path,
+    account_id: str,
+) -> AccountRecoveryClearance | None:
+    """Read the typed clearance, seeding it once from legacy recovery evidence.
+
+    Accounts cleared before the typed ``account_recovery_clearance.json`` artifact
+    existed retain only immutable ``account_recovery_proof_recorded`` or
+    ``account_audited_override_recorded`` history. Without a one-time migration a
+    legitimately recovered crash-retired binding would stay blocked forever. The
+    migration is fail-closed: it never materializes a clearance that legacy
+    evidence does not already prove, and it surfaces (rather than silences) a
+    malformed legacy row.
+    """
+
+    existing = read_account_recovery_clearance(artifacts_root, account_id)
+    if existing is not None:
+        return existing
+    legacy = _legacy_recovery_clearance(artifacts_root, account_id)
+    if legacy is None:
+        return None
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_RECOVERY_CLEARANCE_FILENAME,
+    )
+    with _file_lock(path):
+        current = read_account_recovery_clearance(artifacts_root, account_id)
+        if current is not None:
+            return current
+        _atomic_write_json_locked(path, legacy.model_dump())
+    return legacy
+
+
+def _legacy_recovery_clearance(
+    artifacts_root: Path,
+    account_id: str,
+) -> AccountRecoveryClearance | None:
+    """Reconstruct the latest recovery clearance from pre-artifact events."""
+
+    best: AccountRecoveryClearance | None = None
+    for event in read_legacy_account_events(artifacts_root, account_id):
+        event_type = event.get("event_type")
+        if event_type == "account_recovery_proof_recorded":
+            source: Literal["account_recovery_proof", "account_audited_override"] = "account_recovery_proof"
+            evidence_id = event.get("recovery_id")
+            cleared_at_ms = event.get("recorded_at_ms")
+        elif event_type == "account_audited_override_recorded":
+            if event.get("approved_decision") == "freeze":
+                # A freeze override never cleared a restart block.
+                continue
+            source = "account_audited_override"
+            evidence_id = event.get("override_id")
+            cleared_at_ms = event.get("approved_at_ms")
+        else:
+            continue
+        if not isinstance(evidence_id, str) or not 0 < len(evidence_id) <= 128:
+            raise AccountArtifactError("legacy account recovery clearance has an invalid evidence id")
+        if not isinstance(cleared_at_ms, int) or isinstance(cleared_at_ms, bool) or cleared_at_ms < 0:
+            raise AccountArtifactError("legacy account recovery clearance has an invalid timestamp")
+        candidate = AccountRecoveryClearance(
+            account_id=account_id,
+            source=source,
+            evidence_id=evidence_id,
+            cleared_at_ms=cleared_at_ms,
+        )
+        if best is None or candidate.cleared_at_ms > best.cleared_at_ms:
+            best = candidate
+    return best
 
 
 def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
-    """Read account events strictly for canonical safety consumers."""
+    """Read deterministic operational history without creating global authority.
 
-    path = _account_event_ledger_path(artifacts_root, account_id)
-    if not path.is_file():
-        return []
-    with _account_event_lock(path):
-        raw = path.read_bytes()
-    return _parse_account_event_bytes(path, raw, tolerant=False)
+    Historical ``account_events.jsonl`` rows remain immutable legacy evidence.
+    Forward writes live in producer-owned logs and are merged only for reads;
+    the returned ``seq`` is a display cursor, never a broker or causal clock.
+    Clerk order and exposure authority stays in ``clerk_journal.jsonl``.
+    """
+
+    from app.engine.live.producer_operational_log import (
+        merge_operator_history,
+        read_producer_operational_events,
+    )
+
+    legacy_events = _read_legacy_account_events(artifacts_root, account_id, tolerant=False)
+    history = merge_operator_history(
+        legacy_events=legacy_events,
+        producer_records=read_producer_operational_events(artifacts_root, account_id=account_id),
+    )
+    return [
+        {
+            **event.payload,
+            "account_id": event.account_id,
+            "event_type": event.event_type,
+            "seq": display_seq,
+            "ts_ms": event.display_clock_ms,
+            "event_at_ms": event.event_at_ms,
+            "arrived_at_ms": event.arrived_at_ms,
+            "recorded_at_ms": event.recorded_at_ms,
+            "history_provenance": event.source,
+            "producer": event.producer,
+            "producer_boot_id": event.producer_boot_id,
+            "producer_seq": event.producer_seq,
+        }
+        for display_seq, event in enumerate(history, start=1)
+    ]
+
+
+def read_legacy_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
+    """Read only immutable pre-split account-event evidence strictly."""
+
+    return _read_legacy_account_events(artifacts_root, account_id, tolerant=False)
 
 
 def read_account_events_with_snapshot(
     artifacts_root: Path,
     account_id: str,
 ) -> tuple[list[dict], bytes]:
-    """Read strict journal rows and their exact, locked source bytes.
+    """Read deterministic display history and its virtual serialized snapshot.
 
-    Cutover evidence must name the same journal image it replays.  Select the
-    existing ledger through the non-symlinked artifact boundary, then keep the
-    writer lock while taking its one byte snapshot.  A missing ledger is the
-    canonical empty journal and therefore has the stable empty-byte snapshot.
+    The snapshot is a stable serialization of the merged read projection, not
+    a byte image of one physical log and not Clerk authority.  Callers that
+    need order or exposure proof must read the canonical Clerk journal.
     """
 
-    path = _existing_account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_EVENTS_FILENAME,
+    events = read_account_events(artifacts_root, account_id)
+    raw = b"".join(
+        json.dumps(event, separators=(",", ":"), sort_keys=True).encode() + b"\n" for event in events
     )
-    if path is None:
-        return [], b""
-    with _account_event_lock(path):
-        raw = path.read_bytes()
-    return _parse_account_event_bytes(path, raw, tolerant=False), raw
+    return events, raw
 
 
 def read_account_events_tolerant(artifacts_root: Path, account_id: str) -> list[dict]:
-    """Read account events tolerantly for legacy projection/replay adapters."""
+    """Read legacy rows tolerantly; producer logs retain their own strict scope."""
 
     rows, _source_hash = read_account_events_tolerant_with_hash(artifacts_root, account_id)
     return rows
@@ -561,7 +787,7 @@ def repair_account_event_sequence(
 
     path = _account_event_ledger_path(artifacts_root, account_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with _account_event_lock(path):
+    with _file_lock(path):
         if not path.is_file():
             return AccountEventSequenceRepair(
                 account_id=account_id,
@@ -620,13 +846,11 @@ def repair_account_event_sequence(
 def read_account_events_tolerant_with_hash(artifacts_root: Path, account_id: str) -> tuple[list[dict], str | None]:
     """Read tolerant account events and hash the same byte snapshot."""
 
-    path = _account_artifact_file_path(artifacts_root, account_id, ACCOUNT_EVENTS_FILENAME)
-    events: list[dict] = []
-    if not path.is_file():
-        return events, None
-    with _account_event_lock(path):
-        raw = path.read_bytes()
-    return _parse_account_event_bytes(path, raw, tolerant=True), _sha256_bytes(raw)
+    events = _read_legacy_account_events(artifacts_root, account_id, tolerant=True)
+    raw = b"".join(
+        json.dumps(event, separators=(",", ":"), sort_keys=True).encode() + b"\n" for event in events
+    )
+    return events, _sha256_bytes(raw) if raw else None
 
 
 def _parse_account_event_bytes(path: Path, raw: bytes, *, tolerant: bool) -> list[dict]:
@@ -672,6 +896,28 @@ def _parse_account_event_bytes(path: Path, raw: bytes, *, tolerant: bool) -> lis
     return events
 
 
+def _read_legacy_account_events(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    tolerant: bool,
+) -> list[dict]:
+    """Read immutable pre-split evidence without acquiring a shared writer lock."""
+
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_EVENTS_FILENAME,
+    )
+    if path is None:
+        return []
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise AccountArtifactError(f"cannot read legacy account event journal: {exc}") from exc
+    return _parse_account_event_bytes(path, raw, tolerant=tolerant)
+
+
 def append_account_event(
     artifacts_root: Path,
     account_id: str,
@@ -679,15 +925,22 @@ def append_account_event(
     *,
     only_if_receipt_absent: bool = False,
 ) -> bool:
-    """Append an account event, optionally rejecting a duplicate receipt id atomically."""
+    """Append an operational event; durable receipt identities are exactly-once.
+
+    Callers cannot opt a receipt-bearing transition into restart-duplicate
+    semantics.  ``only_if_receipt_absent`` remains for explicit call sites,
+    while every non-empty ``receipt_id`` receives the same producer-local
+    cross-boot claim automatically.
+    """
     receipt_id = payload.get("receipt_id")
     if only_if_receipt_absent and (not isinstance(receipt_id, str) or not receipt_id):
         raise AccountArtifactError("idempotent account event receipt_id must not be empty")
+    receipt_is_present = isinstance(receipt_id, str) and bool(receipt_id)
     return _append_account_event(
         artifacts_root,
         account_id,
         {**payload, "account_id": account_id},
-        only_if_receipt_absent=only_if_receipt_absent,
+        only_if_receipt_absent=only_if_receipt_absent or receipt_is_present,
     )
 
 
@@ -728,7 +981,10 @@ def read_account_owner_generation(
     )
     if path is None:
         return None
-    return AccountOwnerGeneration.model_validate_json(path.read_text(encoding="utf-8"))
+    generation = AccountOwnerGeneration.model_validate_json(path.read_text(encoding="utf-8"))
+    if generation.account_id != account_id:
+        raise AccountArtifactError("account owner generation belongs to another account")
+    return generation
 
 
 def advance_account_clerk_generation(
@@ -753,6 +1009,8 @@ def advance_account_clerk_generation(
             if path.is_file()
             else None
         )
+        if existing is not None and existing.account_id != account_id:
+            raise AccountArtifactError("account clerk generation belongs to another account")
         generation = AccountClerkGeneration(
             account_id=account_id,
             generation=(existing.generation + 1 if existing is not None else 1),
@@ -784,7 +1042,10 @@ def read_account_clerk_generation(artifacts_root: Path, account_id: str) -> Acco
     )
     if path is None:
         return None
-    return AccountClerkGeneration.model_validate_json(path.read_text(encoding="utf-8"))
+    generation = AccountClerkGeneration.model_validate_json(path.read_text(encoding="utf-8"))
+    if generation.account_id != account_id:
+        raise AccountArtifactError("account clerk generation belongs to another account")
+    return generation
 
 
 def write_account_clerk_lease(artifacts_root: Path, lease: AccountClerkLease) -> Path:
@@ -806,7 +1067,10 @@ def read_account_clerk_lease(artifacts_root: Path, account_id: str) -> AccountCl
     )
     if path is None:
         return None
-    return AccountClerkLease.model_validate_json(path.read_text(encoding="utf-8"))
+    lease = AccountClerkLease.model_validate_json(path.read_text(encoding="utf-8"))
+    if lease.account_id != account_id:
+        raise AccountArtifactError("account clerk lease belongs to another account")
+    return lease
 
 
 def require_active_account_clerk_generation(
@@ -884,15 +1148,16 @@ def evaluate_restart_intensity(
     record_freeze: bool = True,
 ) -> GateResult:
     policy = policy or RestartIntensityPolicy()
-    events = read_account_events(artifacts_root, account_id)
-    window_start_ms = max(now_ms - policy.window_ms, _latest_restart_intensity_clear_ms(events) or 0)
-    restart_events = [
-        event
-        for event in events
-        if event.get("event_type") == "account_instance_binding_recorded"
-        and event.get("lifecycle_state") == "ACTIVE"
-        and window_start_ms <= int(event.get("recorded_at_ms") or -1) <= now_ms
-    ]
+    window_start_ms = max(
+        now_ms - policy.window_ms,
+        _latest_restart_intensity_clear_ms(artifacts_root, account_id) or 0,
+    )
+    restart_events = _restart_intensity_binding_events(
+        artifacts_root,
+        account_id=account_id,
+        window_start_ms=window_start_ms,
+        now_ms=now_ms,
+    )
     restart_groups = _restart_intensity_groups(restart_events)
     observed_count = _restart_intensity_count(restart_groups)
     reason = _restart_intensity_reason(
@@ -977,15 +1242,16 @@ def project_restart_intensity_gate(
     if additional_start_groups < 1:
         raise ValueError("additional_start_groups must be at least one")
     policy = policy or RestartIntensityPolicy()
-    events = read_account_events(artifacts_root, account_id)
-    window_start_ms = max(now_ms - policy.window_ms, _latest_restart_intensity_clear_ms(events) or 0)
-    restart_events = [
-        event
-        for event in events
-        if event.get("event_type") == "account_instance_binding_recorded"
-        and event.get("lifecycle_state") == "ACTIVE"
-        and window_start_ms <= int(event.get("recorded_at_ms") or -1) <= now_ms
-    ]
+    window_start_ms = max(
+        now_ms - policy.window_ms,
+        _latest_restart_intensity_clear_ms(artifacts_root, account_id) or 0,
+    )
+    restart_events = _restart_intensity_binding_events(
+        artifacts_root,
+        account_id=account_id,
+        window_start_ms=window_start_ms,
+        now_ms=now_ms,
+    )
     # Dead pre-start projection retained for parity with ``evaluate``: it treats
     # the proposed start(s) as repeat activations of the busiest bot, a
     # conservative upper bound that never under-reports intensity.
@@ -1053,15 +1319,92 @@ def _restart_intensity_count(groups: dict[str, list[dict]]) -> int:
     return max((len(events) for events in groups.values()), default=0)
 
 
-def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:
-    clears = [
-        int(event["cleared_at_ms"])
-        for event in events
-        if event.get("event_type") == "account_freeze_cleared"
-        and str(event.get("reason") or "").startswith(RESTART_INTENSITY_REASON)
-        and event.get("cleared_at_ms") is not None
+def _restart_intensity_binding_events(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    window_start_ms: int,
+    now_ms: int,
+) -> list[dict]:
+    """Project restart evidence from the typed binding registry, not history."""
+
+    # Runtime import avoids the legacy compatibility import cycle: the registry
+    # owns activation state, while this module owns the restart policy.
+    from app.engine.live.account_registry import read_account_instance_registry
+
+    return [
+        {
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "bot_order_namespace": binding.bot_order_namespace,
+            "recorded_at_ms": binding.recorded_at_ms,
+        }
+        for binding in read_account_instance_registry(artifacts_root, account_id)
+        if binding.lifecycle_state == "ACTIVE"
+        and window_start_ms <= binding.recorded_at_ms <= now_ms
     ]
-    return max(clears) if clears else None
+
+
+def _record_restart_intensity_clearance(
+    artifacts_root: Path,
+    account_id: str,
+    cleared_at_ms: int,
+) -> None:
+    """Retain the restart-intensity clear cutoff independently of the freeze slot.
+
+    The active-freeze artifact holds one freeze at a time, so a later unrelated
+    freeze would otherwise erase the cutoff that starts a fresh restart-intensity
+    window. This dedicated record keeps the latest cutoff monotonically.
+    """
+
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME,
+    )
+    with _file_lock(path):
+        existing = _read_restart_intensity_clearance_ms(artifacts_root, account_id)
+        if existing is not None and existing >= cleared_at_ms:
+            return
+        _atomic_write_json_locked(path, {"account_id": account_id, "cleared_at_ms": cleared_at_ms})
+
+
+def _read_restart_intensity_clearance_ms(artifacts_root: Path, account_id: str) -> int | None:
+    """Read the retained restart-intensity clear cutoff, if any."""
+
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME,
+    )
+    if path is None:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise AccountArtifactError("account restart-intensity clearance is unreadable") from exc
+    if not isinstance(payload, dict) or payload.get("account_id") != account_id:
+        raise AccountArtifactError("account restart-intensity clearance belongs to another account")
+    cleared_at_ms = payload.get("cleared_at_ms")
+    if not isinstance(cleared_at_ms, int) or isinstance(cleared_at_ms, bool) or cleared_at_ms < 0:
+        raise AccountArtifactError("account restart-intensity clearance has an invalid timestamp")
+    return cleared_at_ms
+
+
+def _latest_restart_intensity_clear_ms(artifacts_root: Path, account_id: str) -> int | None:
+    candidates: list[int] = []
+    dedicated = _read_restart_intensity_clearance_ms(artifacts_root, account_id)
+    if dedicated is not None:
+        candidates.append(dedicated)
+    evidence = read_account_freeze_evidence(artifacts_root, account_id)
+    if (
+        evidence is not None
+        and evidence.cleared_at_ms is not None
+        and evidence.source == RESTART_INTENSITY_SOURCE
+        and evidence.reason.startswith(RESTART_INTENSITY_REASON)
+    ):
+        candidates.append(evidence.cleared_at_ms)
+    return max(candidates) if candidates else None
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
@@ -1099,89 +1442,127 @@ def _append_account_event(
     *,
     only_if_receipt_absent: bool = False,
 ) -> bool:
-    path = _account_event_ledger_path(artifacts_root, account_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _account_event_lock(path):
-        if only_if_receipt_absent:
-            events = (
-                _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
-                if path.is_file()
-                else []
-            )
-            receipt_id = payload["receipt_id"]
-            if any(event.get("receipt_id") == receipt_id for event in events):
-                return False
-        enriched = dict(payload)
-        enriched["seq"] = _next_account_event_seq_locked(path)
-        enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
+    from app.engine.live.producer_operational_log import (
+        ProducerOperationalLogError,
+        append_producer_operational_event,
+        append_producer_operational_event_if_absent,
+    )
+
+    enriched = {**payload, "account_id": account_id}
+    _validate_account_event_timestamp_fields(enriched)
+    event_type = enriched.get("event_type")
+    if not isinstance(event_type, str) or not event_type:
+        raise AccountArtifactError("account event event_type must be a non-empty string")
+    producer = _producer_for_account_event(event_type)
+    idempotency_key = _account_event_idempotency_key(enriched)
+    # The compatibility payload can contain historical/generic timestamps
+    # such as ``created_at_ms``.  They are evidence *about* the operation,
+    # never proof of when this producer durably wrote this row.  Keep that
+    # evidence in payload and let the producer log establish the record clock.
+    recorded_at_ms = time.time_ns() // 1_000_000
+    event_at_ms = _compatibility_event_at_ms(enriched)
+    if only_if_receipt_absent:
         try:
-            record = AccountEventRecord.model_validate(enriched)
-        except ValidationError as exc:
-            raise AccountArtifactError(f"invalid account event payload: {exc}") from exc
-        line = json.dumps(record.model_dump(mode="json"), separators=(",", ":"), sort_keys=True) + "\n"
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.flush()
-            os.fsync(fh.fileno())
-        _write_account_event_sequence_locked(path, enriched["seq"])
-        _fsync_parent_dir(path)
+            return append_producer_operational_event_if_absent(
+                artifacts_root,
+                account_id=account_id,
+                producer=producer,
+                idempotency_key=idempotency_key,
+                event_type=event_type,
+                payload=enriched,
+                event_at_ms=event_at_ms,
+                arrived_at_ms=_int_ms_or_none(enriched.get("arrived_at_ms")),
+                recorded_at_ms=recorded_at_ms,
+            )
+        except ProducerOperationalLogError as exc:
+            raise AccountArtifactError(str(exc)) from exc
+    try:
+        append_producer_operational_event(
+            artifacts_root,
+            account_id=account_id,
+            producer=producer,
+            idempotency_key=idempotency_key,
+            event_type=event_type,
+            payload=enriched,
+            event_at_ms=event_at_ms,
+            arrived_at_ms=_int_ms_or_none(enriched.get("arrived_at_ms")),
+            recorded_at_ms=recorded_at_ms,
+        )
+    except ProducerOperationalLogError as exc:
+        raise AccountArtifactError(str(exc)) from exc
     return True
 
 
-@contextmanager
-def _account_event_lock(path: Path) -> Iterator[None]:
-    """Serialize account-event reads and writes across the host/VM boundary.
+def _producer_for_account_event(event_type: str) -> Literal[
+    "bot", "clerk_supervisor", "daemon", "data_plane"
+]:
+    """Route former shared events to the process that owns their operation."""
 
-    ``flock`` coordinates local processes but the host daemon and podman VM
-    observe the bind mount through independent advisory-lock domains. An
-    exclusive-create marker is arbitrated by the shared filesystem itself, so
-    only one runtime can allocate a sequence or replace the ledger at a time.
-    A stranded marker fails closed after a bounded wait; it is deliberately
-    never guessed stale and removed by a concurrent writer.
+    if event_type.startswith(("account_instance_binding", "account_binding_retirement")):
+        return "daemon"
+    if event_type.startswith(("account_owner_", "account_clerk_", "account_epoch_")):
+        return "clerk_supervisor"
+    if event_type.startswith("account_observation_lease_shadow"):
+        return "bot"
+    return "data_plane"
+
+
+def _account_event_idempotency_key(payload: Mapping[str, object]) -> str:
+    """Return a receipt identity without collapsing separate observations.
+
+    A caller-supplied receipt is the durable replay identity.  Older account
+    event callers that do not own such a receipt represent independent
+    operational observations even when their payload and test clock coincide,
+    so each gets an immutable per-emission identity rather than being silently
+    dropped as a duplicate.
     """
 
-    mutex_path = path.with_name(ACCOUNT_EVENTS_MUTEX_FILENAME)
-    deadline = time.monotonic() + _ACCOUNT_EVENT_MUTEX_TIMEOUT_SECONDS
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    with _file_lock(path):
-        while True:
-            try:
-                descriptor = os.open(mutex_path, flags, 0o600)
-            except FileExistsError:
-                if time.monotonic() >= deadline:
-                    raise AccountArtifactError(
-                        f"account event mutex is already held: {mutex_path}"
-                    ) from None
-                time.sleep(_ACCOUNT_EVENT_MUTEX_POLL_SECONDS)
-                continue
-            except OSError as exc:
-                raise AccountArtifactError(
-                    f"account event mutex could not be acquired: {mutex_path}: {exc}"
-                ) from exc
-            break
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(
-                    json.dumps(
-                        {
-                            "created_at_ms": time.time_ns() // 1_000_000,
-                            "pid": os.getpid(),
-                        },
-                        separators=(",", ":"),
-                        sort_keys=True,
-                    )
-                )
-                handle.flush()
-                os.fsync(handle.fileno())
-            yield
-        finally:
-            try:
-                mutex_path.unlink()
-            except FileNotFoundError:
-                logger.error(
-                    "Account event mutex disappeared while held",
-                    extra={"path": str(mutex_path)},
-                )
+    receipt_id = payload.get("receipt_id")
+    if isinstance(receipt_id, str) and receipt_id:
+        raw_key = f"receipt:{receipt_id}"
+        # Recovery receipts may legally contain a 256-character user supplied
+        # idempotency component.  The producer record keeps its key bounded;
+        # hash only its representation, never the durable receipt in payload.
+        if len(raw_key) <= 256:
+            return raw_key
+        import hashlib
+
+        return f"receipt-sha256:{hashlib.sha256(raw_key.encode()).hexdigest()}"
+    import hashlib
+
+    serialized = json.dumps(payload, separators=(",", ":"), sort_keys=True, default=str)
+    return f"observation:{hashlib.sha256(serialized.encode()).hexdigest()}:{uuid.uuid4().hex}"
+
+
+def _compatibility_event_at_ms(payload: Mapping[str, object]) -> int | None:
+    """Map only unambiguous legacy operation clocks to the source-event clock.
+
+    ``created_at_ms`` and generic legacy ``ts_ms`` deliberately remain payload
+    evidence: neither proves when the callback occurred.  Named state-change
+    clocks, by contrast, are already authored as the time the corresponding
+    transition happened and retain the old display ordering without ever being
+    presented as this producer's durable-record clock.
+    """
+
+    explicit = _int_ms_or_none(payload.get("event_at_ms"))
+    if explicit is not None:
+        return explicit
+    fields = (
+        ("cleared_at_ms", "recorded_at_ms")
+        if payload.get("event_type") == "account_freeze_cleared"
+        else ("recorded_at_ms", "cleared_at_ms")
+    ) + (
+        "approved_at_ms",
+        "updated_at_ms",
+        "decided_at_ms",
+        "completed_at_ms",
+        "started_at_ms",
+    )
+    for field in fields:
+        value = _int_ms_or_none(payload.get(field))
+        if value is not None:
+            return value
+    return None
 
 
 def _account_event_ledger_path(artifacts_root: Path, account_id: str) -> Path:
@@ -1290,16 +1671,6 @@ def _write_account_event_sequence_locked(event_path: Path, last_seq: int) -> Non
     _atomic_write_json_locked(counter_path, {"last_seq": last_seq})
 
 
-def _account_event_ts_ms_for_write(payload: dict) -> int:
-    if "ts_ms" in payload and _int_ms_or_none(payload.get("ts_ms")) is None:
-        raise AccountArtifactError("account event ts_ms must be a non-negative int64 ms UTC value")
-    _validate_account_event_timestamp_fields(payload)
-    resolved, _field = resolve_account_event_ts_ms(payload)
-    if resolved is not None:
-        return resolved
-    return time.time_ns() // 1_000_000
-
-
 def resolve_account_event_ts_ms(row: Mapping[str, object]) -> tuple[int | None, str | None]:
     explicit = _int_ms_or_none(row.get("ts_ms"))
     if explicit is not None:
@@ -1368,6 +1739,8 @@ _LOCAL_EXPORTS = [
     "ACCOUNT_CLERK_LEASE_FILENAME",
     "ACCOUNT_FREEZE_FILENAME",
     "ACCOUNT_OWNER_GENERATION_FILENAME",
+    "ACCOUNT_RECOVERY_CLEARANCE_FILENAME",
+    "ACCOUNT_RESTART_INTENSITY_CLEARANCE_FILENAME",
     "RESTART_INTENSITY_REASON",
     "RESTART_INTENSITY_SOURCE",
     "AccountArtifactError",
@@ -1380,6 +1753,7 @@ _LOCAL_EXPORTS = [
     "AccountFreezeEvidence",
     "AccountOwnerGeneration",
     "AccountRecoveryProof",
+    "AccountRecoveryClearance",
     "RestartIntensityPolicy",
     "account_artifacts_root",
     "list_account_artifact_ids",
@@ -1389,6 +1763,7 @@ _LOCAL_EXPORTS = [
     "evaluate_restart_intensity",
     "project_restart_intensity_gate",
     "read_account_events",
+    "read_legacy_account_events",
     "repair_account_event_sequence",
     "read_account_events_with_snapshot",
     "read_account_clerk_generation",
@@ -1398,8 +1773,12 @@ _LOCAL_EXPORTS = [
     "read_account_events_tolerant",
     "read_account_events_tolerant_with_hash",
     "read_account_freeze",
+    "read_account_freeze_evidence",
+    "read_account_recovery_clearance",
+    "read_or_migrate_account_recovery_clearance",
     "read_account_owner_generation",
     "resolve_account_event_ts_ms",
+    "record_account_recovery_clearance",
     "write_account_freeze",
     "write_account_clerk_lease",
     "write_account_owner_generation",

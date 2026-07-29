@@ -41,6 +41,7 @@ from app.engine.execution.order_sizer import OrderSizer, WholeAccountPortfolioVa
 from app.engine.execution.signal_intent_executor import SignalIntentExecutor
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 from app.engine.live import bot_event_spine
+from app.engine.live.account_custody_projection import CustodyEntryPendingError, CustodyProjection
 from app.engine.live.artifacts import (
     CORE_DECISION_COLUMNS,
     DECISION_COLUMNS,
@@ -64,7 +65,11 @@ from app.engine.live.broker_callbacks import (
 from app.engine.live.broker_callbacks import (
     broker_callbacks_wal_path as default_broker_callbacks_wal_path,
 )
-from app.engine.live.clock_out import ClockOutReceipt, write_clock_out_receipt
+from app.engine.live.clock_out import (
+    ClockOutReceipt,
+    clock_out_is_in_progress,
+    write_clock_out_receipt,
+)
 from app.engine.live.command_channel import (
     Command,
     CommandChannel,
@@ -72,7 +77,11 @@ from app.engine.live.command_channel import (
     CommandVerb,
 )
 from app.engine.live.config import LiveConfig
-from app.engine.live.desired_state import DesiredState
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRecord,
+)
 from app.engine.live.halt import (
     FatalHaltError,
     PoisonedHaltReason,
@@ -82,6 +91,7 @@ from app.engine.live.halt import (
 )
 from app.engine.live.live_context import LiveContext
 from app.engine.live.live_portfolio import (
+    AccountSuspendedEntryPauseError,
     BrokerAdapter,
     ControlledLiveHaltError,
     IbkrBrokerAdapter,
@@ -89,6 +99,7 @@ from app.engine.live.live_portfolio import (
     LivePortfolio,
     TransientAccountFreezePauseError,
 )
+from app.engine.live.live_state_sidecar import LiveStateSidecarCorruptError
 from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_live_readiness_emission
 from app.engine.live.readiness_sidecar import write_readiness
@@ -497,6 +508,11 @@ class LiveEngine:
         # channel dispatches PAUSE/RESUME/STOP so it outlives this run.
         start_paused: bool = False,
         desired_state_writer: Callable[[DesiredState, str], None] | None = None,
+        # The control loop also observes the durable desired-state sidecar.
+        # This is the recovery path when the data plane cannot reach the host
+        # daemon to enqueue a per-run command, but the shared artifact store
+        # remains available to the running engine.
+        desired_state_reader: Callable[[], DesiredState | DesiredStateRecord] | None = None,
         # NEW: decision-row provenance (PRD-A §16.1 Resolution 5). Threaded
         # from run.py off the ledger + resolved spec. ``decision_columns``
         # is the resolved parquet schema (core + spec.decision_columns);
@@ -599,6 +615,7 @@ class LiveEngine:
         # Per-order metadata captured at submit time; used to expand
         # IBKR fill events back into engine OrderEvents.
         self._order_meta: dict[int, _OrderMeta] = {}
+        self._custody_projection: CustodyProjection | None = None
         # Optional artifact-writer integration. When ``output_dir`` is
         # set, the run() loop opens a LiveArtifactWriters bundle, feeds
         # input bars / decisions / executions / trades / equity snapshots,
@@ -645,6 +662,8 @@ class LiveEngine:
         self._live_state_writer = live_state_writer
         self._command_channel = command_channel
         self._desired_state_writer = desired_state_writer
+        self._desired_state_reader = desired_state_reader
+        self._end_day_intent_active = False
         # PAUSE drops new orders the strategy queues each bar; RESUME
         # restores normal submission. STOP / MARK_POISONED set the
         # bar loop's shutdown_event so the existing graceful path runs.
@@ -734,6 +753,7 @@ class LiveEngine:
         self._account_registry_gate_enabled = account_registry_gate_enabled
         self._account_gate_authority = account_gate_authority
         self._account_truth_gate_provider: Callable[[], object] | None = None
+        self._account_safety_gate_provider: Callable[[], object] | None = None
         self._account_live_feed_evidence_write_failed = False
         self._owner_generation_provider = owner_generation_provider
         self._current_owner_generation_provider = (
@@ -942,7 +962,14 @@ class LiveEngine:
                 )
 
         account_truth_gate_provider = None
+        account_safety_gate_provider = None
+        self._account_truth_gate_provider = None
+        self._account_safety_gate_provider = None
         if self._account_id and getattr(self._broker, "requires_durable_submit", False):
+            from app.engine.live.account_safety import (
+                AccountSafetyAuthority,
+                AccountSafetyVerdict,
+            )
             from app.services.account_truth_snapshot import (
                 AccountTruthSubmitGrace,
                 get_account_truth_snapshot_provider,
@@ -950,12 +977,45 @@ class LiveEngine:
             from app.utils.timestamps import now_ms_utc
 
             account_truth_submit_grace = AccountTruthSubmitGrace()
+            safety_authority = (
+                AccountSafetyAuthority(
+                    artifacts_root=self._artifacts_root,
+                    account_id=self._account_id,
+                    now_ms=now_ms_utc,
+                )
+                if self._artifacts_root is not None
+                else None
+            )
+
+            def account_safety_gate_provider():
+                if safety_authority is not None:
+                    # AccountReconciliationService owns the durable Account
+                    # Truth-to-safety fold.  Portfolio submission only reads
+                    # that projection; it must never take a cross-runtime
+                    # writer permit or mutate safety from the bot event loop.
+                    safety = safety_authority.read()
+                    if safety.verdict is not AccountSafetyVerdict.CLEAN:
+                        suspension = safety.suspension
+                        return GateResult(
+                            gate_id="account.safety",
+                            status="block",
+                            source="account_safety",
+                            operator_reason="ACCOUNT_SAFETY_RETIRED_OWNER_LIVE_EXPOSURE",
+                            operator_next_step="RECONCILE_NOW",
+                            evidence_at_ms=(
+                                suspension.detected_at_ms
+                                if suspension is not None
+                                else safety.updated_at_ms
+                            ),
+                        )
+                return None
 
             def account_truth_gate_provider():
                 snapshot = get_account_truth_snapshot_provider().get(self._account_id)
                 return account_truth_submit_grace.gate(snapshot, now_ms=now_ms_utc())
 
             self._account_truth_gate_provider = account_truth_gate_provider
+            self._account_safety_gate_provider = account_safety_gate_provider
 
         account_observation_lease_gate_provider = None
         account_observation_lease_shadow_comparison_observer = None
@@ -973,6 +1033,7 @@ class LiveEngine:
             from app.services.observation_lease_parity import (
                 OBSERVATION_LEASE_GENERATION_AUTHORITY,
                 OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+                record_observation_lease_shadow_comparison,
             )
             from app.utils.timestamps import now_ms_utc
 
@@ -984,34 +1045,40 @@ class LiveEngine:
                 )
                 return account_observation_lease_gate_result(assessment)
 
-            def account_observation_lease_shadow_comparison_observer(
-                truth_gate,
-                lease_gate,
-            ):
-                append_account_event(
+            async def account_observation_lease_shadow_comparison_observer(
+                truth_gate: GateResult,
+                lease_gate: GateResult,
+            ) -> None:
+                payload = {
+                    "event_type": "account_observation_lease_shadow_comparison",
+                    "comparison_schema_version": (
+                        OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION
+                    ),
+                    "recorded_at_ms": now_ms_utc(),
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "run_id": self._run_id,
+                    "truth_gate_id": truth_gate.gate_id,
+                    "truth_source": truth_gate.source,
+                    "truth_status": truth_gate.status,
+                    "truth_reason_code": truth_gate.operator_reason,
+                    "lease_gate_id": lease_gate.gate_id,
+                    "lease_source": lease_gate.source,
+                    "lease_status": lease_gate.status,
+                    "lease_reason_code": lease_gate.operator_reason,
+                    "lease_schema_version": ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION,
+                    "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
+                }
+                await asyncio.to_thread(
+                    record_observation_lease_shadow_comparison,
                     self._artifacts_root,
                     self._account_id,
-                    {
-                        "event_type": "account_observation_lease_shadow_comparison",
-                        "comparison_schema_version": (
-                            OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION
-                        ),
-                        "recorded_at_ms": now_ms_utc(),
-                        "strategy_instance_id": self._strategy_instance_id,
-                        "run_id": self._run_id,
-                        "truth_gate_id": truth_gate.gate_id,
-                        "truth_source": truth_gate.source,
-                        "truth_status": truth_gate.status,
-                        "truth_reason_code": truth_gate.operator_reason,
-                        "lease_gate_id": lease_gate.gate_id,
-                        "lease_source": lease_gate.source,
-                        "lease_status": lease_gate.status,
-                        "lease_reason_code": lease_gate.operator_reason,
-                        "lease_schema_version": ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION,
-                        "lease_generation_authority": (
-                            OBSERVATION_LEASE_GENERATION_AUTHORITY
-                        ),
-                    },
+                    payload,
+                )
+                await asyncio.to_thread(
+                    append_account_event,
+                    self._artifacts_root,
+                    self._account_id,
+                    payload,
                 )
 
         account_live_session_gate_provider = None
@@ -1112,6 +1179,7 @@ class LiveEngine:
                 self._account_registry_gate_result if self._account_registry_gate_enabled else None
             ),
             account_truth_gate_provider=self._account_truth_gate_provider,
+            account_safety_gate_provider=self._account_safety_gate_provider,
             account_observation_lease_gate_provider=account_observation_lease_gate_provider,
             account_gate_authority=effective_account_gate_authority,
             account_gate_authority_provider=account_gate_authority_provider,
@@ -1129,6 +1197,7 @@ class LiveEngine:
             owner_generation_provider=self._owner_generation_provider,
             trace_id_provider=self._trace_id_provider,
         )
+        self._custody_projection = portfolio.custody_projection
         if self._config.sizing is not None:
             portfolio.order_sizer = OrderSizer(
                 self._config.sizing,
@@ -1248,6 +1317,8 @@ class LiveEngine:
 
             raw_events = self._drain_raw_real_broker_events()
             self._append_raw_broker_callbacks(raw_events)
+            for raw_event in raw_events:
+                self._adopt_custody_callback_metadata(raw_event)
             if self._halt_enabled and raw_events:
                 self._extend_seen_executions(seen_executions, raw_events)
                 await self._check_halt_outside_mutation(
@@ -1774,6 +1845,7 @@ class LiveEngine:
                 self._reconcile_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._reconcile_task
+            await portfolio.drain_shadow_comparisons()
             # NEW: indicator-state checkpoint at graceful shutdown.
             if last_bar is not None:
                 try:
@@ -2117,7 +2189,7 @@ class LiveEngine:
             return
         try:
             self._live_state_writer(portfolio, bar_close_ms)
-        except Exception:
+        except (DesiredStateCorruptError, LiveStateSidecarCorruptError, OSError):
             logger.exception("live-state sidecar write failed; continuing")
 
     @staticmethod
@@ -2247,6 +2319,19 @@ class LiveEngine:
             return []
         try:
             acks = await portfolio.submit_pending_orders()
+        except AccountSuspendedEntryPauseError as pause:
+            # S6: a sibling's retired-owner exposure suspends account entry
+            # risk, but must not terminally retire or fatal-halt this healthy
+            # run. The pending entry has already been dropped by the portfolio
+            # boundary; wait for the Clerk's current-epoch reconciliation.
+            logger.warning(
+                "[ACCOUNT_SUSPENDED] strategy=%s pending=%d — entries paused this bar; "
+                "run stays alive while %s is reconciled",
+                self._strategy_key,
+                len(pending_snapshot),
+                pause.reason,
+            )
+            return []
         except TransientAccountFreezePauseError as pause:
             # Active restart-intensity evidence paused submits this bar. Pending
             # orders were already dropped at the gate, so nothing was submitted;
@@ -2262,8 +2347,32 @@ class LiveEngine:
                 pause.reason,
             )
             return []
+        except CustodyEntryPendingError as pending:
+            # A prior entry is still durably owned by the Clerk.  The
+            # duplicate local order was drained at the portfolio boundary;
+            # continue this healthy bot and wait for the original intent's
+            # callback rather than turning ordinary backpressure into a halt.
+            logger.info(
+                "[CUSTODY_ENTRY_PENDING] strategy=%s intent_id=%s — duplicate entry suppressed (%s)",
+                self._strategy_key,
+                pending.intent_id,
+                pending.reason,
+            )
+            return []
         submitted_at_ms = now_ms_utc()
-        for order, ack in zip(pending_snapshot, acks, strict=True):
+        self._custody_projection = portfolio.custody_projection
+        direct_ack_orders = []
+        for order in pending_snapshot:
+            pending_identity = pending_identities.get(order.order_id)
+            custody_metadata = portfolio.custody_projection.capture_submission_metadata(
+                order_id=order.order_id,
+                evaluation_id=(
+                    pending_identity.evaluation_id if pending_identity is not None else evaluation_id
+                ),
+            )
+            if custody_metadata is None:
+                direct_ack_orders.append(order)
+        for order, ack in zip(direct_ack_orders, acks, strict=True):
             bot_event_identity = bot_event_spine.submitted_bot_event_identity(
                 ack,
                 pending_identities.get(order.order_id),
@@ -2331,7 +2440,8 @@ class LiveEngine:
                 logger.exception("command channel read_pending failed; sleeping then retrying")
                 pending = []
             for cmd in pending:
-                outcome = self._dispatch_command(cmd, shutdown_event)
+                durable_state = self._apply_durable_desired_state(shutdown_event)
+                outcome = self._dispatch_command(cmd, shutdown_event, durable_state=durable_state)
                 try:
                     self._command_channel.ack(cmd, outcome=outcome)
                 except Exception:
@@ -2340,13 +2450,103 @@ class LiveEngine:
                         cmd.seq,
                         cmd.verb.value,
                     )
+            if not pending:
+                self._apply_durable_desired_state(shutdown_event)
             # Mark successful completion of the command-channel critical
             # section too. A slow read/ack pass means the loop is alive but
             # would otherwise look stale until the next cycle starts.
             await self._publish_command_loop_block()
+            if shutdown_event.is_set():
+                return
             await asyncio.sleep(1.0)
 
-    def _dispatch_command(self, cmd: Command, shutdown_event: asyncio.Event) -> dict:
+    def _apply_durable_desired_state(self, shutdown_event: asyncio.Event) -> DesiredState | None:
+        """Apply a newer durable operator intent without rewriting it.
+
+        The command queue is the normal low-latency actuation path. During a
+        data-plane-to-daemon outage, however, an operator can still persist a
+        risk-reducing desired state. Reading that sidecar here makes the
+        running engine the eventual actuator while preserving the original
+        durable writer and avoiding a duplicate command/receipt.
+
+        An unreadable sidecar is handled conservatively: pause new entries and
+        leave the process alive for inspection. It is not safe to infer a
+        RUNNING intent from corrupt durable control evidence.
+        """
+
+        if self._desired_state_reader is None:
+            return None
+        try:
+            observed = self._desired_state_reader()
+        except Exception:
+            logger.exception("durable desired-state read failed; pausing new entries")
+            self._paused = True
+            return None
+        if isinstance(observed, DesiredStateRecord):
+            desired_state = observed.desired_state
+            self._end_day_intent_active = (
+                observed.desired_state is DesiredState.PAUSED
+                and observed.end_day_requested
+            )
+        else:
+            desired_state = observed
+            self._end_day_intent_active = False
+        if desired_state is DesiredState.PAUSED:
+            self._paused = True
+        elif desired_state is DesiredState.RUNNING:
+            self._paused = False
+        elif desired_state is DesiredState.STOPPED:
+            shutdown_event.set()
+        if self._end_day_intent_active:
+            self._queue_durable_end_day_clock_out()
+        return desired_state
+
+    def _queue_durable_end_day_clock_out(self) -> None:
+        """Turn an outage-time end-day intent into the normal audited command.
+
+        The desired-state marker lives by strategy instance rather than by run,
+        so it survives precisely the data-plane/daemon partition that prevented
+        the API from writing a run-local command.  Once this engine can read
+        that marker it writes the same CLOCK_OUT command and receipt sequence
+        as an observed API request.  A failed clock-out leaves the marker in
+        place, allowing a bounded retry on a later poll instead of silently
+        degrading end-day into an ordinary pause.
+        """
+
+        if self._clock_out_command is not None:
+            return
+        if self._command_channel is None or self._output_dir is None:
+            logger.error(
+                "durable end-day intent cannot enqueue clock-out without run command artifacts",
+                extra={"run_id": self._run_id, "strategy_instance_id": self._strategy_instance_id},
+            )
+            return
+        try:
+            if clock_out_is_in_progress(self._output_dir):
+                return
+            command = self._command_channel.write_from_operator(CommandVerb.CLOCK_OUT)
+        except OSError:
+            logger.exception(
+                "durable end-day intent could not enqueue clock-out; will retry",
+                extra={"run_id": self._run_id, "strategy_instance_id": self._strategy_instance_id},
+            )
+            return
+        logger.info(
+            "durable end-day intent queued clock-out",
+            extra={
+                "run_id": self._run_id,
+                "strategy_instance_id": self._strategy_instance_id,
+                "command_seq": command.seq,
+            },
+        )
+
+    def _dispatch_command(
+        self,
+        cmd: Command,
+        shutdown_event: asyncio.Event,
+        *,
+        durable_state: DesiredState | None = None,
+    ) -> dict:
         """Apply a single command to engine state. Returns the outcome
         payload that will be written into the ack file.
 
@@ -2354,6 +2554,28 @@ class LiveEngine:
         down the poll loop; the outcome reflects the failure for
         post-mortem inspection.
         """
+        expected_state = {
+            CommandVerb.PAUSE: DesiredState.PAUSED,
+            CommandVerb.RESUME: DesiredState.RUNNING,
+            CommandVerb.STOP: DesiredState.STOPPED,
+            CommandVerb.CLOCK_OUT: DesiredState.PAUSED,
+        }.get(cmd.verb)
+        if expected_state is not None and self._desired_state_reader is not None:
+            if durable_state is None:
+                return {
+                    "status": "superseded",
+                    "reason_code": "DURABLE_INTENT_UNAVAILABLE",
+                    "effect": "command skipped because current durable intent is unreadable",
+                }
+            if durable_state is not expected_state:
+                return {
+                    "status": "superseded",
+                    "reason_code": "DURABLE_INTENT_SUPERSEDED",
+                    "effect": (
+                        f"{cmd.verb.value} skipped because durable intent is "
+                        f"{durable_state.value}"
+                    ),
+                }
         try:
             if cmd.verb is CommandVerb.PAUSE:
                 self._persist_command_desired_state(
@@ -2391,10 +2613,11 @@ class LiveEngine:
             if cmd.verb is CommandVerb.CLOCK_OUT:
                 if self._clock_out_command is not None:
                     return {"status": "already_running", "effect": "clock_out_in_progress"}
-                self._persist_command_desired_state(
-                    DesiredState.PAUSED,
-                    "command_channel:CLOCK_OUT",
-                )
+                if not self._end_day_intent_active:
+                    self._persist_command_desired_state(
+                        DesiredState.PAUSED,
+                        "command_channel:CLOCK_OUT",
+                    )
                 self._paused = True
                 self._clock_out_command = cmd
                 return {"status": "accepted", "effect": "clock_out_queued"}
@@ -3336,10 +3559,40 @@ class LiveEngine:
             return []
         out: list[OrderEvent] = []
         for fill in self._broker.drain_broker_events():
+            self._adopt_custody_callback_metadata(fill)
             engine_event = self._convert_ibkr_fill(fill)
             if engine_event is not None:
                 out.append(engine_event)
         return out
+
+    def _adopt_custody_callback_metadata(
+        self,
+        event: IbkrOrderEvent,
+    ) -> None:
+        """Install metadata validated by the dedicated custody projection."""
+
+        if self._custody_projection is None:
+            return
+        meta = self._custody_projection.adopt_callback(
+            event,
+            strategy_instance_id=self._strategy_instance_id,
+        )
+        if meta is None:
+            return
+
+        if event.perm_id is not None:
+            self._owned_perm_ids.add(int(event.perm_id))
+        if int(event.order_id) not in self._order_meta:
+            self._order_meta[int(event.order_id)] = _OrderMeta(
+                symbol=meta.symbol,
+                tag=meta.tag,
+                signed_qty=meta.signed_qty,
+                submitted_at_ms=meta.submitted_at_ms,
+                evaluation_id=meta.evaluation_id,
+                intent_id=meta.intent_id,
+                order_ref=meta.order_ref,
+                perm_id=event.perm_id if event.perm_id is not None else meta.perm_id,
+            )
 
     def _check_reconnect_revalidation(self, portfolio: LivePortfolio) -> None:
         """Phase 3 reconnect re-validation / VCR-0006.

@@ -6,7 +6,12 @@ import json
 import logging
 from pathlib import Path
 
-from app.engine.live.account_artifacts import AccountArtifactError, AccountAuditedOverride, append_account_event
+from app.engine.live.account_artifacts import (
+    AccountArtifactError,
+    AccountAuditedOverride,
+    append_account_event,
+    record_account_recovery_clearance,
+)
 from app.engine.live.account_registry import AccountInstanceBinding, crash_retired_restart_blocking_binding
 from app.engine.live.exit_taxonomy import LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
 from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
@@ -152,6 +157,11 @@ def record_crash_recovery_override_evidence(
         strategy_instance_id=strategy_instance_id,
         run_id=binding.run_id,
         bot_order_namespace=binding.bot_order_namespace,
+    )
+    record_account_recovery_clearance(
+        artifacts_root,
+        audited_override=override,
+        cleared_at_ms=recorded_at_ms,
     )
     append_account_event(
         artifacts_root,

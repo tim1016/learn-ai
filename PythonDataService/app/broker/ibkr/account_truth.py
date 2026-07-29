@@ -91,33 +91,50 @@ _ACKNOWLEDGED_STATUSES = frozenset({"PreSubmitted", "Submitted"})
 def _account_monitor_blockers(messages: Sequence[AccountTruthMessage]) -> list[OperatorBlocker]:
     """Project Account Truth messages into Account Monitor-scoped moves."""
 
-    return [
-        OperatorBlocker.for_host(
-            condition_id=message.code,
-            scope="account",
-            host="account_monitor",
-            anchor=SURFACE_ANCHOR,
-            audience="operator",
-            disposition="fix_here",
-            headline=message.title,
-            detail=message.message,
-            primary_move=OperatorMove(
-                label="Run account reconcile",
-                action=ConfirmInFormAction(
-                    kind="confirm_in_form",
-                    anchor="account-reconciliation-action",
+    blockers: list[OperatorBlocker] = []
+    for message in messages:
+        retired_owner_suspension = message.code == "retired_owner_live_exposure"
+        blockers.append(
+            OperatorBlocker.for_host(
+                condition_id=message.code,
+                scope="account",
+                host="account_monitor",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
+                disposition="fix_here",
+                headline=(
+                    "Retired bot exposure suspends new account entries"
+                    if retired_owner_suspension
+                    else message.title
                 ),
-            ),
-            applies_to="both",
-            severity="blocking" if message.severity == "critical" else "warning",
-            evidence={
-                key: value
-                for key, value in message.forensic_facts.items()
-                if isinstance(value, (str, int, float, bool)) or value is None
-            },
+                detail=(
+                    "A retired bot still has attributable broker exposure. Healthy bots remain "
+                    "on duty but cannot open new entries until the Account Clerk records a "
+                    "fresh current-epoch reconciliation with no remaining retired custody."
+                    if retired_owner_suspension
+                    else message.message
+                ),
+                primary_move=OperatorMove(
+                    label=(
+                        "Reconcile retired-owner exposure"
+                        if retired_owner_suspension
+                        else "Run account reconcile"
+                    ),
+                    action=ConfirmInFormAction(
+                        kind="confirm_in_form",
+                        anchor="account-reconciliation-action",
+                    ),
+                ),
+                applies_to="both",
+                severity="blocking" if message.severity == "critical" else "warning",
+                evidence={
+                    key: value
+                    for key, value in message.forensic_facts.items()
+                    if isinstance(value, (str, int, float, bool)) or value is None
+                },
+            )
         )
-        for message in messages
-    ]
+    return blockers
 
 
 def _account_desk_holdings_blockers(

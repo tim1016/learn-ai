@@ -36,8 +36,12 @@ def latest_run_dir_for_instance(artifacts_root: Path, strategy_instance_id: str)
     return candidates[0][1]
 
 
-def account_id_from_run_ledger(run_dir: Path) -> str | None:
-    """Return the account id from a run ledger when present and readable."""
+def account_id_from_run_ledger(
+    run_dir: Path,
+    *,
+    expected_run_id: str | None = None,
+) -> str | None:
+    """Return a readable ledger's account id, optionally bound to one run id."""
 
     ledger_path = run_dir / "run_ledger.json"
     if not ledger_path.exists():
@@ -46,7 +50,11 @@ def account_id_from_run_ledger(run_dir: Path) -> str | None:
         payload = json.loads(ledger_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return None
-    account_id = payload.get("account_id") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if expected_run_id is not None and payload.get("run_id") != expected_run_id:
+        return None
+    account_id = payload.get("account_id")
     if not isinstance(account_id, str) or not account_id:
         return None
     return account_id

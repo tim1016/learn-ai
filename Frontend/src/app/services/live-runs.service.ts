@@ -7,8 +7,6 @@ import type {
   CommandsSummary,
   CommandWriteRequest,
   CommandWriteResponse,
-  DesiredStateWriteRequest,
-  DesiredStateWriteResponse,
   EngineStrategyInfo,
   HostRunnerActionResponse,
   HostRunnerDeployRequest,
@@ -90,25 +88,6 @@ export class LiveRunsService {
     );
   }
 
-  /**
-   * UI-3 — write durable operator intent (pause/resume/stop) to the
-   * desired-state sidecar. Backed by the sibling backend PR
-   * `prd-a/ui-1-status-and-controls-api`. The write is addressed by
-   * `run_id`; the backend resolves the run's `strategy_instance_id` and
-   * writes `artifacts/live_state/<strategy_instance_id>/desired_state.json`.
-   */
-  writeDesiredState(
-    runId: string,
-    request: DesiredStateWriteRequest,
-  ): Promise<DesiredStateWriteResponse> {
-    return firstValueFrom(
-      this.http.post<DesiredStateWriteResponse>(
-        `${this.base}/${encodeURIComponent(runId)}/desired-state`,
-        request,
-      ),
-    );
-  }
-
   /** UI-4 — read the per-run command pending/ack timeline. */
   getCommands(runId: string): Promise<CommandsSummary> {
     return firstValueFrom(
@@ -174,9 +153,9 @@ export class LiveRunsService {
     );
   }
 
-  stopHostRunner(runId: string, request: HostRunnerStopRequest): Promise<HostRunnerActionResponse> {
+  stopHostRunner(runId: string, request: HostRunnerStopRequest): Promise<SetInstanceDesiredStateResponse> {
     return firstValueFrom(
-      this.http.post<HostRunnerActionResponse>(
+      this.http.post<SetInstanceDesiredStateResponse>(
         `${this.instancesBase}/runs/${encodeURIComponent(runId)}/stop`,
         request,
       ),
@@ -186,9 +165,9 @@ export class LiveRunsService {
   endDayNow(
     instanceId: string,
     request: HostRunnerStopRequest = { force: false },
-  ): Promise<HostRunnerActionResponse> {
+  ): Promise<SetInstanceDesiredStateResponse> {
     return firstValueFrom(
-      this.http.post<HostRunnerActionResponse>(
+      this.http.post<SetInstanceDesiredStateResponse>(
         `${this.instancesBase}/${encodeURIComponent(instanceId)}/end-day-now`,
         request,
       ),

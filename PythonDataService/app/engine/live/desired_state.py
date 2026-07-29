@@ -96,6 +96,11 @@ class DesiredStateRecord(BaseModel):
     # before the append-only disposition commit.
     last_disposition_id: str | None = None
     last_disposition_action: str | None = None
+    # End-day is stronger than an ordinary pause: the running engine must
+    # eventually queue an audited CLOCK_OUT after a control-plane outage.
+    # This explicit marker is intentionally not inferred from ``reason``;
+    # reasons are operator prose, not durable execution semantics.
+    end_day_requested: bool = False
     version: int = 1
 
 
@@ -172,6 +177,7 @@ class DesiredStateRepo:
         updated_by: str,
         now_ms: int,
         reason: str | None = None,
+        end_day_requested: bool = False,
         disposition_id: str | None = None,
         disposition_action: str | None = None,
     ) -> DesiredStateRecord:
@@ -207,6 +213,7 @@ class DesiredStateRepo:
                     if disposition_action is not None
                     else (existing.last_disposition_action if existing is not None else None)
                 ),
+                end_day_requested=end_day_requested,
                 version=next_version,
             )
             self._write_locked(path, record)

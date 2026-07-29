@@ -8,6 +8,8 @@ the durable recorded-intent rows.
 
 from __future__ import annotations
 
+import contextlib
+import sys
 import time
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -26,6 +28,7 @@ from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerEventReceipt,
     AccountClerkBrokerEvidenceBaseline,
     AccountClerkCancelNamespaceReceipt,
+    AccountClerkCustodyStatus,
     AccountClerkEmergencyAuthorization,
     AccountClerkEmergencyFlattenReceipt,
     AccountClerkEmergencyOperationEvent,
@@ -35,10 +38,13 @@ from app.engine.live.account_clerk_journal_models import (
     AccountClerkJournalEntry,
     AccountClerkOperatorAdjustment,
     AccountClerkOperatorAdjustmentConflict,
+    AccountClerkPendingCancelReceipt,
     AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
     _require_entry_intent,
 )
+from app.engine.live.account_effect_models import AccountEffectEvidence
+from app.engine.live.account_epoch import AccountEpoch
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
 from app.engine.live.journal_recovery_state import (
@@ -69,10 +75,15 @@ class AccountClerkJournal:
         artifacts_root: Path,
         account_id: str,
         now_ms: Callable[[], int] = _now_ms,
+        after_inbox_durable_append: Callable[[AccountOwnerSubmitIntent], None] | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = safe_account_artifact_id(account_id)
         self._now_ms = now_ms
+        # The normal Clerk never supplies this observer.  Focused integration
+        # tests may observe the exact point after the inbox append has fsynced
+        # and before its timestamp is written into the recorded receipt.
+        self._after_inbox_durable_append = after_inbox_durable_append
         self._entries: list[AccountClerkJournalEntry] | None = None
         self._journal_identity: tuple[int, int, int, int] | None = None
         self._intents_by_order_ref: dict[str, AccountOwnerSubmitIntent] = {}
@@ -99,6 +110,13 @@ class AccountClerkJournal:
         intent: AccountOwnerSubmitIntent,
         *,
         validate_intent: Callable[[AccountOwnerSubmitIntent], None],
+        clerk_request_received_at_ms: int | None = None,
+        clerk_intake_admitted_at_ms: int | None = None,
+        async_custody_lane: Literal["entry", "risk_reducing"] | None = None,
+        effect_evidence: AccountEffectEvidence | None = None,
+        origin_epoch: AccountEpoch | None = None,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
     ) -> AccountClerkRecordedReceipt:
         inbox_path, journal_path = self._paths()
         journal_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,13 +132,30 @@ class AccountClerkJournal:
             inbox_entry = AccountClerkInboxEntry(
                 seq=next_seq,
                 received_at_ms=self._now_ms(),
+                clerk_request_received_at_ms=clerk_request_received_at_ms,
+                async_custody_lane=async_custody_lane,
+                effect_evidence=effect_evidence,
                 intent=intent,
             )
             _append_jsonl(inbox_path, inbox_entry)
+            if self._after_inbox_durable_append is not None:
+                self._after_inbox_durable_append(intent)
+            inbox_fsynced_at_ms = self._now_ms()
             journal_entry = AccountClerkJournalEntry(
                 seq=inbox_entry.seq,
                 recorded_at_ms=self._now_ms(),
                 intent=inbox_entry.intent,
+                clerk_request_received_at_ms=inbox_entry.clerk_request_received_at_ms,
+                clerk_intake_admitted_at_ms=clerk_intake_admitted_at_ms,
+                # This timestamp is taken only after the inbox durable append
+                # returns. Replayed legacy inbox rows leave it unknown rather
+                # than presenting a synthesized fsync clock.
+                inbox_fsynced_at_ms=inbox_fsynced_at_ms,
+                async_custody_lane=inbox_entry.async_custody_lane,
+                effect_evidence=inbox_entry.effect_evidence,
+                origin_epoch=origin_epoch,
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
             )
             self._append_entry_locked(journal_path, entries, journal_entry)
             self.register_attribution(intent)
@@ -136,7 +171,303 @@ class AccountClerkJournal:
                     return AccountClerkBrokerAckReceipt.from_journal_entry(entry)
         return None
 
-    def append_broker_ack(self, intent: AccountOwnerSubmitIntent, ack: Any) -> AccountClerkBrokerAckReceipt:
+    def custody_status_for_intent(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCustodyStatus | None:
+        """Fold one durable intent lifecycle for the asynchronous custody read API."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            return _custody_status_for_entries(
+                [entry for entry in entries if entry.intent == intent],
+            )
+
+    def intent_for_id(self, intent_id: str) -> AccountOwnerSubmitIntent | None:
+        """Return durable identity before an admission-capacity decision masks a collision."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            for entry in entries:
+                if entry.intent is not None and entry.intent.intent_id == intent_id:
+                    return entry.intent
+        return None
+
+    def nonterminal_async_entry_for_strategy_instance(
+        self,
+        *,
+        strategy_instance_id: str,
+        excluding_intent_id: str,
+    ) -> AccountOwnerSubmitIntent | None:
+        """Find a prior normal-entry A0 that still owns this strategy instance.
+
+        This guard is intentionally journal-derived rather than process-local:
+        an originator crash after A0 cannot make a freshly restarted bot admit
+        a second entry while its predecessor is queued, submitting, broker
+        known, or awaiting reconciliation.  Expiry before A1 and an observed
+        economic terminal are the only states that free the entry slot.
+        """
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+        grouped: dict[str, list[AccountClerkJournalEntry]] = {}
+        for entry in entries:
+            if entry.intent is not None:
+                grouped.setdefault(entry.intent.intent_id, []).append(entry)
+        for intent_id, intent_entries in grouped.items():
+            if intent_id == excluding_intent_id:
+                continue
+            intent = intent_entries[0].intent
+            assert intent is not None
+            if intent.strategy_instance_id != strategy_instance_id:
+                continue
+            status = _custody_status_for_entries(intent_entries)
+            if status is None or status.lane != "entry":
+                continue
+            if status.lifecycle_state not in {
+                "economic_terminal",
+                "expired_before_submit",
+                "cancelled_before_submit",
+            }:
+                return intent
+        return None
+
+    def queued_async_custody_intents(
+        self,
+    ) -> tuple[tuple[AccountOwnerSubmitIntent, Literal["entry", "risk_reducing"]], ...]:
+        """Return only A0 queue rows not yet crossed into an A1-or-later state."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+        grouped: dict[str, list[AccountClerkJournalEntry]] = {}
+        for entry in entries:
+            if entry.intent is not None:
+                grouped.setdefault(entry.intent.intent_id, []).append(entry)
+        queued: list[tuple[AccountOwnerSubmitIntent, Literal["entry", "risk_reducing"]]] = []
+        for intent_entries in grouped.values():
+            status = _custody_status_for_entries(intent_entries)
+            if status is None or status.lifecycle_state != "queued" or status.lane is None:
+                continue
+            intent = intent_entries[0].intent
+            assert intent is not None
+            queued.append((intent, status.lane))
+        return tuple(queued)
+
+    def nonterminal_async_custody_count(
+        self,
+        lane: Literal["entry", "risk_reducing"],
+    ) -> int:
+        """Count every durable, nonterminal A0-or-later item in one lane."""
+
+        entry_depth, risk_reducing_depth = self.nonterminal_async_custody_depths()
+        return entry_depth if lane == "entry" else risk_reducing_depth
+
+    def nonterminal_async_custody_depths(self) -> tuple[int, int]:
+        """Read both durable lane depths under one journal-lock snapshot.
+
+        Queue size alone is not capacity: a broker-submitting or outcome-
+        unknown intent still consumes the same account risk budget after a
+        worker removes it from the process-local scheduler.
+        """
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = tuple(self._load_tail_locked(inbox_path, journal_path))
+        grouped: dict[str, list[AccountClerkJournalEntry]] = {}
+        for entry in entries:
+            if entry.intent is not None:
+                grouped.setdefault(entry.intent.intent_id, []).append(entry)
+        terminal_states = {"economic_terminal", "expired_before_submit", "cancelled_before_submit"}
+        depths = {"entry": 0, "risk_reducing": 0}
+        for intent_entries in grouped.values():
+            status = _custody_status_for_entries(intent_entries)
+            if (
+                status is not None
+                and status.lane is not None
+                and status.lifecycle_state not in terminal_states
+            ):
+                depths[status.lane] += 1
+        return depths["entry"], depths["risk_reducing"]
+
+    def append_custody_expired_before_submit(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> None:
+        """Close a recovered A0-only entry without inferring broker absence after A1."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            matching = [entry for entry in entries if entry.intent == intent]
+            recorded = _require_recorded_intent_entry(entries, intent)
+            lane = recorded.async_custody_lane
+            if lane is None:
+                raise ValueError("cannot expire a non-asynchronous custody intent")
+            if any(entry.entry_kind == "custody_expired_before_submit" for entry in matching):
+                return
+            if any(
+                entry.entry_kind in {"broker_submitting", "broker_acked", "broker_uncertain", "broker_event"}
+                for entry in matching
+            ):
+                return
+            self._append_entry_locked(
+                journal_path,
+                entries,
+                AccountClerkJournalEntry(
+                    seq=_next_seq(entries),
+                    entry_kind="custody_expired_before_submit",
+                    recorded_at_ms=self._now_ms(),
+                    intent=intent,
+                    custody_lane=lane,
+                ),
+            )
+
+    def append_custody_cancelled_before_submit(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkPendingCancelReceipt:
+        """Close exactly one queued A0 intent without contacting the broker.
+
+        This is distinct from expiry: the durable row preserves that a human
+        explicitly cancelled the accepted custody transfer. Any A1-or-later
+        row fails closed here; the caller must use the exact broker-cancel
+        lifecycle rather than infer broker absence.
+        """
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            matching = [entry for entry in entries if entry.intent == intent]
+            recorded = _require_recorded_intent_entry(entries, intent)
+            lane = recorded.async_custody_lane
+            if lane is None:
+                raise ValueError("cannot locally cancel a non-asynchronous custody intent")
+            existing = next(
+                (entry for entry in matching if entry.entry_kind == "custody_cancelled_before_submit"),
+                None,
+            )
+            if existing is not None:
+                return AccountClerkPendingCancelReceipt(
+                    recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+                    cancelled_journal_seq=existing.seq,
+                    cancelled_at_ms=existing.recorded_at_ms,
+                )
+            if any(
+                entry.entry_kind
+                in {
+                    "custody_expired_before_submit",
+                    "custody_recovery_action_required",
+                    "custody_submission_hold",
+                }
+                for entry in matching
+            ):
+                raise ValueError("cannot locally cancel a custody intent outside the queued state")
+            if any(
+                entry.entry_kind
+                in {"broker_submitting", "broker_acked", "broker_uncertain", "broker_event"}
+                for entry in matching
+            ):
+                raise ValueError("cannot locally cancel custody after broker-write admission")
+            entry = AccountClerkJournalEntry(
+                seq=_next_seq(entries),
+                entry_kind="custody_cancelled_before_submit",
+                recorded_at_ms=self._now_ms(),
+                intent=intent,
+                custody_lane=lane,
+            )
+            self._append_entry_locked(journal_path, entries, entry)
+            return AccountClerkPendingCancelReceipt(
+                recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+                cancelled_journal_seq=entry.seq,
+                cancelled_at_ms=entry.recorded_at_ms,
+            )
+
+    def append_custody_recovery_action_required(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> None:
+        """Keep recovered risk-reducing work visible until an explicit policy resumes it."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            matching = [entry for entry in entries if entry.intent == intent]
+            recorded = _require_recorded_intent_entry(entries, intent)
+            lane = recorded.async_custody_lane
+            if lane is None:
+                raise ValueError("cannot hold a non-asynchronous custody intent")
+            if any(entry.entry_kind == "custody_recovery_action_required" for entry in matching):
+                return
+            if any(
+                entry.entry_kind in {"broker_submitting", "broker_acked", "broker_uncertain", "broker_event"}
+                for entry in matching
+            ):
+                return
+            self._append_entry_locked(
+                journal_path,
+                entries,
+                AccountClerkJournalEntry(
+                    seq=_next_seq(entries),
+                    entry_kind="custody_recovery_action_required",
+                    recorded_at_ms=self._now_ms(),
+                    intent=intent,
+                    custody_lane=lane,
+                ),
+            )
+
+    def append_custody_submission_hold(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        reason: str,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+    ) -> None:
+        """Hold an A0 intent when a post-admission policy fence closes before A1."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            matching = [entry for entry in entries if entry.intent == intent]
+            recorded = _require_recorded_intent_entry(entries, intent)
+            lane = recorded.async_custody_lane
+            if lane is None:
+                raise ValueError("cannot hold a non-asynchronous custody intent")
+            if any(entry.entry_kind == "custody_submission_hold" for entry in matching):
+                return
+            if any(
+                entry.entry_kind in {"broker_submitting", "broker_acked", "broker_uncertain", "broker_event"}
+                for entry in matching
+            ):
+                return
+            self._append_entry_locked(
+                journal_path,
+                entries,
+                AccountClerkJournalEntry(
+                    seq=_next_seq(entries),
+                    entry_kind="custody_submission_hold",
+                    recorded_at_ms=self._now_ms(),
+                    intent=intent,
+                    custody_lane=lane,
+                    broker_error=reason,
+                    origin_epoch=recorded.origin_epoch,
+                    observed_epoch=observed_epoch,
+                    reconciliation_id=reconciliation_id,
+                ),
+            )
+
+    def append_broker_ack(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        ack: Any,
+        *,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+    ) -> AccountClerkBrokerAckReceipt:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
             entries = self._load_tail_locked(inbox_path, journal_path)
@@ -149,18 +480,45 @@ class AccountClerkJournal:
                 perm_id=_try_int(getattr(ack, "perm_id", None)),
                 exec_id=getattr(ack, "exec_id", None),
                 broker_ack=ack if isinstance(ack, IbkrOrderAck) else None,
+                origin_epoch=_origin_epoch_for_intent(entries, intent),
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
             )
             self._append_entry_locked(journal_path, entries, entry)
             return AccountClerkBrokerAckReceipt.from_journal_entry(entry)
 
-    def append_broker_submitting(self, intent: AccountOwnerSubmitIntent) -> None:
-        self._append_broker_transition(intent, entry_kind="broker_submitting")
+    def append_broker_submitting(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+        effect_evidence: AccountEffectEvidence | None = None,
+    ) -> None:
+        self._append_broker_transition(
+            intent,
+            entry_kind="broker_submitting",
+            observed_epoch=observed_epoch,
+            reconciliation_id=reconciliation_id,
+            effect_evidence=effect_evidence,
+        )
 
-    def append_broker_uncertain(self, intent: AccountOwnerSubmitIntent, error: Exception) -> None:
+    def append_broker_uncertain(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        error: Exception,
+        *,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+        effect_evidence: AccountEffectEvidence | None = None,
+    ) -> None:
         self._append_broker_transition(
             intent,
             entry_kind="broker_uncertain",
             broker_error=f"{type(error).__name__}: {error}",
+            observed_epoch=observed_epoch,
+            reconciliation_id=reconciliation_id,
+            effect_evidence=effect_evidence,
         )
 
     def _append_broker_transition(
@@ -169,6 +527,9 @@ class AccountClerkJournal:
         *,
         entry_kind: Literal["broker_submitting", "broker_uncertain"],
         broker_error: str | None = None,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+        effect_evidence: AccountEffectEvidence | None = None,
     ) -> None:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
@@ -179,6 +540,10 @@ class AccountClerkJournal:
                 recorded_at_ms=self._now_ms(),
                 intent=intent,
                 broker_error=broker_error,
+                origin_epoch=_origin_epoch_for_intent(entries, intent),
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
+                effect_evidence=effect_evidence,
             )
             self._append_entry_locked(journal_path, entries, entry)
 
@@ -269,7 +634,12 @@ class AccountClerkJournal:
             self._append_entry_locked(journal_path, entries, entry)
             return self._cancel_namespace_receipt(entries, intent, entry)
 
-    def append_cancel_submitting(self, intent: AccountOwnerSubmitIntent) -> None:
+    def append_cancel_submitting(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        effect_evidence: AccountEffectEvidence | None = None,
+    ) -> None:
         """Record the crash boundary immediately before a broker cancel."""
 
         inbox_path, journal_path = self._paths()
@@ -282,6 +652,7 @@ class AccountClerkJournal:
                 entry_kind="cancel_submitting",
                 recorded_at_ms=self._now_ms(),
                 intent=intent,
+                effect_evidence=effect_evidence,
             )
             self._append_entry_locked(journal_path, entries, entry)
 
@@ -408,7 +779,13 @@ class AccountClerkJournal:
             cancelled_order_ids=confirmation.cancelled_order_ids or (),
         )
 
-    def record_broker_event(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
+    def record_broker_event(
+        self,
+        event: IbkrOrderEvent,
+        *,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
+    ) -> AccountClerkBrokerEventReceipt:
         """Append one deduplicated callback after durable attribution lookup."""
 
         inbox_path, journal_path = self._paths()
@@ -434,6 +811,9 @@ class AccountClerkJournal:
                 broker_event=event.model_dump(mode="json"),
                 event_account_id=event.account_id,
                 broker_callback_idempotency_key=callback_key,
+                origin_epoch=_origin_epoch_for_intent(entries, intent) if intent is not None else None,
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
             )
             self._append_entry_locked(journal_path, entries, entry)
             return AccountClerkBrokerEventReceipt(
@@ -449,6 +829,8 @@ class AccountClerkJournal:
         *,
         verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"],
         reason: str,
+        observed_epoch: AccountEpoch | None = None,
+        reconciliation_id: str | None = None,
     ) -> None:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
@@ -461,6 +843,9 @@ class AccountClerkJournal:
                 intent=intent,
                 reconciliation_verdict=verdict,
                 reconciliation_reason=reason,
+                origin_epoch=_origin_epoch_for_intent(entries, intent),
+                observed_epoch=observed_epoch,
+                reconciliation_id=reconciliation_id,
             )
             self._append_entry_locked(journal_path, entries, entry)
 
@@ -662,6 +1047,9 @@ class AccountClerkJournal:
                 seq=inbox_entry.seq,
                 recorded_at_ms=inbox_entry.received_at_ms,
                 intent=inbox_entry.intent,
+                clerk_request_received_at_ms=inbox_entry.clerk_request_received_at_ms,
+                async_custody_lane=inbox_entry.async_custody_lane,
+                effect_evidence=inbox_entry.effect_evidence,
             )
             _append_jsonl(journal_path, replayed)
             journal_entries.append(replayed)
@@ -693,8 +1081,16 @@ def read_account_clerk_inbox(
 
     path = account_clerk_inbox_path(artifacts_root, account_id)
     journal_path = account_clerk_journal_path(artifacts_root, account_id)
-    with _file_lock(journal_path):
-        return _read_jsonl(path, AccountClerkInboxEntry)
+    with _read_only_journal_lock(journal_path) as coordinated:
+        before = _observation_identity(path, journal_path)
+        entries = _read_jsonl(path, AccountClerkInboxEntry)
+        _assert_unchanged_uncoordinated_observation(
+            coordinated,
+            before,
+            path,
+            journal_path,
+        )
+        return entries
 
 
 def read_account_clerk_journal(
@@ -704,8 +1100,11 @@ def read_account_clerk_journal(
     """Read the strict, serial receipt-#1 ledger for an account."""
 
     path = account_clerk_journal_path(artifacts_root, account_id)
-    with _file_lock(path):
-        return _read_journal_jsonl(path)
+    with _read_only_journal_lock(path) as coordinated:
+        before = _observation_identity(path)
+        entries = _read_journal_jsonl(path)
+        _assert_unchanged_uncoordinated_observation(coordinated, before, path)
+        return entries
 
 
 def read_account_clerk_durability_spine(
@@ -716,8 +1115,18 @@ def read_account_clerk_durability_spine(
 
     inbox_path = account_clerk_inbox_path(artifacts_root, account_id)
     journal_path = account_clerk_journal_path(artifacts_root, account_id)
-    with _file_lock(journal_path):
-        return read_account_clerk_durability_spine_locked(inbox_path, journal_path)
+    if not journal_path.exists() and not inbox_path.exists():
+        return []
+    with _read_only_journal_lock(journal_path) as coordinated:
+        before = _observation_identity(inbox_path, journal_path)
+        entries = read_account_clerk_durability_spine_locked(inbox_path, journal_path)
+        _assert_unchanged_uncoordinated_observation(
+            coordinated,
+            before,
+            inbox_path,
+            journal_path,
+        )
+        return entries
 
 
 def read_account_clerk_journal_locked(path: Path) -> list[AccountClerkJournalEntry]:
@@ -738,12 +1147,42 @@ def read_account_clerk_durability_spine_locked(
     """Strictly validate both Clerk durability artifacts under their writer lock."""
 
     journal_entries = _read_journal_jsonl(journal_path)
-    _validate_inbox_replayable(
+    inbox_entries = _validate_inbox_replayable(
         _read_jsonl(inbox_path, AccountClerkInboxEntry),
         journal_entries,
         journal_path,
     )
-    return journal_entries
+    entries_by_seq = {entry.seq: entry for entry in journal_entries}
+    for inbox_entry in inbox_entries:
+        entries_by_seq.setdefault(
+            inbox_entry.seq,
+            AccountClerkJournalEntry(
+                seq=inbox_entry.seq,
+                recorded_at_ms=inbox_entry.received_at_ms,
+                intent=inbox_entry.intent,
+                clerk_request_received_at_ms=inbox_entry.clerk_request_received_at_ms,
+                async_custody_lane=inbox_entry.async_custody_lane,
+                effect_evidence=inbox_entry.effect_evidence,
+            ),
+        )
+    return [entries_by_seq[seq] for seq in sorted(entries_by_seq)]
+
+
+def fold_account_clerk_custody_statuses(
+    entries: list[AccountClerkJournalEntry],
+) -> tuple[AccountClerkCustodyStatus, ...]:
+    """Purely fold bounded custody stages from a validated durability spine."""
+
+    by_intent_id: dict[str, list[AccountClerkJournalEntry]] = {}
+    for entry in entries:
+        if entry.intent is not None:
+            by_intent_id.setdefault(entry.intent.intent_id, []).append(entry)
+    statuses = [
+        status
+        for intent_entries in by_intent_id.values()
+        if (status := _custody_status_for_entries(intent_entries)) is not None
+    ]
+    return tuple(sorted(statuses, key=lambda status: status.intent_id))
 
 
 def seed_account_clerk_broker_evidence_baseline(
@@ -808,8 +1247,16 @@ def inspect_account_clerk_journal(
     # The sibling lock already exists for an established journal; taking it
     # keeps this observational projection from parsing a partially appended
     # JSONL row while still avoiding directory creation for unseen accounts.
-    with _file_lock(journal_path):
-        return read_account_clerk_durability_spine_locked(inbox_path, journal_path)
+    with _read_only_journal_lock(journal_path) as coordinated:
+        before = _observation_identity(inbox_path, journal_path)
+        entries = read_account_clerk_durability_spine_locked(inbox_path, journal_path)
+        _assert_unchanged_uncoordinated_observation(
+            coordinated,
+            before,
+            inbox_path,
+            journal_path,
+        )
+        return entries
 
 
 def recovery_operation_started_for_namespace(
@@ -908,6 +1355,16 @@ def _validate_inbox_replayable(
                     journal_path,
                     f"inbox and journal intent differ at seq {inbox_entry.seq}",
                 )
+            if (
+                journal_entry.clerk_request_received_at_ms
+                != inbox_entry.clerk_request_received_at_ms
+                or journal_entry.async_custody_lane != inbox_entry.async_custody_lane
+                or journal_entry.effect_evidence != inbox_entry.effect_evidence
+            ):
+                raise AccountClerkJournalCorruptError(
+                    journal_path,
+                    f"inbox and journal A0 admission proof differs at seq {inbox_entry.seq}",
+                )
             continue
         if inbox_entry.seq != expected_seq:
             raise AccountClerkJournalCorruptError(
@@ -918,6 +1375,9 @@ def _validate_inbox_replayable(
             seq=inbox_entry.seq,
             recorded_at_ms=inbox_entry.received_at_ms,
             intent=inbox_entry.intent,
+            clerk_request_received_at_ms=inbox_entry.clerk_request_received_at_ms,
+            async_custody_lane=inbox_entry.async_custody_lane,
+            effect_evidence=inbox_entry.effect_evidence,
         )
         expected_seq += 1
     return unique_inbox_entries
@@ -1029,6 +1489,23 @@ def _broker_callback_entry_for_key(
     return None
 
 
+def _origin_epoch_for_intent(
+    entries: list[AccountClerkJournalEntry],
+    intent: AccountOwnerSubmitIntent,
+) -> AccountEpoch | None:
+    """Return durable A0 epoch provenance, preserving legacy unknowns."""
+
+    recorded = next(
+        (
+            entry
+            for entry in entries
+            if entry.entry_kind == "recorded" and entry.intent == intent
+        ),
+        None,
+    )
+    return recorded.origin_epoch if recorded is not None else None
+
+
 def normalize_broker_event(
     event: IbkrOrderEvent | Mapping[str, object],
 ) -> IbkrOrderEvent | None:
@@ -1062,6 +1539,198 @@ def _unattributed_broker_events(
 
 def _next_seq(entries: list[AccountClerkJournalEntry]) -> int:
     return entries[-1].seq + 1 if entries else 1
+
+
+def _custody_status_for_entries(
+    entries: list[AccountClerkJournalEntry],
+) -> AccountClerkCustodyStatus | None:
+    """Fold lifecycle receipts without making journal sequence a broker-time claim."""
+
+    recorded = next((entry for entry in entries if entry.entry_kind == "recorded"), None)
+    if recorded is None or recorded.intent is None:
+        return None
+    intent = recorded.intent
+    # ``async_custody_lane`` is part of the recorded A0 receipt. The legacy
+    # marker fallback is retained solely so a journal produced by the earliest
+    # unshipped shadow implementation remains readable.
+    legacy_queued = next((entry for entry in entries if entry.entry_kind == "custody_queued"), None)
+    broker_acked = next((entry for entry in entries if entry.entry_kind == "broker_acked"), None)
+    is_terminal = any(
+        entry.entry_kind == "broker_event" and is_economic_terminal_broker_event(entry.broker_event)
+        for entry in entries
+    )
+    updated_at_ms = max(entry.recorded_at_ms for entry in entries)
+    lane = recorded.async_custody_lane or (
+        legacy_queued.custody_lane if legacy_queued is not None else None
+    )
+    if lane is None:
+        # The custody read surface must not reinterpret an ordinary synchronous
+        # recorded receipt as an asynchronous ownership transfer.
+        return None
+    if is_terminal:
+        return AccountClerkCustodyStatus(
+            account_id=intent.account_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            custody_stage="A3_ECONOMIC_TERMINAL",
+            lifecycle_state="economic_terminal",
+            lane=lane,
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+            broker_acked=(
+                AccountClerkBrokerAckReceipt.from_journal_entry(broker_acked)
+                if broker_acked is not None and broker_acked.order_id is not None
+                else None
+            ),
+            updated_at_ms=updated_at_ms,
+        )
+    if any(entry.entry_kind == "custody_expired_before_submit" for entry in entries):
+        return AccountClerkCustodyStatus(
+            account_id=intent.account_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            custody_stage="A3_ECONOMIC_TERMINAL",
+            lifecycle_state="expired_before_submit",
+            lane=lane,
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+            updated_at_ms=updated_at_ms,
+        )
+    cancelled_before_submit = next(
+        (entry for entry in entries if entry.entry_kind == "custody_cancelled_before_submit"),
+        None,
+    )
+    if cancelled_before_submit is not None:
+        return AccountClerkCustodyStatus(
+            account_id=intent.account_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            custody_stage="A3_ECONOMIC_TERMINAL",
+            lifecycle_state="cancelled_before_submit",
+            lane=lane,
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+            updated_at_ms=cancelled_before_submit.recorded_at_ms,
+        )
+    if any(entry.entry_kind == "custody_recovery_action_required" for entry in entries):
+        return AccountClerkCustodyStatus(
+            account_id=intent.account_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            custody_stage="A0_CUSTODY_ACCEPTED",
+            lifecycle_state="recovery_action_required",
+            lane=lane,
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+            updated_at_ms=updated_at_ms,
+        )
+    if any(entry.entry_kind == "custody_submission_hold" for entry in entries):
+        return AccountClerkCustodyStatus(
+            account_id=intent.account_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            custody_stage="A0_CUSTODY_ACCEPTED",
+            lifecycle_state="submission_hold",
+            lane=lane,
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+            updated_at_ms=updated_at_ms,
+        )
+    if any(entry.entry_kind == "broker_uncertain" for entry in entries):
+        return AccountClerkCustodyStatus(
+            account_id=intent.account_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            custody_stage="A1_BROKER_WRITE_STARTED",
+            lifecycle_state="uncertain_requires_reconciliation",
+            lane=lane,
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+            updated_at_ms=updated_at_ms,
+        )
+    if broker_acked is not None and broker_acked.order_id is not None:
+        return AccountClerkCustodyStatus(
+            account_id=intent.account_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            custody_stage="A2_BROKER_KNOWN",
+            lifecycle_state="broker_known",
+            lane=lane,
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+            broker_acked=AccountClerkBrokerAckReceipt.from_journal_entry(broker_acked),
+            updated_at_ms=updated_at_ms,
+        )
+    if any(entry.entry_kind == "broker_submitting" for entry in entries):
+        return AccountClerkCustodyStatus(
+            account_id=intent.account_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            custody_stage="A1_BROKER_WRITE_STARTED",
+            lifecycle_state="submitting",
+            lane=lane,
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+            updated_at_ms=updated_at_ms,
+        )
+    return AccountClerkCustodyStatus(
+        account_id=intent.account_id,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        custody_stage="A0_CUSTODY_ACCEPTED",
+        lifecycle_state="queued" if lane is not None else "recorded",
+        lane=lane,
+        recorded=AccountClerkRecordedReceipt.from_journal_entry(recorded),
+        updated_at_ms=updated_at_ms,
+    )
+
+
+def is_economic_terminal_broker_event(event: dict[str, object] | None) -> bool:
+    if event is None:
+        return False
+    status = event.get("status")
+    if isinstance(status, str) and status.lower() in {
+        "filled",
+        "cancelled",
+        "apicancelled",
+        "inactive",
+        "rejected",
+    }:
+        return True
+    return event.get("event_type") == "cancel"
+
+
+@contextlib.contextmanager
+def _read_only_journal_lock(journal_path: Path) -> Iterator[bool]:
+    """Coordinate an observational read without ever creating a lock artifact."""
+
+    lock_path = journal_path.with_suffix(journal_path.suffix + ".lock")
+    try:
+        handle = open(lock_path, "rb")  # noqa: SIM115
+    except FileNotFoundError:
+        yield False
+        return
+    try:
+        if sys.platform == "win32":
+            yield False
+            return
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _observation_identity(*paths: Path) -> tuple[tuple[int, int, int, int] | None, ...]:
+    return tuple(_journal_file_identity(path) for path in paths)
+
+
+def _assert_unchanged_uncoordinated_observation(
+    coordinated: bool,
+    before: tuple[tuple[int, int, int, int] | None, ...],
+    *paths: Path,
+) -> None:
+    if not coordinated and before != _observation_identity(*paths):
+        raise AccountClerkJournalCorruptError(
+            paths[-1],
+            "Clerk durability artifacts changed during an uncoordinated read",
+        )
 
 
 def _journal_file_identity(path: Path) -> tuple[int, int, int, int] | None:
@@ -1108,6 +1777,7 @@ __all__ = [
     "ACCOUNT_CLERK_JOURNAL_FILENAME",
     "AccountClerkBrokerAckReceipt",
     "AccountClerkBrokerEventReceipt",
+    "AccountClerkCustodyStatus",
     "AccountClerkEmergencyFlattenReceipt",
     "AccountClerkEmergencyOperationEvent",
     "AccountClerkInboxEntry",
@@ -1121,6 +1791,8 @@ __all__ = [
     "AccountClerkRecoveryFlattenReceipt",
     "account_clerk_inbox_path",
     "account_clerk_journal_path",
+    "fold_account_clerk_custody_statuses",
+    "is_economic_terminal_broker_event",
     "normalize_broker_event",
     "read_account_clerk_durability_spine",
     "read_account_clerk_durability_spine_locked",

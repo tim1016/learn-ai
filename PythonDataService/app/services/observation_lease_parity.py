@@ -8,23 +8,24 @@ real submit boundaries and makes that promotion invariant explicit.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from app.engine.live.account_artifacts import (
-    ACCOUNT_EVENTS_FILENAME,
-    read_account_events,
-    read_account_events_with_snapshot,
-)
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.engine.live.account_artifacts import account_artifact_file_path, read_legacy_account_events
 from app.engine.live.account_observation_lease import (
     ACCOUNT_OBSERVATION_LEASE_GATE_ID,
     ACCOUNT_OBSERVATION_LEASE_GATE_SOURCE,
     ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION,
 )
+from app.engine.live.live_state_sidecar import _file_lock
 from app.lean_sidecar.trading_calendar import is_trading_day
+from app.schemas.artifact_io import atomic_write_pydantic_artifact
 from app.services.account_truth_snapshot import ACCOUNT_TRUTH_GATE_ID, ACCOUNT_TRUTH_GATE_SOURCE
 
 ACCOUNT_OBSERVATION_LEASE_SHADOW_COMPARISON_EVENT = (
@@ -35,6 +36,17 @@ _GATE_STATUSES = frozenset({"pass", "block"})
 OBSERVATION_LEASE_PARITY_ARCHIVE_SCHEMA_VERSION = 2
 OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION = 2
 OBSERVATION_LEASE_GENERATION_AUTHORITY = "account_clerk"
+OBSERVATION_LEASE_SHADOW_HISTORY_FILENAME = "account_observation_lease_shadow_history.json"
+
+
+class _ObservationLeaseShadowHistory(BaseModel):
+    """Typed promotion evidence, separate from operator-history display rows."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    rows: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,12 +167,81 @@ def assess_observation_lease_shadow_parity_from_artifacts(
     *,
     minimum_sessions: int = 3,
 ) -> AccountObservationLeaseParityReport:
-    """Replay the canonical account journal for one account's promotion gate."""
+    """Replay typed promotion evidence, never merged operator history."""
 
     return assess_observation_lease_shadow_parity(
-        read_account_events(artifacts_root, account_id),
+        _read_shadow_rows(artifacts_root, account_id),
         minimum_sessions=minimum_sessions,
     )
+
+
+def record_observation_lease_shadow_comparison(
+    artifacts_root: Path,
+    account_id: str,
+    payload: Mapping[str, object],
+) -> None:
+    """Persist one submit-boundary comparison in its typed promotion store."""
+
+    row = dict(payload)
+    path = _shadow_history_path(artifacts_root, account_id)
+    with _file_lock(path):
+        current = _read_or_migrate_shadow_history_locked(artifacts_root, account_id, path)
+        atomic_write_pydantic_artifact(
+            path,
+            _ObservationLeaseShadowHistory(
+                account_id=account_id,
+                rows=(*current.rows, row),
+            ),
+        )
+
+
+def _shadow_history_path(artifacts_root: Path, account_id: str) -> Path:
+    return account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        OBSERVATION_LEASE_SHADOW_HISTORY_FILENAME,
+    )
+
+
+def _read_shadow_history(
+    artifacts_root: Path,
+    account_id: str,
+) -> _ObservationLeaseShadowHistory:
+    path = _shadow_history_path(artifacts_root, account_id)
+    if not path.exists():
+        return _ObservationLeaseShadowHistory(account_id=account_id)
+    try:
+        history = _ObservationLeaseShadowHistory.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("observation-lease shadow history is unreadable") from exc
+    if history.account_id != account_id:
+        raise ValueError("observation-lease shadow history belongs to another account")
+    return history
+
+
+def _read_shadow_rows(artifacts_root: Path, account_id: str) -> tuple[dict[str, object], ...]:
+    path = _shadow_history_path(artifacts_root, account_id)
+    with _file_lock(path):
+        return _read_or_migrate_shadow_history_locked(artifacts_root, account_id, path).rows
+
+
+def _read_or_migrate_shadow_history_locked(
+    artifacts_root: Path,
+    account_id: str,
+    path: Path,
+) -> _ObservationLeaseShadowHistory:
+    """Snapshot immutable pre-split parity once before it gates promotion."""
+
+    history = _read_shadow_history(artifacts_root, account_id)
+    if path.exists():
+        return history
+    # Forward producer logs are intentionally excluded from this migration.
+    history = _ObservationLeaseShadowHistory(
+        account_id=account_id,
+        rows=tuple(read_legacy_account_events(artifacts_root, account_id)),
+    )
+    atomic_write_pydantic_artifact(path, history)
+    return history
 
 
 def observation_lease_shadow_parity_archive_payload(
@@ -171,22 +252,25 @@ def observation_lease_shadow_parity_archive_payload(
 ) -> dict[str, object]:
     """Build an immutable-input report payload suitable for cutover evidence.
 
-    The event journal is read once under its writer lock.  The resulting
-    source bytes are parsed directly, so the reported digest names precisely
-    the rows assessed for the promotion decision.
+    The shadow-comparison rows are read once via ``_read_shadow_rows``.  The
+    resulting source bytes are parsed directly, so the reported digest names
+    precisely the rows assessed for the promotion decision.
     """
 
-    events, source_bytes = read_account_events_with_snapshot(artifacts_root, account_id)
-    report = assess_observation_lease_shadow_parity(events, minimum_sessions=minimum_sessions)
+    rows = _read_shadow_rows(artifacts_root, account_id)
+    source_bytes = b"".join(
+        json.dumps(row, separators=(",", ":"), sort_keys=True).encode() + b"\n" for row in rows
+    )
+    report = assess_observation_lease_shadow_parity(rows, minimum_sessions=minimum_sessions)
     return {
         "schema_version": OBSERVATION_LEASE_PARITY_ARCHIVE_SCHEMA_VERSION,
         "comparison_schema_version": OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
         "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
         "account_id": account_id,
         "source": {
-            "account_events_filename": ACCOUNT_EVENTS_FILENAME,
+            "account_events_filename": OBSERVATION_LEASE_SHADOW_HISTORY_FILENAME,
             "account_events_sha256": hashlib.sha256(source_bytes).hexdigest(),
-            "account_event_count": len(events),
+            "account_event_count": len(rows),
         },
         "minimum_sessions": report.minimum_sessions,
         "comparison_count": report.comparison_count,

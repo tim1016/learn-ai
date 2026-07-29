@@ -1,4 +1,8 @@
 export type AccountEventView = 'operations';
+export type AccountEventProvenance =
+  | 'legacy_account_events'
+  | 'producer_operational_log'
+  | 'clerk_journal';
 export type AccountEventKind =
   | 'activity'
   | 'safety'
@@ -28,13 +32,20 @@ export interface AccountEventOperatorOrderReceipt {
   acknowledged_at_ms: number;
 }
 
-/** Versioned server-owned narration and classification for one journal event. */
+/** Versioned server-owned narration and classification for one operational-history row. */
 export interface AccountEventRow {
   schema_version: 1;
   event_id: string;
+  provenance: AccountEventProvenance;
   seq: number;
   kind: AccountEventKind;
   occurred_at_ms: number;
+  event_at_ms: number | null;
+  arrived_at_ms: number | null;
+  recorded_at_ms: number | null;
+  producer: string;
+  producer_boot_id: string;
+  producer_seq: number;
   trader_narration: string | null;
   operator_detail: string;
   evidence_refs: AccountEventEvidenceRef[];

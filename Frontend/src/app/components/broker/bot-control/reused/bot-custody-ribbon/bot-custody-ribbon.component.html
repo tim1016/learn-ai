@@ -1,0 +1,73 @@
+<section class="bot-custody-ribbon" aria-labelledby="botCustodyTitle">
+  <header>
+    <div>
+      <p class="eyebrow">Namespace evidence</p>
+      <h2 id="botCustodyTitle">Bot custody timeline</h2>
+    </div>
+    <button type="button" [disabled]="loading()" (click)="refresh()">Refresh custody evidence</button>
+  </header>
+
+  <p>
+    This is a bounded server-folded Clerk receipt window for this bot namespace. It never changes the account safety verdict or action eligibility.
+  </p>
+
+  @if (accountReconciliationPending()) {
+    <p class="account-note" role="status">
+      Account reconciliation is still pending. This namespace evidence is explanatory only.
+    </p>
+  }
+
+  @if (accountId() === null || strategyInstanceId() === null) {
+    <p class="state">Namespace custody evidence is unavailable until Bot Control has a proven account binding and bot identity.</p>
+  } @else if (loading() && page() === null) {
+    <p class="state">Loading the saved custody projection…</p>
+  } @else if (page(); as page) {
+    @if (loading()) {
+      <p class="state">Refreshing saved custody evidence. The visible window is prior evidence until the request completes.</p>
+    }
+    @if (error(); as error) {
+      <p class="state state-error" role="alert">{{ error }} The visible window is prior saved evidence.</p>
+    }
+    <p class="state" [class.state-error]="!page.projection_available || page.feed_state === 'corrupt'" role="status">
+      <strong>{{ page.feed_headline }}</strong> {{ page.feed_detail }}
+      <span>Source state: {{ page.feed_state | receiptLabel }}.</span>
+    </p>
+    @if (page.projection_available) {
+      <div class="custody-stages" aria-label="Server-folded custody stages in this evidence window">
+        <div><strong>A0</strong><span>{{ page.custody_summary.a0_custody_accepted_count }}</span><small>custody accepted</small></div>
+        <div><strong>A1</strong><span>{{ page.custody_summary.a1_broker_write_started_count }}</span><small>broker write started</small></div>
+        <div><strong>A2</strong><span>{{ page.custody_summary.a2_broker_known_count }}</span><small>broker known</small></div>
+        <div><strong>A3</strong><span>{{ page.custody_summary.a3_economic_terminal_count }}</span><small>economic terminal</small></div>
+        <div class="uncertain"><strong>?</strong><span>{{ page.custody_summary.uncertain_count }}</span><small>uncertain stage</small></div>
+      </div>
+      <p class="window-note">
+        Counts cover {{ page.custody_summary.record_count }} projected record{{ page.custody_summary.record_count === 1 ? '' : 's' }} in this response window, not account-wide truth.
+      </p>
+      @if (rows().length === 0) {
+        <p class="state">No projected receipts match this bot namespace in the current evidence window.</p>
+      } @else {
+        <ol class="receipt-list" aria-label="Namespace transaction receipts">
+          @for (row of rows(); track trackRow($index, row)) {
+            <li>
+              <button type="button" (click)="openReceipt(row, $event)" [attr.aria-label]="'Open custody receipt ' + row.order_ref">
+                <span><app-timestamp-display [value]="row.recorded_at_ms" mode="local" /></span>
+                <strong>{{ row.lifecycle_state | receiptLabel }}</strong>
+                <code>{{ row.intent_id }}</code>
+                <small>{{ row.event_count }} event{{ row.event_count === 1 ? '' : 's' }}</small>
+              </button>
+            </li>
+          }
+        </ol>
+      }
+    }
+  } @else if (error(); as error) {
+    <p class="state state-error" role="alert">{{ error }}</p>
+  }
+
+  <app-clerk-transaction-evidence-drawer
+    [accountId]="accountId()"
+    [transaction]="selectedTransaction()"
+    [openerElement]="receiptOpener()"
+    (closed)="onReceiptClosed()"
+  />
+</section>

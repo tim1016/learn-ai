@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Mapping, Sequence, Set
+from collections.abc import Callable, Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -19,7 +19,7 @@ from app.engine.live.account_artifacts import (
     _append_account_event,
     _safe_account_path_segment,
     account_artifacts_root,
-    read_account_events,
+    read_or_migrate_account_recovery_clearance,
 )
 from app.engine.live.account_binding_ledger import (
     AccountBindingCommand,
@@ -412,7 +412,6 @@ def crash_retired_restart_blocking_binding(
     """Return the unsafe terminal binding that blocks restart, if any."""
 
     bindings = read_account_instance_registry(artifacts_root, account_id)
-    events = read_account_events(artifacts_root, account_id)
     latest = latest_account_instance_binding(
         bindings,
         account_id=account_id,
@@ -425,9 +424,34 @@ def crash_retired_restart_blocking_binding(
         or latest.source not in RECOVERY_REQUIRED_RETIRED_BINDING_SOURCES
     ):
         return None
-    if has_account_recovery_evidence_after(events, latest.recorded_at_ms):
+    if account_recovery_evidence_exists_after(
+        artifacts_root,
+        account_id=account_id,
+        recorded_at_ms=latest.recorded_at_ms,
+    ):
         return None
     return latest
+
+
+def account_recovery_evidence_exists_after(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    recorded_at_ms: int,
+) -> bool:
+    """Read recovery clearance from its typed recovery artifact.
+
+    Operator history can describe a recovery, but it cannot clear a restart
+    block. A valid clearance is the only durable state transition that may do
+    so, and is retained in ``account_recovery_clearance.json`` even when no
+    unresolved-exposure freeze existed.
+    """
+
+    evidence = read_or_migrate_account_recovery_clearance(artifacts_root, account_id)
+    return (
+        evidence is not None
+        and evidence.cleared_at_ms > recorded_at_ms
+    )
 
 
 def retire_unmanaged_active_bindings_on_daemon_boot(
@@ -529,6 +553,7 @@ def fold_account_binding_retirements(
     artifacts_root: Path,
     *,
     account_id: str,
+    before_legacy_retirement: Callable[[AccountInstanceBinding], None] | None = None,
 ) -> BindingRetirementFoldResult:
     """Let the Clerk fold all outstanding retirement proposals in ledger order."""
 
@@ -558,10 +583,15 @@ def fold_account_binding_retirements(
             },
         )
 
+    def before_retirement(retirement: dict[str, object]) -> None:
+        if before_legacy_retirement is not None:
+            before_legacy_retirement(AccountInstanceBinding.model_validate(retirement))
+
     return fold_binding_retirement_proposals(
         artifacts_root,
         account_id=account_id,
         read_current_binding=read_current,
+        before_legacy_retirement=before_retirement,
         write_legacy_retirement=write_legacy,
     )
 
@@ -861,6 +891,7 @@ __all__ = [
     "BindingLedgerParity",
     "BindingRetirementFoldResult",
     "account_binding_ledger_parity",
+    "account_recovery_evidence_exists_after",
     "backfill_false_crash_registry_rows",
     "baseline_account_binding_ledger",
     "bot_order_namespace_for_instance",

@@ -4,6 +4,7 @@ import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/route
 import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DeployPreflightResponse } from '../../../api/operator-blocker.types';
+import type { PresentedOperatorAction } from '../../../api/broker-models';
 import { ActionPlanPreviewService } from '../../../api/action-plan-preview.service';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
@@ -13,6 +14,7 @@ import type { StrategyValidationCatalog } from '../../../services/strategy-valid
 import type { ActionPlan } from '../../../api/action-plan.types';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 import { operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
+import { makeAccountSafetySnapshot } from '../../../../testing/account-safety-snapshot-fixtures';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
 
@@ -20,6 +22,31 @@ const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidat
 const DEPLOYMENT_VALIDATION_SPEC_PATH =
   'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
 const DEPLOYMENT_VALIDATION_QC_BACKTEST_ID = 'd2fe45a7142e88575f6fbd75229f8681';
+
+function presentedDeployAction(accountId: string, strategyInstanceId: string): PresentedOperatorAction {
+  return {
+    action_id: 'deploy',
+    target: { account_id: accountId, strategy_instance_id: strategyInstanceId, run_id: null },
+    snapshot_id: 'a'.repeat(64),
+    snapshot_version: 'a'.repeat(64),
+    evidence_refs: [],
+    effect_class: 'RISK_INCREASING_LIFECYCLE',
+    idempotency_key: 'b'.repeat(64),
+    issued_at_ms: 1,
+    expires_at_ms: 60_001,
+    presentation_token: 'c'.repeat(64),
+    preconditions: [],
+    confirmation: {
+      title: 'Deploy bot',
+      body: 'Test action.',
+      consequence: 'Test consequence.',
+      confirm_label: 'Deploy',
+    },
+    availability: 'AVAILABLE',
+    disposition: 'fix_here',
+    finished_copy: 'Accepted.',
+  };
+}
 
 function identityCoherenceCard(fixture: { nativeElement: HTMLElement }): HTMLElement | null {
   return fixture.nativeElement.querySelector('[aria-label="Run identity confirmation"]');
@@ -197,6 +224,13 @@ function setup(
     positions: vi
       .fn()
       .mockResolvedValue({ positions: opts.positions ?? [] }),
+    accountSafetySnapshot: vi.fn().mockImplementation((accountId: string) =>
+      Promise.resolve(makeAccountSafetySnapshot({ account_id: accountId })),
+    ),
+    presentLifecycleAction: vi.fn().mockImplementation(
+      (accountId: string, _actionId: string, strategyInstanceId: string) =>
+        Promise.resolve(presentedDeployAction(accountId, strategyInstanceId)),
+    ),
   };
   const connectivity = {
     links: () => [],
@@ -363,6 +397,17 @@ afterEach(() => {
 });
 
 describe('BrokerDeployFormComponent', () => {
+  it('renders the shared server-owned account safety snapshot for the selected account', async () => {
+    const { fixture } = setup();
+    await settleResource(fixture);
+
+    const truthSpine = fixture.nativeElement.querySelector('app-account-truth-spine');
+    expect(truthSpine?.textContent).toContain('Reconciling');
+    expect(truthSpine?.textContent).toContain(
+      'Fresh reconciliation is required before new entry risk can proceed.',
+    );
+  });
+
   it('lists only validated strategies and binds their deploy receipt without rendering receipt inputs', async () => {
     const { fixture, component } = setup();
     await flush();

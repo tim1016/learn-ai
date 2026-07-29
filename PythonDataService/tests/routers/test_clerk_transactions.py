@@ -5,13 +5,34 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.routers.clerk_transactions import get_clerk_transaction_store, router
-from app.schemas.clerk_transaction_projection import ClerkTransactionRow
+from app.schemas.clerk_transaction_projection import (
+    ClerkTransactionRow,
+    ClerkTransactionSummaryRow,
+)
 from app.services.clerk_transaction_projection import (
     ClerkTransactionProjectionUnavailable,
     _encode_cursor,
+    custody_window_summary,
+    fold_lifecycle_state,
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+def _summary(*, transaction_id: str, lifecycle_state: str) -> ClerkTransactionSummaryRow:
+    return ClerkTransactionSummaryRow(
+        transaction_id=transaction_id,
+        account_id="DU1219",
+        journal_seq=12,
+        recorded_at_ms=1_700_000_000_000,
+        transaction_kind="strategy_submission",
+        strategy_instance_id="bot-1",
+        run_id="run-1",
+        intent_id=f"intent:{transaction_id}",
+        order_ref=f"learn-ai/bot-1:{transaction_id}",
+        lifecycle_state=lifecycle_state,
+        event_count=1,
+    )
 
 
 class _NoIoStore:
@@ -65,7 +86,12 @@ async def test_history_endpoint_is_bounded_projection_read_only() -> None:
     assert response.json() == {
         "projection_available": True, "canonical_fallback_required": False,
         "feed_state": "live", "feed_headline": "Live", "feed_detail": "Durable Clerk callback projection is current.",
-        "high_water_journal_seq": 12, "lag_records": 0, "lag_is_lower_bound": False, "rows": [], "next_cursor": None,
+        "high_water_journal_seq": 12, "lag_records": 0, "lag_is_lower_bound": False,
+        "custody_summary": {
+            "record_count": 0, "a0_custody_accepted_count": 0, "a1_broker_write_started_count": 0,
+            "a2_broker_known_count": 0, "a3_economic_terminal_count": 0, "uncertain_count": 0,
+        },
+        "rows": [], "next_cursor": None,
     }
 
 
@@ -149,3 +175,29 @@ async def test_selected_transaction_endpoint_reads_only_the_requested_projection
         response = await client.get("/api/accounts/DU1219/transactions/ctxn_opaque")
     assert response.status_code == 200
     assert response.json()["receipt"] == {"order_ref": "manual/v1:opaque"}
+
+
+async def test_custody_window_summary_preserves_server_folded_terminal_state_after_reordered_callbacks() -> None:
+    lifecycle = fold_lifecycle_state("filled", "acknowledged")
+
+    summary = custody_window_summary(
+        [
+            _summary(transaction_id="recorded", lifecycle_state="recorded"),
+            _summary(transaction_id="submitting", lifecycle_state="submitting"),
+            _summary(transaction_id="broker-known", lifecycle_state="submitted"),
+            _summary(transaction_id="partial", lifecycle_state="partial_fill"),
+            _summary(transaction_id="terminal", lifecycle_state=lifecycle),
+            _summary(transaction_id="error", lifecycle_state="error"),
+            _summary(transaction_id="uncertain", lifecycle_state="limbo"),
+        ]
+    )
+
+    assert lifecycle == "filled"
+    assert summary.model_dump() == {
+        "record_count": 7,
+        "a0_custody_accepted_count": 1,
+        "a1_broker_write_started_count": 1,
+        "a2_broker_known_count": 2,
+        "a3_economic_terminal_count": 1,
+        "uncertain_count": 2,
+    }

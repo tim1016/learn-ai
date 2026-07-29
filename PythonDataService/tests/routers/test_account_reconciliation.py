@@ -19,9 +19,11 @@ from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrConnectionHealth,
+    IbkrOrderAck,
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import (
+    ACCOUNT_EVENTS_FILENAME,
     AccountClerkLease,
     AccountFreezeEvidence,
     account_artifacts_root,
@@ -538,7 +540,7 @@ async def test_reconciliation_service_honors_artifact_root_dependency_override(t
     assert response.json()["receipt_id"] == receipt.receipt_id
 
 
-async def test_account_emergency_flatten_works_without_surviving_bot_run(
+async def test_raw_account_emergency_flatten_is_retired_in_favor_of_presented_actions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -607,16 +609,11 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 200
-    assert response.json()["audit_run_id"] == "eflat-audit-1"
-    assert response.json()["idempotency_key"].startswith("account-emergency-flatten-")
-    assert any(
-        event.get("event_type") == "account_emergency_flatten_completed"
-        for event in read_account_events(tmp_path, "DU1234567")
-    )
+    assert response.status_code == 410
+    assert response.json()["detail"]["reason_code"] == "PRESENTED_ACTION_REQUIRED"
 
 
-async def test_account_emergency_flatten_fails_closed_without_declared_confirmation(
+async def test_raw_account_emergency_flatten_never_reaches_the_host_clerk(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -646,8 +643,8 @@ async def test_account_emergency_flatten_fails_closed_without_declared_confirmat
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "ACCOUNT_EMERGENCY_FLATTEN_NOT_DECLARED"
+    assert response.status_code == 410
+    assert response.json()["detail"]["reason_code"] == "PRESENTED_ACTION_REQUIRED"
 
 
 async def test_triage_contract_returns_condition_rows_for_active_freeze(tmp_path: Path) -> None:
@@ -1103,7 +1100,7 @@ async def test_journal_cure_preview_honors_artifact_root_dependency_override(
     assert observed_roots == [tmp_path]
 
 
-async def test_operator_recovery_flatten_endpoint_delegates_to_host_clerk_and_appends_audit_event(
+async def test_raw_operator_recovery_flatten_is_retired_before_the_host_clerk(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1181,31 +1178,11 @@ async def test_operator_recovery_flatten_endpoint_delegates_to_host_clerk_and_ap
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 200
-    assert replay.status_code == 200
-    assert [row[1] for row in forwarded] == ["DU1234567", "DU1234567"]
-    assert all(row[2]["intent"] == intent.model_dump(mode="json") for row in forwarded)
-    [event] = read_account_events(tmp_path, "DU1234567")
-    assert {
-        key: event[key]
-        for key in (
-            "account_id",
-            "event_type",
-            "intent_id",
-            "order_ref",
-            "request_provenance",
-            "recorded_at_ms",
-            "receipt_id",
-        )
-    } == {
-        "account_id": "DU1234567",
-        "event_type": "account_clerk_operator_recovery_flatten",
-        "intent_id": intent.intent_id,
-        "order_ref": intent.order_ref,
-        "request_provenance": "account-monitor/recovery",
-        "recorded_at_ms": 101,
-        "receipt_id": "account-clerk-operator-recovery:intent-operator-recovery:1",
-    }
+    assert response.status_code == 410
+    assert replay.status_code == 410
+    assert response.json()["detail"]["reason_code"] == "PRESENTED_ACTION_REQUIRED"
+    assert forwarded == []
+    assert read_account_events(tmp_path, "DU1234567") == []
 
 
 async def test_account_events_endpoint_pages_filters_and_preserves_stable_event_identity(
@@ -1240,40 +1217,25 @@ async def test_account_events_endpoint_pages_filters_and_preserves_stable_event_
         app.dependency_overrides.clear()
 
     assert first_page.status_code == 200
-    assert first_page.json() == {
-        "schema_version": 1,
-        "account_id": "DU1234567",
-        "view": "operations",
-        "rows": [
-            {
-                "schema_version": 1,
-                "event_id": "DU1234567:3",
-                "seq": 3,
-                "kind": "reconciliation",
-                "occurred_at_ms": 1_710_000_002_000,
-                    "trader_narration": "Account reconciliation was recorded.",
-                    "operator_detail": "Account reconciliation receipt recorded in the journal.",
-                    "evidence_refs": [{"source": "account_event_journal", "ref": "DU1234567:3", "detail": None}],
-                    "operator_order_receipt": None,
-            },
-            {
-                "schema_version": 1,
-                "event_id": "DU1234567:2",
-                "seq": 2,
-                "kind": "safety",
-                "occurred_at_ms": 1_710_000_001_000,
-                "trader_narration": "An account safety freeze was recorded.",
-                "operator_detail": "Account safety freeze recorded in the journal.",
-                    "evidence_refs": [
-                        {"source": "account_event_journal", "ref": "DU1234567:2", "detail": None},
-                        {"source": "receipt", "ref": "freeze-receipt", "detail": None},
-                    ],
-                    "operator_order_receipt": None,
-            },
-        ],
-        "latest_seq": 3,
-        "next_before_seq": 2,
+    first_payload = first_page.json()
+    assert first_payload["account_id"] == "DU1234567"
+    assert first_payload["view"] == "operations"
+    assert first_payload["latest_seq"] == 3
+    assert first_payload["next_before_seq"] == 2
+    assert [(row["seq"], row["kind"]) for row in first_payload["rows"]] == [
+        (3, "reconciliation"),
+        (2, "safety"),
+    ]
+    assert all(row["provenance"] == "producer_operational_log" for row in first_payload["rows"])
+    assert first_payload["rows"][0]["producer"] == "data_plane"
+    assert first_payload["rows"][0]["trader_narration"] == "Account reconciliation was recorded."
+    first_ref, receipt_ref = first_payload["rows"][1]["evidence_refs"]
+    assert first_ref == {
+        "source": "producer_operational_log",
+        "ref": first_payload["rows"][1]["event_id"],
+        "detail": None,
     }
+    assert receipt_ref == {"source": "receipt", "ref": "freeze-receipt", "detail": None}
     assert [row["seq"] for row in older_page.json()["rows"]] == [1]
     assert [row["seq"] for row in newer_page.json()["rows"]] == [3, 2]
     assert [row["seq"] for row in safety.json()["rows"]] == [2]
@@ -1307,7 +1269,7 @@ async def test_account_events_endpoint_projects_singular_opaque_evidence_refs(tm
     [row] = response.json()["rows"]
     assert row["kind"] == "safety"
     assert {(ref["source"], ref["ref"]) for ref in row["evidence_refs"]} == {
-        ("account_event_journal", "DU1234567:1"),
+        ("producer_operational_log", row["event_id"]),
         ("order", "17"),
         ("execution", "exec-17"),
         ("order_ref", "learn-ai/bot-a/v1:intent-17"),
@@ -1315,29 +1277,257 @@ async def test_account_events_endpoint_projects_singular_opaque_evidence_refs(tm
     }
 
 
-async def test_account_events_exposes_manual_order_receipts_only_to_operations(tmp_path: Path) -> None:
-    from app.main import app
-
-    timestamp = 1_710_000_000_000
+def test_account_event_head_includes_a_late_callback_that_sorts_before_existing_rows(
+    tmp_path: Path,
+) -> None:
     append_account_event(
         tmp_path,
         "DU1234567",
         {
-            "event_type": "account_clerk_manual_order_acked",
-            "ts_ms": timestamp,
-            "receipt_id": "account-clerk-manual-order-ack:manual/operator/v1:opaque-1",
-            "broker": "ibkr",
-            "intent_id": "opaque-1",
-            "order_ref": "manual/operator/v1:opaque-1",
-            "order_id": 42,
-            "perm_id": 9001,
+            "event_type": "account_freeze_recorded",
+            "event_at_ms": 100,
+        },
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_reconciliation_receipt_recorded",
+            "event_at_ms": 200,
+        },
+    )
+    service = AccountEventJournalService(artifacts_root=tmp_path)
+    first_head = service.page(
+        account_id="DU1234567",
+        view="operations",
+        limit=50,
+        kinds=frozenset(),
+    )
+
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_clerk_event_stream_down",
+            "event_at_ms": 50,
+            "arrived_at_ms": 300,
+        },
+    )
+    refreshed_head = service.page(
+        account_id="DU1234567",
+        view="operations",
+        limit=50,
+        kinds=frozenset(),
+    )
+
+    assert [row.event_id for row in first_head.rows] != [row.event_id for row in refreshed_head.rows]
+    assert refreshed_head.rows[-1].event_at_ms == 50
+    assert refreshed_head.rows[-1].event_id not in {row.event_id for row in first_head.rows}
+
+
+async def test_account_events_degrades_unprojectable_manual_order_without_blanking_desk(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    timestamp = 1_710_000_000_000
+    account_id = "DU1234567"
+    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id=account_id, now_ms=lambda: timestamp)
+
+    valid_ref = "manual/operator/v1:valid-1"
+    valid_intent = AccountOwnerSubmitIntent(
+        trace_id="manual-order:valid-1",
+        account_id=account_id,
+        strategy_instance_id="manual-operator",
+        run_id="manual-ticket",
+        bot_order_namespace="manual/operator/v1",
+        intent_id="valid-1",
+        order_ref=valid_ref,
+        intent_kind="MANUAL_ORDER",
+        order_spec={
             "symbol": "SPY",
+            "sec_type": "STK",
             "action": "BUY",
             "quantity": 3,
             "order_type": "LMT",
+            "time_in_force": "DAY",
+            "confirm_paper": True,
+            "order_ref": valid_ref,
             "limit_price": 593.25,
-            "status": "Submitted",
-            "acknowledged_at_ms": timestamp,
+            "manual_order": True,
+        },
+        owner_generation=1,
+        created_at_ms=timestamp - 2,
+    )
+    journal.record_intent(valid_intent, validate_intent=lambda _: None)
+    journal.append_broker_ack(
+        valid_intent,
+        IbkrOrderAck(
+            account_id=account_id,
+            is_paper=True,
+            order_id=42,
+            perm_id=9001,
+            client_id=1,
+            con_id=756733,
+            symbol="SPY",
+            action="BUY",
+            quantity=3,
+            order_type="LMT",
+            limit_price=593.25,
+            status="Submitted",
+            order_ref=valid_ref,
+            placed_at_ms=timestamp,
+        ),
+    )
+
+    # A corrupt/legacy receipt whose order_spec can no longer be projected.
+    corrupt_ref = "manual/operator/v1:corrupt-1"
+    corrupt_intent = AccountOwnerSubmitIntent(
+        trace_id="manual-order:corrupt-1",
+        account_id=account_id,
+        strategy_instance_id="manual-operator",
+        run_id="manual-ticket",
+        bot_order_namespace="manual/operator/v1",
+        intent_id="corrupt-1",
+        order_ref=corrupt_ref,
+        intent_kind="MANUAL_ORDER",
+        order_spec={
+            "symbol": "SPY",
+            "sec_type": "STK",
+            "action": "BUY",
+            "quantity": "not-a-number",
+            "order_type": "MKT",
+            "order_ref": corrupt_ref,
+        },
+        owner_generation=1,
+        created_at_ms=timestamp - 1,
+    )
+    journal.record_intent(corrupt_intent, validate_intent=lambda _: None)
+    journal.append_broker_ack(
+        corrupt_intent,
+        IbkrOrderAck(
+            account_id=account_id,
+            is_paper=True,
+            order_id=43,
+            perm_id=9002,
+            client_id=1,
+            con_id=756733,
+            symbol="SPY",
+            action="BUY",
+            quantity=1,
+            order_type="MKT",
+            status="Submitted",
+            order_ref=corrupt_ref,
+            placed_at_ms=timestamp + 1,
+        ),
+    )
+
+    service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: timestamp)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/events?view=operations")
+    finally:
+        app.dependency_overrides.clear()
+
+    # One malformed receipt must not blank the entire Desk history.
+    assert response.status_code == 200
+    rows = response.json()["rows"]
+    projected_order_ids = {
+        row["operator_order_receipt"]["order_id"] for row in rows if row["operator_order_receipt"]
+    }
+    assert 42 in projected_order_ids
+    unclassified = [
+        row for row in rows if row["operator_order_receipt"] is None and row["kind"] == "other"
+    ]
+    assert any("could not be projected" in row["operator_detail"] for row in unclassified)
+
+
+async def test_account_events_exposes_manual_order_receipts_only_to_operations(tmp_path: Path) -> None:
+    from app.main import app
+
+    timestamp = 1_710_000_000_000
+    account_id = "DU1234567"
+    order_ref = "manual/operator/v1:opaque-1"
+    intent = AccountOwnerSubmitIntent(
+        trace_id="manual-order:opaque-1",
+        account_id=account_id,
+        strategy_instance_id="manual-operator",
+        run_id="manual-ticket",
+        bot_order_namespace="manual/operator/v1",
+        intent_id="opaque-1",
+        order_ref=order_ref,
+        intent_kind="MANUAL_ORDER",
+        order_spec={
+            "symbol": "SPY",
+            "sec_type": "STK",
+            "action": "BUY",
+            "quantity": 3,
+            "order_type": "LMT",
+            "time_in_force": "DAY",
+            "confirm_paper": True,
+            "order_ref": order_ref,
+            "limit_price": 593.25,
+            "manual_order": True,
+        },
+        owner_generation=1,
+        created_at_ms=timestamp - 1,
+    )
+    journal = AccountClerkJournal(
+        artifacts_root=tmp_path,
+        account_id=account_id,
+        now_ms=lambda: timestamp,
+    )
+    journal.record_intent(intent, validate_intent=lambda _: None)
+    journal.append_broker_ack(
+        intent,
+        IbkrOrderAck(
+            account_id=account_id,
+            is_paper=True,
+            order_id=42,
+            perm_id=9001,
+            client_id=1,
+            con_id=756733,
+            symbol="SPY",
+            action="BUY",
+            quantity=3,
+            order_type="LMT",
+            limit_price=593.25,
+            status="Submitted",
+            order_ref=order_ref,
+            placed_at_ms=timestamp,
+        ),
+    )
+    # Pre-split Desk mirrored this acknowledgement into the shared history.
+    # The legacy row is non-authoritative now, but must never suppress the
+    # direct canonical Clerk receipt during migration.
+    legacy_path = account_artifacts_root(tmp_path, account_id) / ACCOUNT_EVENTS_FILENAME
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "account_id": account_id,
+                "event_type": "account_clerk_manual_order_acked",
+                "seq": 1,
+                "ts_ms": timestamp,
+                "order_ref": order_ref,
+                "order_id": 42,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # A forged producer record may be readable history, but it must never
+    # become an operator order receipt.
+    append_account_event(
+        tmp_path,
+        account_id,
+        {
+            "event_type": "account_clerk_manual_order_acked",
+            "ts_ms": timestamp + 1,
+            "broker": "ibkr",
+            "order_id": 999,
+            "order_ref": order_ref,
         },
     )
     service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: timestamp)
@@ -1350,7 +1540,11 @@ async def test_account_events_exposes_manual_order_receipts_only_to_operations(t
         app.dependency_overrides.clear()
 
     assert operations.status_code == 200
-    [operations_row] = operations.json()["rows"]
+    operations_rows = operations.json()["rows"]
+    [operations_row] = [row for row in operations_rows if row["provenance"] == "clerk_journal"]
+    [forged_row] = [row for row in operations_rows if row["provenance"] == "producer_operational_log"]
+    [legacy_row] = [row for row in operations_rows if row["provenance"] == "legacy_account_events"]
+    assert operations_row["provenance"] == "clerk_journal"
     assert operations_row["trader_narration"] == "Your paper order was received by the broker."
     assert operations_row["operator_order_receipt"] == {
         "broker": "ibkr",
@@ -1365,6 +1559,8 @@ async def test_account_events_exposes_manual_order_receipts_only_to_operations(t
         "status": "Submitted",
         "acknowledged_at_ms": timestamp,
     }
+    assert forged_row["operator_order_receipt"] is None
+    assert legacy_row["operator_order_receipt"] is None
     assert trader.status_code == 200
     [trader_row] = trader.json()["rows"]
     assert trader_row["outcome"] == "Your paper order was received by the broker."
@@ -1458,6 +1654,10 @@ async def test_account_events_endpoint_returns_empty_for_missing_journal_and_typ
             journal.parent.mkdir(parents=True)
             journal.write_text("{malformed json\n", encoding="utf-8")
             corrupt = await client.get("/api/accounts/DU1234567/events")
+            clerk_journal = tmp_path / "accounts" / "DU7654321" / "clerk_journal.jsonl"
+            clerk_journal.parent.mkdir(parents=True)
+            clerk_journal.write_text("{malformed json\n", encoding="utf-8")
+            corrupt_clerk = await client.get("/api/accounts/DU7654321/events")
     finally:
         app.dependency_overrides.clear()
 
@@ -1467,6 +1667,9 @@ async def test_account_events_endpoint_returns_empty_for_missing_journal_and_typ
     assert corrupt.status_code == 409
     assert corrupt.json()["detail"]["reason_code"] == "ACCOUNT_EVENTS_JOURNAL_CORRUPT"
     assert journal.read_text(encoding="utf-8") == "{malformed json\n"
+    assert corrupt_clerk.status_code == 409
+    assert corrupt_clerk.json()["detail"]["reason_code"] == "ACCOUNT_EVENTS_JOURNAL_CORRUPT"
+    assert clerk_journal.read_text(encoding="utf-8") == "{malformed json\n"
 
 
 async def test_trader_account_events_use_new_york_day_across_dst(tmp_path: Path) -> None:
@@ -1501,7 +1704,7 @@ async def test_trader_account_events_use_new_york_day_across_dst(tmp_path: Path)
 
     assert response.status_code == 200
     [row] = response.json()["rows"]
-    assert row["seq"] == 2
+    assert row["outcome"] == "An account safety freeze was cleared."
     assert row["occurred_at_ms"] == today
     assert isinstance(row["occurred_at_ms"], int)
     assert row["outcome"] == "An account safety freeze was cleared."
@@ -1509,7 +1712,9 @@ async def test_trader_account_events_use_new_york_day_across_dst(tmp_path: Path)
 
 async def test_accounts_roster_exposes_the_current_single_account_without_a_service(tmp_path: Path) -> None:
     from app.main import app
+    from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 
+    get_account_truth_snapshot_provider().clear()
     service = AccountDirectoryService(
         artifacts_root=tmp_path,
         current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),

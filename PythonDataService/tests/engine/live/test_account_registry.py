@@ -7,10 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.live import account_artifacts
 from app.engine.live.account_artifacts import (
+    ACCOUNT_RECOVERY_CLEARANCE_FILENAME,
     AccountArtifactError,
+    AccountRecoveryClearance,
+    AccountRecoveryProof,
     account_artifacts_root,
+    read_account_recovery_clearance,
+    read_or_migrate_account_recovery_clearance,
+    record_account_recovery_clearance,
 )
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -24,6 +29,7 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
     write_account_instance_binding,
 )
+from app.schemas.live_runs import GateResult
 
 
 def _binding(
@@ -68,6 +74,15 @@ def _write_run_status(
         ),
         encoding="utf-8",
     )
+
+
+def _append_legacy_account_event(artifacts_root: Path, account_id: str, event: dict) -> None:
+    """Seed an immutable pre-split ``account_events.jsonl`` row for migration tests."""
+
+    legacy_path = account_artifacts_root(artifacts_root, account_id) / "account_events.jsonl"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    with legacy_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"account_id": account_id, **event}) + "\n")
 
 
 def test_read_account_instance_registry_rejects_path_like_account_id(
@@ -313,14 +328,23 @@ def test_crash_retired_restart_recovery_allows_after_later_proof(tmp_path: Path)
         }
     )
     write_account_instance_binding(tmp_path, retired)
-    account_artifacts.append_account_event(
+    record_account_recovery_clearance(
         tmp_path,
-        "DU123456",
-        {
-            "event_type": "account_recovery_proof_recorded",
-            "recorded_at_ms": 1_700_000_010_001,
-            "recovery_id": "proof-1",
-        },
+        recovery_proof=AccountRecoveryProof(
+            account_id="DU123456",
+            recovery_id="proof-1",
+            requested_by="operator",
+            reconciliation_result="clean",
+            final_gate_result=GateResult(
+                gate_id="account.reconciliation",
+                status="pass",
+                source="test",
+                operator_reason="CLEAN",
+                operator_next_step=None,
+                evidence_at_ms=1_700_000_010_001,
+            ),
+            recorded_at_ms=1_700_000_010_001,
+        ),
     )
 
     blocking_binding = crash_retired_restart_blocking_binding(
@@ -330,6 +354,145 @@ def test_crash_retired_restart_recovery_allows_after_later_proof(tmp_path: Path)
     )
 
     assert blocking_binding is None
+
+
+def test_wrong_account_recovery_clearance_cannot_release_a_crash_retired_binding(tmp_path: Path) -> None:
+    retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
+        update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
+    )
+    write_account_instance_binding(tmp_path, retired)
+    clearance_path = account_artifacts_root(tmp_path, "DU123456") / ACCOUNT_RECOVERY_CLEARANCE_FILENAME
+    clearance_path.write_text(
+        AccountRecoveryClearance(
+            account_id="DU765432",
+            source="account_recovery_proof",
+            evidence_id="wrong-account-proof",
+            cleared_at_ms=1_700_000_010_001,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AccountArtifactError, match="belongs to another account"):
+        crash_retired_restart_blocking_binding(
+            tmp_path,
+            account_id="DU123456",
+            strategy_instance_id="spy-ema-paper-1",
+        )
+
+
+def test_legacy_recovery_proof_event_migrates_clearance_and_unblocks_binding(tmp_path: Path) -> None:
+    # An account cleared before the typed clearance artifact existed retains only
+    # a legacy ``account_recovery_proof_recorded`` row; the one-time migration must
+    # materialize the typed artifact so the crash-retired binding is not blocked forever.
+    retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
+        update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
+    )
+    write_account_instance_binding(tmp_path, retired)
+    _append_legacy_account_event(
+        tmp_path,
+        "DU123456",
+        {
+            "event_type": "account_recovery_proof_recorded",
+            "recovery_id": "legacy-proof-1",
+            "recorded_at_ms": 1_700_000_010_001,
+        },
+    )
+    assert read_account_recovery_clearance(tmp_path, "DU123456") is None
+
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path, account_id="DU123456", strategy_instance_id="spy-ema-paper-1"
+    )
+
+    assert blocking_binding is None
+    migrated = read_account_recovery_clearance(tmp_path, "DU123456")
+    assert migrated is not None
+    assert migrated.source == "account_recovery_proof"
+    assert migrated.evidence_id == "legacy-proof-1"
+    assert migrated.cleared_at_ms == 1_700_000_010_001
+
+
+def test_legacy_audited_override_event_migrates_recovery_clearance(tmp_path: Path) -> None:
+    retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
+        update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
+    )
+    write_account_instance_binding(tmp_path, retired)
+    _append_legacy_account_event(
+        tmp_path,
+        "DU123456",
+        {
+            "event_type": "account_audited_override_recorded",
+            "override_id": "legacy-override-1",
+            "approved_decision": "continue",
+            "approved_at_ms": 1_700_000_010_002,
+            "recorded_at_ms": 1_700_000_009_000,
+        },
+    )
+
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path, account_id="DU123456", strategy_instance_id="spy-ema-paper-1"
+    )
+
+    assert blocking_binding is None
+    migrated = read_account_recovery_clearance(tmp_path, "DU123456")
+    assert migrated is not None
+    assert migrated.source == "account_audited_override"
+    assert migrated.evidence_id == "legacy-override-1"
+    assert migrated.cleared_at_ms == 1_700_000_010_002
+
+
+def test_missing_legacy_recovery_evidence_keeps_crash_retired_binding_blocked(tmp_path: Path) -> None:
+    # No legacy clearance evidence means the migration must not fabricate one.
+    retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
+        update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
+    )
+    write_account_instance_binding(tmp_path, retired)
+
+    assert read_or_migrate_account_recovery_clearance(tmp_path, "DU123456") is None
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path, account_id="DU123456", strategy_instance_id="spy-ema-paper-1"
+    )
+    assert blocking_binding == retired
+    assert not (
+        account_artifacts_root(tmp_path, "DU123456") / ACCOUNT_RECOVERY_CLEARANCE_FILENAME
+    ).exists()
+
+
+def test_malformed_legacy_recovery_clearance_fails_closed(tmp_path: Path) -> None:
+    _append_legacy_account_event(
+        tmp_path,
+        "DU123456",
+        {
+            # A proof row missing its recovery_id must surface, never fabricate a clearance.
+            "event_type": "account_recovery_proof_recorded",
+            "recorded_at_ms": 1_700_000_010_001,
+        },
+    )
+    with pytest.raises(AccountArtifactError, match="invalid evidence id"):
+        read_or_migrate_account_recovery_clearance(tmp_path, "DU123456")
+
+
+def test_legacy_freeze_override_event_does_not_clear_a_crash_retired_binding(tmp_path: Path) -> None:
+    retired = _binding(recorded_at_ms=1_700_000_010_000).model_copy(
+        update={"lifecycle_state": "RETIRED", "source": "host_daemon.process_crashed"}
+    )
+    write_account_instance_binding(tmp_path, retired)
+    _append_legacy_account_event(
+        tmp_path,
+        "DU123456",
+        {
+            "event_type": "account_audited_override_recorded",
+            "override_id": "legacy-freeze-override",
+            "approved_decision": "freeze",
+            "approved_at_ms": 1_700_000_010_005,
+            "recorded_at_ms": 1_700_000_010_005,
+        },
+    )
+
+    assert read_or_migrate_account_recovery_clearance(tmp_path, "DU123456") is None
+    blocking_binding = crash_retired_restart_blocking_binding(
+        tmp_path, account_id="DU123456", strategy_instance_id="spy-ema-paper-1"
+    )
+    assert blocking_binding == retired
 
 
 def test_crash_retired_restart_recovery_allows_non_crash_retirement(tmp_path: Path) -> None:

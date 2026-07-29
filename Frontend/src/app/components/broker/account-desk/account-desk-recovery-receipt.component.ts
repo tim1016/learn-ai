@@ -99,22 +99,13 @@ function recoveryReceiptView(success: AccountDeskRecoverySuccess): RecoveryRecei
       };
     case "recovery_flatten":
       return {
-        message: "Clerk recovery flatten was accepted.",
-        fields: [
-          field("Intent", success.receipt.recovery_flatten.recorded.intent_id, "code"),
-          field("Order reference", success.receipt.recovery_flatten.recorded.order_ref, "code"),
-          field("Order", success.receipt.recovery_flatten.broker_acked.order_id, "code"),
-          field("Recorded", "", "text", success.receipt.recovery_flatten.broker_acked.recorded_at_ms),
-        ],
+        message: success.receipt.finished_copy,
+        fields: presentedRecoveryReceiptFields(success.receipt),
       };
     case "emergency_flatten":
       return {
-        message: "Emergency paper account flatten completed.",
-        fields: [
-          field("Account", success.receipt.account_id, "code"),
-          field("Audit run", success.receipt.audit_run_id, "code"),
-          field("Completed", "", "text", success.receipt.completed_at_ms),
-        ],
+        message: success.receipt.finished_copy,
+        fields: presentedRecoveryReceiptFields(success.receipt),
       };
     case "restore_clerk":
       return {
@@ -161,4 +152,24 @@ function recoveryReceiptView(success: AccountDeskRecoverySuccess): RecoveryRecei
         ],
       };
   }
+}
+
+function presentedRecoveryReceiptFields(
+  receipt: Extract<AccountDeskRecoverySuccess, { readonly kind: 'recovery_flatten' | 'emergency_flatten' }>['receipt'],
+): readonly RecoveryReceiptField[] {
+  const effect = receipt.effect_receipt;
+  return [
+    field('Action', receipt.action_id, 'label'),
+    field('State', receipt.state, 'label'),
+    ...(effect === null || effect === undefined
+      ? []
+      : [
+          field('Effect receipt', effect.kind, 'label'),
+          field('Account', effect.account_id, 'code'),
+          ...(effect.intent_id === null || effect.intent_id === undefined ? [] : [field('Intent', effect.intent_id, 'code')]),
+          ...(effect.order_ref === null || effect.order_ref === undefined ? [] : [field('Order reference', effect.order_ref, 'code')]),
+          ...(effect.clerk_journal_seq === null || effect.clerk_journal_seq === undefined ? [] : [field('Clerk sequence', effect.clerk_journal_seq)]),
+          field('Recorded', '', 'text', effect.recorded_at_ms),
+        ]),
+  ];
 }

@@ -15,6 +15,7 @@ import type {
 import { BrokerService } from "../../../services/broker.service";
 import { formatReceiptLabel } from "../../../shared/pipes/receipt-label.pipe";
 import { formatTimestampDisplay } from "../../../shared/timestamp";
+import { makeAccountSafetySnapshot } from "../../../../testing/account-safety-snapshot-fixtures";
 import { makeCleanAccountTriage } from "../testing/account-triage-fixtures";
 import {
   makeAccountSummary,
@@ -37,6 +38,7 @@ class FakeBrokerService {
   account = vi.fn().mockResolvedValue(makeAccountSummary());
   positions = vi.fn().mockResolvedValue(makePositionsSnapshot(undefined, []));
   accountTruth = vi.fn().mockResolvedValue(makeAccountTruth(undefined, []));
+  accountSafetySnapshot = vi.fn().mockResolvedValue(makeAccountSafetySnapshot());
 }
 
 class StubEventSource {
@@ -212,6 +214,9 @@ async function setup(
     new BehaviorSubject(convertToParamMap({ accountId: "DU1234567" }));
   const fragment$ =
     options.fragment$ ?? new BehaviorSubject<string | null>(null);
+  broker.accountSafetySnapshot.mockImplementation((accountId: string) =>
+    Promise.resolve(makeAccountSafetySnapshot({ account_id: accountId })),
+  );
   const router = { navigate: vi.fn().mockResolvedValue(true) };
   const events = makeEventsStore();
   const fleet = makeFleetStore();
@@ -244,7 +249,7 @@ async function setup(
     ],
   });
   if (options.waitForVerdict !== false) {
-    await screen.findByText((options.response ?? triage()).verdict.headline);
+    await screen.findByText('Fresh reconciliation is required before new entry risk can proceed.');
   }
   return {
     ...view,
@@ -262,15 +267,12 @@ async function setup(
 }
 
 describe("AccountDeskPageComponent", () => {
-  it.each(["FROZEN", "NOT_PROVEN", "NEEDS_ATTENTION", "CLEAN"] as const)(
-    "renders the server-owned %s verdict without recomputing posture",
-    async (state) => {
-      await setup({ response: triage(state) });
+  it('renders the shared server-authored safety snapshot rather than a desk-local verdict', async () => {
+    await setup({ response: triage('CLEAN') });
 
-      expect(screen.getByText(`${state} verdict`)).toBeTruthy();
-      expect(screen.getByText(formatReceiptLabel(state))).toBeTruthy();
-    },
-  );
+    expect(screen.getByText('Fresh reconciliation is required before new entry risk can proceed.')).toBeTruthy();
+    expect(screen.getByText(formatReceiptLabel('RECONCILING'))).toBeTruthy();
+  });
 
   it("defaults to the trader lens, keeps the verdict visible, and exposes pressed toggle state", async () => {
     await setup({ response: triage("NEEDS_ATTENTION") });
@@ -285,7 +287,7 @@ describe("AccountDeskPageComponent", () => {
     await waitFor(() =>
       expect(operator.getAttribute("aria-pressed")).toBe("true"),
     );
-    expect(screen.getByText("NEEDS_ATTENTION verdict")).toBeTruthy();
+    expect(screen.getByText('Fresh reconciliation is required before new entry risk can proceed.')).toBeTruthy();
     expect(
       screen.getByRole("heading", { name: "Resolve the account posture" }),
     ).toBeTruthy();
@@ -336,7 +338,9 @@ describe("AccountDeskPageComponent", () => {
     expect(events.load).toHaveBeenCalledWith("DU7654321");
     expect(recovery.load).toHaveBeenCalledWith("DU7654321");
     expect(directory.loadServiceStatus).toHaveBeenCalledWith("DU7654321");
-    expect(await screen.findByText("DU7654321")).toBeTruthy();
+    expect(
+      await screen.findByRole("heading", { name: "Account desk · DU7654321" }),
+    ).toBeTruthy();
   });
 
   it("loads an explicitly empty account route parameter", async () => {
@@ -366,7 +370,7 @@ describe("AccountDeskPageComponent", () => {
     const mismatched = makeCleanAccountTriage({ accountId: 'DU1234567' });
     await setup({ response: mismatched, route$, waitForVerdict: false });
 
-    expect(await screen.findByText('We could not load this account verdict.')).toBeTruthy();
+    expect(await screen.findByText('We could not load account desk details.')).toBeTruthy();
     expect(screen.queryByText(mismatched.verdict.headline)).toBeNull();
     expect((screen.getByRole('combobox', { name: 'Account' }) as HTMLSelectElement).value).toBe('DUM284968');
   });
@@ -456,9 +460,10 @@ describe("AccountDeskPageComponent", () => {
     ).not.toHaveLength(0);
 
     broker.accountTriage.mockRejectedValueOnce(new Error("offline"));
+    broker.accountSafetySnapshot.mockRejectedValueOnce(new Error('offline'));
     fixture.componentInstance.retry();
-    await screen.findByText(/Showing last good account data/);
-    expect(screen.getByText("CLEAN verdict")).toBeTruthy();
+    await screen.findByText(/Showing the last received safety evidence/);
+    expect(screen.getByText('Fresh reconciliation is required before new entry risk can proceed.')).toBeTruthy();
   });
 
   it("shows an explicit empty state and retries an initial fetch failure", async () => {
@@ -502,7 +507,7 @@ describe("AccountDeskPageComponent", () => {
 
     const retries = await screen.findAllByRole("button", { name: "Retry" });
     fireEvent.click(retries[0]);
-    await screen.findByText("Account is clean");
+    await screen.findByText('Fresh reconciliation is required before new entry risk can proceed.');
     expect(broker.accountTriage).toHaveBeenCalledTimes(2);
   });
 });

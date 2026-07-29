@@ -113,6 +113,85 @@ describe('AccountDeskHoldingsStore', () => {
     expect(store.headlineMetrics()?.openPositions).toBe(0);
   });
 
+  it('settles an unchanged position-stream buffer without self-invalidating its effect', async () => {
+    const position = makePosition();
+    broker.account.mockResolvedValue(makeAccountSummary());
+    broker.positions.mockResolvedValue(makePositionsSnapshot(undefined, [position]));
+    broker.accountTruth.mockResolvedValue(makeAccountTruth(undefined, [makeTruthPosition(position)]));
+    const store = TestBed.inject(AccountDeskHoldingsStore);
+    await store.load('DU1234567');
+
+    StubEventSource.instances[1].dispatch('pnl', JSON.stringify(positionTick()));
+    await settleEffects();
+    await settleEffects();
+
+    expect(store.rows()[0]?.pnl?.market_value).toBe(1_111);
+  });
+
+  it('keeps a live close after other position ticks evict it from the SSE buffer', async () => {
+    const closedPosition = makePosition();
+    const activePosition = { ...makePosition('DU1234567', 54321), symbol: 'QQQ' };
+    broker.account.mockResolvedValue(makeAccountSummary());
+    broker.positions.mockResolvedValue(makePositionsSnapshot(undefined, [closedPosition, activePosition]));
+    broker.accountTruth.mockResolvedValue(
+      makeAccountTruth(undefined, [makeTruthPosition(closedPosition), makeTruthPosition(activePosition)]),
+    );
+    const store = TestBed.inject(AccountDeskHoldingsStore);
+    await store.load('DU1234567');
+
+    StubEventSource.instances[1].dispatch(
+      'pnl',
+      JSON.stringify({
+        ...positionTick(),
+        position: 0,
+        unrealized_pnl: null,
+        market_value: null,
+      }),
+    );
+    await settleEffects();
+
+    for (let index = 0; index < 120; index += 1) {
+      StubEventSource.instances[1].dispatch(
+        'pnl',
+        JSON.stringify({
+          ...positionTick(),
+          con_id: activePosition.con_id,
+          ts_ms: positionTick().ts_ms + index + 1,
+        }),
+      );
+    }
+    await settleEffects();
+
+    expect(store.rows().map((row) => row.position.con_id)).toEqual([activePosition.con_id]);
+    expect(store.headlineMetrics()?.openPositions).toBe(1);
+  });
+
+  it('keeps a live close when the position stream disconnects', async () => {
+    const position = makePosition();
+    broker.account.mockResolvedValue(makeAccountSummary());
+    broker.positions.mockResolvedValue(makePositionsSnapshot(undefined, [position]));
+    broker.accountTruth.mockResolvedValue(makeAccountTruth(undefined, [makeTruthPosition(position)]));
+    const store = TestBed.inject(AccountDeskHoldingsStore);
+    await store.load('DU1234567');
+
+    StubEventSource.instances[1].dispatch(
+      'pnl',
+      JSON.stringify({
+        ...positionTick(),
+        position: 0,
+        unrealized_pnl: null,
+        market_value: null,
+      }),
+    );
+    await settleEffects();
+    StubEventSource.instances[1].dispatch('error');
+    await settleEffects();
+
+    expect(store.rows()).toEqual([]);
+    expect(store.headlineMetrics()?.openPositions).toBe(0);
+    expect(store.unavailableMessage()).toContain('disconnected');
+  });
+
   it('rejects a mismatched session before positions, Account Truth, or streams are requested', async () => {
     broker.account.mockResolvedValue(makeAccountSummary('DU9999999'));
     const store = TestBed.inject(AccountDeskHoldingsStore);
