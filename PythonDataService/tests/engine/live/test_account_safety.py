@@ -14,7 +14,7 @@ from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.account_artifacts import advance_account_clerk_generation
 from app.engine.live.account_clerk import AccountClerk
 from app.engine.live.account_clerk_journal import AccountClerkJournal
-from app.engine.live.account_clerk_journal_models import AccountClerkIntentRejected
+from app.engine.live.account_clerk_journal_models import AccountClerkIntentRejected, AccountClerkJournalEntry
 from app.engine.live.account_epoch import (
     AccountEpochAuthority,
     AccountEpochOutageChanges,
@@ -39,9 +39,11 @@ from app.engine.live.account_safety import (
     account_safety_admission_lock,
     account_safety_admission_path,
     account_safety_admission_repair_path,
+    account_safety_blocks_current_bot,
     account_safety_entry_admission_lock,
     account_safety_suspension_reservation,
     repair_account_safety_admission,
+    retired_owner_nonterminal_custody,
 )
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
@@ -855,3 +857,97 @@ def test_retirement_preserves_nonterminal_clerk_custody_before_terminal_lifecycl
     assert safety.verdict is AccountSafetyVerdict.SUSPENDED
     assert safety.suspension is not None
     assert safety.suspension.requires_broker_clearance is True
+
+
+# ---------------------------------------------------------------------------
+# account_safety_blocks_current_bot — sibling-exemption regression (BUG-11)
+# ---------------------------------------------------------------------------
+
+def test_account_safety_blocks_current_bot_blocks_own_sid(tmp_path: Path) -> None:
+    """A bot whose own SID is in custody must be blocked."""
+    authority = AccountSafetyAuthority(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        now_ms=lambda: NOW_MS,
+    )
+    authority.suspend_retired_owner_custody(
+        (
+            RetiredOwnerCustody(
+                account_id=ACCOUNT_ID,
+                strategy_instance_id="dv-20260727-amd",
+                intent_id="intent-amd-001",
+                order_ref="learn-ai/dv-20260727-amd/v1:intent-amd-001",
+            ),
+        ),
+    )
+    safety = authority.read()
+
+    assert account_safety_blocks_current_bot(safety, "dv-20260727-amd") is True
+
+
+def test_account_safety_blocks_current_bot_exempts_sibling_sid(tmp_path: Path) -> None:
+    """A bot not named in custody must NOT be blocked by a sibling's suspension.
+
+    This is the root cause of the Jul 27 2026 cascade: AMD crashed with an
+    in-flight intent, its namespace was RETIRED, Clerk detected nonterminal
+    custody, suspended the account, and all 7 sibling bots were halted at
+    their next bar evaluation.  After this fix each sibling's gate provider
+    calls account_safety_blocks_current_bot() and sees its own SID is absent
+    from custody, so it returns None (no block) instead of a block GateResult.
+    """
+    authority = AccountSafetyAuthority(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        now_ms=lambda: NOW_MS,
+    )
+    authority.suspend_retired_owner_custody(
+        (
+            RetiredOwnerCustody(
+                account_id=ACCOUNT_ID,
+                strategy_instance_id="dv-20260727-amd",
+                intent_id="intent-amd-001",
+                order_ref="learn-ai/dv-20260727-amd/v1:intent-amd-001",
+            ),
+        ),
+    )
+    safety = authority.read()
+
+    # Siblings (SPY, QQQ, AAPL, …) must not be blocked
+    for sibling_sid in ("dv-20260727-spy", "dv-20260727-qqq", "dv-20260727-aapl"):
+        assert account_safety_blocks_current_bot(safety, sibling_sid) is False, sibling_sid
+
+
+def test_cancel_confirmed_entry_resolves_custody() -> None:
+    """cancel_confirmed must terminate retired-owner custody.
+
+    Root cause of the 2026-07-29 SUSPENDED→infinite-epoch-invalidation loop:
+    smoke-20260729-spy-2 crashed with SubmitUncertainHaltError; one of its
+    intents had cancel_submitting + cancel_confirmed (order never reached the
+    broker), but _custody_is_terminal did not check cancel_confirmed, so the
+    intent was retained as non-terminal custody forever.  The Clerk's
+    reconciliation loop kept re-invalidating the epoch (seq 819→835) without
+    ever lifting the safety suspension.
+    """
+    strategy_instance_id = "crashed-spy-2"
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-cancel-terminal",
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=strategy_instance_id,
+        run_id="run-crashed-spy-2",
+        bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
+        intent_id="intent-cancel-only",
+        order_ref=f"learn-ai/{strategy_instance_id}/v1:intent-cancel-only",
+        intent_kind="STRATEGY",
+        order_spec={"symbol": "SPY"},
+        owner_generation=1,
+        created_at_ms=NOW_MS,
+    )
+    entries = [
+        AccountClerkJournalEntry(seq=1, entry_kind="recorded", recorded_at_ms=NOW_MS, intent=intent),
+        AccountClerkJournalEntry(seq=2, entry_kind="cancel_submitting", recorded_at_ms=NOW_MS, intent=intent),
+        AccountClerkJournalEntry(seq=3, entry_kind="cancel_confirmed", recorded_at_ms=NOW_MS, intent=intent),
+    ]
+
+    retained = retired_owner_nonterminal_custody(entries, strategy_instance_id=strategy_instance_id)
+
+    assert retained == (), f"cancel_confirmed must terminate custody, got: {retained}"

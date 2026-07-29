@@ -22,7 +22,7 @@ from app.engine.live.account_epoch import (
     AccountEpochState,
     EpochReconciliationDepth,
 )
-from app.engine.live.journal_exposure import project_journal_account_exposure
+from app.engine.live.journal_exposure import project_journal_exposure
 
 _BROKER_READ_TIMEOUT_S = 30.0
 
@@ -120,12 +120,25 @@ def _complete_proof(
             )
         )
     }
+    # An EMERGENCY_FLATTEN intent with no broker_submitting entry made no broker
+    # write and therefore cannot cause a position discrepancy.  The reconciler
+    # explicitly skips retrying these intents; the epoch proof excludes them from
+    # the unresolved list for the same reason — they are attribution-only records.
+    submitted_intent_ids = {
+        entry.intent.intent_id
+        for entry in entries
+        if entry.entry_kind == "broker_submitting" and entry.intent is not None
+    }
     unresolved_intents = [
         {"intent_id": entry.intent.intent_id, "order_ref": entry.intent.order_ref}
         for entry in entries
         if entry.entry_kind == "recorded"
         and entry.intent is not None
         and entry.intent.intent_id not in terminal_intent_ids
+        and not (
+            entry.intent.intent_kind == "EMERGENCY_FLATTEN"
+            and entry.intent.intent_id not in submitted_intent_ids
+        )
     ]
     unknown_orders = [
         _order_fact(order)
@@ -137,10 +150,26 @@ def _complete_proof(
         for execution in executions
         if execution.order_ref not in known_order_refs
     ]
-    baseline_exposure = project_journal_account_exposure(entries, account_id=state.account_id)
-    expected_position_by_symbol = {
-        exposure.symbol.upper(): exposure.quantity for exposure in baseline_exposure
-    }
+    # Expected position = pre-Clerk baseline (broker_evidence_baseline entries) +
+    # namespace-level fills and operator-adjustment cures.  The account-level
+    # projection is intentionally NOT used here: it accumulates unattributed fills
+    # (foreign orders) that inflate the expected total and ignores cures, causing
+    # false-positive contamination when retired-bot fill history is corrected via
+    # operator_adjustment.  Unattributed fills that are still open at the broker
+    # are still detected via nonflat_positions below.
+    baseline_by_symbol: dict[str, float] = defaultdict(float)
+    for entry in entries:
+        b = entry.broker_evidence_baseline
+        if entry.entry_kind == "broker_evidence_baseline" and b is not None and b.account_id == state.account_id:
+            for pos in b.positions:
+                baseline_by_symbol[pos.symbol.upper()] += pos.signed_quantity
+    namespace_exposure = project_journal_exposure(entries, group_by="namespace", account_id=state.account_id)
+    expected_position_by_symbol: dict[str, float] = dict(baseline_by_symbol)
+    for exposure in namespace_exposure:
+        expected_position_by_symbol[exposure.symbol] = (
+            expected_position_by_symbol.get(exposure.symbol, 0.0) + exposure.quantity
+        )
+    expected_position_by_symbol = {s: q for s, q in expected_position_by_symbol.items() if q != 0.0}
     observed_position_by_symbol: dict[str, float] = defaultdict(float)
     observed_position_count_by_symbol: dict[str, int] = defaultdict(int)
     for position in positions.positions:
