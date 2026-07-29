@@ -21,6 +21,10 @@ ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S: Final = 120.0
 # caller, while each individual broker write remains independently bounded.
 # Keep the end-to-end caller budget large enough to cover that queue plus its
 # own write without turning a delayed acknowledgement into a false timeout.
+# ``cancel_exact_order`` and ``cancel_pending_a0`` take the same broker-write
+# lock, so they queue behind the same up-to-eight serialized writes and share
+# this budget; the 30s normal timeout would expire mid-queue and turn a healthy
+# cancel into durable cancel-uncertainty that blocks the owner's next submit.
 ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S: Final = 240.0
 # This limits how long a caller waits for an unambiguous A0 response. It is
 # deliberately not a claim that a filesystem fsync can be preempted by the
@@ -288,7 +292,7 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
 
 
 def request_timeout_s(operation: AccountClerkRpcOperation) -> float:
-    if operation == "submit":
+    if operation in ("submit", "cancel_exact_order", "cancel_pending_a0"):
         return ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S
     if operation == "submit_custody_v2":
         return ACCOUNT_CLERK_RPC_CUSTODY_RESPONSE_DEADLINE_S

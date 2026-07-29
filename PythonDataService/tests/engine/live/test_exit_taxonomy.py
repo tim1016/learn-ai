@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from app.engine.live.exit_taxonomy import (
+    ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
+    LIVENESS_UNPROVEN_REGISTRY_SOURCE,
+    PROCESS_CRASHED_REGISTRY_SOURCE,
     RunExitEvidence,
     classify_run_exit,
     false_crash_repair_source,
+    terminal_restart_failure_phrase,
 )
 
 
@@ -68,3 +72,17 @@ def test_false_crash_repair_requires_positive_non_crash_status() -> None:
         )
         is None
     )
+
+
+def test_terminal_restart_failure_phrase_is_accurate_per_source() -> None:
+    """The operator message must not label an OOM/SIGKILL exit as a 'crash'."""
+
+    assert (
+        "liveness is unproven"
+        in terminal_restart_failure_phrase(LIVENESS_UNPROVEN_REGISTRY_SOURCE)
+    )
+    assert (
+        terminal_restart_failure_phrase(ENDED_WITHOUT_STATUS_REGISTRY_SOURCE)
+        == "ended without a run-status receipt"
+    )
+    assert terminal_restart_failure_phrase(PROCESS_CRASHED_REGISTRY_SOURCE) == "crashed"

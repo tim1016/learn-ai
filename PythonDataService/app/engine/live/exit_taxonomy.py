@@ -163,6 +163,21 @@ def false_crash_repair_source(evidence: RunExitEvidence) -> str | None:
     return verdict.registry_source
 
 
+def terminal_restart_failure_phrase(source: str) -> str:
+    """Human phrase for why a terminal binding blocks restart, by source.
+
+    Canonical so the host daemon and the crash-recovery detail cannot drift.
+    An ``ended_without_status`` exit (SIGKILL/OOM before a run-status receipt)
+    must not be described as a crash.
+    """
+
+    if source in LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES:
+        return "is not owned by the current host daemon and its liveness is unproven"
+    if source in ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES:
+        return "ended without a run-status receipt"
+    return "crashed"
+
+
 __all__ = [
     "CRASH_RETIRED_BINDING_SOURCES",
     "ENDED_WITHOUT_STATUS_REGISTRY_SOURCE",
@@ -184,4 +199,5 @@ __all__ = [
     "classify_run_exit",
     "false_crash_repair_source",
     "read_run_exit_evidence",
+    "terminal_restart_failure_phrase",
 ]

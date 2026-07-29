@@ -1165,6 +1165,22 @@ async def test_drain_events_rejects_a_broker_event_outside_the_canonical_shape(t
     assert exc.value.reason_code == "ACCOUNT_CLERK_PROTOCOL_ERROR:MALFORMED_RESPONSE"
 
 
+def test_broker_write_lock_cancels_share_the_submit_queue_budget() -> None:
+    """cancel_exact_order and cancel_pending_a0 acquire the same _broker_write_lock
+    as a submit, so a caller can queue behind up to eight serialized broker writes.
+    They must get the submit-sized budget, not the 30s normal timeout, or an 8-bot
+    cancel times out into durable cancel-uncertainty that blocks the next submit."""
+
+    from app.engine.live.account_clerk_rpc_protocol import request_timeout_s
+
+    assert request_timeout_s("cancel_exact_order") == ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S
+    assert request_timeout_s("cancel_pending_a0") == ACCOUNT_CLERK_RPC_SUBMIT_TIMEOUT_S
+    # Guard against over-broadening: cancels/writes that do not take the broker-write
+    # lock keep the 30s normal budget.
+    assert request_timeout_s("cancel_namespace") == ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S
+    assert request_timeout_s("fold_binding_retirements") == ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("rpc_request", "expected_budget", "expected_identity"),

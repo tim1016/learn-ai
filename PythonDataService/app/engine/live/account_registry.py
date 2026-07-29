@@ -38,7 +38,7 @@ from app.engine.live.account_binding_ledger import (
 from app.engine.live.exit_taxonomy import (
     CRASH_RETIRED_BINDING_SOURCES,
     LIVENESS_UNPROVEN_REGISTRY_SOURCE,
-    RECOVERY_REQUIRED_RETIRED_BINDING_SOURCES,
+    TERMINAL_RESTART_BLOCKING_BINDING_SOURCES,
     false_crash_repair_source,
     read_run_exit_evidence,
 )
@@ -409,7 +409,13 @@ def crash_retired_restart_blocking_binding(
     account_id: str,
     strategy_instance_id: str,
 ) -> AccountInstanceBinding | None:
-    """Return the unsafe terminal binding that blocks restart, if any."""
+    """Return the unsafe terminal binding that blocks restart, if any.
+
+    Covers every terminal source whose exposure is unproven at exit: a crash,
+    a daemon-boot binding whose liveness is unproven, and an ``ended_without_status``
+    exit (SIGKILL/OOM before a run-status receipt). Each requires an audited
+    recovery override or a retire-and-replace before the same instance restarts.
+    """
 
     bindings = read_account_instance_registry(artifacts_root, account_id)
     latest = latest_account_instance_binding(
@@ -421,7 +427,7 @@ def crash_retired_restart_blocking_binding(
         return None
     if (
         latest.lifecycle_state != "RETIRED"
-        or latest.source not in RECOVERY_REQUIRED_RETIRED_BINDING_SOURCES
+        or latest.source not in TERMINAL_RESTART_BLOCKING_BINDING_SOURCES
     ):
         return None
     if account_recovery_evidence_exists_after(
