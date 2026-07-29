@@ -22,8 +22,9 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk import journal as journal_module
-from app.broker.alpaca.clerk.clerk import UNCERTAIN_SUBMIT_GRACE_MS, AlpacaClerk
+from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind
+from app.broker.alpaca.clerk.recovery import UNCERTAIN_SUBMIT_GRACE_MS
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
@@ -404,7 +405,7 @@ async def test_startup_replay_resolves_intent_left_uncertain_by_crash() -> None:
 async def test_startup_replay_resolves_intent_recorded_with_no_uncertain() -> None:
     # A crash BEFORE even the submit_uncertain line (right after the intent's
     # fsync) leaves only intent_recorded. Recovery must still resolve it.
-    from app.broker.alpaca.clerk.clerk import _LegIdentity
+    from app.broker.alpaca.clerk.leg_identity import LegIdentity
     from app.broker.alpaca.clerk.models import OrderJournalEntry
     from app.engine.live.order_identity import (
         build_manual_order_namespace,
@@ -418,7 +419,7 @@ async def test_startup_replay_resolves_intent_recorded_with_no_uncertain() -> No
     account_id, journal = await clerk._ensure_journal()  # type: ignore[attr-defined]
     intent_id = mint_intent_id()
     order_ref = build_order_ref(build_manual_order_namespace("inkant"), intent_id)
-    identity = _LegIdentity(
+    identity = LegIdentity(
         account_id,
         "inkant",
         intent_id,

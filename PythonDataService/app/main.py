@@ -7,6 +7,10 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.clerk import AlpacaClerk
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +30,7 @@ from app.routers import (
     bot_events,
     broker,
     broker_account_truth,
+    broker_bots,
     broker_capability,
     broker_session,
     brokers,
@@ -42,6 +47,7 @@ from app.routers import (
     iv_recorder,
     jobs,
     lean_sidecar,
+    market_data_feed,
     market_monitor,
     monte_carlo,
     options,
@@ -106,7 +112,7 @@ def _alpaca_clerk_configuration_is_valid() -> bool:
     return True
 
 
-async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: object) -> bool:
+async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: AlpacaClerk) -> bool:
     """Run S5 recovery before enabling submits; preserve a safe disabled state.
 
     Recovery failure is not an availability-only concern: unresolved intents may
@@ -116,7 +122,7 @@ async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: object) -> bool:
     """
     try:
         await asyncio.wait_for(
-            alpaca_clerk.recover(),  # type: ignore[attr-defined]
+            alpaca_clerk.recover(),
             timeout=_ALPACA_RECOVERY_TIMEOUT_S,
         )
     except Exception as exc:
@@ -168,8 +174,17 @@ async def lifespan(app: FastAPI):
     from app.broker.alpaca.clerk import AlpacaClerk, get_clerk_settings, set_alpaca_clerk
 
     if _alpaca_clerk_configuration_is_valid():
+        from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
+
         alpaca_broker = AlpacaBroker()
-        alpaca_clerk = AlpacaClerk(read=alpaca_broker, trade=alpaca_broker)
+        # S4 (#1262): the dual-health submission gate — market-data feed (S1)
+        # AND trade_updates execution channel must both be healthy for a new
+        # submit; either broken -> durable STREAM_HEALTH_HOLD, clear-only exit.
+        alpaca_clerk = AlpacaClerk(
+            read=alpaca_broker,
+            trade=alpaca_broker,
+            stream_health=build_default_stream_health_gate(),
+        )
 
         # Alpaca crash-safety recovery (phase 2, S5) — replay the order journal
         # and resolve every intent left uncertain by a timeout or a restart
@@ -220,9 +235,9 @@ async def lifespan(app: FastAPI):
             )
 
             alpaca_sweep = ReconciliationSweep(clerk=alpaca_clerk)
-            alpaca_sweep.start()
+            # NOTE: .start() is deferred to AFTER bot_task_registry.run_boot_recovery()
+            # to avoid racing the boot reconciliation pass with the periodic sweep.
             set_reconciliation_sweep(alpaca_sweep)
-            logger.info("Alpaca reconciliation sweep started (S6).")
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -345,6 +360,15 @@ async def lifespan(app: FastAPI):
             account_service_ensurer=_ensure_connected_account_service,
         )
         account_truth_refresh_loop.start()
+
+        # Shared MarketDataFeed — installed after the IBKR client is created
+        # so it references the same process-local client the rest of the broker
+        # stack uses. The feed is read-only (no orders); it is the one sanctioned
+        # cross-broker surface (phase-3 design §4, #1258 L2).
+        from app.marketdata.ibkr_feed import IbkrMarketDataFeed, set_market_data_feed
+
+        set_market_data_feed(IbkrMarketDataFeed(ibkr_client))
+        logger.info("Shared MarketDataFeed installed (ibkr, in-process fan-out).")
     else:
         set_client(None)
         set_monitor(None)
@@ -387,6 +411,52 @@ async def lifespan(app: FastAPI):
             "daemon connectivity monitor not started."
         )
 
+    # ── Alpaca Bot Control v2, S2 (#1260) — in-container bot runner ────
+    # The task registry is installed regardless of broker_enabled so the
+    # /api/brokers/{broker}/bots routes answer honestly: without the shared
+    # MarketDataFeed a deploy fails with a typed 503, and the artifact-derived
+    # list stays readable. No host daemon anywhere in this path (L1/P10).
+    from app.marketdata.ibkr_feed import get_market_data_feed
+    from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+
+    bot_task_registry = BotTaskRegistry(
+        artifacts_root=Path(ibkr_settings.live_runs_root).parent,
+        feed_resolver=get_market_data_feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+    )
+    set_bot_task_registry(bot_task_registry)
+    logger.info("In-container bot runner installed (task registry, daemon-free).")
+
+    # S5 (#1263) — boot recovery sweep, BEFORE any bot may start (fail
+    # closed): durable ON_DUTY state from before the restart becomes typed
+    # interrupted evidence; the clerk resolves unresolved intents by identity
+    # and runs one reconciliation pass; starts stay refused while any intent
+    # remains uncertain.
+    from app.broker.alpaca.clerk import derive as alpaca_derive
+    from app.broker.alpaca.clerk import get_alpaca_clerk
+
+    _boot_clerk = get_alpaca_clerk()
+    if _boot_clerk is not None:
+        async def _unresolved_intents() -> int:
+            return len(alpaca_derive.unresolved_intents(await _boot_clerk.read_journal_entries()))
+
+        await bot_task_registry.run_boot_recovery(
+            recover=_boot_clerk.recover,
+            reconcile=_boot_clerk.reconcile_once,
+            unresolved_intents_probe=_unresolved_intents,
+        )
+    else:
+        await bot_task_registry.run_boot_recovery()
+
+    # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
+    # sweep cannot race the boot reconciliation pass (both call reconcile_once).
+    from app.broker.alpaca.clerk import get_reconciliation_sweep
+
+    _pending_sweep = get_reconciliation_sweep()
+    if _pending_sweep is not None:
+        _pending_sweep.start()
+        logger.info("Alpaca reconciliation sweep started (S6, post-boot-recovery).")
+
     # ADR-0028 Stage 2 — each visible bot gets one producer-owned status
     # snapshot before the API begins serving normal reads. The producer owns
     # broker-activity bootstrap and periodic assembly; status GET only reads
@@ -396,6 +466,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # Stop the in-container bot tasks first — they consume the shared
+        # MarketDataFeed, which is torn down later in this block. Operator
+        # desired-state is preserved; outcomes record SERVICE_SHUTDOWN.
+        await bot_task_registry.stop_all()
+        set_bot_task_registry(None)
         # Stop the Alpaca reconciliation sweep + live-lifecycle consumer first —
         # cancel their background tasks (and the consumer's socket) cleanly,
         # independent of the IBKR teardown.
@@ -445,6 +520,10 @@ async def lifespan(app: FastAPI):
         if ibkr_client is not None and ibkr_client.is_connected():
             await ibkr_client.disconnect()
         set_client(None)
+        # Clear the shared MarketDataFeed after the IBKR client is down.
+        from app.marketdata.ibkr_feed import set_market_data_feed as _clear_feed
+
+        _clear_feed(None)
         logger.info("Shutting down Polygon Data Service")
 
 
@@ -548,6 +627,14 @@ app.include_router(iv_recorder.router)
 # /research/data-divergence/* — dashboard + matrix endpoints. The router
 # carries its own prefix so we mount it bare.
 app.include_router(research_divergence.router)
+# Shared MarketDataFeed diagnostic surface — read-only feed health + fan-out
+# subscription count. Requires the always-on control secret (GET exposes live
+# broker state: connection status, last bar watermark, subscription count).
+app.include_router(
+    market_data_feed.router,
+    prefix="/api/market-data-feed",
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+)
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.
 app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
@@ -564,6 +651,13 @@ app.include_router(broker_session.router, dependencies=PROTECTED_DATA_PLANE_READ
 # data, so every v2 read requires the always-on data-plane control secret.
 app.include_router(
     brokers.router,
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+)
+# Broker-parameterized bot runner (Alpaca Bot Control v2, S2 — #1260).
+# Deploy/stop/list for in-container log-only bots; broker-tagged bindings.
+# Control actions on live broker state — always-on data-plane secret.
+app.include_router(
+    broker_bots.router,
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.

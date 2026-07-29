@@ -1,0 +1,144 @@
+"""Dual-health submission gate composition (S4, #1262 — P5/P6/P7).
+
+Composes the two channel-health facts the clerk's submit gate consumes:
+
+- **market_data** — the shared :class:`MarketDataFeed`'s ``FeedHealth``
+  (S1). Unhealthy when the feed is not installed, disconnected, or stale
+  past its bounded threshold.
+- **execution** — the Alpaca ``trade_updates`` websocket per its existing
+  reconnect state (the consumer's connection watermark). Unhealthy when the
+  consumer is not running or the socket is down.
+
+Every fact carries its own ``observed_at_ms`` (P7: truth has age). The gate
+itself is dumb composition — the *hold* raised on an unhealthy channel lives
+at the clerk boundary and reuses the existing journal-derived hold semantics
+unchanged (blocks new submissions, never reductions/cancels, restart-durable,
+clearable — never auto-cleared).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+
+from app.broker.alpaca.clerk.models import ChannelHealth
+from app.marketdata.feed import FeedHealth
+
+ChannelHealthProvider = Callable[[], ChannelHealth]
+
+
+def market_data_channel_health(
+    feed_health: FeedHealth | None, *, now_ms: int
+) -> ChannelHealth:
+    """Fold the shared feed's health snapshot into the gate's fact shape."""
+    if feed_health is None:
+        return ChannelHealth(
+            stream="market_data",
+            healthy=False,
+            reason="Shared market-data feed is not installed.",
+            observed_at_ms=now_ms,
+        )
+    healthy = feed_health.connected and not feed_health.stale
+    return ChannelHealth(
+        stream="market_data",
+        healthy=healthy,
+        reason="" if healthy else (feed_health.reason or "Market-data feed is unhealthy."),
+        observed_at_ms=feed_health.observed_at_ms,
+    )
+
+
+def execution_channel_health(
+    *,
+    connected: bool | None,
+    connection_changed_at_ms: int | None,
+    now_ms: int,
+) -> ChannelHealth:
+    """Fold the trade_updates connection watermark into the gate's fact shape.
+
+    ``connected=None`` means the consumer is not running at all — fail-safe
+    unhealthy, observed now.
+    """
+    if connected is None:
+        return ChannelHealth(
+            stream="execution",
+            healthy=False,
+            reason="Alpaca trade_updates consumer is not running.",
+            observed_at_ms=now_ms,
+        )
+    return ChannelHealth(
+        stream="execution",
+        healthy=connected,
+        reason="" if connected else "Alpaca trade_updates websocket is disconnected.",
+        observed_at_ms=(
+            connection_changed_at_ms if connection_changed_at_ms is not None else now_ms
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class StreamHealthGate:
+    """The two channel-health providers the clerk's submit gate snapshots."""
+
+    market_data: ChannelHealthProvider
+    execution: ChannelHealthProvider
+
+    def snapshot(self) -> tuple[ChannelHealth, ChannelHealth]:
+        return (self.market_data(), self.execution())
+
+    def broken(self) -> tuple[ChannelHealth, ...]:
+        return tuple(health for health in self.snapshot() if not health.healthy)
+
+
+def stream_health_refusal(gate: StreamHealthGate | None) -> tuple[str, str] | None:
+    """``(reason, detail)`` for a submit refusal, or ``None`` when clear.
+
+    ``reason`` names the broken stream(s) for the hold line; ``detail`` adds
+    each stream's why and observation time. A ``None`` gate (not installed)
+    refuses nothing — production wiring always installs it.
+    """
+    if gate is None:
+        return None
+    broken = gate.broken()
+    if not broken:
+        return None
+    names = ", ".join(health.stream for health in broken)
+    detail = "; ".join(
+        f"{health.stream}: {health.reason} (observed_at_ms={health.observed_at_ms})"
+        for health in broken
+    )
+    return (f"Order submission is paused: unhealthy stream(s): {names}.", detail)
+
+
+def build_default_stream_health_gate() -> StreamHealthGate:
+    """Production wiring: shared MarketDataFeed + trade_updates consumer.
+
+    Providers resolve their singletons lazily per call, so the gate can be
+    constructed before either exists (the consumer is created after the
+    clerk). Imports are deferred inside the providers to avoid the
+    ``trade_updates`` → ``clerk`` import cycle.
+    """
+    from app.utils.timestamps import now_ms_utc
+
+    def _market_data() -> ChannelHealth:
+        from app.marketdata.ibkr_feed import get_market_data_feed
+
+        feed = get_market_data_feed()
+        return market_data_channel_health(
+            feed.health() if feed is not None else None, now_ms=now_ms_utc()
+        )
+
+    def _execution() -> ChannelHealth:
+        from app.broker.alpaca.trade_updates import get_trade_updates_consumer
+
+        consumer = get_trade_updates_consumer()
+        if consumer is None:
+            return execution_channel_health(
+                connected=None, connection_changed_at_ms=None, now_ms=now_ms_utc()
+            )
+        return execution_channel_health(
+            connected=consumer.connected,
+            connection_changed_at_ms=consumer.connection_changed_at_ms,
+            now_ms=now_ms_utc(),
+        )
+
+    return StreamHealthGate(market_data=_market_data, execution=_execution)

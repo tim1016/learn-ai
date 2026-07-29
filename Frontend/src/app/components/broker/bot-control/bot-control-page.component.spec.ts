@@ -387,6 +387,30 @@ describe('BotControlPageComponent', () => {
     }));
   });
 
+  it('shows Resume instead of a known-refused Start for a durably stopped bot', async () => {
+    const { fixture, element, broker, liveRuns } = await setupBotControlPage({
+      status: stoppedReadyStatus(),
+      mutationResponses: { setInstanceDesiredState: makeDesiredStateResponse() },
+    });
+
+    const verb = element.querySelector<HTMLButtonElement>('[data-testid="trader-primary-action"]');
+    expect(verb?.textContent?.trim()).toBe('Resume');
+
+    verb?.click();
+    await flush(fixture);
+
+    expect(liveRuns.startHostRunner).not.toHaveBeenCalled();
+    expect(broker.presentLifecycleAction).toHaveBeenCalledWith(
+      'DU1234567', 'resume', 'sid-x', undefined,
+    );
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', expect.objectContaining({
+      action: 'resume',
+      reason: 'Resume',
+      updated_by: 'operator',
+      presented_action: expect.objectContaining({ action_id: 'resume' }),
+    }));
+  });
+
   it('guides an on-duty bot through graceful stop and records durable STOPPED intent', async () => {
     const { fixture, element, broker, liveRuns } = await setupBotControlPage({
       status: onDutyStatus(),

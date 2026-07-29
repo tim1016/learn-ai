@@ -299,11 +299,32 @@ class TradeUpdatesConsumer:
         # fingerprints still protect live redeliveries and corrections.
         self._terminal_orders: dict[str, set[str]] = {}
         self._task: asyncio.Task[None] | None = None
+        # S4 (#1262) connection watermark: True from the first accepted frame
+        # of a cycle until that source is exhausted or errors. The dual-health
+        # submission gate reads it (with its change time) as the execution
+        # channel's health fact.
+        self._connected = False
+        self._connection_changed_at_ms = clock()
 
     @property
     def counters(self) -> TradeUpdateCounters:
         """The observable counters (read-only accessor for tests / health)."""
         return self._counters
+
+    @property
+    def connected(self) -> bool:
+        """True while a trade_updates source is live (S4 gate input)."""
+        return self._connected
+
+    @property
+    def connection_changed_at_ms(self) -> int:
+        """When the connection state last flipped, int64 ms UTC (P7 age)."""
+        return self._connection_changed_at_ms
+
+    def _mark_connection(self, connected: bool) -> None:
+        if self._connected != connected:
+            self._connected = connected
+            self._connection_changed_at_ms = self._clock()
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -370,11 +391,15 @@ class TradeUpdatesConsumer:
         # For the real socket, it yields the auth acknowledgement only after
         # the server accepted the ``listen`` subscription; a reconnect is live
         # before the REST snapshot closes the previous gap.
-        if reconcile_after_connect:
-            await self._gap_reconcile()
-        await self._handle_frame(first_frame)
-        async for frame in source:
-            await self._handle_frame(frame)
+        self._mark_connection(True)
+        try:
+            if reconcile_after_connect:
+                await self._gap_reconcile()
+            await self._handle_frame(first_frame)
+            async for frame in source:
+                await self._handle_frame(frame)
+        finally:
+            self._mark_connection(False)
 
     # ── Per-frame processing ─────────────────────────────────────────────────
 

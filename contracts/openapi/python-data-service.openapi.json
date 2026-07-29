@@ -7771,6 +7771,100 @@
         "title": "BotRollCallSummary",
         "type": "object"
       },
+      "BotStatusView": {
+        "description": "One bot's roster row: broker-tagged binding + artifact-derived state.",
+        "properties": {
+          "active_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Run Id"
+          },
+          "binding_created_at_ms": {
+            "title": "Binding Created At Ms",
+            "type": "integer"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "desired_state": {
+            "enum": [
+              "RUNNING",
+              "PAUSED",
+              "STOPPED"
+            ],
+            "title": "Desired State",
+            "type": "string"
+          },
+          "duty_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotDutyOutcomeView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_transition_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Transition At Ms"
+          },
+          "mode": {
+            "const": "log_only",
+            "title": "Mode"
+          },
+          "phase": {
+            "enum": [
+              "OFF_DUTY",
+              "ON_DUTY",
+              "RETIRED"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "broker",
+          "symbol",
+          "mode",
+          "running",
+          "phase",
+          "desired_state",
+          "active_run_id",
+          "duty_outcome",
+          "binding_created_at_ms",
+          "last_transition_at_ms"
+        ],
+        "title": "BotStatusView",
+        "type": "object"
+      },
       "BreachProbability": {
         "additionalProperties": false,
         "description": "Probability that *any* simulation hit a drawdown >= threshold.\n\nThreshold is a positive fraction (``0.10`` = 10% drawdown). The\nprobability is the *fraction of simulations* whose realised\nmax-drawdown met or exceeded the threshold \u2014 a sample estimate\nof P(MDD >= threshold) under the simulation distribution.",
@@ -10425,6 +10519,40 @@
         "title": "CalculateIndicatorsResponse",
         "type": "object"
       },
+      "ChannelHealth": {
+        "additionalProperties": false,
+        "description": "One submission-affecting stream's health fact, with its age (P7).\n\n``observed_at_ms`` is mandatory: no health fact is rendered without an\nobservation time. ``reason`` is empty when healthy.",
+        "properties": {
+          "healthy": {
+            "title": "Healthy",
+            "type": "boolean"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "stream": {
+            "enum": [
+              "market_data",
+              "execution"
+            ],
+            "title": "Stream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stream",
+          "healthy",
+          "observed_at_ms"
+        ],
+        "title": "ChannelHealth",
+        "type": "object"
+      },
       "ChartDataRequest": {
         "description": "Request for chart data with resampled bars and indicators.",
         "properties": {
@@ -11110,6 +11238,20 @@
           "broker": {
             "title": "Broker",
             "type": "string"
+          },
+          "channel_healths": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChannelHealth"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Healths"
           },
           "hold": {
             "$ref": "#/components/schemas/HoldState"
@@ -13811,6 +13953,35 @@
         "title": "DeflatedSharpeResponse",
         "type": "object"
       },
+      "DeployBotRequest": {
+        "additionalProperties": false,
+        "description": "Deploy (and start) a log-only bot bound to ``{broker}``.",
+        "properties": {
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 12,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "use_rth": {
+            "default": true,
+            "title": "Use Rth",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "symbol"
+        ],
+        "title": "DeployBotRequest",
+        "type": "object"
+      },
       "DeployPreflightResponse": {
         "additionalProperties": false,
         "properties": {
@@ -16156,6 +16327,53 @@
           "category"
         ],
         "title": "FeeDivergenceModel",
+        "type": "object"
+      },
+      "FeedHealth": {
+        "description": "Point-in-time health snapshot for a MarketDataFeed.\n\n``connected`` \u2014 the underlying broker connection is alive.\n``stale``     \u2014 connected but no bar has arrived within the stale threshold.\n``last_bar_ms`` \u2014 ``start_ms`` of the most recently emitted bar, or ``None``\n                  if no bar has been emitted yet.\n``reason``    \u2014 human-readable detail when unhealthy (empty string when healthy).\n``active_subscription_count`` \u2014 number of symbols currently subscribed.\n``observed_at_ms`` \u2014 wall-clock of this snapshot, int64 ms UTC.",
+        "properties": {
+          "active_subscription_count": {
+            "title": "Active Subscription Count",
+            "type": "integer"
+          },
+          "connected": {
+            "title": "Connected",
+            "type": "boolean"
+          },
+          "last_bar_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Bar Ms"
+          },
+          "observed_at_ms": {
+            "description": "Snapshot wall-clock, int64 ms UTC.",
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "connected",
+          "stale",
+          "last_bar_ms",
+          "reason",
+          "active_subscription_count",
+          "observed_at_ms"
+        ],
+        "title": "FeedHealth",
         "type": "object"
       },
       "FitParamsResponse": {
@@ -36219,6 +36437,26 @@
         "title": "StockTickerSnapshot",
         "type": "object"
       },
+      "StopBotRequest": {
+        "additionalProperties": false,
+        "description": "Button-Rule exit: stop a running bot (durable desired-state first).",
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "StopBotRequest",
+        "type": "object"
+      },
       "StrategyAnalyzeRequest": {
         "description": "Request to analyze an options strategy.",
         "properties": {
@@ -46185,6 +46423,285 @@
         ]
       }
     },
+    "/api/brokers/{broker}/bots": {
+      "get": {
+        "operationId": "list_bots_api_brokers__broker__bots_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BotStatusView"
+                  },
+                  "title": "Response List Bots Api Brokers  Broker  Bots Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List bots whose durable binding carries this broker tag",
+        "tags": [
+          "broker-bots"
+        ]
+      },
+      "post": {
+        "operationId": "deploy_bot_api_brokers__broker__bots_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeployBotRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotStatusView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Deploy and start a log-only bot bound to this broker",
+        "tags": [
+          "broker-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{strategy_instance_id}": {
+      "get": {
+        "operationId": "get_bot_status_api_brokers__broker__bots__strategy_instance_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotStatusView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One bot's roster row (artifact-derived state + registry liveness)",
+        "tags": [
+          "broker-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/stop": {
+      "post": {
+        "operationId": "stop_bot_api_brokers__broker__bots__strategy_instance_id__stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/StopBotRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Request"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotStatusView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop a running bot (durable STOPPED intent first, then reap)",
+        "tags": [
+          "broker-bots"
+        ]
+      }
+    },
     "/api/brokers/{broker}/clerk/clear-hold": {
       "post": {
         "description": "Clear the account exposure hold (operator exit); return the updated status.\n\nA control mutation (the control secret gates it). Transport only: resolve the\nClerk and delegate. The Clerk journals HOLD_CLEARED (idempotent \u2014 a clear\nagainst no active hold is a benign NO-OP) and returns the post-clear status so\nthe desk re-renders in one round-trip.",
@@ -52602,6 +53119,56 @@
         "tags": [
           "live-runs",
           "live-runs"
+        ]
+      }
+    },
+    "/api/market-data-feed/health": {
+      "get": {
+        "description": "Returns the current health snapshot for the process-level shared MarketDataFeed: connection state, stale flag, last bar timestamp, and active subscription count.  Returns 503 when the feed has not been installed (IBKR broker disabled).",
+        "operationId": "get_feed_health_api_market_data_feed_health_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Shared IBKR market-data feed health",
+        "tags": [
+          "market-data-feed"
         ]
       }
     },
