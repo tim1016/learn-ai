@@ -33,6 +33,7 @@ import json
 import logging
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -102,8 +103,6 @@ def _deploy_payload(symbol: str, date_prefix: str, now_ms: int) -> dict:
 
 
 def _today_date_prefix() -> str:
-    from datetime import datetime
-
     ct = datetime.now(ZoneInfo("America/Chicago"))
     return ct.strftime("%Y%m%d")
 
@@ -147,8 +146,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("QC audit copy not found: %s", _QC_AUDIT_PATH)
         return 1
 
+    now_ms = time.time_ns() // 1_000_000
     bots = [
-        {"symbol": sym, "payload": _deploy_payload(sym, date_prefix, time.time_ns() // 1_000_000)}
+        {"symbol": sym, "payload": _deploy_payload(sym, date_prefix, now_ms)}
         for sym in _SYMBOLS
     ]
 
