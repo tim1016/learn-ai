@@ -1236,6 +1236,10 @@ class LiveEngine:
         previous_bar: TradeBar | None = None
         last_force_flat_date: date | None = None
         force_flat_at = self._config.force_flat_at
+        # Tracks orders that were placed with a ReplaySimBroker on the final bar
+        # but never filled because no subsequent bar arrived to call advance_bar.
+        # See issue #1302 and _settle_replay_pending_at_feed_end.
+        _replay_pending_cancelled: int = 0
 
         # § 9 max-orders-per-day enforcement. Counter resets on the
         # date boundary of each new bar; crossing the cap raises
@@ -1808,6 +1812,14 @@ class LiveEngine:
                 await reconcile_real_broker_events(
                     last_clean_bar_close_ms=last_clean_ms,
                 )
+            # Issue #1302 — replay feed exhausted with orders in broker._pending.
+            # ReplaySimBroker fills market orders at the *next* bar open.  When
+            # the strategy emits an order on the last selected bar the replay
+            # broker queues it but no next bar ever arrives, so advance_bar is
+            # never called and the order silently stays pending.  Explicitly
+            # cancel those orders and surface their count in LiveRunResult so
+            # callers can see that settlement did not complete.
+            _replay_pending_cancelled = await self._settle_replay_pending_at_feed_end()
         finally:
             # PRD #619-B B5 follow-up — stop the child watchdog FIRST so
             # its periodic lease-reading task is settled before we touch
@@ -1890,7 +1902,7 @@ class LiveEngine:
             insight_summary=ctx.insight_manager.get_summary().to_dict(),
             submitted_order_ids=submitted_order_ids,
             open_positions=open_positions,
-            pending_orders=len(portfolio.pending_orders),
+            pending_orders=len(portfolio.pending_orders) + _replay_pending_cancelled,
         )
 
     # ──────────────────── Artifact-writer helpers ────────────────────
@@ -3543,6 +3555,32 @@ class LiveEngine:
         if failure is None:
             return
         raise LiveBrokerEventStreamError("IBKR order-event stream terminated unexpectedly; aborting run") from failure
+
+    async def _settle_replay_pending_at_feed_end(self) -> int:
+        """Cancel broker-pending orders that were never filled because the feed ended.
+
+        The ``ReplaySimBroker`` NEXT_BAR_OPEN model queues a placed order in
+        ``broker._pending`` and fills it on the *next* ``advance_bar`` call.
+        When the strategy emits an order on the very last replay bar, no next
+        bar arrives, so ``advance_bar`` is never called and the order silently
+        remains pending — the fill-and-position-change that should follow never
+        happens.  This method cancels those orders and returns their count so
+        callers can surface the discrepancy rather than silently dropping it.
+
+        Non-replay brokers return 0 immediately (no-op).
+        """
+        if not isinstance(self._broker, ReplayBrokerAdapter):
+            return 0
+        cancelled = await self._broker.cancel_open_orders()
+        if cancelled:
+            logger.warning(
+                "[REPLAY] %d order(s) submitted on the final bar were never filled "
+                "(no next bar arrived to call advance_bar); cancelling and surfacing "
+                "as pending_orders in LiveRunResult (issue #1302)",
+                len(cancelled),
+                extra={"cancelled_order_ids": cancelled},
+            )
+        return len(cancelled)
 
     async def _process_replay_broker_bar(self, bar: TradeBar) -> None:
         if isinstance(self._broker, ReplayBrokerAdapter):

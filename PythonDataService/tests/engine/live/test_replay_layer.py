@@ -12,14 +12,17 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from app.engine.data.trade_bar import TradeBar
+from app.engine.live.config import LiveConfig
 from app.engine.live.divergence.bar_series_joiner import CanonicalBar
 from app.engine.live.divergence.report_bundler import ReportMetadata
-from app.engine.live.replay_layer import replay_session, run_layer_b
+from app.engine.live.live_engine import LiveEngine
+from app.engine.live.replay_layer import ReplaySimBroker, replay_session, run_layer_b
 from app.engine.strategy.base import DecisionSnapshot, Strategy
 
 
@@ -178,3 +181,93 @@ async def test_run_layer_b_decision_drift_fails_the_gate(tmp_path) -> None:
     summary = json.loads(paths.json.read_text())
     assert summary["passed"] is False
     assert "decision_drift" in summary["gating_categories"]
+
+
+# ---------------------------------------------------------------------------
+# Regression test for issue #1302 — final-bar order never fills
+# ---------------------------------------------------------------------------
+
+
+class _EntryOnFinalBarStrategy(Strategy):
+    """Emits a HOLD decision and calls set_holdings on EVERY consolidated bar.
+
+    Used to test final-bar order settlement: when this strategy runs over a
+    single 15-min consolidation window, it fires exactly once — on the last
+    input bar — and queues a BUY.  Without the fix the queued order is never
+    advanced (no next bar arrives) and the engine silently returns
+    pending_orders=0 even though one broker-side pending order was never filled.
+    """
+
+    def initialize(self) -> None:
+        assert self.ctx is not None
+        self.ctx.add_equity("SPY")
+        self.ctx.register_consolidator("SPY", timedelta(minutes=15), self.on_bar)
+
+    def on_bar(self, bar: TradeBar) -> None:
+        assert self.ctx is not None
+        self.last_decision_snapshot = DecisionSnapshot(
+            bar_close_ms=int(bar.end_time.timestamp() * 1000),
+            ema5=1.0,
+            ema10=2.0,
+            rsi=50.0,
+            signal="ENTER",
+            intended_price=float(bar.close),
+        )
+        # Queue a market buy — the order lands in broker._pending but can only
+        # fill on the *next* bar's open.  When this fires on the last bar of the
+        # feed there is no next bar, so the fix must surface the count rather
+        # than silently drop it.
+        self.ctx.set_holdings("SPY", 1.0)
+
+
+@pytest.mark.asyncio
+async def test_order_emitted_on_final_bar_is_surfaced_as_pending(tmp_path: Path) -> None:
+    """Regression test for issue #1302.
+
+    A single 15-min consolidation window (15 one-minute bars) causes the
+    strategy to emit a BUY on the last bar.  The order is placed with the
+    broker (``place_order`` called, broker._pending has 1 entry) but there
+    is no following bar to call ``advance_bar`` and fill it.
+
+    Before the fix: ``result.pending_orders == 0`` — the broker-side pending
+    order was invisible to the caller.
+    After the fix: ``result.pending_orders == 1`` — the unresolved order is
+    cancelled and its count is surfaced in the result.
+    """
+    # 16 one-minute bars: minutes 30-44 build the working consolidated bar
+    # (14:30–14:45 window).  The bar at minute 45 (floor=14:45 ≠ 14:30)
+    # triggers the consolidator to fire and starts a new working window.
+    # on_bar() fires during bar-45 processing → set_holdings queues a BUY →
+    # _submit_pending_with_meta places it with the broker.  The feed is now
+    # exhausted — advance_bar is never called for bar 46 — so the order
+    # stays in broker._pending and is never filled.
+    bars = [_bar(minute) for minute in range(30, 46)]
+
+    broker = ReplaySimBroker(initial_cash=Decimal("100000"))
+    engine = LiveEngine(
+        None,
+        LiveConfig(force_flat_at=None),
+        broker=broker,
+        output_dir=tmp_path,
+    )
+
+    result = await engine.run(_EntryOnFinalBarStrategy(), _async_iter(bars))
+
+    # The strategy fired exactly once (one 15-min window).
+    assert len(result.submitted_order_ids) == 1, "expected one order submitted"
+    # No fill arrived — no next bar existed.
+    assert result.order_events == [], "expected no fills (feed exhausted before next bar)"
+    # After the fix: the unresolved broker-pending order is cancelled and
+    # surfaced.  Before the fix this asserts 0 (the bug).
+    assert result.pending_orders == 1, (
+        "expected 1 unresolved pending order surfaced in result (issue #1302)"
+    )
+    # Equity must reflect reality: no fill, so cash is unchanged.
+    assert result.final_equity == Decimal("100000"), (
+        "final equity must match initial cash when the order never filled"
+    )
+
+
+async def _async_iter(bars: list[TradeBar]):  # type: ignore[return]
+    for bar in bars:
+        yield bar
