@@ -210,6 +210,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "brokers/:broker/manual",
+    loadComponent: () =>
+      import(
+        "./components/broker/v2-panel/manual-page/broker-v2-manual-page.component"
+      ).then((m) => m.BrokerV2ManualPageComponent),
+  },
+  {
     path: "broker/options-chain",
     loadComponent: () =>
       import(

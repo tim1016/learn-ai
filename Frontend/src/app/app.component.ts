@@ -3,6 +3,7 @@ import { RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
 import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodology-drawer.component';
+import { BrokerV2HelpDrawerComponent } from './components/broker/v2-panel/help-drawer/broker-v2-help-drawer.component';
 import { BrokerHealthService } from './services/broker-health.service';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
@@ -16,6 +17,7 @@ import { BrokerHealthService } from './services/broker-health.service';
     RouterOutlet,
     AppSidebarComponent,
     MethodologyDrawerComponent,
+    BrokerV2HelpDrawerComponent,
     Toast,
   ],
   styles: [`
@@ -53,6 +55,7 @@ import { BrokerHealthService } from './services/broker-health.service';
       </div>
     </main>
     <app-methodology-drawer />
+    <app-broker-v2-help-drawer />
     <p-toast position="top-right" />
   `,
 })
