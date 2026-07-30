@@ -97,6 +97,7 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-link',
     items: [
       { label: 'Accounts', route: '/brokers/alpaca' },
+      { label: 'Bots', route: '/brokers/alpaca/bots' },
     ],
   },
   {
