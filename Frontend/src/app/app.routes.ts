@@ -400,12 +400,13 @@ export const routes: Routes = [
       ).then((m) => m.BotsListPageComponent),
   },
   {
-    // Broker v2 panel — unscoped bots list (all accounts for this broker)
+    // Broker v2 panel — unscoped bots entry point: resolves account then
+    // redirects to /brokers/:broker/accounts/:accountId/bots.
     path: 'brokers/:broker/bots',
     loadComponent: () =>
       import(
-        './components/broker/v2-panel/bots-list-page/bots-list-page.component'
-      ).then((m) => m.BotsListPageComponent),
+        './components/broker/v2-panel/bots-list-redirect/bots-list-redirect.component'
+      ).then((m) => m.BotsListRedirectComponent),
   },
   { path: "**", redirectTo: "/data-lab" },
 ];

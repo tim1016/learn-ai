@@ -73,13 +73,14 @@ describe('AppSidebarComponent', () => {
     expect(links.has('Reconciliation')).toBe(false);
   });
 
-  it('adds Alpaca as a sibling broker group with its account desk', () => {
+  it('adds Alpaca as a sibling broker group with its account desk and bot list', () => {
     const fixture = setup();
 
     clickGroup(fixture, 'Alpaca');
 
     const links = navLinks(fixture);
     expect(links.get('Accounts')).toBe('/brokers/alpaca');
+    expect(links.get('Bots')).toBe('/brokers/alpaca/bots');
   });
 
   it('surfaces live options visualizations in the Options menu', () => {
