@@ -1,13 +1,25 @@
-import { ChangeDetectionStrategy, Component, inject, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input } from '@angular/core';
 import { BrokerV2HelpDrawerService } from './broker-v2-help-drawer.service';
+import {
+  BROKER_V2_CARD_ANCHOR_MAP,
+  type BrokerV2CardName,
+} from './broker-v2-card-anchor-map';
 
 /**
- * Reusable "?" button that opens the broker-v2 help drawer at a specific
- * manual section. Import this component into any card that wants to surface
- * contextual help.
+ * Reusable "?" button that opens the broker-v2 operator manual at the section
+ * mapped to a specific card name.
+ *
+ * The `cardName` input is typed as `BrokerV2CardName` — a union of keys in
+ * `BROKER_V2_CARD_ANCHOR_MAP`.  Templates receive a compile-time error if they
+ * pass an unrecognised card name.
+ *
+ * S4 wiring note: S4 operator-lens card components will wire `cardName` once
+ * the S4 branch is rebased onto this branch.  The anchor lookup and type are
+ * intentionally frozen here so S4 has a stable contract to target.
  *
  * @example
- * <app-broker-v2-card-help-btn anchor="station-3-submit-gate" />
+ * <app-broker-v2-card-help-btn cardName="signal" />
+ * <app-broker-v2-card-help-btn cardName="submit-gate" label="Submit gate help" />
  */
 @Component({
   selector: 'app-broker-v2-card-help-btn',
@@ -47,12 +59,17 @@ import { BrokerV2HelpDrawerService } from './broker-v2-help-drawer.service';
   ],
 })
 export class BrokerV2CardHelpButtonComponent {
-  /** The anchor slug (without `#`) to scroll to in the manual. */
-  readonly anchor = input.required<string>();
+  /**
+   * The card whose manual section to open.  Must be a key in
+   * `BROKER_V2_CARD_ANCHOR_MAP` — passing an arbitrary string is a
+   * compile-time error.
+   */
+  readonly cardName = input.required<BrokerV2CardName>();
 
-  /** Aria-label for the button. Defaults to "Open manual help". */
+  /** Aria-label for the button.  Defaults to "Open manual help". */
   readonly label = input<string>('');
 
+  private readonly anchor = computed(() => BROKER_V2_CARD_ANCHOR_MAP[this.cardName()]);
   private readonly helpDrawer = inject(BrokerV2HelpDrawerService);
 
   openHelp(): void {

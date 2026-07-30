@@ -1,10 +1,23 @@
 /**
  * Copy-authority contract test for the broker-v2 vocabulary.
  *
- * This test locks the emergency-fallback copy map against the vocabulary
- * snapshot. It fails visibly when:
- *   (a) A code in the snapshot is missing from the fallback map.
- *   (b) A code in the fallback map has empty label or explanation.
+ * The snapshot (`broker-v2-vocabulary.snapshot.json`) is the single source
+ * of truth for vocabulary codes AND their server-authored copy.  This test
+ * asserts three things independently:
+ *
+ * 1. **Server copy completeness** — every code in the snapshot has a non-empty
+ *    label and explanation in `snapshot.copy`.  A missing or empty server value
+ *    fails this test visibly.  The TS emergency-fallback map is NOT consulted
+ *    here; that map is an explicit last-resort, not the authority.
+ *
+ * 2. **Snapshot ↔ fallback parity** — every snapshot code has an entry in
+ *    `BROKER_V2_EMERGENCY_COPY`, and every fallback entry has non-empty copy.
+ *    This ensures the emergency map covers the full vocabulary if the server
+ *    ever fails to deliver copy at runtime.
+ *
+ * 3. **No orphan fallback entries** — every code in `BROKER_V2_EMERGENCY_COPY`
+ *    exists in the snapshot.  Stale entries in the fallback map are a
+ *    maintenance hazard.
  *
  * Adding a vocabulary code requires updating:
  *   1. PythonDataService/app/broker/v2panel/vocabulary.py
@@ -17,8 +30,49 @@ import snapshot from './broker-v2-vocabulary.snapshot.json';
 import { BROKER_V2_EMERGENCY_COPY } from './broker-v2-emergency-copy';
 
 const SNAPSHOT_CODES: readonly string[] = snapshot.codes;
+const SERVER_COPY = snapshot.copy as Record<string, { label: string; explanation: string }>;
 
 describe('broker-v2 copy contract', () => {
+  // ── 1. Server copy completeness ──────────────────────────────────────────
+  it('snapshot.copy has an entry for every vocabulary code', () => {
+    const missing: string[] = [];
+    for (const code of SNAPSHOT_CODES) {
+      if (!(code in SERVER_COPY)) {
+        missing.push(code);
+      }
+    }
+    // If this fails: re-run regenerate_broker_v2_vocabulary_snapshot.py to
+    // add the missing code(s) to snapshot.copy before deploying.
+    expect(missing).toEqual([]);
+  });
+
+  it('every snapshot.copy entry has a non-empty label', () => {
+    const invalid: string[] = [];
+    for (const code of SNAPSHOT_CODES) {
+      const entry = SERVER_COPY[code];
+      if (!entry || !entry.label.trim()) {
+        invalid.push(code);
+      }
+    }
+    // If this fails: the backend vocabulary.py OPERATOR_COPY map is missing a
+    // label for the listed code(s).  Fix it there; do NOT paper over it in the
+    // TS emergency-fallback map.
+    expect(invalid).toEqual([]);
+  });
+
+  it('every snapshot.copy entry has a non-empty explanation', () => {
+    const invalid: string[] = [];
+    for (const code of SNAPSHOT_CODES) {
+      const entry = SERVER_COPY[code];
+      if (!entry || !entry.explanation.trim()) {
+        invalid.push(code);
+      }
+    }
+    // Same as above — fix in vocabulary.py OPERATOR_COPY, not in the TS map.
+    expect(invalid).toEqual([]);
+  });
+
+  // ── 2. Emergency-fallback parity ─────────────────────────────────────────
   it('emergency fallback map covers every code in the vocabulary snapshot', () => {
     const missing: string[] = [];
     for (const code of SNAPSHOT_CODES) {
@@ -39,42 +93,17 @@ describe('broker-v2 copy contract', () => {
         invalid.push(code);
       }
     }
-    // failure output: `invalid` lists codes with empty label or explanation
     expect(invalid).toEqual([]);
   });
 
-  it('no code in the snapshot produces an unknown label (server-omit simulation)', () => {
-    // Simulate what happens when the server omits copy for a code:
-    // the consumer should fall back to BROKER_V2_EMERGENCY_COPY and find a non-empty label.
-    // This test documents the contract: every snapshot code has emergency cover.
-    const failures: string[] = [];
-    for (const code of SNAPSHOT_CODES) {
-      const serverCopy = simulateServerOmit(code);
-      const resolved = serverCopy.label || BROKER_V2_EMERGENCY_COPY[code]?.label || '';
-      if (!resolved.trim()) {
-        failures.push(code);
-      }
-    }
-    // failure output: `failures` lists codes with no emergency label when server omits copy
-    expect(failures).toEqual([]);
-  });
-
-  it('no code in the snapshot produces an unknown explanation (server-omit simulation)', () => {
-    const failures: string[] = [];
-    for (const code of SNAPSHOT_CODES) {
-      const serverCopy = simulateServerOmit(code);
-      const resolved =
-        serverCopy.explanation || BROKER_V2_EMERGENCY_COPY[code]?.explanation || '';
-      if (!resolved.trim()) {
-        failures.push(code);
-      }
-    }
-    // failure output: `failures` lists codes with no emergency explanation when server omits copy
-    expect(failures).toEqual([]);
+  // ── 3. No orphan fallback entries ────────────────────────────────────────
+  it('no code in BROKER_V2_EMERGENCY_COPY is absent from the snapshot', () => {
+    const codeSet = new Set(SNAPSHOT_CODES);
+    const orphans = Object.keys(BROKER_V2_EMERGENCY_COPY).filter(
+      (code) => !codeSet.has(code),
+    );
+    // If this fails: the listed code(s) were removed from vocabulary.py but
+    // not from BROKER_V2_EMERGENCY_COPY.  Remove the stale entries.
+    expect(orphans).toEqual([]);
   });
 });
-
-/** Returns an empty copy object, simulating a server response that omits copy for the code. */
-function simulateServerOmit(_code: string): { label: string; explanation: string } {
-  return { label: '', explanation: '' };
-}

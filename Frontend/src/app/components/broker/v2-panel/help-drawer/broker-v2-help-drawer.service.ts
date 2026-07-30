@@ -1,41 +1,49 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, computed } from '@angular/core';
+import { inject } from '@angular/core';
+import { MarkdownDrawerService } from '../../../../shared/markdown-drawer/markdown-drawer.service';
 
 /**
- * App-wide state for the broker-v2 help drawer. The drawer is mounted once
- * at the app-shell level; any component can call `open(anchor)` to show the
- * operator manual at a specific section without prop-drilling through the
- * component tree.
+ * Façade for opening the broker-v2 operator manual in the single shell-level
+ * markdown drawer host.
  *
- * Canonical pattern: `shared/methodology-drawer/methodology-drawer.service.ts`.
- * Duplication is intentional: the two drawers serve different documents and
- * are mounted at the same shell level. A shared generic service would need to
- * carry per-drawer identity state (doc URL, title, etc.) and route calls to
- * the right visible signal — adding more coupling than it removes. When a
- * third markdown drawer is needed, extract a generic `MarkdownDrawerService`
- * at that time (see CLAUDE.md §5).
+ * Preserved as a named service so `BrokerV2CardHelpButtonComponent` and any
+ * future S4 operator-lens card consumers can inject it without knowing the
+ * generic drawer internals.
+ *
+ * Canonical implementation: `shared/markdown-drawer/markdown-drawer.service.ts`.
+ * This service is a thin pass-through with `docId = 'broker-v2-manual'`
+ * hardcoded.
+ *
+ * S4 wiring note: S4 operator-lens cards will call `open(anchor)` with an
+ * anchor derived from `BROKER_V2_CARD_ANCHOR_MAP[cardName]`.  The anchor map
+ * and `BrokerV2CardName` type live in `broker-v2-card-anchor-map.ts`.  The
+ * typed `BrokerV2CardHelpButtonComponent` (Fix 4) already enforces this —
+ * S4 only needs to wire the `cardName` input.
  */
 @Injectable({ providedIn: 'root' })
 export class BrokerV2HelpDrawerService {
-  /** Whether the drawer is currently visible. */
-  readonly visible = signal<boolean>(false);
+  private readonly drawer = inject(MarkdownDrawerService);
 
-  /**
-   * Anchor slug to scroll to (without the leading `#`). Changes every time
-   * the drawer opens so the viewer re-scrolls even if the same anchor is
-   * opened twice in a row (e.g. after the user has scrolled away).
-   */
-  readonly anchor = signal<string | null>(null);
+  /** Whether the broker-v2 help drawer is currently visible. */
+  readonly visible = computed(
+    () => this.drawer.visible() && this.drawer.activeDocId() === 'broker-v2-manual',
+  );
 
-  /** Monotonic counter — increments each `open()` to bust effect caches. */
-  readonly openTick = signal<number>(0);
+  /** Current anchor slug, or null. */
+  readonly anchor = computed(() =>
+    this.drawer.activeDocId() === 'broker-v2-manual' ? this.drawer.anchor() : null,
+  );
+
+  /** Monotonic open tick (forwarded from the generic service). */
+  readonly openTick = computed(() =>
+    this.drawer.activeDocId() === 'broker-v2-manual' ? this.drawer.openTick() : 0,
+  );
 
   open(anchor?: string): void {
-    if (anchor) this.anchor.set(anchor);
-    this.visible.set(true);
-    this.openTick.update((n: number) => n + 1);
+    this.drawer.open('broker-v2-manual', anchor);
   }
 
   close(): void {
-    this.visible.set(false);
+    this.drawer.close();
   }
 }
