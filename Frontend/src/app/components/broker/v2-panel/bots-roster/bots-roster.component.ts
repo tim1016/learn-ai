@@ -42,7 +42,10 @@ const ITEM_SIZE = 48; // px — one table row height
   ],
   templateUrl: './bots-roster.component.html',
   styleUrl: './bots-roster.component.scss',
-  host: { class: 'block' },
+  // Flex column filling the parent's height: .roster-table-wrap relies on
+  // `flex: 1` — under a block host it collapses to the header row and the
+  // CDK virtual-scroll viewport renders 0px tall (roster showed no bots).
+  host: { class: 'flex min-h-0 flex-1 flex-col' },
 })
 export class BotsRosterComponent {
   readonly bots = input.required<BotCatalogView[]>();
