@@ -2623,6 +2623,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/examples/alpaca-bot-control/fixtures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Static Fixtures
+         * @description Return the committed documents for contract inspection only.
+         */
+        get: operations["list_static_fixtures_api_examples_alpaca_bot_control_fixtures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/golden-fixtures": {
         parameters: {
             query?: never;
@@ -7946,6 +7966,28 @@ export interface components {
             to_date: string;
         };
         /**
+         * AlpacaBotControlFixtureEnvelope
+         * @description Versioned server-presented fixture envelope for one diagnostic scenario.
+         */
+        AlpacaBotControlFixtureEnvelope: {
+            operator: components["schemas"]["OperatorDiagnosticView"];
+            /** Review Note */
+            review_note: string;
+            /**
+             * Scenario Id
+             * @enum {string}
+             */
+            scenario_id: "running_ready_flat" | "running_attributed_long" | "entry_partial_pending" | "exit_cancelling_entry" | "exit_closing" | "exit_complete" | "stopped_flat" | "stop_requires_flatten" | "stopped_carryover_intact" | "stopped_carryover_mismatch" | "instance_submit_uncertain" | "market_data_stale" | "account_unattributable" | "account_unprovable" | "known_manual_exposure";
+            /** Scenario Label */
+            scenario_label: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: "1.0";
+            trader: components["schemas"]["TraderDiagnosticView"];
+        };
+        /**
          * AlphaDecayStatsResponse
          * @description Alpha decay regression statistics with power-guard flags.
          */
@@ -8089,6 +8131,16 @@ export interface components {
              * @enum {string}
              */
             verdict: "proven_match" | "proven_mismatch" | "cannot_prove";
+        };
+        /**
+         * AuthoredValue
+         * @description One server-presented label/value pair; Angular does not compose it.
+         */
+        AuthoredValue: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
         };
         /** AvailabilityResponse */
         AvailabilityResponse: {
@@ -11536,6 +11588,21 @@ export interface components {
             theoretical_value: number;
         };
         /**
+         * CustodySpineStep
+         * @description One explicitly presented custody step in the operator diagnostic.
+         */
+        CustodySpineStep: {
+            /** Label */
+            label: string;
+            /** State Label */
+            state_label: string;
+            /**
+             * Tone
+             * @enum {string}
+             */
+            tone: "neutral" | "verified" | "active" | "caution" | "blocked";
+        };
+        /**
          * DaemonDiagnosticAction
          * @description Optional check action.
          *
@@ -12910,6 +12977,22 @@ export interface components {
             summary: string;
         };
         /**
+         * EvidenceItem
+         * @description Bounded evidence with a code label and opaque identifier kept verbatim.
+         */
+        EvidenceItem: {
+            /** Age Label */
+            age_label: string;
+            /** Code */
+            code: string;
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /** Opaque Id */
+            opaque_id: string;
+        };
+        /**
          * EvidencePage
          * @description A bounded page of operator-gated evidence entries (§14).
          */
@@ -13031,6 +13114,18 @@ export interface components {
             run_id?: string | null;
             /** Strategy Instance Id */
             strategy_instance_id?: string | null;
+        };
+        /**
+         * ExposureSlice
+         * @description One attribution bucket, including known Clerk manual activity.
+         */
+        ExposureSlice: {
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /** Quantity Label */
+            quantity_label: string;
         };
         /**
          * FailureRecord
@@ -18297,6 +18392,48 @@ export interface components {
             title: string;
         };
         /**
+         * OperatorDiagnosticView
+         * @description All Operator-lens diagnosis, evidence, and action availability.
+         */
+        OperatorDiagnosticView: {
+            /** Actions */
+            actions: components["schemas"]["StaticAction"][];
+            /** Admission Explanation */
+            admission_explanation: string;
+            /** Admission Label */
+            admission_label: string;
+            /** Custody Spine */
+            custody_spine: components["schemas"]["CustodySpineStep"][];
+            /** Custody Spine Label */
+            custody_spine_label: string;
+            /** Evidence */
+            evidence: components["schemas"]["EvidenceItem"][];
+            /** Evidence Label */
+            evidence_label: string;
+            /** Exposure Label */
+            exposure_label: string;
+            /** Exposure Slices */
+            exposure_slices: components["schemas"]["ExposureSlice"][];
+            /** Freeze Explanation */
+            freeze_explanation: string;
+            /** Freeze Label */
+            freeze_label: string;
+            /** Next Step */
+            next_step: string;
+            /** Reduction Explanation */
+            reduction_explanation: string;
+            /** Reduction Label */
+            reduction_label: string;
+            /** Resume Comparisons */
+            resume_comparisons: components["schemas"]["ResumeComparison"][];
+            /** Resume Label */
+            resume_label: string;
+            /** Resume Result */
+            resume_result: string;
+            /** Scope Cards */
+            scope_cards: components["schemas"]["AuthoredValue"][];
+        };
+        /**
          * OperatorGate
          * @description Operator-facing projection of an engine readiness gate (PRD #616).
          *
@@ -20184,6 +20321,20 @@ export interface components {
             target_order_ref?: string | null;
         };
         /**
+         * PricePoint
+         * @description Compact, authored chart context; not a market-data API response.
+         */
+        PricePoint: {
+            /** Fill Label */
+            fill_label?: string | null;
+            /** Fill Tone */
+            fill_tone?: ("neutral" | "verified" | "active" | "caution" | "blocked") | null;
+            /** Label */
+            label: string;
+            /** Price */
+            price: string;
+        };
+        /**
          * PricingCompareRequest
          * @description Compare pricing models across a range of underlying prices.
          */
@@ -20934,6 +21085,25 @@ export interface components {
         Resolution: {
             /** Period Minutes */
             period_minutes: number;
+        };
+        /**
+         * ResumeComparison
+         * @description An already-evaluated Resume checkpoint comparison.
+         */
+        ResumeComparison: {
+            /** Checkpoint */
+            checkpoint: string;
+            /** Label */
+            label: string;
+            /** Observed */
+            observed: string;
+            /** Result Label */
+            result_label: string;
+            /**
+             * Tone
+             * @enum {string}
+             */
+            tone: "neutral" | "verified" | "active" | "caution" | "blocked";
         };
         /**
          * RetireReplaceAction
@@ -22706,6 +22876,26 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
+         * StaticAction
+         * @description A deliberately inert action example for the static gallery.
+         */
+        StaticAction: {
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "available" | "blocked" | "terminal";
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /**
+             * Tone
+             * @enum {string}
+             */
+            tone: "neutral" | "verified" | "active" | "caution" | "blocked";
+        };
+        /**
          * StationApplicability
          * @description One station's applicability for this broker/mode (§4, §7).
          *
@@ -24116,6 +24306,34 @@ export interface components {
              * @constant
              */
             schema_version?: 1;
+        };
+        /**
+         * TraderDiagnosticView
+         * @description All Trader-lens meaning, authored by the fixture producer.
+         */
+        TraderDiagnosticView: {
+            /** Fill Summary */
+            fill_summary: string;
+            /** Headline */
+            headline: string;
+            /** Operation Summary */
+            operation_summary: string;
+            /** Price Context Label */
+            price_context_label: string;
+            /** Price Points */
+            price_points: components["schemas"]["PricePoint"][];
+            primary_action: components["schemas"]["StaticAction"];
+            /** Status Label */
+            status_label: string;
+            /**
+             * Status Tone
+             * @enum {string}
+             */
+            status_tone: "neutral" | "verified" | "active" | "caution" | "blocked";
+            /** Title */
+            title: string;
+            /** Truth Rows */
+            truth_rows: components["schemas"]["AuthoredValue"][];
         };
         /**
          * TradesSummary
@@ -29497,6 +29715,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_static_fixtures_api_examples_alpaca_bot_control_fixtures_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlpacaBotControlFixtureEnvelope"][];
                 };
             };
         };

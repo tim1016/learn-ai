@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "running_ready_flat",
+  "scenario_label": "Running, ready, and flat",
+  "review_note": "Shows that a ready instance may enter only when its account attribution is proven flat.",
+  "trader": {
+    "title": "SPY · Two-green-bar · Alpaca paper",
+    "status_label": "Ready to enter",
+    "status_tone": "verified",
+    "truth_rows": [{"label": "Desired", "value": "RUNNING"}, {"label": "Runtime", "value": "On duty · fresh one-minute bar"}, {"label": "Execution", "value": "Account exposure attributed here: FLAT"}],
+    "headline": "Watching for two consecutive green one-minute bars.",
+    "operation_summary": "No Clerk effect operation is active.",
+    "price_context_label": "Compact price context · attributed fills only",
+    "price_points": [{"label": "10:39", "price": "$590.12"}, {"label": "10:40", "price": "$590.28"}, {"label": "10:41", "price": "$590.34"}],
+    "fill_summary": "No attributed fills today.",
+    "primary_action": {"label": "STOP", "explanation": "Stop new strategy decisions; this static example cannot submit it.", "availability": "available", "tone": "neutral"}
+  },
+  "operator": {
+    "scope_cards": [{"label": "Instance scope", "value": "Desired RUNNING · SPY · instance inst-spy-001"}, {"label": "Runtime / feed scope", "value": "On duty · market data fresh"}, {"label": "Account / Clerk scope", "value": "Alpaca paper · reconciled · no freeze"}],
+    "admission_label": "Entry admission: READY",
+    "admission_explanation": "Configuration, Clerk attribution, and current account observation are proven.",
+    "reduction_label": "Reduction availability: not needed",
+    "reduction_explanation": "No attributed exposure needs a reducing operation.",
+    "custody_spine_label": "Clerk custody spine",
+    "custody_spine": [{"label": "Strategy decision", "state_label": "Waiting", "tone": "neutral"}, {"label": "Clerk custody", "state_label": "Waiting", "tone": "neutral"}, {"label": "Broker effects", "state_label": "None", "tone": "neutral"}, {"label": "Attributed exposure", "state_label": "Flat", "tone": "verified"}, {"label": "Reconciliation", "state_label": "Proven", "tone": "verified"}],
+    "exposure_label": "Attributed account exposure",
+    "exposure_slices": [{"label": "This instance", "quantity_label": "SPY 0", "explanation": "No Clerk-attributed position."}],
+    "resume_label": "Resume custody proof",
+    "resume_result": "Not applicable while the instance is running.",
+    "resume_comparisons": [{"label": "Configuration", "checkpoint": "Current", "observed": "Current", "result_label": "Not required", "tone": "neutral"}, {"label": "Checkpoint quantity", "checkpoint": "0", "observed": "0", "result_label": "Not required", "tone": "neutral"}, {"label": "Clerk attribution", "checkpoint": "Current", "observed": "Current", "result_label": "Not required", "tone": "neutral"}, {"label": "Unresolved orders", "checkpoint": "0", "observed": "0", "result_label": "Not required", "tone": "neutral"}],
+    "freeze_label": "Account freeze: none",
+    "freeze_explanation": "Current account truth is attributable and provable.",
+    "next_step": "Wait for a qualifying signal or stop the instance.",
+    "evidence_label": "Recent evidence",
+    "evidence": [{"label": "Fresh reconciliation", "explanation": "Account net and Clerk attribution agree.", "code": "RECONCILIATION_PROVEN", "opaque_id": "recon_01J9SPYREADY", "age_label": "4 seconds old"}],
+    "actions": [{"label": "STOP", "explanation": "Static example only; no lifecycle request is sent.", "availability": "available", "tone": "neutral"}]
+  }
+}

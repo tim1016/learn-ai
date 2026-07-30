@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "exit_cancelling_entry",
+  "scenario_label": "EXIT cancelling a working entry",
+  "review_note": "Makes terminal cancellation a distinct prerequisite before the Clerk can reduce final exposure.",
+  "trader": {
+    "title": "SPY · Two-green-bar · Alpaca paper",
+    "status_label": "Exit in progress",
+    "status_tone": "active",
+    "truth_rows": [{"label": "Desired", "value": "RUNNING"}, {"label": "Runtime", "value": "Decision complete · Clerk resolving"}, {"label": "Execution", "value": "Account exposure attributed here: SPY +4"}],
+    "headline": "The Clerk is cancelling the working entry before it can close the final attributed quantity.",
+    "operation_summary": "EXIT is active: cancel entry before exact reduction.",
+    "price_context_label": "Compact price context · attributed partial fill",
+    "price_points": [{"label": "10:42", "price": "$590.38", "fill_label": "Entry +4", "fill_tone": "active"}, {"label": "10:43", "price": "$590.31"}, {"label": "10:44", "price": "$590.24"}],
+    "fill_summary": "No exit fill is claimed until the entry cancellation is terminal.",
+    "primary_action": {"label": "EXIT", "explanation": "The existing Clerk operation remains the only safe exit action.", "availability": "blocked", "tone": "caution"}
+  },
+  "operator": {
+    "scope_cards": [{"label": "Instance scope", "value": "Desired RUNNING · exit decision emitted"}, {"label": "Runtime / feed scope", "value": "Runtime may exit; Clerk custody persists"}, {"label": "Account / Clerk scope", "value": "SPY +4 attributed · cancellation pending"}],
+    "admission_label": "Entry admission: BLOCKED",
+    "admission_explanation": "No new entry may begin while the Clerk resolves EXIT.",
+    "reduction_label": "Reduction availability: WAITING FOR CANCELLATION",
+    "reduction_explanation": "The working entry must become terminal before the Clerk measures the exact close quantity.",
+    "custody_spine_label": "Clerk custody spine",
+    "custody_spine": [{"label": "Strategy decision", "state_label": "EXIT accepted", "tone": "verified"}, {"label": "Clerk custody", "state_label": "Active", "tone": "active"}, {"label": "Cancel entries", "state_label": "Waiting", "tone": "caution"}, {"label": "Close exposure", "state_label": "Blocked by cancel", "tone": "caution"}, {"label": "Verify zero", "state_label": "Waiting", "tone": "neutral"}],
+    "exposure_label": "Attributed account exposure",
+    "exposure_slices": [{"label": "This instance", "quantity_label": "SPY +4", "explanation": "Exact reduction is intentionally deferred until cancellation is terminal."}],
+    "resume_label": "Resume custody proof",
+    "resume_result": "Unavailable during a non-terminal EXIT.",
+    "resume_comparisons": [{"label": "Configuration", "checkpoint": "Current", "observed": "Current", "result_label": "Waiting", "tone": "active"}, {"label": "Checkpoint quantity", "checkpoint": "+4", "observed": "+4", "result_label": "Waiting", "tone": "active"}, {"label": "Clerk attribution", "checkpoint": "+4", "observed": "+4", "result_label": "Waiting", "tone": "active"}, {"label": "Unresolved orders", "checkpoint": "0", "observed": "1 cancel pending", "result_label": "Waiting", "tone": "caution"}],
+    "freeze_label": "Account freeze: none",
+    "freeze_explanation": "The Clerk has a truthful, attributable path to resolution.",
+    "next_step": "Wait for the entry cancellation terminal fact.",
+    "evidence_label": "Recent evidence",
+    "evidence": [{"label": "Cancellation requested", "explanation": "The EXIT operation owns cancellation before reduction.", "code": "ENTRY_CANCEL_PENDING", "opaque_id": "intent_01J9CANCEL", "age_label": "3 seconds old"}],
+    "actions": [{"label": "EXIT", "explanation": "Already under Clerk custody; this static example cannot duplicate it.", "availability": "blocked", "tone": "caution"}]
+  }
+}

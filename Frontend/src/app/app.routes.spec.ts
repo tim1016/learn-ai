@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { AccountMonitorRedirectComponent } from './components/broker/account-monitor-redirect/account-monitor-redirect.component';
 import { BotOperatorManualPageComponent } from './components/broker/bot-operator-manual/bot-operator-manual-page.component';
+import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
 import { routes } from './app.routes';
 
 describe('routes', () => {
@@ -29,5 +30,12 @@ describe('routes', () => {
     if (route?.loadComponent === undefined) throw new Error('Bot manual route is missing.');
 
     expect(await route.loadComponent()).toBe(BotOperatorManualPageComponent);
+  });
+
+  it('keeps the Clerk diagnostic gallery unlinked beneath the examples route', async () => {
+    const route = routes.find((candidate) => candidate.path === 'examples/alpaca-bot-control');
+    if (route?.loadComponent === undefined) throw new Error('Alpaca bot control example route is missing.');
+
+    expect(await route.loadComponent()).toBe(AlpacaBotControlExampleComponent);
   });
 });
