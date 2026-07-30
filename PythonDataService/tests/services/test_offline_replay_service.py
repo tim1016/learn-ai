@@ -349,3 +349,90 @@ async def test_create_session_rejects_a_session_not_yet_completed(tmp_path: Path
                 speed=60,
             )
         )
+
+
+class _StopDuringWarmupClock:
+    """Clock that signals STOP on the first warmup bar.
+
+    Used to verify that a STOP command issued during the warm-up phase is
+    honored immediately and terminates the replay rather than being ignored
+    until the first playback bar.
+    """
+
+    def __init__(self) -> None:
+        self._warmup_calls = 0
+        self.stop_requested = True
+
+    @property
+    def speed(self) -> int:
+        return 60
+
+    async def before_tick(self, *, warmup: bool) -> ReplayTickPermission:
+        if warmup:
+            self._warmup_calls += 1
+            return ReplayTickPermission.STOP
+        return ReplayTickPermission.RUN  # pragma: no cover — never reached
+
+    async def pace(self, permission: ReplayTickPermission) -> None:
+        return None  # pragma: no cover
+
+
+@pytest.mark.asyncio
+async def test_stop_during_warmup_terminates_session(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression: a STOP issued during warm-up must terminate the replay.
+
+    Before the fix, ``before_tick`` was only called for non-warmup bars.
+    A stop command set during the 225-bar pre-roll was silently ignored
+    until the first playback bar, leaving the operator with no way to abort
+    an in-progress warm-up phase.
+    """
+    caplog.set_level(logging.WARNING, logger="app.engine.live.live_engine")
+    window = session_window_for_date(date(2026, 7, 28))
+    playback_minutes = 30
+    total_minutes = _WARMUP_MINUTES + playback_minutes
+    prepared = PreparedOfflineReplay(
+        session=window,
+        warmup_minutes=_WARMUP_MINUTES,
+        playback_minutes=playback_minutes,
+        warmup_end_ms=window.open_ms_utc + _WARMUP_MINUTES * 60_000,
+        playback_end_ms=window.open_ms_utc + total_minutes * 60_000,
+        bars_by_symbol={
+            "SPY": _stream("SPY", open_ms=window.open_ms_utc, count=total_minutes),
+            "TSLA": _stream("TSLA", open_ms=window.open_ms_utc, count=total_minutes),
+        },
+        data_sha256_by_symbol={"SPY": "spy-digest", "TSLA": "tsla-digest"},
+    )
+    service = OfflineReplayService(
+        data_service=_PreparedData(prepared),  # type: ignore[arg-type]
+        root=tmp_path,
+        clock_factory=lambda _speed: _StopDuringWarmupClock(),  # type: ignore[arg-type]
+    )
+
+    created = await service.create_session(
+        OfflineReplayCreateRequest(
+            session_date_ms=window.open_ms_utc,
+            playback_minutes=playback_minutes,
+            speed=60,
+        )
+    )
+
+    for _ in range(500):
+        session = service.get_session(created.session_id)
+        if session.status in {"completed", "failed", "stopped"}:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        pytest.fail("offline replay did not reach a terminal state")
+
+    # Must stop, not complete — the STOP fired during warm-up.
+    assert session.status == "stopped", (
+        f"expected 'stopped' but got '{session.status}': {session.failure_message}"
+    )
+    # Playhead must be at most the last warmup bar (first bar processed and then stopped).
+    # A completed run would push playhead to playback_end_ms.
+    assert session.playhead_ms is None or (
+        session.playhead_ms < prepared.warmup_end_ms
+    ), f"playhead {session.playhead_ms!r} overran warmup boundary {prepared.warmup_end_ms}"

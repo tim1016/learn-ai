@@ -342,7 +342,13 @@ class OfflineReplayService:
             last_index = total_bars - 1
             for index in range(total_bars):
                 warmup = index < prepared.warmup_minutes
-                if not warmup:
+                if warmup:
+                    # Honor STOP during warm-up; pause/step are not exposed.
+                    perm = await record.clock.before_tick(warmup=True)
+                    if perm is ReplayTickPermission.STOP:
+                        stopped = True
+                        break
+                else:
                     permission = await record.clock.before_tick(warmup=False)
                     if permission is ReplayTickPermission.STOP:
                         stopped = True

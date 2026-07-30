@@ -78,30 +78,50 @@ export class OfflineReplayPageComponent {
   async initialize(): Promise<void> {
     this.loading.set(true);
     this.errorMessage.set(null);
+    const errors: string[] = [];
     try {
-      const [catalog, sessions] = await Promise.all([
+      const [catalogResult, sessionsResult] = await Promise.allSettled([
         this.replay.getCatalog(),
         this.replay.listSessions(),
       ]);
-      this.catalog.set(catalog);
-      this.selectedSessionDateMs.set(
-        catalog.recommended_session_date_ms
-          ?? catalog.sessions.find((session) => session.eligible)?.session_date_ms
-          ?? null,
-      );
-      if (sessions.length > 0) {
-        this.currentSession.set(
-          sessions.find((session) => ACTIVE_STATUSES.has(session.status)) ?? sessions[0],
+
+      if (catalogResult.status === 'fulfilled') {
+        const catalog = catalogResult.value;
+        this.catalog.set(catalog);
+        this.selectedSessionDateMs.set(
+          catalog.recommended_session_date_ms
+            ?? catalog.sessions.find((session) => session.eligible)?.session_date_ms
+            ?? null,
+        );
+      } else {
+        errors.push(
+          extractServerMessage(
+            catalogResult.reason,
+            'Session catalog could not be loaded.',
+          ),
         );
       }
+
+      if (sessionsResult.status === 'fulfilled') {
+        const sessions = sessionsResult.value;
+        if (sessions.length > 0) {
+          this.currentSession.set(
+            sessions.find((session) => ACTIVE_STATUSES.has(session.status)) ?? sessions[0],
+          );
+        }
+      } else {
+        errors.push(
+          extractServerMessage(
+            sessionsResult.reason,
+            'Existing sessions could not be loaded.',
+          ),
+        );
+      }
+
+      if (errors.length > 0) {
+        this.errorMessage.set(errors.join(' '));
+      }
       this.schedulePoll();
-    } catch (error) {
-      this.errorMessage.set(
-        extractServerMessage(
-          error,
-          'Offline replay is unavailable. Check the Python data service and retry.',
-        ),
-      );
     } finally {
       this.loading.set(false);
     }

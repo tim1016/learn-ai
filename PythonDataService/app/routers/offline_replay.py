@@ -38,7 +38,7 @@ async def catalog(service: ReplayService) -> OfflineReplayCatalogResponse:
     response_model=OfflineReplaySessionListResponse,
     summary="List active and archived offline replay sessions",
 )
-def list_sessions(service: ReplayService) -> OfflineReplaySessionListResponse:
+async def list_sessions(service: ReplayService) -> OfflineReplaySessionListResponse:
     return service.list_sessions()
 
 
@@ -66,7 +66,7 @@ async def create_session(
     response_model=OfflineReplaySessionResponse,
     summary="Read the latest durable replay projection",
 )
-def get_session(
+async def get_session(
     session_id: str,
     service: ReplayService,
 ) -> OfflineReplaySessionResponse:
