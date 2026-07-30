@@ -1,0 +1,48 @@
+<div class="bots-page" role="main" aria-label="Bots list">
+
+  <header class="bots-page__header">
+    <div class="bots-page__title-row">
+      <h1 class="bots-page__title">Bots — {{ broker() }}</h1>
+      <button
+        pButton
+        type="button"
+        label="Deploy bot"
+        icon="pi pi-plus"
+        (click)="deployVisible.set(true)"
+        aria-label="Open deploy bot dialog"
+      ></button>
+    </div>
+
+    <app-account-strip [broker]="broker()" />
+  </header>
+
+  @if (actionError()) {
+    <div class="bots-page__error" role="alert" aria-live="assertive">
+      {{ actionError() }}
+    </div>
+  }
+
+  <section class="bots-page__roster" aria-label="Bot roster">
+    @if (catalog.isLoading() && bots.length === 0) {
+      <div class="bots-page__loading" aria-busy="true">Loading bots…</div>
+    } @else if (catalog.error() && bots.length === 0) {
+      <div class="bots-page__error" role="alert">Could not load bots. Retrying…</div>
+    } @else {
+      <app-bots-roster
+        [bots]="bots"
+        [profile]="profile.value() ?? null"
+        [broker]="broker()"
+        [accountId]="accountId()"
+        (rowAction)="onRowAction($event)"
+      />
+    }
+  </section>
+
+</div>
+
+<app-deploy-dialog
+  [broker]="broker()"
+  [visible]="deployVisible()"
+  (visibleChange)="deployVisible.set($event)"
+  (deployed)="onDeployed()"
+/>
