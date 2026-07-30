@@ -21,8 +21,11 @@ per the closed-set/no-fake-buttons rule (§11).
 
 from __future__ import annotations
 
-import threading
+import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Literal
 
 from app.broker.v2panel.vocabulary import ActionId
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
@@ -59,26 +62,82 @@ class UnknownActionError(ActionExecutionError):
 # A performer runs one action and returns a human-readable outcome message.
 ActionPerformer = Callable[[str], Awaitable[str]]
 
+_IN_FLIGHT_WAIT_SECONDS = 5.0
+
+
+@dataclass
+class IdempotencyRecord:
+    state: Literal["in_flight", "succeeded", "failed"]
+    result: PanelActionResult | None = None
+    error_detail: str | None = None
+    _event: asyncio.Event = field(default_factory=asyncio.Event)
+
 
 class IdempotencyStore:
     """In-memory idempotency ledger keyed by ``(sid, action_id, key)``.
 
-    A key seen before short-circuits the action to a no-op. The store is
-    process-local — durable idempotency across restarts is a later-slice
-    concern; within one process it makes double-clicks and retries safe (§11).
+    Three states — ``in_flight``, ``succeeded``, ``failed`` — with an asyncio
+    event that the first caller sets when execution resolves. Concurrent POSTs
+    with the same key wait up to 5 s for the first execution to finish rather
+    than racing to double-fire the action (§11).
+
+    The store is process-local — durable idempotency across restarts is a
+    later-slice concern; within one process it makes double-clicks and retries
+    safe (§11).
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._seen: dict[tuple[str, str, str], str] = {}
+        self._lock = asyncio.Lock()
+        self._records: dict[tuple[str, str, str], IdempotencyRecord] = {}
 
-    def seen(self, sid: str, action_id: str, key: str) -> str | None:
-        with self._lock:
-            return self._seen.get((sid, action_id, key))
+    async def reserve_or_get(
+        self, sid: str, action_id: str, key: str
+    ) -> IdempotencyRecord | None:
+        """Reserve key for new execution, returning None; or return existing record.
 
-    def record(self, sid: str, action_id: str, key: str, message: str) -> None:
-        with self._lock:
-            self._seen[(sid, action_id, key)] = message
+        If None: key is new, caller should execute and then call complete() or fail().
+        If record with state in_flight: waits (up to 5 s) for the first
+            execution to finish, then returns the resolved record.
+        If record with state succeeded/failed: returns immediately.
+        """
+        compound = (sid, action_id, key)
+        async with self._lock:
+            existing = self._records.get(compound)
+            if existing is None:
+                record = IdempotencyRecord(state="in_flight")
+                self._records[compound] = record
+                return None
+            if existing.state != "in_flight":
+                return existing
+            # in_flight — capture the event to wait on outside the lock
+            event = existing._event
+
+        # Wait outside the lock so the first caller can complete/fail
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(event.wait(), timeout=_IN_FLIGHT_WAIT_SECONDS)
+
+        async with self._lock:
+            return self._records.get(compound)
+
+    async def complete(
+        self, sid: str, action_id: str, key: str, result: PanelActionResult
+    ) -> None:
+        compound = (sid, action_id, key)
+        async with self._lock:
+            record = self._records.get(compound)
+            if record is not None:
+                record.state = "succeeded"
+                record.result = result
+                record._event.set()
+
+    async def fail(self, sid: str, action_id: str, key: str, error: str) -> None:
+        compound = (sid, action_id, key)
+        async with self._lock:
+            record = self._records.get(compound)
+            if record is not None:
+                record.state = "failed"
+                record.error_detail = error
+                record._event.set()
 
 
 _IDEMPOTENCY_STORE = IdempotencyStore()
@@ -91,7 +150,7 @@ def get_idempotency_store() -> IdempotencyStore:
 
 def reset_idempotency_store_for_testing() -> None:
     """Clear the process-level idempotency ledger (test isolation)."""
-    _IDEMPOTENCY_STORE._seen.clear()
+    _IDEMPOTENCY_STORE._records.clear()
 
 
 async def execute_action(
@@ -114,14 +173,22 @@ async def execute_action(
     # 2. Idempotency — check BEFORE the revision guard so a genuine retry of an
     # already-applied action stays a safe no-op even if the panel has since
     # advanced (the action already took effect; re-posting must not 409).
-    prior = ledger.seen(sid, request.action_id, request.idempotency_key)
-    if prior is not None:
-        return PanelActionResult(
-            action_id=request.action_id,
-            applied=False,
-            revision=current_revision,
-            message=prior,
-        )
+    record = await ledger.reserve_or_get(sid, request.action_id, request.idempotency_key)
+    if record is not None:
+        if record.state == "succeeded" and record.result is not None:
+            return PanelActionResult(
+                action_id=request.action_id,
+                applied=False,
+                revision=current_revision,
+                message=record.result.message,
+            )
+        if record.state == "failed":
+            raise ActionNotAvailableError(
+                "This action previously failed; the idempotency key cannot be reused.",
+                detail=record.error_detail,
+            )
+        # state is still in_flight after timeout — treat as a new execution
+        # by falling through (the first caller may have crashed)
 
     # 1. Revision guard.
     if request.revision != current_revision:
@@ -142,11 +209,19 @@ async def execute_action(
 
     # 3. Identity from the channel — the performer receives the configured
     # operator identity, never anything from the request body.
-    message = await performer(operator_identity)
-    ledger.record(sid, request.action_id, request.idempotency_key, message)
-    return PanelActionResult(
+    try:
+        message = await performer(operator_identity)
+    except Exception as err:
+        await ledger.fail(
+            sid, request.action_id, request.idempotency_key, str(err)
+        )
+        raise
+
+    result = PanelActionResult(
         action_id=request.action_id,
         applied=True,
         revision=current_revision,
         message=message,
     )
+    await ledger.complete(sid, request.action_id, request.idempotency_key, result)
+    return result

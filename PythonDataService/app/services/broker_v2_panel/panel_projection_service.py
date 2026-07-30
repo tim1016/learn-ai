@@ -221,6 +221,7 @@ def build_panel(
     latest_reconciliation = _latest_reconciliation_entry(entries)
 
     stations = derive_stations(
+        sid=status.strategy_instance_id,
         transaction_ref=transaction_ref,
         all_entries=entries,
         latest_decision=latest_decision,

@@ -6,9 +6,11 @@ Pins the three execution invariants: revision guard (stale → 409), idempotency
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from app.schemas.broker_v2_panel import PanelActionRequest
+from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     IdempotencyStore,
@@ -140,3 +142,40 @@ async def test_unwired_action_is_typed_not_available() -> None:
 
 async def _noop() -> str:
     return "noop"
+
+
+async def test_duplicate_concurrent_posts_run_mutation_once() -> None:
+    """Two concurrent POSTs with the same idempotency_key must fire the mutation once."""
+    calls = 0
+
+    async def _slow_perform(operator: str) -> str:
+        nonlocal calls
+        calls += 1
+        # Yield briefly so the second coroutine can reach reserve_or_get before we finish.
+        await asyncio.sleep(0)
+        return "stopped"
+
+    store = IdempotencyStore()
+
+    async def _post() -> PanelActionResult | None:
+        try:
+            return await execute_action(
+                _request(key="race"),
+                sid=_SID,
+                current_revision=42,
+                performers={"stop": _slow_perform},
+                operator_identity="op",
+                store=store,
+            )
+        except Exception:
+            return None
+
+    results = await asyncio.gather(_post(), _post())
+    applied_count = sum(1 for r in results if r is not None and r.applied)
+    noop_count = sum(1 for r in results if r is not None and not r.applied)
+    assert calls == 1, f"mutation ran {calls} times, expected 1"
+    # One result is applied=True, one is applied=False (or both may be True if
+    # the second started before the first completed and fell through — but calls
+    # must still be 1 because the first call completed and set the record before
+    # the second performer could start).
+    assert applied_count + noop_count == 2
