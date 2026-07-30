@@ -1,0 +1,91 @@
+<section class="trades-today" aria-label="Trades today">
+  <header class="trades-header">
+    <h3 class="trades-title">Trades today</h3>
+    @if (tradingDateMs()) {
+      <app-timestamp-display
+        [value]="tradingDateMs()"
+        mode="date-et"
+        class="trading-date"
+        aria-label="Trading date"
+      />
+    }
+    @if (sessionPolicy()) {
+      <span class="session-policy" aria-label="Session policy">{{ sessionPolicy() }}</span>
+    }
+  </header>
+
+  @if (hasPairs()) {
+    <table class="trades-table" aria-label="Trade pairs">
+      <thead>
+        <tr>
+          <th scope="col">Entry</th>
+          <th scope="col">Exit</th>
+          <th scope="col">Qty</th>
+          <th scope="col">Entry price</th>
+          <th scope="col">Exit price</th>
+          <th scope="col">Realized P&amp;L</th>
+          <th scope="col">Held</th>
+          <th scope="col">Fees</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (pair of pairs(); track pairId(pair)) {
+          <tr class="trade-row" [class.trade-row--open]="!pair.exitFill">
+            <td>
+              <app-timestamp-display
+                [value]="pair.entryFill.filled_at_ms"
+                mode="local"
+                granularity="time"
+              />
+            </td>
+            <td>
+              @if (pair.exitFill) {
+                <app-timestamp-display
+                  [value]="pair.exitFill.filled_at_ms"
+                  mode="local"
+                  granularity="time"
+                />
+              } @else {
+                <span class="open-badge" aria-label="Position still open">open</span>
+              }
+            </td>
+            <td>{{ pair.quantity }}</td>
+            <td>${{ pair.entryFill.price.toFixed(2) }}</td>
+            <td>
+              @if (pair.exitFill) {
+                ${{ pair.exitFill.price.toFixed(2) }}
+              } @else {
+                <span aria-label="Exit price not yet known">—</span>
+              }
+            </td>
+            <td [class]="pnlClass(pair.realizedPnl)">
+              {{ formatPnl(pair.realizedPnl) }}
+            </td>
+            <td>{{ formatDuration(pair.holdDurationMs) }}</td>
+            <td class="fees-cell">
+              @if (feesLabel()) {
+                <span class="fees-not-reported">{{ feesLabel() }}</span>
+              } @else {
+                <span>$0.00</span>
+              }
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="pnl-summary" aria-label="P&L summary">
+      <span class="pnl-label">Realized today</span>
+      <span [class]="pnlClass(realizedTotal())" aria-label="Realized P&L today">
+        {{ formatPnl(realizedTotal()) }}
+      </span>
+      <span class="pnl-separator" aria-hidden="true">·</span>
+      <span class="pnl-label">Open P&amp;L</span>
+      <span class="pnl-open" aria-label="Open P&L (indicative)">
+        indicative — see broker account
+      </span>
+    </div>
+  } @else {
+    <p class="no-trades" role="status">No trades today.</p>
+  }
+</section>

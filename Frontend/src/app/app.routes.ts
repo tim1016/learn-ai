@@ -210,6 +210,15 @@ export const routes: Routes = [
       ),
   },
   {
+    // Broker-v2 bot control panel — trader lens (S3); operator lens adds in S4.
+    // Route binds broker, accountId, sid as component inputs.
+    path: "brokers/:broker/accounts/:accountId/bots/:sid",
+    loadComponent: () =>
+      import(
+        "./components/broker/v2-panel/panel-shell/bot-panel-shell.component"
+      ).then((m) => m.BotPanelShellComponent),
+  },
+  {
     path: "broker/options-chain",
     loadComponent: () =>
       import(

@@ -1,0 +1,39 @@
+@if (loadError()) {
+  <div class="load-error" role="alert" aria-live="assertive">
+    <p>{{ loadError() }}</p>
+  </div>
+}
+
+@if (!isLoaded()) {
+  <div class="loading-state" role="status" aria-live="polite" aria-label="Loading bot panel">
+    <span class="loading-text">Loading…</span>
+  </div>
+}
+
+@if (isLoaded()) {
+  @let panelData = panel()!;
+  @let profileData = profile()!;
+
+  <!-- S4 extension point: add a lens toggle bar here, e.g. -->
+  <!--
+  <div class="lens-toggle" role="tablist">
+    <button role="tab" [attr.aria-selected]="activeLens() === 'trader'"
+            (click)="selectLens('trader')">Trader</button>
+    <button role="tab" [attr.aria-selected]="activeLens() === 'operator'"
+            (click)="selectLens('operator')">Operator</button>
+  </div>
+  -->
+
+  @if (activeLens() === 'trader') {
+    <app-trader-lens
+      [panel]="panelData"
+      [profile]="profileData"
+      [liveChart]="liveChart()"
+      [histChart]="histChart()"
+      [selectedPreset]="selectedPreset()"
+      [actionPending]="actionPending()"
+      (presetChange)="onPresetChange($event)"
+      (actionRequested)="onActionRequested($event)"
+    />
+  }
+}

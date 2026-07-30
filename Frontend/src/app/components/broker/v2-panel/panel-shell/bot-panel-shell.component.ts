@@ -1,0 +1,242 @@
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  computed,
+  effect,
+  inject,
+  input,
+  signal,
+} from '@angular/core';
+
+import type {
+  BotPanelView,
+  ChartHistoryPreset,
+  ChartHistoryResponse,
+  ChartLiveResponse,
+  PanelAction,
+  PanelProfile,
+} from '../lib/broker-v2-panel.types';
+import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { TraderLensComponent } from '../trader-lens/trader-lens.component';
+
+/**
+ * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
+ *
+ * ## Shell responsibilities
+ * - Route parameter extraction (broker, accountId, sid).
+ * - Data loading: panel view (5s poll), live chart (5s poll), history chart
+ *   (on preset change).
+ * - Action execution (post to backend, re-poll on success).
+ *
+ * ## Lens extension points (S4 operator lens)
+ * The `activeLens` signal determines which lens renders. Currently only
+ * `'trader'` (default). S4 adds `'operator'` and wires it via a query param
+ * (`?lens=operator`) or a tab button. The lens receives `panel` + `profile`
+ * + chart data as inputs — the shell passes them identically regardless of
+ * which lens is active.
+ *
+ * To add the operator lens in S4:
+ * 1. Add `OperatorLensComponent` to imports.
+ * 2. Extend `activeLens` to read `Router.routerState.snapshot.url` or a
+ *    `queryParams` input for `?lens=operator`.
+ * 3. Add `@if (activeLens() === 'operator')` block in the template
+ *    beneath the trader block, passing the same inputs.
+ * The shared panel data (BotPanelView, PanelProfile) flows down to both
+ * lenses unchanged.
+ */
+@Component({
+  selector: 'app-bot-panel-shell',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [TraderLensComponent],
+  templateUrl: './bot-panel-shell.component.html',
+  styleUrl: './bot-panel-shell.component.scss',
+})
+export class BotPanelShellComponent {
+  // ── Route inputs (Angular route input binding) ────────────────────────────
+
+  readonly broker = input.required<string>();
+  readonly accountId = input.required<string>();
+  readonly sid = input.required<string>();
+
+  // ── Services ──────────────────────────────────────────────────────────────
+
+  private readonly panelSvc = inject(BrokerV2PanelService);
+  private readonly destroyRef = inject(DestroyRef);
+
+  // ── Active lens ──────────────────────────────────────────────────────────
+  // S4: extend this signal to switch between 'trader' | 'operator'.
+
+  protected readonly activeLens = signal<'trader'>('trader');
+
+  // ── Internal state ────────────────────────────────────────────────────────
+
+  protected readonly panel = signal<BotPanelView | null>(null);
+  protected readonly profile = signal<PanelProfile | null>(null);
+  protected readonly liveChart = signal<ChartLiveResponse | null>(null);
+  protected readonly histChart = signal<ChartHistoryResponse | null>(null);
+  protected readonly selectedPreset = signal<ChartHistoryPreset>('1D');
+  protected readonly actionPending = signal(false);
+  protected readonly loadError = signal<string | null>(null);
+
+  protected readonly isLoaded = computed(
+    () => this.panel() !== null && this.profile() !== null,
+  );
+
+  // ── Polling timers ────────────────────────────────────────────────────────
+
+  private readonly POLL_MS = 5_000;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private liveChartTimer: ReturnType<typeof setInterval> | null = null;
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+  constructor() {
+    this.destroyRef.onDestroy(() => this.teardown());
+
+    // Defer initial load until route inputs (broker, accountId, sid) are bound.
+    // input.required() signals throw NG0950 if accessed before the host element
+    // has received its values. An effect() runs after the first change-detection
+    // cycle, guaranteeing inputs are available.
+    //
+    // Teardown before reload guards against same-component re-navigation
+    // (SPA back/forward with different route params): stops any running poll
+    // timers before starting fresh ones, preventing timer accumulation.
+    effect(() => {
+      const broker = this.broker();
+      const accountId = this.accountId();
+      const sid = this.sid();
+
+      if (!broker || !accountId || !sid) return;
+
+      this.teardown();
+      this.panel.set(null);
+      this.profile.set(null);
+      void this.initialLoad();
+    });
+  }
+
+  // ── Shell helpers for S4 extension ───────────────────────────────────────
+
+  /** Called by S4 operator lens to switch the active lens. */
+  protected selectLens(lens: 'trader'): void {
+    this.activeLens.set(lens);
+  }
+
+  // ── Data loading ──────────────────────────────────────────────────────────
+
+  private async initialLoad(): Promise<void> {
+    await Promise.all([
+      this.loadProfile(),
+      this.loadPanel(),
+      this.loadLiveChart(),
+      this.loadHistoryChart(this.selectedPreset()),
+    ]);
+    this.startPolling();
+  }
+
+  private startPolling(): void {
+    // Panel + live chart share the 5s poll.
+    this.pollTimer = setInterval(() => {
+      void this.loadPanel();
+    }, this.POLL_MS);
+
+    this.liveChartTimer = setInterval(() => {
+      void this.loadLiveChart();
+    }, this.POLL_MS);
+  }
+
+  private async loadProfile(): Promise<void> {
+    try {
+      const p = await this.panelSvc.getPanelProfile(this.broker());
+      this.profile.set(p);
+    } catch {
+      // Profile failure is non-fatal; the panel can still render.
+    }
+  }
+
+  private async loadPanel(): Promise<void> {
+    try {
+      const p = await this.panelSvc.getPanel(
+        this.broker(),
+        this.accountId(),
+        this.sid(),
+      );
+      this.panel.set(p);
+      this.loadError.set(null);
+    } catch (err) {
+      this.loadError.set(
+        err instanceof Error ? err.message : 'Failed to load panel data.',
+      );
+    }
+  }
+
+  private async loadLiveChart(): Promise<void> {
+    try {
+      const c = await this.panelSvc.getLiveChart(
+        this.broker(),
+        this.accountId(),
+        this.sid(),
+      );
+      this.liveChart.set(c);
+    } catch {
+      // Non-fatal: chart stays at last known state.
+    }
+  }
+
+  private async loadHistoryChart(preset: ChartHistoryPreset): Promise<void> {
+    try {
+      const c = await this.panelSvc.getHistoryChart(
+        this.broker(),
+        this.accountId(),
+        this.sid(),
+        preset,
+      );
+      this.histChart.set(c);
+    } catch {
+      // Non-fatal.
+    }
+  }
+
+  private teardown(): void {
+    if (this.pollTimer !== null) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    if (this.liveChartTimer !== null) {
+      clearInterval(this.liveChartTimer);
+      this.liveChartTimer = null;
+    }
+  }
+
+  // ── Template handlers ─────────────────────────────────────────────────────
+
+  protected async onPresetChange(preset: ChartHistoryPreset): Promise<void> {
+    this.selectedPreset.set(preset);
+    await this.loadHistoryChart(preset);
+  }
+
+  protected async onActionRequested(action: PanelAction): Promise<void> {
+    if (this.actionPending()) return;
+    this.actionPending.set(true);
+    try {
+      await this.panelSvc.runAction(
+        this.broker(),
+        this.accountId(),
+        this.sid(),
+        {
+          action_id: action.action_id,
+          revision: action.revision,
+          idempotency_key: crypto.randomUUID(),
+          reason: null,
+        },
+      );
+      // Re-poll panel immediately after action.
+      await this.loadPanel();
+    } catch {
+      // Errors bubble to loadError via loadPanel — no silent swallow.
+    } finally {
+      this.actionPending.set(false);
+    }
+  }
+}

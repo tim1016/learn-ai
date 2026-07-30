@@ -1,0 +1,85 @@
+<div
+  class="dual-pane-chart"
+  [class.fullscreen-live]="liveFullscreen()"
+  [class.fullscreen-history]="histFullscreen()"
+>
+  <!-- ── LIVE pane ──────────────────────────────────────────────────────── -->
+  <div
+    class="chart-pane chart-pane--live"
+    role="region"
+    [attr.aria-label]="'Live chart for ' + symbol()"
+  >
+    <div class="pane-header">
+      <span class="pane-title">LIVE (today, NY)</span>
+      @if (liveSource()) {
+        <span
+          class="source-chip"
+          [class.source-chip--polygon]="liveSource() === 'polygon'"
+          [attr.aria-label]="'Data source: ' + (liveSource() ?? '' | receiptLabel)"
+        >
+          {{ liveSource() ?? '' | receiptLabel }}
+        </span>
+      }
+      <button
+        type="button"
+        class="expand-btn"
+        [attr.aria-label]="
+          liveFullscreen()
+            ? 'Exit fullscreen live chart'
+            : 'Expand live chart to fullscreen'
+        "
+        [attr.aria-pressed]="liveFullscreen()"
+        (click)="toggleLiveFullscreen()"
+      >
+        {{ liveFullscreen() ? '⊠' : '⛶' }}
+      </button>
+    </div>
+
+    @for (notice of liveNotices(); track notice.code) {
+      <div class="overlay-notice" role="status" aria-live="polite">
+        {{ notice.message }}
+      </div>
+    }
+
+    <div #liveContainer class="chart-container" aria-hidden="true"></div>
+  </div>
+
+  <!-- ── HISTORY pane ──────────────────────────────────────────────────── -->
+  <div
+    class="chart-pane chart-pane--history"
+    role="region"
+    [attr.aria-label]="'History chart for ' + symbol()"
+  >
+    <div class="pane-header">
+      <span class="pane-title">HISTORY</span>
+      <div class="preset-bar" role="group" aria-label="History time range">
+        @for (p of presets; track p) {
+          <button
+            type="button"
+            class="preset-btn"
+            [class.preset-btn--active]="selectedPreset() === p"
+            [attr.aria-pressed]="selectedPreset() === p"
+            (click)="selectPreset(p)"
+          >
+            {{ p }}
+          </button>
+        }
+      </div>
+      <button
+        type="button"
+        class="expand-btn"
+        [attr.aria-label]="
+          histFullscreen()
+            ? 'Exit fullscreen history chart'
+            : 'Expand history chart to fullscreen'
+        "
+        [attr.aria-pressed]="histFullscreen()"
+        (click)="toggleHistFullscreen()"
+      >
+        {{ histFullscreen() ? '⊠' : '⛶' }}
+      </button>
+    </div>
+
+    <div #histContainer class="chart-container" aria-hidden="true"></div>
+  </div>
+</div>
