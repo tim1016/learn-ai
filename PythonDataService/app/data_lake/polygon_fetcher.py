@@ -77,8 +77,29 @@ async def fetch_minute_trade_aggregates(
     Errors map onto Polygon* exception subclasses for callers to translate
     into ArtifactFailure.reason values.
     """
+    return await fetch_aggregate_bars(
+        symbol, start, end, api_key, multiplier=1, timespan="minute"
+    )
+
+
+async def fetch_aggregate_bars(
+    symbol: str,
+    start: date,
+    end: date,
+    api_key: str,
+    *,
+    multiplier: int,
+    timespan: str,
+) -> list[PolygonBar]:
+    """Fetch aggregate bars at an arbitrary ``multiplier``/``timespan`` for [start, end].
+
+    Generalizes :func:`fetch_minute_trade_aggregates` to the resolutions the
+    broker-v2 history-chart ladder needs (5-minute, 30-minute, hour, day).
+    Returns bars ascending by ``t_ms``; pagination is transparent. Always
+    ``adjusted=false`` (raw bars), the same normalization the minute path uses.
+    """
     url = (
-        f"{_POLYGON_BASE}/v2/aggs/ticker/{symbol.upper()}/range/1/minute/"
+        f"{_POLYGON_BASE}/v2/aggs/ticker/{symbol.upper()}/range/{multiplier}/{timespan}/"
         f"{start.strftime('%Y-%m-%d')}/{end.strftime('%Y-%m-%d')}"
     )
     params = {

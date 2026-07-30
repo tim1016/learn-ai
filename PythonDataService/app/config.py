@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     # this shared secret is configured or a local-dev operator explicitly opts out.
     DATA_PLANE_CONTROL_SECRET: str = ""
     DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL: bool = False
+    # Broker-v2 panel operator identity (spec §14, interim posture). Control
+    # mutations authenticate via DATA_PLANE_CONTROL_SECRET; the server attaches
+    # THIS configured identity to journaled actions. Operator identity is never
+    # a request field — no free-text identity input anywhere in the UI.
+    PANEL_OPERATOR_IDENTITY: str = "operator"
     TRUSTED_HOSTS: str = (
         "localhost,127.0.0.1,test,testserver,python-service,backend,"
         "host.containers.internal,host.docker.internal"

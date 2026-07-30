@@ -1,0 +1,196 @@
+{
+  "$comment": "Snapshot of the closed broker-v2 panel operator vocabulary (phases, desired states, duty-outcome kinds, hold reasons, reconciliation verdicts, channel states, station ids, station states, action ids). PAUSED is deliberately absent (spec \u00a712, decision #10). Two test surfaces lock against this file. Pytest PythonDataService/tests/broker/v2panel/test_vocabulary_snapshot.py reads the Python-tree copy and asserts equality with the live ALL_VOCABULARY_CODES frozenset and non-trivial copy for every code. The Frontend Vitest surface (S5) reads the Frontend-tree copy. Adding a code requires (a) updating vocabulary.py, (b) re-running PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py, (c) adding the emergency-fallback copy on the Frontend map. Any missing step fails a parity test.",
+  "generated_by": "PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py",
+  "source_files": [
+    "PythonDataService/app/broker/v2panel/vocabulary.py (ALL_VOCABULARY_CODES, OPERATOR_COPY)"
+  ],
+  "codes": [
+    "BROKER_ACK",
+    "CRASHED",
+    "EXITED_UNVERIFIED",
+    "FILL",
+    "INTENT",
+    "NO_HOLD",
+    "OFF_DUTY",
+    "ON_DUTY",
+    "RECONCILED",
+    "RETIRED",
+    "RUNNING",
+    "SIGNAL",
+    "STOPPED",
+    "STOPPED_OUTCOME",
+    "STREAM_HEALTH_HOLD",
+    "SUBMIT_GATE",
+    "UNEXPLAINED_ORDER_HOLD",
+    "blocked",
+    "cancel_order",
+    "clean",
+    "clear_hold",
+    "deploy",
+    "flatten_stop",
+    "healthy",
+    "missing_intent",
+    "not_applicable",
+    "reconcile_now",
+    "retire",
+    "satisfied",
+    "stale",
+    "start",
+    "stop",
+    "unexplained_order",
+    "unhealthy",
+    "unknown",
+    "unknown_stale",
+    "waiting"
+  ],
+  "copy": {
+    "BROKER_ACK": {
+      "label": "Broker ack",
+      "explanation": "The broker acknowledged (or rejected) the submitted order."
+    },
+    "CRASHED": {
+      "label": "Crashed",
+      "explanation": "The bot exited on an unhandled error. Check the duty reason."
+    },
+    "EXITED_UNVERIFIED": {
+      "label": "Exited unverified",
+      "explanation": "The bot's task ended without a clean stop. Its final state is not confirmed."
+    },
+    "FILL": {
+      "label": "Fill",
+      "explanation": "The order executed, in full or in part, at the broker."
+    },
+    "INTENT": {
+      "label": "Intent",
+      "explanation": "The bot recorded an order intent before touching the broker."
+    },
+    "NO_HOLD": {
+      "label": "No hold",
+      "explanation": "No exposure hold is active. Order submission is allowed."
+    },
+    "OFF_DUTY": {
+      "label": "Off duty",
+      "explanation": "The bot is not running. It evaluates no bars and places no orders."
+    },
+    "ON_DUTY": {
+      "label": "On duty",
+      "explanation": "The bot is running and evaluating bars as they close."
+    },
+    "RECONCILED": {
+      "label": "Reconciled",
+      "explanation": "A sweep confirmed the journal and the broker agree on this order."
+    },
+    "RETIRED": {
+      "label": "Retired",
+      "explanation": "The bot is permanently decommissioned. Its id is never reused."
+    },
+    "RUNNING": {
+      "label": "Running",
+      "explanation": "The operator wants this bot evaluating bars."
+    },
+    "SIGNAL": {
+      "label": "Signal",
+      "explanation": "The bot evaluated a bar and produced (or withheld) a decision."
+    },
+    "STOPPED": {
+      "label": "Stopped",
+      "explanation": "The operator wants this bot idle. Exposure is left untouched."
+    },
+    "STOPPED_OUTCOME": {
+      "label": "Stopped cleanly",
+      "explanation": "The bot exited on an operator stop or a service shutdown."
+    },
+    "STREAM_HEALTH_HOLD": {
+      "label": "Stream-health hold",
+      "explanation": "A market-data or execution channel is unhealthy. New submits are paused account-wide."
+    },
+    "SUBMIT_GATE": {
+      "label": "Submit gate",
+      "explanation": "Holds and channel health were checked before submission."
+    },
+    "UNEXPLAINED_ORDER_HOLD": {
+      "label": "Unexplained-order hold",
+      "explanation": "An order this account did not submit was seen in the journal. New submits are paused account-wide."
+    },
+    "blocked": {
+      "label": "Blocked",
+      "explanation": "An identified condition is preventing this station from progressing."
+    },
+    "cancel_order": {
+      "label": "Cancel order",
+      "explanation": "Cancel one working order at the broker."
+    },
+    "clean": {
+      "label": "Clean",
+      "explanation": "The last sweep found the journal and the broker in agreement."
+    },
+    "clear_hold": {
+      "label": "Clear hold",
+      "explanation": "Lift the account exposure hold once its root condition is healthy and freshly observed."
+    },
+    "deploy": {
+      "label": "Deploy",
+      "explanation": "Create and start a new bot bound to this account."
+    },
+    "flatten_stop": {
+      "label": "Flatten & stop",
+      "explanation": "Cancel working orders, submit closing orders to flatten exposure, then stop."
+    },
+    "healthy": {
+      "label": "Healthy",
+      "explanation": "The channel is connected and current."
+    },
+    "missing_intent": {
+      "label": "Missing intent",
+      "explanation": "The last sweep found a recorded intent with no matching broker order."
+    },
+    "not_applicable": {
+      "label": "Not applicable",
+      "explanation": "This broker or mode has no such station."
+    },
+    "reconcile_now": {
+      "label": "Reconcile now",
+      "explanation": "Run a reconciliation sweep against the broker immediately."
+    },
+    "retire": {
+      "label": "Retire",
+      "explanation": "Permanently decommission this bot. Its id is never reused."
+    },
+    "satisfied": {
+      "label": "Satisfied",
+      "explanation": "This station completed with recorded evidence."
+    },
+    "stale": {
+      "label": "Stale",
+      "explanation": "The last sweep could not reach the broker; the verdict is out of date."
+    },
+    "start": {
+      "label": "Start",
+      "explanation": "Begin evaluating bars for this off-duty bot."
+    },
+    "stop": {
+      "label": "Stop",
+      "explanation": "Stop evaluating bars and cancel this bot's working entry orders. Exposure is left untouched."
+    },
+    "unexplained_order": {
+      "label": "Unexplained order",
+      "explanation": "The last sweep found a broker order the journal cannot explain."
+    },
+    "unhealthy": {
+      "label": "Unhealthy",
+      "explanation": "The channel is down or lagging. Trading is gated until it recovers."
+    },
+    "unknown": {
+      "label": "Unknown",
+      "explanation": "The channel's health has not been observed yet."
+    },
+    "unknown_stale": {
+      "label": "Unknown (stale)",
+      "explanation": "Evidence for this station exists but is too old to trust."
+    },
+    "waiting": {
+      "label": "Waiting",
+      "explanation": "This station is expected to progress. Nothing is wrong."
+    }
+  }
+}
