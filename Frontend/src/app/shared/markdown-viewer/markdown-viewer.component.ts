@@ -326,13 +326,32 @@ export class MarkdownViewerComponent {
     });
   }
 
-  /** Post-render hook that injects a slug `id` attribute on every heading. */
+  /** Post-render hook that injects a slug `id` attribute on every heading.
+   *
+   * Honors the Pandoc/GitBook `{#explicit-id}` anchor syntax in headings:
+   * if the heading text ends with `{#some-id}`, that id is used verbatim and
+   * the `{#...}` suffix is stripped from the visible text.  Otherwise the id
+   * is derived from the heading text via `markdownSlug`.
+   */
   private addHeadingAnchors(html: string): string {
+    // Matches an explicit anchor suffix — `{#id-slug}` — at the end of
+    // the heading text (after stripping tags).  The `{`, `#`, and `}` are
+    // rendered by marked as literal characters, so we match them in the
+    // post-render HTML.
+    const EXPLICIT_ANCHOR = /\{#([\w-]+)\}\s*$/;
+
     return html.replace(
       /<(h[1-6])>([\s\S]*?)<\/\1>/gi,
       (_m, tag: string, inner: string) => {
-        // Strip inline tags to get plain text for slug generation.
+        // Strip inline tags to get plain text for id/display resolution.
         const plain = inner.replace(/<[^>]+>/g, '');
+        const match = EXPLICIT_ANCHOR.exec(plain);
+        if (match) {
+          // Use the explicit id; strip the `{#id}` suffix from the displayed text.
+          const id = match[1];
+          const cleanInner = inner.replace(/\s*\{#[\w-]+\}\s*$/, '');
+          return `<${tag} id="${id}">${cleanInner}</${tag}>`;
+        }
         const id = markdownSlug(plain);
         return `<${tag} id="${id}">${inner}</${tag}>`;
       },

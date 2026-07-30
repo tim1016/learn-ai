@@ -31,6 +31,17 @@ HTMLCanvasElement.prototype.getContext = ((kind: string) => {
   });
 }) as any;
 
+// jsdom lacks CSS.escape — stub it so MarkdownViewerComponent.scrollToAnchor
+// doesn't crash when tested with an anchor argument.
+if (typeof CSS === 'undefined' || !CSS.escape) {
+  const cssObj = typeof CSS !== 'undefined' ? CSS : ({} as typeof CSS);
+  (cssObj as { escape: (value: string) => string }).escape = (value: string) =>
+    value.replace(/([^\w-])/g, '\\$1');
+  if (typeof CSS === 'undefined') {
+    (globalThis as unknown as Record<string, unknown>)['CSS'] = cssObj;
+  }
+}
+
 // jsdom lacks window.matchMedia — stub it so PrimeNG Menubar
 // doesn't crash during tests
 Object.defineProperty(window, 'matchMedia', {
