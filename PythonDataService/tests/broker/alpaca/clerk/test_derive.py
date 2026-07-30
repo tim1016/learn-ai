@@ -180,3 +180,94 @@ def test_has_missing_intent_detects_manual_position_after_unrelated_intent() -> 
 
 def test_has_missing_intent_false_on_empty_broker_state() -> None:
     assert derive.has_missing_intent([], [], []) is False
+
+
+# ── Position-drift race: fill ORDER_EVENT not yet journaled (2026-07-30) ─────
+
+
+def _order_snapshot(
+    *, symbol: str, side: str, status: str, filled_quantity: float
+) -> BrokerOrder:
+    order = _order("learn-ai/alp8-spy-0730/v1:i1")
+    return order.model_copy(
+        update={
+            "symbol": symbol,
+            "side": side,
+            "status": status,
+            "filled_quantity": filled_quantity,
+        }
+    )
+
+
+def _entry_with_order(order_ref: str, order: BrokerOrder) -> OrderJournalEntry:
+    return OrderJournalEntry(
+        kind=ClerkEntryKind.SUBMIT_ACKED,
+        account_id="A",
+        operator="op",
+        intent_id="i1",
+        order_ref=order_ref,
+        client_order_id=order_ref,
+        order=order,
+        recorded_at_ms=_MS,
+    )
+
+
+def _position_for(symbol: str, quantity: float = 1.0) -> BrokerPosition:
+    return _position().model_copy(update={"symbol": symbol, "quantity": quantity})
+
+
+def test_has_missing_intent_suppressed_while_fill_event_in_flight() -> None:
+    """Race regression: broker shows the position before the fill ORDER_EVENT
+    reaches the journal (observed live: verdict fired ~7s early). An in-flight
+    journaled order for the symbol suppresses the flag for this sweep."""
+    ref = "learn-ai/alp8-spy-0730/v1:i1"
+    entries = [
+        _intent(ref),
+        _entry_with_order(
+            ref,
+            _order_snapshot(
+                symbol="SPY", side="buy", status="pending_new", filled_quantity=0.0
+            ),
+        ),
+    ]
+
+    flagged = derive.has_missing_intent(entries, [], [_position_for("SPY")])
+
+    assert flagged is False
+
+
+def test_has_missing_intent_clean_after_fill_event_journaled() -> None:
+    ref = "learn-ai/alp8-spy-0730/v1:i1"
+    entries = [
+        _intent(ref),
+        _entry_with_order(
+            ref,
+            _order_snapshot(
+                symbol="SPY", side="buy", status="filled", filled_quantity=1.0
+            ),
+        ),
+    ]
+
+    flagged = derive.has_missing_intent(entries, [], [_position_for("SPY")])
+
+    assert flagged is False
+
+
+def test_has_missing_intent_foreign_position_not_masked_by_suppression() -> None:
+    """A position with no journal presence must still flag — the in-flight
+    suppression is per-symbol and must not hide foreign exposure."""
+    ref = "learn-ai/alp8-spy-0730/v1:i1"
+    entries = [
+        _intent(ref),
+        _entry_with_order(
+            ref,
+            _order_snapshot(
+                symbol="SPY", side="buy", status="pending_new", filled_quantity=0.0
+            ),
+        ),
+    ]
+    positions = [_position_for("SPY"), _position_for("TSLA")]
+
+    flagged = derive.has_missing_intent(entries, [], positions)
+
+    assert flagged is True
