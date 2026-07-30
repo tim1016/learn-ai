@@ -183,12 +183,11 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     """Build the bots-list catalog for one account (§5)."""
     resolved = await _validate_account(broker, account_id)
     statuses = _bot_statuses(broker)
+    entries = _read_order_journal(resolved)
+    sids = [status.strategy_instance_id for status in statuses]
+    decisions = {sid: _latest_decision(resolved, sid) for sid in sids}
     owner = get_or_create_owner(resolved, broker)
-    if not owner.is_bootstrapped:
-        entries = _read_order_journal(resolved)
-        sids = [status.strategy_instance_id for status in statuses]
-        decisions = {sid: _latest_decision(resolved, sid) for sid in sids}
-        owner.bootstrap(entries, sids, decisions=decisions)
+    owner.sync(entries, sids, decisions=decisions)
     return owner.snapshot_catalog(statuses)
 
 
@@ -203,8 +202,7 @@ async def get_panel(
     decision = _latest_decision(resolved, sid)
 
     owner = get_or_create_owner(resolved, broker)
-    if not owner.is_bootstrapped:
-        owner.bootstrap(entries, [sid], decisions={sid: decision})
+    owner.sync(entries, [sid], decisions={sid: decision})
     rollup = owner.get_rollup(sid)
 
     profile = panel_profile_for(broker)

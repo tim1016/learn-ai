@@ -139,6 +139,21 @@ class IdempotencyStore:
                 record.error_detail = error
                 record._event.set()
 
+    async def release(self, sid: str, action_id: str, key: str) -> None:
+        """Drop a reservation whose action provably never ran (pre-exec reject).
+
+        A stale-revision or not-available rejection happens *before* the
+        performer runs, so nothing was applied. Removing the record frees the
+        key for a corrected retry — otherwise it would sit ``in_flight`` forever
+        (a leak) and force the retry to wait out the in-flight timeout. Any
+        waiters are woken so they re-evaluate instead of blocking.
+        """
+        compound = (sid, action_id, key)
+        async with self._lock:
+            record = self._records.pop(compound, None)
+            if record is not None:
+                record._event.set()
+
 
 _IDEMPOTENCY_STORE = IdempotencyStore()
 
@@ -174,6 +189,7 @@ async def execute_action(
     # already-applied action stays a safe no-op even if the panel has since
     # advanced (the action already took effect; re-posting must not 409).
     record = await ledger.reserve_or_get(sid, request.action_id, request.idempotency_key)
+    reserved_fresh = record is None
     if record is not None:
         if record.state == "succeeded" and record.result is not None:
             return PanelActionResult(
@@ -188,33 +204,41 @@ async def execute_action(
                 detail=record.error_detail,
             )
         # state is still in_flight after timeout — treat as a new execution
-        # by falling through (the first caller may have crashed)
+        # by falling through (the first caller may have crashed). We do not own
+        # this reservation, so we must not release/complete it below.
 
-    # 1. Revision guard.
-    if request.revision != current_revision:
-        raise StaleRevisionError(
-            "The panel changed since this action was presented.",
-            detail=(
-                f"Presented revision {request.revision} no longer matches the "
-                f"current revision {current_revision}. Refresh and retry."
-            ),
-        )
-
-    performer = performers.get(request.action_id)
-    if performer is None:
-        raise ActionNotAvailableError(
-            f"The '{request.action_id}' action cannot be executed right now.",
-            detail="This action's backend is not available for this bot in its current state.",
-        )
-
-    # 3. Identity from the channel — the performer receives the configured
-    # operator identity, never anything from the request body.
     try:
+        # 1. Revision guard.
+        if request.revision != current_revision:
+            raise StaleRevisionError(
+                "The panel changed since this action was presented.",
+                detail=(
+                    f"Presented revision {request.revision} no longer matches the "
+                    f"current revision {current_revision}. Refresh and retry."
+                ),
+            )
+
+        performer = performers.get(request.action_id)
+        if performer is None:
+            raise ActionNotAvailableError(
+                f"The '{request.action_id}' action cannot be executed right now.",
+                detail="This action's backend is not available for this bot in its current state.",
+            )
+
+        # 3. Identity from the channel — the performer receives the configured
+        # operator identity, never anything from the request body.
         message = await performer(operator_identity)
+    except ActionExecutionError:
+        # Pre-execution rejection (stale revision / not available): the action
+        # never ran, so free a fresh reservation for a corrected retry.
+        if reserved_fresh:
+            await ledger.release(sid, request.action_id, request.idempotency_key)
+        raise
     except Exception as err:
-        await ledger.fail(
-            sid, request.action_id, request.idempotency_key, str(err)
-        )
+        # The performer ran and failed: burn the key so a blind retry does not
+        # re-fire an action that may have partially applied.
+        if reserved_fresh:
+            await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
         raise
 
     result = PanelActionResult(
@@ -223,5 +247,6 @@ async def execute_action(
         revision=current_revision,
         message=message,
     )
-    await ledger.complete(sid, request.action_id, request.idempotency_key, result)
+    if reserved_fresh:
+        await ledger.complete(sid, request.action_id, request.idempotency_key, result)
     return result

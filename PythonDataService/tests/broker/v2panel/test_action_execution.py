@@ -144,6 +144,64 @@ async def _noop() -> str:
     return "noop"
 
 
+async def test_stale_revision_releases_key_for_corrected_retry() -> None:
+    """A stale-revision rejection must not strand the idempotency key.
+
+    The action never ran, so the key must be reusable: the pre-execution
+    rejection frees the reservation instead of leaving it ``in_flight``, and a
+    corrected retry (with the current revision) executes.
+    """
+    calls = 0
+
+    async def _perform(operator: str) -> str:
+        nonlocal calls
+        calls += 1
+        return "stopped"
+
+    store = IdempotencyStore()
+
+    with pytest.raises(StaleRevisionError):
+        await execute_action(
+            _request(key="retry", revision=41),
+            sid=_SID,
+            current_revision=42,
+            performers={"stop": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    # Nothing was applied → no dangling in_flight reservation for the key.
+    assert (_SID, "stop", "retry") not in store._records
+
+    result = await execute_action(
+        _request(key="retry", revision=42),
+        sid=_SID,
+        current_revision=42,
+        performers={"stop": _perform},
+        operator_identity="op",
+        store=store,
+    )
+    assert result.applied is True
+    assert calls == 1
+
+
+async def test_not_available_action_releases_key() -> None:
+    """An unwired action rejects pre-execution and frees its idempotency key."""
+    store = IdempotencyStore()
+
+    with pytest.raises(ActionNotAvailableError):
+        await execute_action(
+            _request(action_id="retire", key="na"),
+            sid=_SID,
+            current_revision=42,
+            performers={"stop": lambda op: _noop()},  # retire not wired
+            operator_identity="op",
+            store=store,
+        )
+
+    assert (_SID, "retire", "na") not in store._records
+
+
 async def test_duplicate_concurrent_posts_run_mutation_once() -> None:
     """Two concurrent POSTs with the same idempotency_key must fire the mutation once."""
     calls = 0
