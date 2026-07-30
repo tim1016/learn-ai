@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime
@@ -38,6 +39,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
+
+_CONTROL_SECRET = os.environ.get("DATA_PLANE_CONTROL_SECRET", "")
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SPEC_PATH = (
@@ -160,7 +163,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     results: list[dict] = []
-    with httpx.Client(base_url=_DATA_PLANE, timeout=30.0) as client:
+    headers = {"X-Data-Plane-Control-Secret": _CONTROL_SECRET} if _CONTROL_SECRET else {}
+    with httpx.Client(base_url=_DATA_PLANE, timeout=120.0, headers=headers) as client:
         for i, bot in enumerate(bots):
             symbol = bot["symbol"]
             payload = bot["payload"]
