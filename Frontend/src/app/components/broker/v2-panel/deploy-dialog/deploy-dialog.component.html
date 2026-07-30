@@ -1,0 +1,76 @@
+<p-dialog
+  header="Deploy bot"
+  [visible]="visible()"
+  (visibleChange)="visibleChange.emit($event)"
+  [modal]="true"
+  [closable]="!submitting()"
+  [style]="{ width: '28rem' }"
+  (onHide)="close()"
+  role="dialog"
+  aria-labelledby="deploy-dialog-header"
+>
+  <form [formGroup]="form" (ngSubmit)="submit()" id="deploy-form" aria-label="Deploy bot form">
+
+    <div class="field">
+      <label for="sid" class="field__label">Strategy instance ID</label>
+      <input
+        pInputText
+        id="sid"
+        type="text"
+        formControlName="strategy_instance_id"
+        placeholder="e.g. my-spy-momentum-01"
+        class="field__input"
+        autocomplete="off"
+        aria-required="true"
+      />
+    </div>
+
+    <div class="field">
+      <label for="symbol" class="field__label">Symbol</label>
+      <input
+        pInputText
+        id="symbol"
+        type="text"
+        formControlName="symbol"
+        placeholder="e.g. SPY"
+        class="field__input"
+        autocomplete="off"
+        aria-required="true"
+      />
+    </div>
+
+    <div class="field field--inline">
+      <p-checkbox
+        formControlName="rth_only"
+        [binary]="true"
+        inputId="rth_only"
+        aria-describedby="rth-hint"
+      />
+      <label for="rth_only" class="field__label field__label--inline">RTH only</label>
+      <span id="rth-hint" class="field__hint">Limit trading to regular trading hours</span>
+    </div>
+
+    @if (submitError()) {
+      <p-message severity="error" class="deploy-error">{{ submitError() }}</p-message>
+    }
+
+  </form>
+
+  <ng-template pTemplate="footer">
+    <button
+      pButton
+      type="button"
+      severity="secondary"
+      [disabled]="submitting()"
+      (click)="close()"
+    >Cancel</button>
+    <button
+      pButton
+      type="submit"
+      form="deploy-form"
+      [loading]="submitting()"
+      [disabled]="form.invalid || submitting()"
+      (click)="submit()"
+    >Deploy</button>
+  </ng-template>
+</p-dialog>

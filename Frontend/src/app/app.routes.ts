@@ -375,5 +375,21 @@ export const routes: Routes = [
         "./components/_ide-sandbox/ide-sandbox.component"
       ).then((m) => m.IdeSandboxComponent),
   },
+  {
+    // Broker v2 panel — account-scoped bots list
+    path: 'brokers/:broker/accounts/:accountId/bots',
+    loadComponent: () =>
+      import(
+        './components/broker/v2-panel/bots-list-page/bots-list-page.component'
+      ).then((m) => m.BotsListPageComponent),
+  },
+  {
+    // Broker v2 panel — unscoped bots list (all accounts for this broker)
+    path: 'brokers/:broker/bots',
+    loadComponent: () =>
+      import(
+        './components/broker/v2-panel/bots-list-page/bots-list-page.component'
+      ).then((m) => m.BotsListPageComponent),
+  },
   { path: "**", redirectTo: "/data-lab" },
 ];
