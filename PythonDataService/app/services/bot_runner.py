@@ -133,7 +133,8 @@ class BrokerBotBinding(BaseModel):
     broker: str
     symbol: str
     use_rth: bool = True
-    mode: Literal["log_only"] = "log_only"
+    mode: Literal["log_only", "trade"] = "log_only"
+    quantity: int = 1
     run_id: str
     created_at_ms: int
 
@@ -208,8 +209,10 @@ class BotTaskRegistry:
         strategy_instance_id: str,
         symbol: str,
         use_rth: bool = True,
+        mode: Literal["log_only", "trade"] = "log_only",
+        quantity: int = 1,
     ) -> BotStatusView:
-        """Deploy and start a log-only bot; durable evidence before liveness."""
+        """Deploy and start a bot; durable evidence before liveness."""
         instance_dir = self._confined_instance_dir(strategy_instance_id)
         managed = self._bots.get(strategy_instance_id)
         if managed is not None and not managed.task.done():
@@ -233,6 +236,8 @@ class BotTaskRegistry:
             broker=broker,
             symbol=symbol,
             use_rth=use_rth,
+            mode=mode,
+            quantity=quantity,
             run_id=run_id,
             created_at_ms=now,
         )
@@ -246,7 +251,7 @@ class BotTaskRegistry:
             now_ms=now,
             updated_by=_UPDATED_BY,
             active_run_id=run_id,
-            reason="deploy_log_only_bot",
+            reason=f"deploy_{mode}_bot",
         )
         task = asyncio.create_task(
             self._supervise(binding, feed), name=f"bot:{strategy_instance_id}"
@@ -498,9 +503,14 @@ class BotTaskRegistry:
 
     async def _supervise(self, binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
         """Run the bot; on ANY exit record a typed durable duty outcome, then reap."""
+        from app.services.bot_trade_strategy import run_trade_bot
+
         sid = binding.strategy_instance_id
         try:
-            await self._run_log_only_bot(binding, feed)
+            if binding.mode == "trade":
+                await run_trade_bot(binding, feed)
+            else:
+                await self._run_log_only_bot(binding, feed)
         except asyncio.CancelledError:
             managed = self._bots.get(sid)
             stop_reason = managed.stop_reason_code if managed is not None else None
@@ -657,6 +667,7 @@ class BotTaskRegistry:
             broker=binding.broker,
             symbol=binding.symbol,
             mode=binding.mode,
+            quantity=binding.quantity,
             running=running,
             phase=(lifecycle.phase.value if lifecycle is not None else "OFF_DUTY"),
             desired_state=desired.value,

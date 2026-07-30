@@ -1,6 +1,7 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type { components } from '../../../../api/broker.types';
 import type {
   BotCatalogView,
   BotPanelView,
@@ -12,6 +13,8 @@ import type {
   PanelActionResult,
   PanelProfile,
 } from './broker-v2-panel.types';
+
+export type DeployBotBody = components['schemas']['DeployBotRequest'];
 
 /**
  * HTTP client for the broker-v2 panel surface.
@@ -37,7 +40,7 @@ export class BrokerV2PanelService {
   deployBot(
     broker: string,
     accountId: string,
-    body: { strategy_instance_id: string; symbol: string; use_rth: boolean },
+    body: DeployBotBody,
   ): Promise<unknown> {
     return firstValueFrom(
       this.http.post<unknown>(

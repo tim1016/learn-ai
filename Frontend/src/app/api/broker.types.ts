@@ -1504,6 +1504,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deploy and start a bot for this account (scoped alias) (§5) */
+        post: operations["deploy_bot_scoped_api_brokers__broker__accounts__account_id__bots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/catalog": {
         parameters: {
             query?: never;
@@ -9164,9 +9181,9 @@ export interface components {
             journal_tail_seq: number | null;
             /**
              * Mode
-             * @constant
+             * @enum {string}
              */
-            mode: "log_only";
+            mode: "log_only" | "trade";
             /** Open Pnl */
             open_pnl: number | null;
             rail: components["schemas"]["TransactionRail"];
@@ -9295,14 +9312,16 @@ export interface components {
             last_transition_at_ms: number | null;
             /**
              * Mode
-             * @constant
+             * @enum {string}
              */
-            mode: "log_only";
+            mode: "log_only" | "trade";
             /**
              * Phase
              * @enum {string}
              */
             phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
+            /** Quantity */
+            quantity: number;
             /** Running */
             running: boolean;
             /** Strategy Instance Id */
@@ -12140,9 +12159,20 @@ export interface components {
         };
         /**
          * DeployBotRequest
-         * @description Deploy (and start) a log-only bot bound to ``{broker}``.
+         * @description Deploy (and start) a bot bound to ``{broker}``.
          */
         DeployBotRequest: {
+            /**
+             * Mode
+             * @default log_only
+             * @enum {string}
+             */
+            mode?: "log_only" | "trade";
+            /**
+             * Quantity
+             * @default 1
+             */
+            quantity?: number;
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */
@@ -27564,6 +27594,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerAccountSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    deploy_bot_scoped_api_brokers__broker__accounts__account_id__bots_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeployBotRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotStatusView"];
                 };
             };
             /** @description Validation Error */

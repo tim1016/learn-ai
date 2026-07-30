@@ -241,7 +241,7 @@ class BotPanelView(BaseModel):
     broker: str
     account_id: str
     symbol: str
-    mode: Literal["log_only"]
+    mode: Literal["log_only", "trade"]
     revision: int
     health: BotHealthCard
     clerk: ClerkCard

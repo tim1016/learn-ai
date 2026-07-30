@@ -77,6 +77,9 @@ export class BotPanelShellComponent {
     () => this.panel() !== null && this.profile() !== null,
   );
 
+  private panelInFlight = false;
+  private liveChartInFlight = false;
+
   // ── Polling timers ────────────────────────────────────────────────────────
 
   private readonly POLL_MS = 5_000;
@@ -149,7 +152,13 @@ export class BotPanelShellComponent {
     }
   }
 
+  // In-flight guards: the panel/live-chart endpoints can take longer than
+  // POLL_MS; without the guard each tick stacks another concurrent request
+  // and the pile-up degrades the backend for every panel consumer.
+
   private async loadPanel(): Promise<void> {
+    if (this.panelInFlight) return;
+    this.panelInFlight = true;
     try {
       const p = await this.panelSvc.getPanel(
         this.broker(),
@@ -162,10 +171,14 @@ export class BotPanelShellComponent {
       this.loadError.set(
         err instanceof Error ? err.message : 'Failed to load panel data.',
       );
+    } finally {
+      this.panelInFlight = false;
     }
   }
 
   private async loadLiveChart(): Promise<void> {
+    if (this.liveChartInFlight) return;
+    this.liveChartInFlight = true;
     try {
       const c = await this.panelSvc.getLiveChart(
         this.broker(),
@@ -175,6 +188,8 @@ export class BotPanelShellComponent {
       this.liveChart.set(c);
     } catch {
       // Non-fatal: chart stays at last known state.
+    } finally {
+      this.liveChartInFlight = false;
     }
   }
 

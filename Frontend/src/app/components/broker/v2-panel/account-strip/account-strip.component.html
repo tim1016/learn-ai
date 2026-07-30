@@ -1,6 +1,6 @@
 <div class="account-strip" role="region" aria-label="Account summary">
 
-  @if (account.isLoading()) {
+  @if (account.isLoading() && !account.hasValue()) {
     <span class="strip-loading" aria-busy="true">Loading account</span>
   } @else if (account.error()) {
     <span class="strip-error" role="alert">Account unavailable</span>

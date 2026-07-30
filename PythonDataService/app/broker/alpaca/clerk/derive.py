@@ -23,6 +23,13 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 
+# Terminal order statuses: settled exposure is represented by the broker
+# positions snapshot, not by further order-state changes. ``reconcile``
+# re-exports this for the sweep's working-order filter.
+RECONCILIATION_TERMINAL_ORDER_STATUSES = frozenset(
+    {"filled", "canceled", "expired", "rejected", "replaced"}
+)
+
 
 def build_status(
     entries: list[OrderJournalEntry],
@@ -222,8 +229,20 @@ def has_missing_intent(
         if entry.order_ref and entry.order is not None:
             latest_order_by_ref[entry.order_ref] = entry.order
 
+    # Only settled (terminal) snapshots contribute to the expected tally: a
+    # working snapshot's filled_quantity goes stale the instant the broker
+    # fills it, and the authoritative fill ORDER_EVENT may not have been
+    # journaled yet when the sweep reads (observed live 2026-07-30: verdict
+    # fired ~7s before the fill event landed). A symbol with such an in-flight
+    # order is skipped for this pass — the next sweep, after the fill event
+    # lands, decides. A position with no journal presence still flags
+    # (foreign exposure must not be masked by this suppression).
     expected_quantity_by_symbol: dict[str, float] = {}
+    symbols_with_inflight_order: set[str] = set()
     for order in latest_order_by_ref.values():
+        if order.status.lower() not in RECONCILIATION_TERMINAL_ORDER_STATUSES:
+            symbols_with_inflight_order.add(order.symbol)
+            continue
         signed_quantity = order.filled_quantity
         if order.side.lower() == "sell":
             signed_quantity = -signed_quantity
@@ -232,6 +251,8 @@ def has_missing_intent(
         )
 
     for position in positions:
+        if position.symbol in symbols_with_inflight_order:
+            continue
         actual_quantity = position.quantity
         if position.side.lower() == "short":
             actual_quantity = -actual_quantity

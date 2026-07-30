@@ -23,7 +23,11 @@ from typing import NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.broker.contract.errors import BrokerError
+from app.broker.contract.registry import get_broker_registry
 from app.config import settings
+from app.routers.brokers import _raise_http
+from app.schemas.broker_bots import BotStatusView, DeployBotRequest
 from app.schemas.broker_v2_evidence import EvidencePage
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
@@ -35,6 +39,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
     PanelProfile,
 )
+from app.services.bot_runner import BotRunnerError, get_bot_task_registry
 from app.services.broker_v2_panel import panel_data_source as ds
 from app.services.broker_v2_panel.action_execution_service import ActionExecutionError
 from app.services.broker_v2_panel.chart_projection_service import (
@@ -114,6 +119,62 @@ async def get_catalog_scoped(broker: str, account_id: str) -> list[BotCatalogVie
 async def get_catalog_unscoped(broker: str) -> list[BotCatalogView]:
     account_id = await _resolve_default_account(broker)
     return await _catalog(broker, account_id)
+
+
+# ── §5 Deploy (account-scoped alias of the bot-runner deploy route) ──────────
+
+
+def _resolve_broker_or_404(broker: str) -> None:
+    """Resolve the broker against the registry; raises 404 via _raise_http on unknown."""
+    try:
+        get_broker_registry().resolve(broker)
+    except BrokerError as error:
+        _raise_http(error)
+
+
+def _raise_runner_error(error: BotRunnerError) -> NoReturn:
+    raise HTTPException(
+        status_code=error.http_status,
+        detail={"message": str(error), "why": error.detail},
+    )
+
+
+@router.post(
+    "/{broker}/accounts/{account_id}/bots",
+    response_model=BotStatusView,
+    status_code=201,
+    summary="Deploy and start a bot for this account (scoped alias) (§5)",
+)
+async def deploy_bot_scoped(
+    broker: str, account_id: str, request: DeployBotRequest
+) -> BotStatusView:
+    default_account = await _resolve_default_account(broker)
+    if account_id != default_account:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": f"Account '{account_id}' is not served by broker '{broker}'.",
+                "why": f"This broker serves account '{default_account}' only.",
+            },
+        )
+    _resolve_broker_or_404(broker)
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Bot runner is not available (service still starting or shut down).",
+        )
+    try:
+        return await registry.deploy(
+            broker=broker,
+            strategy_instance_id=request.strategy_instance_id,
+            symbol=request.symbol,
+            use_rth=request.use_rth,
+            mode=request.mode,
+            quantity=request.quantity,
+        )
+    except BotRunnerError as error:
+        _raise_runner_error(error)
 
 
 # ── §7 Panel projection (account-scoped + unscoped alias) ────────────────────

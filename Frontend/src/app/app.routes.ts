@@ -1,3 +1,4 @@
+import { ChangeDetectionStrategy, Component } from "@angular/core";
 import { Routes } from "@angular/router";
 import { BotSurfaceStore } from "./components/broker/bot-control/bot-surface-store.service";
 import { AccountDeskHoldingsStore } from "./components/broker/account-desk/account-desk-holdings-store.service";
@@ -12,6 +13,12 @@ import {
   botExistsGuard,
   botSurfaceResolver,
 } from "./components/broker/bot-control/bot-surface-routing";
+import { brokerBotsRedirectGuard } from "./components/broker/v2-panel/lib/broker-bots-redirect.guard";
+
+// Nominal component target for the brokerBotsRedirectGuard route.
+// The guard always returns a UrlTree so this component never renders.
+@Component({ template: '', changeDetection: ChangeDetectionStrategy.OnPush })
+class NeverRendersComponent {}
 
 export const routes: Routes = [
   { path: "", redirectTo: "/data-lab", pathMatch: "full" },
@@ -403,10 +410,8 @@ export const routes: Routes = [
     // Broker v2 panel — unscoped bots entry point: resolves account then
     // redirects to /brokers/:broker/accounts/:accountId/bots.
     path: 'brokers/:broker/bots',
-    loadComponent: () =>
-      import(
-        './components/broker/v2-panel/bots-list-redirect/bots-list-redirect.component'
-      ).then((m) => m.BotsListRedirectComponent),
+    canActivate: [brokerBotsRedirectGuard],
+    component: NeverRendersComponent,
   },
   { path: "**", redirectTo: "/data-lab" },
 ];

@@ -31,9 +31,9 @@ from app.engine.live.order_identity import order_ref_namespace_matches
 # Reconciliation only considers orders that can still create exposure. Filled,
 # canceled, expired, rejected, and replaced orders belong to historical audit;
 # their settled exposure is represented by the broker positions snapshot.
-RECONCILIATION_TERMINAL_ORDER_STATUSES = frozenset(
-    {"filled", "canceled", "expired", "rejected", "replaced"}
-)
+# Canonical definition lives in ``derive`` (which also uses it for the
+# position-drift projection); re-exported here for the sweep's callers.
+RECONCILIATION_TERMINAL_ORDER_STATUSES = derive.RECONCILIATION_TERMINAL_ORDER_STATUSES
 
 
 

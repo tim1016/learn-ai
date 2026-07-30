@@ -728,8 +728,12 @@ class AlpacaClerk:
             account_id, journal = await self._ensure_journal()
 
         try:
-            orders = await self._read.list_orders(status="all", limit=500)
-            positions = await self._read.list_positions()
+            # Independent reads; each is a full Alpaca REST round-trip
+            # (~5-15s against the paper API), so run them concurrently.
+            orders, positions = await asyncio.gather(
+                self._read.list_orders(status="all", limit=500),
+                self._read.list_positions(),
+            )
         except BrokerError as exc:
             logger.warning(
                 "alpaca clerk reconciliation could not read the broker; stale",
