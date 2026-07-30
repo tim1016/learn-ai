@@ -117,6 +117,22 @@ def _require_panel_broker(broker: str) -> None:
         )
 
 
+async def validate_account_scope(broker: str, account_id: str, sid: str) -> None:
+    """Validate broker + account_id + sid for operator-gated endpoints (§3, §14).
+
+    Raises ``AccountMismatchError`` (→ 404) when the path ``account_id``
+    does not match the broker's real account, and ``UnknownBotError`` (→ 404)
+    when the bot has no durable binding to the broker.
+    """
+    real_account_id = await resolve_account_id(broker)
+    if account_id != real_account_id:
+        raise AccountMismatchError(
+            f"Account '{account_id}' does not match broker '{broker}'.",
+            detail="Stale deep link — the account id in the URL does not match.",
+        )
+    _bot_status(broker, sid)
+
+
 def _read_order_journal(account_id: str) -> list[OrderJournalEntry]:
     journal = OrderJournal(account_id=account_id, root=get_clerk_settings().dir)
     return journal.read_entries()

@@ -19,6 +19,7 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
+import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
 
 /**
  * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
@@ -29,26 +30,18 @@ import { TraderLensComponent } from '../trader-lens/trader-lens.component';
  *   (on preset change).
  * - Action execution (post to backend, re-poll on success).
  *
- * ## Lens extension points (S4 operator lens)
- * The `activeLens` signal determines which lens renders. Currently only
- * `'trader'` (default). S4 adds `'operator'` and wires it via a query param
- * (`?lens=operator`) or a tab button. The lens receives `panel` + `profile`
- * + chart data as inputs — the shell passes them identically regardless of
- * which lens is active.
+ * ## Lens architecture (S3 trader + S4 operator)
+ * The `activeLens` signal determines which lens renders. The tab bar in the
+ * template drives `selectLens()`. Both lenses receive identical `panel` +
+ * `profile` + `actionPending` inputs from the shell.
  *
- * To add the operator lens in S4:
- * 1. Add `OperatorLensComponent` to imports.
- * 2. Extend `activeLens` to read `Router.routerState.snapshot.url` or a
- *    `queryParams` input for `?lens=operator`.
- * 3. Add `@if (activeLens() === 'operator')` block in the template
- *    beneath the trader block, passing the same inputs.
- * The shared panel data (BotPanelView, PanelProfile) flows down to both
- * lenses unchanged.
+ * The operator lens additionally receives `broker`, `accountId`, and `sid`
+ * so it can call the operator-gated evidence endpoint directly.
  */
 @Component({
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TraderLensComponent],
+  imports: [TraderLensComponent, OperatorLensComponent],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
 })
@@ -65,9 +58,10 @@ export class BotPanelShellComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   // ── Active lens ──────────────────────────────────────────────────────────
-  // S4: extend this signal to switch between 'trader' | 'operator'.
+  // Reads the `?lens=` query param if provided; defaults to 'trader'.
+  // Set via selectLens() or the tab toggle in the template.
 
-  protected readonly activeLens = signal<'trader'>('trader');
+  protected readonly activeLens = signal<'trader' | 'operator'>('trader');
 
   // ── Internal state ────────────────────────────────────────────────────────
 
@@ -118,8 +112,8 @@ export class BotPanelShellComponent {
 
   // ── Shell helpers for S4 extension ───────────────────────────────────────
 
-  /** Called by S4 operator lens to switch the active lens. */
-  protected selectLens(lens: 'trader'): void {
+  /** Called by the tab bar to switch between lenses. */
+  protected selectLens(lens: 'trader' | 'operator'): void {
     this.activeLens.set(lens);
   }
 

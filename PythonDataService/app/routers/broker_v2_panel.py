@@ -24,6 +24,7 @@ from typing import NoReturn
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import settings
+from app.schemas.broker_v2_evidence import EvidencePage
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
     BotPanelView,
@@ -39,6 +40,11 @@ from app.services.broker_v2_panel.action_execution_service import ActionExecutio
 from app.services.broker_v2_panel.chart_projection_service import (
     ChartPresetError,
     coerce_history_preset,
+)
+from app.services.broker_v2_panel.evidence_service import (
+    PAGE_SIZE_DEFAULT,
+    PAGE_SIZE_MAX,
+    read_evidence_page,
 )
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
 
@@ -266,6 +272,78 @@ async def get_history_chart_unscoped(
 ) -> ChartHistoryResponse:
     account_id = await _resolve_default_account(broker)
     return await _history_chart(broker, account_id, sid, preset)
+
+
+# ── §14 Operator-gated evidence (account-scoped + unscoped alias) ─────────────
+
+
+async def _read_evidence(
+    broker: str,
+    account_id: str,
+    sid: str,
+    transaction_ref: str | None,
+    cursor: int | None,
+    page_size: int,
+    client_hint: str | None,
+) -> EvidencePage:
+    try:
+        await ds.validate_account_scope(broker, account_id, sid)
+    except ds.PanelDataError as error:
+        _raise_panel_error(error)
+    # read_evidence_page is outside the try/except: it raises only OSError
+    # (audit log write failure, which is logged-and-swallowed inside) and does
+    # not raise PanelDataError, so wrapping it here would mask real I/O errors.
+    return read_evidence_page(
+        account_id=account_id,
+        sid=sid,
+        transaction_ref=transaction_ref,
+        cursor=cursor,
+        page_size=page_size,
+        operator_identity=settings.PANEL_OPERATOR_IDENTITY,
+        client_hint=client_hint,
+    )
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/{sid}/evidence",
+    response_model=EvidencePage,
+    summary="Operator-gated raw evidence for one bot (bounded, paged, audit-logged) (§14)",
+)
+async def get_evidence_scoped(
+    broker: str,
+    account_id: str,
+    sid: str,
+    transaction_ref: str | None = Query(default=None, max_length=256),
+    cursor: int | None = Query(default=None, ge=0),
+    page_size: int = Query(
+        default=PAGE_SIZE_DEFAULT, ge=1
+    ),
+    client_hint: str | None = Query(default=None, max_length=256),
+) -> EvidencePage:
+    return await _read_evidence(
+        broker, account_id, sid, transaction_ref, cursor, page_size, client_hint
+    )
+
+
+@router.get(
+    "/{broker}/bots/{sid}/evidence",
+    response_model=EvidencePage,
+    summary="Operator-gated raw evidence (single-account alias) (§14)",
+)
+async def get_evidence_unscoped(
+    broker: str,
+    sid: str,
+    transaction_ref: str | None = Query(default=None, max_length=256),
+    cursor: int | None = Query(default=None, ge=0),
+    page_size: int = Query(
+        default=PAGE_SIZE_DEFAULT, ge=1
+    ),
+    client_hint: str | None = Query(default=None, max_length=256),
+) -> EvidencePage:
+    account_id = await _resolve_default_account(broker)
+    return await _read_evidence(
+        broker, account_id, sid, transaction_ref, cursor, page_size, client_hint
+    )
 
 
 # ── Shared helpers ───────────────────────────────────────────────────────────

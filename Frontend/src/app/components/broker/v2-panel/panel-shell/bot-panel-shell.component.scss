@@ -31,3 +31,39 @@
   color: var(--text-color-secondary, #9ca3af);
   font-size: 0.875rem;
 }
+
+// ── Lens tab bar ─────────────────────────────────────────────────────────────
+
+.lens-toggle {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border, #e5e7eb);
+}
+
+.lens-toggle__tab {
+  padding: 0.375rem 0.875rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--color-text-secondary, #6b7280);
+  margin-bottom: -1px;
+
+  &:hover:not([aria-selected='true']) {
+    color: var(--color-text, #111827);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-focus, #2563eb);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  &--active {
+    color: var(--color-text, #111827);
+    border-bottom-color: var(--color-primary, #2563eb);
+    font-weight: 500;
+  }
+}

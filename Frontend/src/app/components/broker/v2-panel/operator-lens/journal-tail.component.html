@@ -1,0 +1,104 @@
+<!-- Journal tail (spec §7.4). Newest-first, filterable by kind. -->
+<section class="journal-tail" aria-label="Order journal tail">
+  <header class="journal-tail__header">
+    <h3 class="journal-tail__title">Journal</h3>
+
+    @if (availableKinds().length > 0) {
+      <div class="journal-tail__filters" role="group" aria-label="Filter by kind">
+        <button
+          type="button"
+          class="journal-tail__filter-btn"
+          [class.journal-tail__filter-btn--active]="kindFilter() === ''"
+          aria-pressed="true"
+          (click)="onKindFilter('')"
+        >
+          All
+        </button>
+        @for (kindItem of availableKinds(); track kindItem.kind) {
+          <button
+            type="button"
+            class="journal-tail__filter-btn"
+            [class.journal-tail__filter-btn--active]="kindFilter() === kindItem.kind"
+            [attr.aria-pressed]="kindFilter() === kindItem.kind"
+            (click)="onKindFilter(kindItem.kind)"
+          >
+            {{ kindItem.label }}
+          </button>
+        }
+      </div>
+    }
+  </header>
+
+  @if (loading()) {
+    <p class="journal-tail__loading" role="status" aria-live="polite">Loading journal…</p>
+  }
+
+  @if (!loading() && entries().length === 0) {
+    <p class="journal-tail__empty" role="status">No journal entries.</p>
+  }
+
+  <ul class="journal-tail__list" aria-label="Journal entries">
+    @for (entry of entries(); track trackEntry($index, entry)) {
+      <li
+        class="journal-entry"
+        [class.journal-entry--expanded]="isExpanded(entry.seq)"
+      >
+        <button
+          type="button"
+          class="journal-entry__row"
+          [attr.aria-expanded]="isExpanded(entry.seq)"
+          [attr.aria-label]="entry.kind_label + ' at ' + entry.recorded_at_ms"
+          (click)="toggleExpand(entry.seq)"
+        >
+          <span class="journal-entry__kind">{{ entry.kind_label }}</span>
+          <span class="journal-entry__ts">
+            <app-timestamp-display [value]="entry.recorded_at_ms" mode="local" />
+          </span>
+          <span class="journal-entry__expand-icon" aria-hidden="true">
+            {{ isExpanded(entry.seq) ? '▲' : '▼' }}
+          </span>
+        </button>
+
+        @if (isExpanded(entry.seq)) {
+          <div class="journal-entry__detail">
+            <p class="journal-entry__summary">{{ entry.summary }}</p>
+
+            @if (entry.intent_id) {
+              <p class="journal-entry__meta">Intent: <code>{{ entry.intent_id }}</code></p>
+            }
+
+            <div class="journal-entry__actions">
+              @if (entry.order_ref) {
+                <button
+                  type="button"
+                  class="journal-entry__select-btn"
+                  [attr.aria-label]="'Select transaction ' + entry.order_ref + ' on rail'"
+                  (click)="onSelectRow(entry)"
+                >
+                  Select on rail
+                </button>
+              }
+
+              @if (entry.order_ref) {
+                <button
+                  type="button"
+                  class="journal-entry__evidence-btn"
+                  [attr.aria-label]="'View raw evidence for ' + entry.kind_label"
+                  (click)="onEvidenceDrawer(entry)"
+                >
+                  View evidence
+                </button>
+              }
+            </div>
+          </div>
+        }
+      </li>
+    }
+  </ul>
+
+  @if (hasMore()) {
+    <p class="journal-tail__more" role="note">
+      Showing first {{ entries().length }} entries. Older entries available via the evidence drawer.
+    </p>
+  }
+</section>

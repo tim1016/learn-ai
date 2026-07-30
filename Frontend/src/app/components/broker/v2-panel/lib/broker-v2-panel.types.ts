@@ -230,3 +230,28 @@ export interface ChartHistoryResponse {
   readonly truncated: boolean;
   readonly as_of_ms: number;
 }
+
+// ── §14 Operator-gated evidence ──────────────────────────────────────────────
+
+export interface EvidenceEntry {
+  readonly seq: number;
+  readonly kind: string;
+  readonly kind_label: string;
+  readonly recorded_at_ms: number;
+  readonly order_ref: string | null;
+  readonly intent_id: string | null;
+  readonly summary: string;
+  readonly has_more_detail: boolean;
+}
+
+export interface EvidencePage {
+  readonly strategy_instance_id: string;
+  readonly account_id: string;
+  readonly transaction_ref: string | null;
+  readonly entries: readonly EvidenceEntry[];
+  readonly next_cursor: number | null;
+  readonly total_entries: number;
+  readonly truncated: boolean;
+  readonly read_by: string;
+  readonly read_at_ms: number;
+}

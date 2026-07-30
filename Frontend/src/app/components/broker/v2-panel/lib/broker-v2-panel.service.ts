@@ -7,6 +7,7 @@ import type {
   ChartHistoryPreset,
   ChartHistoryResponse,
   ChartLiveResponse,
+  EvidencePage,
   PanelActionRequest,
   PanelActionResult,
   PanelProfile,
@@ -93,6 +94,31 @@ export class BrokerV2PanelService {
     return firstValueFrom(
       this.http.get<ChartHistoryResponse>(
         `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/chart/history`,
+        { params },
+      ),
+    );
+  }
+
+  /** §14 Operator-gated raw evidence — bounded, paged, audit-logged. */
+  getEvidence(
+    broker: string,
+    accountId: string,
+    sid: string,
+    options: {
+      transactionRef?: string;
+      cursor?: number;
+      pageSize?: number;
+      clientHint?: string;
+    } = {},
+  ): Promise<EvidencePage> {
+    let params = new HttpParams();
+    if (options.transactionRef) params = params.set('transaction_ref', options.transactionRef);
+    if (options.cursor !== undefined) params = params.set('cursor', String(options.cursor));
+    if (options.pageSize !== undefined) params = params.set('page_size', String(options.pageSize));
+    if (options.clientHint) params = params.set('client_hint', options.clientHint);
+    return firstValueFrom(
+      this.http.get<EvidencePage>(
+        `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/evidence`,
         { params },
       ),
     );

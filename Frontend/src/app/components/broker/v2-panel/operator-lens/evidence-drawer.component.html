@@ -1,0 +1,84 @@
+<!-- Evidence drawer (spec §14): operator-gated, bounded/paged, audit-logged. -->
+@if (open()) {
+  <div
+    class="evidence-drawer"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Raw evidence"
+  >
+    <header class="evidence-drawer__header">
+      <h2 class="evidence-drawer__title">Evidence</h2>
+      @if (transactionRef()) {
+        <code class="evidence-drawer__ref">{{ transactionRef() }}</code>
+      }
+      <button
+        type="button"
+        class="evidence-drawer__close"
+        aria-label="Close evidence drawer"
+        (click)="onClose()"
+      >
+        ✕
+      </button>
+    </header>
+
+    @if (loadError()) {
+      <div class="evidence-drawer__error" role="alert">
+        <p>{{ loadError() }}</p>
+      </div>
+    }
+
+    @if (loading()) {
+      <p class="evidence-drawer__loading" role="status" aria-live="polite">Loading evidence…</p>
+    }
+
+    @if (!loading() && entries().length === 0 && !loadError()) {
+      <p class="evidence-drawer__empty" role="status">No evidence entries for this transaction.</p>
+    }
+
+    @if (entries().length > 0) {
+      <p class="evidence-drawer__summary" aria-live="polite">
+        Showing {{ entries().length }} of {{ totalEntries() }} entries.
+        @if (readBy()) { Audit read by: {{ readBy() }}. }
+        @if (readAt()) { <app-timestamp-display [value]="readAt()" mode="local" /> }
+      </p>
+
+      <ul class="evidence-drawer__list" aria-label="Evidence entries">
+        @for (entry of entries(); track trackEntry($index, entry)) {
+          <li class="evidence-entry">
+            <div class="evidence-entry__meta">
+              <span class="evidence-entry__kind">{{ entry.kind_label }}</span>
+              <span class="evidence-entry__ts">
+                <app-timestamp-display [value]="entry.recorded_at_ms" mode="local" />
+              </span>
+            </div>
+            <p class="evidence-entry__summary">{{ entry.summary }}</p>
+            @if (entry.has_more_detail) {
+              <p class="evidence-entry__more-note" role="note">
+                Additional detail available through an authenticated channel.
+              </p>
+            }
+          </li>
+        }
+      </ul>
+
+      @if (hasNextPage()) {
+        <button
+          type="button"
+          class="evidence-drawer__next-btn"
+          [disabled]="loading()"
+          aria-label="Load next page of evidence"
+          (click)="onNextPage()"
+        >
+          Load more
+        </button>
+      }
+    }
+  </div>
+
+  <!-- Backdrop -->
+  <div
+    class="evidence-drawer__backdrop"
+    aria-hidden="true"
+    (click)="onClose()"
+  ></div>
+}
