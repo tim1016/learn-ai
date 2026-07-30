@@ -1,0 +1,127 @@
+<!-- Account/clerk card (spec §7.3) -->
+<!-- card-help anchor: holds — wired to S5 drawer in end-phase integration -->
+<!-- card-help anchor: reconciliation — wired to S5 drawer in end-phase integration -->
+<section class="clerk-card" aria-label="Account and clerk status">
+  <header class="clerk-card__header">
+    <h3 class="clerk-card__title">Account / Clerk</h3>
+    <div class="clerk-card__help-group">
+      <button
+        type="button"
+        class="clerk-card__help"
+        aria-label="Help: holds"
+        disabled
+        title="Help drawer wired in S5"
+      >?</button>
+      <button
+        type="button"
+        class="clerk-card__help"
+        aria-label="Help: reconciliation"
+        disabled
+        title="Help drawer wired in S5"
+      >?</button>
+    </div>
+  </header>
+
+  <dl class="clerk-card__facts">
+    <dt>Account</dt>
+    <dd>{{ clerk().account_id }}</dd>
+
+    <dt>Hold</dt>
+    <dd [class.clerk-card__hold--active]="clerk().hold_active">
+      @if (clerk().hold_active) {
+        {{ clerk().hold_reason_label }}
+        @if (clerk().hold_since_ms) {
+          <span class="clerk-card__sub">since <app-timestamp-display [value]="clerk().hold_since_ms" mode="local" /></span>
+        }
+        <span class="clerk-card__badge clerk-card__badge--warn">Active</span>
+      } @else {
+        <span class="clerk-card__none">None</span>
+      }
+    </dd>
+
+    <dt>Reconciliation</dt>
+    <dd>
+      @if (clerk().reconciliation_verdict_label) {
+        {{ clerk().reconciliation_verdict_label }}
+      } @else {
+        <span class="clerk-card__none">No sweep yet</span>
+      }
+      @if (clerk().last_sweep_at_ms) {
+        <span class="clerk-card__sub">
+          <app-timestamp-display [value]="clerk().last_sweep_at_ms" mode="local" />
+        </span>
+      }
+    </dd>
+
+    <dt>Uncertain intents</dt>
+    <dd>{{ clerk().outstanding_intents }}</dd>
+
+    <dt>Channels</dt>
+    <dd>
+      <ul class="clerk-card__channels" aria-label="Channel health">
+        @for (ch of clerk().channels; track trackChannel($index, ch)) {
+          <li class="clerk-card__channel" [class]="'clerk-card__channel--' + ch.state">
+            <span class="clerk-card__channel-icon" aria-hidden="true">
+              @switch (ch.state) {
+                @case ('healthy') { ● }
+                @case ('unhealthy') { ✕ }
+                @default { ? }
+              }
+            </span>
+            <span class="clerk-card__channel-label">{{ ch.label }}</span>
+            <span class="clerk-card__channel-state">{{ ch.explanation }}</span>
+          </li>
+        }
+        @if (clerk().channels.length === 0) {
+          <li class="clerk-card__none">No channels reported</li>
+        }
+      </ul>
+    </dd>
+  </dl>
+
+  <div class="clerk-card__actions">
+    @if (reconcileAction()) {
+      @let ra = reconcileAction()!;
+      <button
+        type="button"
+        class="clerk-card__action-btn"
+        [disabled]="!reconcileEnabled() || actionPending()"
+        [attr.aria-disabled]="!reconcileEnabled() || actionPending()"
+        [attr.aria-label]="ra.label"
+        [title]="ra.explanation"
+        (click)="onReconcile()"
+      >
+        {{ ra.label }}
+      </button>
+      @for (blocker of reconcileBlockers(); track blocker.code) {
+        <p class="clerk-card__blocker" role="alert">{{ blocker.label }}</p>
+      }
+    }
+
+    @if (clearHoldAction()) {
+      @let ca = clearHoldAction()!;
+      <button
+        type="button"
+        class="clerk-card__action-btn clerk-card__action-btn--warn"
+        [disabled]="!clearHoldEnabled() || actionPending()"
+        [attr.aria-disabled]="!clearHoldEnabled() || actionPending()"
+        [attr.aria-label]="ca.label"
+        [title]="ca.explanation"
+        (click)="onClearHold()"
+      >
+        {{ ca.label }}
+      </button>
+
+      @if (clearHoldConfirmation()?.required) {
+        @let conf = clearHoldConfirmation()!;
+        <p class="clerk-card__blast-radius" role="note">
+          {{ conf.prompt }}
+        </p>
+      }
+
+      @for (blocker of clearHoldBlockers(); track blocker.code) {
+        <p class="clerk-card__blocker" role="alert">{{ blocker.label }}</p>
+      }
+    }
+  </div>
+</section>

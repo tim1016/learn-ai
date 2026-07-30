@@ -1,0 +1,86 @@
+<!-- Operator lens (spec §7). Four regions. -->
+<div class="operator-lens">
+
+  <!-- ── Top bar: Flatten & stop ─────────────────────────────────────────── -->
+  @if (flattenStopAction()) {
+    @let fsa = flattenStopAction()!;
+    <div class="operator-lens__top-bar">
+      <button
+        type="button"
+        class="operator-lens__flatten-btn"
+        [disabled]="!fsa.enabled || actionPending()"
+        [attr.aria-disabled]="!fsa.enabled || actionPending()"
+        [attr.aria-label]="fsa.label"
+        [title]="fsa.explanation"
+        (click)="onFlattenStop()"
+      >
+        {{ fsa.label }}
+      </button>
+
+      @if (fsa.confirmation?.required) {
+        <p class="operator-lens__flatten-warning" role="note">
+          {{ fsa.confirmation!.prompt }}
+        </p>
+      }
+
+      @for (blocker of fsa.blockers; track blocker.code) {
+        <p class="operator-lens__flatten-blocker" role="alert">{{ blocker.label }}</p>
+      }
+    </div>
+  }
+
+  <!-- ── Main layout: rail + cards ──────────────────────────────────────── -->
+  <div class="operator-lens__main">
+
+    <!-- Rail (center) -->
+    <div class="operator-lens__rail-col">
+      <app-transaction-rail
+        [rail]="displayRail()"
+        [profile]="profile()"
+        (evidenceRequested)="onEvidenceRequested($event)"
+      />
+    </div>
+
+    <!-- Side cards (beside the rail, not inside it — spec §7) -->
+    <aside class="operator-lens__cards">
+      <!-- Bot health card (§7.2) -->
+      <app-health-card
+        [health]="health()"
+        [retireAction]="retireAction()"
+        [actionPending]="actionPending()"
+        (actionRequested)="onActionRequested($event)"
+      />
+
+      <!-- Account/clerk card (§7.3) -->
+      <app-clerk-card
+        [clerk]="clerk()"
+        [reconcileAction]="reconcileAction()"
+        [clearHoldAction]="clearHoldAction()"
+        [actionPending]="actionPending()"
+        (actionRequested)="onActionRequested($event)"
+      />
+    </aside>
+
+  </div>
+
+  <!-- ── Journal tail (bottom, internal scroll) ─────────────────────────── -->
+  <div class="operator-lens__journal">
+    <app-journal-tail
+      [evidencePage]="journalPage()"
+      [loading]="journalLoading()"
+      (transactionSelected)="onTransactionSelected($event)"
+      (evidenceDrawerRequested)="onEvidenceRequested($event)"
+    />
+  </div>
+
+</div>
+
+<!-- ── Evidence drawer (portal-style overlay) ────────────────────────────── -->
+<app-evidence-drawer
+  [broker]="broker()"
+  [accountId]="accountId()"
+  [sid]="sid()"
+  [transactionRef]="evidenceDrawerRef()"
+  [open]="evidenceDrawerOpen()"
+  (closed)="onEvidenceDrawerClose()"
+/>

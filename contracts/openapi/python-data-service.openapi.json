@@ -6730,6 +6730,111 @@
         "title": "BotCatalogRow",
         "type": "object"
       },
+      "BotCatalogView": {
+        "description": "One roster row: bot status + slice-0 rollups (\u00a75).\n\nAssembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``\n(incremental cache). ``needs_attention`` and ``status_label`` drive the\nattention-first sort and the closed status vocabulary. No journal scan per\nrequest.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "desired_state": {
+            "enum": [
+              "RUNNING",
+              "STOPPED"
+            ],
+            "title": "Desired State",
+            "type": "string"
+          },
+          "exposure": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Exposure",
+            "type": "object"
+          },
+          "fills_today": {
+            "title": "Fills Today",
+            "type": "integer"
+          },
+          "last_activity_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At Ms"
+          },
+          "needs_attention": {
+            "title": "Needs Attention",
+            "type": "boolean"
+          },
+          "open_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl"
+          },
+          "phase": {
+            "enum": [
+              "OFF_DUTY",
+              "ON_DUTY",
+              "RETIRED"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "realized_pnl_today": {
+            "title": "Realized Pnl Today",
+            "type": "number"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "status_label": {
+            "title": "Status Label",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "broker",
+          "account_id",
+          "symbol",
+          "phase",
+          "desired_state",
+          "running",
+          "status_label",
+          "exposure",
+          "fills_today",
+          "realized_pnl_today",
+          "open_pnl",
+          "last_activity_at_ms",
+          "needs_attention"
+        ],
+        "title": "BotCatalogView",
+        "type": "object"
+      },
       "BotDailyLifecycleProjection": {
         "additionalProperties": false,
         "description": "Rev-3 daily lifecycle projection for one bot.\n\n``phase`` tracks presence only. Health is derived by the evaluator from\nreceipts and open conditions; the display status is the closed vocabulary the\nUI renders.",
@@ -7377,6 +7482,94 @@
         "title": "BotEventType",
         "type": "string"
       },
+      "BotHealthCard": {
+        "description": "Bot-health card beside the rail (\u00a77.2).\n\n``desired_state`` is narrowed to ``RUNNING | STOPPED`` \u2014 the panel never\nemits ``PAUSED`` (decision #10; pinned by a contract test).",
+        "properties": {
+          "decision_stale": {
+            "title": "Decision Stale",
+            "type": "boolean"
+          },
+          "desired_state": {
+            "enum": [
+              "RUNNING",
+              "STOPPED"
+            ],
+            "title": "Desired State",
+            "type": "string"
+          },
+          "desired_state_label": {
+            "title": "Desired State Label",
+            "type": "string"
+          },
+          "duty_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DutyOutcomeView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_bar_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Bar At Ms"
+          },
+          "last_decision_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Decision At Ms"
+          },
+          "phase": {
+            "enum": [
+              "OFF_DUTY",
+              "ON_DUTY",
+              "RETIRED"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "phase_label": {
+            "title": "Phase Label",
+            "type": "string"
+          },
+          "running": {
+            "title": "Running",
+            "type": "boolean"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "phase",
+          "phase_label",
+          "desired_state",
+          "desired_state_label",
+          "running",
+          "duty_outcome",
+          "last_decision_at_ms",
+          "decision_stale",
+          "last_bar_at_ms"
+        ],
+        "title": "BotHealthCard",
+        "type": "object"
+      },
       "BotLifecycleAction": {
         "additionalProperties": false,
         "description": "One rendered lifecycle action.\n\nThe Button Rule relies on actions being a closed vocabulary. A disabled\naction is not a graveyard button; it exists only when the backend must carry\na refusal reason for the single primary action.",
@@ -7601,6 +7794,104 @@
           "on_roster"
         ],
         "title": "BotLifecycleRosterRequest",
+        "type": "object"
+      },
+      "BotPanelView": {
+        "description": "The full 5s-poll panel projection for one bot (\u00a77).\n\nEverything except chart data: bot health, clerk/account state, the six-\nstation rail, a journal-tail reference, the presented actions, and the\npanel-state ``revision`` those actions bind to.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/PanelAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "clerk": {
+            "$ref": "#/components/schemas/ClerkCard"
+          },
+          "fills_today": {
+            "title": "Fills Today",
+            "type": "integer"
+          },
+          "health": {
+            "$ref": "#/components/schemas/BotHealthCard"
+          },
+          "journal_tail_ref": {
+            "title": "Journal Tail Ref",
+            "type": "string"
+          },
+          "journal_tail_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journal Tail Seq"
+          },
+          "mode": {
+            "const": "log_only",
+            "title": "Mode"
+          },
+          "open_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl"
+          },
+          "rail": {
+            "$ref": "#/components/schemas/TransactionRail"
+          },
+          "realized_pnl_today": {
+            "title": "Realized Pnl Today",
+            "type": "number"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "broker",
+          "account_id",
+          "symbol",
+          "mode",
+          "revision",
+          "health",
+          "clerk",
+          "rail",
+          "journal_tail_ref",
+          "journal_tail_seq",
+          "actions",
+          "fills_today",
+          "realized_pnl_today",
+          "open_pnl"
+        ],
+        "title": "BotPanelView",
         "type": "object"
       },
       "BotRetireReplaceRequest": {
@@ -10553,6 +10844,108 @@
         "title": "ChannelHealth",
         "type": "object"
       },
+      "ChannelHealthView": {
+        "description": "One market-data / execution channel's health (\u00a77.3).",
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "healthy",
+              "unhealthy",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "stream": {
+            "enum": [
+              "market_data",
+              "execution"
+            ],
+            "title": "Stream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stream",
+          "state",
+          "label",
+          "explanation",
+          "reason",
+          "observed_at_ms"
+        ],
+        "title": "ChannelHealthView",
+        "type": "object"
+      },
+      "ChartBar": {
+        "description": "One source-tagged OHLCV bar for a chart pane (\u00a78).\n\nBroker-generic \u2014 decoupled from the IBKR-specific ``IbkrMinuteBar``. Prices\nare strings to preserve exact decimal representation over the wire.\n``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed`` (\u00a78).",
+        "properties": {
+          "close": {
+            "title": "Close",
+            "type": "string"
+          },
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "high": {
+            "title": "High",
+            "type": "string"
+          },
+          "low": {
+            "title": "Low",
+            "type": "string"
+          },
+          "open": {
+            "title": "Open",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "ibkr",
+              "polygon",
+              "mixed"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume",
+          "source"
+        ],
+        "title": "ChartBar",
+        "type": "object"
+      },
       "ChartDataRequest": {
         "description": "Request for chart data with resampled bars and indicators.",
         "properties": {
@@ -10620,6 +11013,124 @@
         "title": "ChartDataRequest",
         "type": "object"
       },
+      "ChartFillMarker": {
+        "description": "One fill marker for a chart pane (\u00a78, \u00a710).\n\nProjected from the clerk journal's fill events filtered by the bot's\nnamespace. ``side`` and ``price`` render the buy/sell marker.",
+        "properties": {
+          "filled_at_ms": {
+            "title": "Filled At Ms",
+            "type": "integer"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "price": {
+            "title": "Price",
+            "type": "number"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filled_at_ms",
+          "side",
+          "quantity",
+          "price",
+          "order_ref"
+        ],
+        "title": "ChartFillMarker",
+        "type": "object"
+      },
+      "ChartHistoryResponse": {
+        "description": "Bounded HISTORY-pane response for a fixed preset (\u00a78).\n\nThe preset \u2192 aggregation ladder and the response-size bound are enforced\nserver-side; the existing 7-day live resolver is not widened.",
+        "properties": {
+          "aggregation": {
+            "enum": [
+              "1m",
+              "5m",
+              "30m",
+              "1h",
+              "1d"
+            ],
+            "title": "Aggregation",
+            "type": "string"
+          },
+          "as_of_ms": {
+            "title": "As Of Ms",
+            "type": "integer"
+          },
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/ChartBar"
+            },
+            "title": "Bars",
+            "type": "array"
+          },
+          "fill_markers": {
+            "items": {
+              "$ref": "#/components/schemas/ChartFillMarker"
+            },
+            "title": "Fill Markers",
+            "type": "array"
+          },
+          "from_ms": {
+            "title": "From Ms",
+            "type": "integer"
+          },
+          "preset": {
+            "enum": [
+              "1D",
+              "5D",
+              "1M",
+              "3M",
+              "1Y",
+              "All"
+            ],
+            "title": "Preset",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "to_ms": {
+            "title": "To Ms",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "symbol",
+          "preset",
+          "aggregation",
+          "from_ms",
+          "to_ms",
+          "bars",
+          "fill_markers",
+          "truncated",
+          "as_of_ms"
+        ],
+        "title": "ChartHistoryResponse",
+        "type": "object"
+      },
       "ChartIndicatorEntry": {
         "description": "Single indicator specification.",
         "properties": {
@@ -10639,6 +11150,73 @@
           "name"
         ],
         "title": "ChartIndicatorEntry",
+        "type": "object"
+      },
+      "ChartLiveResponse": {
+        "description": "Today's merged, source-tagged LIVE-pane bars + today's fill markers (\u00a78).\n\n``as_of_ms`` and the two session boundaries derive from the canonical NY\ncalendar \u2014 \"today\" is the NY trading date, never browser-local midnight.",
+        "properties": {
+          "as_of_ms": {
+            "title": "As Of Ms",
+            "type": "integer"
+          },
+          "bars": {
+            "items": {
+              "$ref": "#/components/schemas/ChartBar"
+            },
+            "title": "Bars",
+            "type": "array"
+          },
+          "fill_markers": {
+            "items": {
+              "$ref": "#/components/schemas/ChartFillMarker"
+            },
+            "title": "Fill Markers",
+            "type": "array"
+          },
+          "overlay_notices": {
+            "items": {
+              "$ref": "#/components/schemas/ChartOverlayNoticeView"
+            },
+            "title": "Overlay Notices",
+            "type": "array"
+          },
+          "resolution": {
+            "enum": [
+              "5s",
+              "1m"
+            ],
+            "title": "Resolution",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "trading_date_close_ms": {
+            "title": "Trading Date Close Ms",
+            "type": "integer"
+          },
+          "trading_date_open_ms": {
+            "title": "Trading Date Open Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "symbol",
+          "trading_date_open_ms",
+          "trading_date_close_ms",
+          "resolution",
+          "bars",
+          "fill_markers",
+          "overlay_notices",
+          "as_of_ms"
+        ],
+        "title": "ChartLiveResponse",
         "type": "object"
       },
       "ChartOverlayNotice": {
@@ -10674,6 +11252,30 @@
           "message"
         ],
         "title": "ChartOverlayNotice",
+        "type": "object"
+      },
+      "ChartOverlayNoticeView": {
+        "description": "An honest chip explaining a fallback overlay (\u00a78).",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "source": {
+            "const": "polygon",
+            "default": "polygon",
+            "title": "Source"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ChartOverlayNoticeView",
         "type": "object"
       },
       "ChartSnapshotResponse": {
@@ -10843,6 +11445,112 @@
           }
         },
         "title": "ClearHoldRequest",
+        "type": "object"
+      },
+      "ClerkCard": {
+        "description": "Account/clerk card beside the rail (\u00a77.3).",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelHealthView"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "hold_active": {
+            "title": "Hold Active",
+            "type": "boolean"
+          },
+          "hold_reason": {
+            "enum": [
+              "NO_HOLD",
+              "UNEXPLAINED_ORDER_HOLD",
+              "STREAM_HEALTH_HOLD"
+            ],
+            "title": "Hold Reason",
+            "type": "string"
+          },
+          "hold_reason_explanation": {
+            "title": "Hold Reason Explanation",
+            "type": "string"
+          },
+          "hold_reason_label": {
+            "title": "Hold Reason Label",
+            "type": "string"
+          },
+          "hold_since_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hold Since Ms"
+          },
+          "last_sweep_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Sweep At Ms"
+          },
+          "outstanding_intents": {
+            "title": "Outstanding Intents",
+            "type": "integer"
+          },
+          "reconciliation_verdict": {
+            "anyOf": [
+              {
+                "enum": [
+                  "clean",
+                  "unexplained_order",
+                  "missing_intent",
+                  "stale"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Verdict"
+          },
+          "reconciliation_verdict_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Verdict Label"
+          }
+        },
+        "required": [
+          "account_id",
+          "hold_active",
+          "hold_reason",
+          "hold_reason_label",
+          "hold_reason_explanation",
+          "hold_since_ms",
+          "reconciliation_verdict",
+          "reconciliation_verdict_label",
+          "last_sweep_at_ms",
+          "outstanding_intents",
+          "channels"
+        ],
+        "title": "ClerkCard",
         "type": "object"
       },
       "ClerkCustodyDurations": {
@@ -14461,6 +15169,65 @@
         "title": "DrawdownPoint",
         "type": "object"
       },
+      "DutyOutcomeView": {
+        "description": "Typed terminal duty fact shown on the bot-health card (\u00a77.2).",
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "ON_DUTY",
+              "STOPPED",
+              "CRASHED",
+              "EXITED_UNVERIFIED"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded At Ms"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "kind",
+          "reason_code",
+          "label",
+          "explanation",
+          "recorded_at_ms",
+          "run_id"
+        ],
+        "title": "DutyOutcomeView",
+        "type": "object"
+      },
       "EdgeScoreBody": {
         "properties": {
           "bars": {
@@ -15545,6 +16312,140 @@
           "run_id"
         ],
         "title": "EvidenceBinding",
+        "type": "object"
+      },
+      "EvidenceEntry": {
+        "description": "One redacted, size-capped journal entry exposed to the operator lens.",
+        "properties": {
+          "has_more_detail": {
+            "title": "Has More Detail",
+            "type": "boolean"
+          },
+          "intent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent Id"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "kind_label": {
+            "title": "Kind Label",
+            "type": "string"
+          },
+          "order_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "kind",
+          "kind_label",
+          "recorded_at_ms",
+          "order_ref",
+          "intent_id",
+          "summary",
+          "has_more_detail"
+        ],
+        "title": "EvidenceEntry",
+        "type": "object"
+      },
+      "EvidencePage": {
+        "description": "A bounded page of operator-gated evidence entries (\u00a714).",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "read_at_ms": {
+            "title": "Read At Ms",
+            "type": "integer"
+          },
+          "read_by": {
+            "title": "Read By",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "total_entries": {
+            "title": "Total Entries",
+            "type": "integer"
+          },
+          "transaction_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Ref"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "account_id",
+          "transaction_ref",
+          "entries",
+          "next_cursor",
+          "total_entries",
+          "truncated",
+          "read_by",
+          "read_at_ms"
+        ],
+        "title": "EvidencePage",
         "type": "object"
       },
       "ExchangeStatus": {
@@ -30497,6 +31398,218 @@
         "title": "OrderSubmitResult",
         "type": "object"
       },
+      "PanelAction": {
+        "description": "One backend-presented action (\u00a711).\n\nAngular executes only the closed set of known action ids and renders\nexactly what it is given. ``revision`` binds the action to the panel-state\nrevision it was presented against; a stale POST is a 409.",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "deploy",
+              "start",
+              "stop",
+              "flatten_stop",
+              "retire",
+              "cancel_order",
+              "clear_hold",
+              "reconcile_now"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorBlocker"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperatorConfirmationCopy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action_id",
+          "label",
+          "explanation",
+          "enabled",
+          "blockers",
+          "confirmation",
+          "revision"
+        ],
+        "title": "PanelAction",
+        "type": "object"
+      },
+      "PanelActionRequest": {
+        "additionalProperties": false,
+        "description": "Execute one presented action (\u00a711).\n\nIdentity is NEVER a request field \u2014 it derives from the authenticated\ncontrol channel (\u00a714). The form carries only the reason.",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "deploy",
+              "start",
+              "stop",
+              "flatten_stop",
+              "retire",
+              "cancel_order",
+              "clear_hold",
+              "reconcile_now"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "revision": {
+            "minimum": 0.0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action_id",
+          "revision",
+          "idempotency_key"
+        ],
+        "title": "PanelActionRequest",
+        "type": "object"
+      },
+      "PanelActionResult": {
+        "description": "The outcome of an executed action (\u00a711).\n\nOn success the caller re-polls the panel; ``applied`` distinguishes a fresh\napplication from an idempotent replay (``applied=False`` \u2014 the key was seen\nbefore, the action is a no-op).",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "deploy",
+              "start",
+              "stop",
+              "flatten_stop",
+              "retire",
+              "cancel_order",
+              "clear_hold",
+              "reconcile_now"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "applied": {
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action_id",
+          "applied",
+          "revision",
+          "message"
+        ],
+        "title": "PanelActionResult",
+        "type": "object"
+      },
+      "PanelProfile": {
+        "description": "Closed descriptor extending BrokerCapabilities for the panel (\u00a74).\n\nAngular renders strictly from this: an inapplicable station renders as\n``not_applicable``; an unsupported action never renders at all. Snapshot-\ncontract-tested per broker.",
+        "properties": {
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "fee_fidelity": {
+            "enum": [
+              "per_fill",
+              "aggregate",
+              "none"
+            ],
+            "title": "Fee Fidelity",
+            "type": "string"
+          },
+          "flatten_supported": {
+            "title": "Flatten Supported",
+            "type": "boolean"
+          },
+          "live_bars_supported": {
+            "title": "Live Bars Supported",
+            "type": "boolean"
+          },
+          "stations": {
+            "items": {
+              "$ref": "#/components/schemas/StationApplicability"
+            },
+            "title": "Stations",
+            "type": "array"
+          },
+          "supported_action_ids": {
+            "items": {
+              "enum": [
+                "deploy",
+                "start",
+                "stop",
+                "flatten_stop",
+                "retire",
+                "cancel_order",
+                "clear_hold",
+                "reconcile_now"
+              ],
+              "type": "string"
+            },
+            "title": "Supported Action Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "broker",
+          "fee_fidelity",
+          "flatten_supported",
+          "live_bars_supported",
+          "stations",
+          "supported_action_ids"
+        ],
+        "title": "PanelProfile",
+        "type": "object"
+      },
       "ParameterStabilityResponse": {
         "description": "Parameter stability assessment.",
         "properties": {
@@ -36590,6 +37703,115 @@
         "title": "StaleBindingRetirementRequest",
         "type": "object"
       },
+      "StationApplicability": {
+        "description": "One station's applicability for this broker/mode (\u00a74, \u00a77).\n\n``applicable=False`` renders the station in the rail's fifth state\n(``not_applicable``); Angular never guesses which stations a broker has.",
+        "properties": {
+          "applicable": {
+            "title": "Applicable",
+            "type": "boolean"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "station_id": {
+            "enum": [
+              "SIGNAL",
+              "INTENT",
+              "SUBMIT_GATE",
+              "BROKER_ACK",
+              "FILL",
+              "RECONCILED"
+            ],
+            "title": "Station Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "applicable",
+          "label",
+          "explanation"
+        ],
+        "title": "StationApplicability",
+        "type": "object"
+      },
+      "StationView": {
+        "description": "One of the six transaction-rail stations (\u00a77.1).\n\n``state`` is one of the five states; ``blocker`` is populated only when\n``state == \"blocked\"`` (carries the reused OperatorBlocker contract).\n``evidence_at_ms`` is the ts of the evidence backing this station, if any.",
+        "properties": {
+          "blocker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OperatorBlocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence At Ms"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "receipt": {
+            "title": "Receipt",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "satisfied",
+              "waiting",
+              "blocked",
+              "unknown_stale",
+              "not_applicable"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "state_label": {
+            "title": "State Label",
+            "type": "string"
+          },
+          "station_id": {
+            "enum": [
+              "SIGNAL",
+              "INTENT",
+              "SUBMIT_GATE",
+              "BROKER_ACK",
+              "FILL",
+              "RECONCILED"
+            ],
+            "title": "Station Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "station_id",
+          "label",
+          "state",
+          "state_label",
+          "receipt",
+          "evidence_at_ms",
+          "blocker"
+        ],
+        "title": "StationView",
+        "type": "object"
+      },
       "StockEntryLeg": {
         "description": "Stock ``ActionEntity`` \u2014 Slice 1B.",
         "properties": {
@@ -39885,6 +41107,35 @@
           "overfit_flag"
         ],
         "title": "TrainTestSplitResponse",
+        "type": "object"
+      },
+      "TransactionRail": {
+        "description": "The six-station rail rendering one selected transaction (\u00a77.1).",
+        "properties": {
+          "stations": {
+            "items": {
+              "$ref": "#/components/schemas/StationView"
+            },
+            "title": "Stations",
+            "type": "array"
+          },
+          "transaction_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transaction Ref"
+          }
+        },
+        "required": [
+          "transaction_ref",
+          "stations"
+        ],
+        "title": "TransactionRail",
         "type": "object"
       },
       "TrustedRunRequestModel": {
@@ -46682,6 +47933,556 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/catalog": {
+      "get": {
+        "operationId": "get_catalog_scoped_api_brokers__broker__accounts__account_id__bots_catalog_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BotCatalogView"
+                  },
+                  "title": "Response Get Catalog Scoped Api Brokers  Broker  Accounts  Account Id  Bots Catalog Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bots-list roster: status + slice-0 rollups (\u00a75)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions": {
+      "post": {
+        "operationId": "run_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PanelActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute one presented action (revision-guarded, idempotent) (\u00a711)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/history": {
+      "get": {
+        "operationId": "get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "preset",
+            "required": true,
+            "schema": {
+              "maxLength": 8,
+              "title": "Preset",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "HISTORY chart pane: bounded preset ladder (\u00a78)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/live": {
+      "get": {
+        "operationId": "get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartLiveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "LIVE chart pane: today's merged bars + fill markers (\u00a78)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/evidence": {
+      "get": {
+        "operationId": "get_evidence_scoped_api_brokers__broker__accounts__account_id__bots__sid__evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "transaction_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Transaction Ref"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "client_hint",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Hint"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Operator-gated raw evidence for one bot (bounded, paged, audit-logged) (\u00a714)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/panel": {
+      "get": {
+        "operationId": "get_panel_scoped_api_brokers__broker__accounts__account_id__bots__sid__panel_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "transaction_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Transaction Ref"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPanelView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "5s-poll panel projection for one bot (\u00a77)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/activities": {
       "get": {
         "operationId": "list_activities_api_brokers__broker__activities_get",
@@ -46993,6 +48794,502 @@
         "summary": "Deploy and start a log-only bot bound to this broker",
         "tags": [
           "broker-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/catalog": {
+      "get": {
+        "operationId": "get_catalog_unscoped_api_brokers__broker__bots_catalog_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BotCatalogView"
+                  },
+                  "title": "Response Get Catalog Unscoped Api Brokers  Broker  Bots Catalog Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bots-list roster (single-account alias of the scoped route) (\u00a75)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{sid}/actions": {
+      "post": {
+        "operationId": "run_action_unscoped_api_brokers__broker__bots__sid__actions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PanelActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute one presented action (single-account alias) (\u00a711)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{sid}/chart/history": {
+      "get": {
+        "operationId": "get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "preset",
+            "required": true,
+            "schema": {
+              "maxLength": 8,
+              "title": "Preset",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "HISTORY chart pane (single-account alias) (\u00a78)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{sid}/chart/live": {
+      "get": {
+        "operationId": "get_live_chart_unscoped_api_brokers__broker__bots__sid__chart_live_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartLiveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "LIVE chart pane (single-account alias) (\u00a78)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{sid}/evidence": {
+      "get": {
+        "operationId": "get_evidence_unscoped_api_brokers__broker__bots__sid__evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "transaction_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Transaction Ref"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "client_hint",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Hint"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidencePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Operator-gated raw evidence (single-account alias) (\u00a714)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{sid}/panel": {
+      "get": {
+        "operationId": "get_panel_unscoped_api_brokers__broker__bots__sid__panel_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "transaction_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Transaction Ref"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPanelView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Panel projection (single-account alias) (\u00a77)",
+        "tags": [
+          "broker-v2-panel"
         ]
       }
     },
@@ -47585,6 +49882,64 @@
         "summary": "Cancel Order",
         "tags": [
           "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/panel-profile": {
+      "get": {
+        "operationId": "get_panel_profile_api_brokers__broker__panel_profile_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelProfile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Closed panel capability profile for this broker (\u00a74)",
+        "tags": [
+          "broker-v2-panel"
         ]
       }
     },

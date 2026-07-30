@@ -1504,6 +1504,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bots-list roster: status + slice-0 rollups (§5) */
+        get: operations["get_catalog_scoped_api_brokers__broker__accounts__account_id__bots_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execute one presented action (revision-guarded, idempotent) (§11) */
+        post: operations["run_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** HISTORY chart pane: bounded preset ladder (§8) */
+        get: operations["get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** LIVE chart pane: today's merged bars + fill markers (§8) */
+        get: operations["get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Operator-gated raw evidence for one bot (bounded, paged, audit-logged) (§14) */
+        get: operations["get_evidence_scoped_api_brokers__broker__accounts__account_id__bots__sid__evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/panel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 5s-poll panel projection for one bot (§7) */
+        get: operations["get_panel_scoped_api_brokers__broker__accounts__account_id__bots__sid__panel_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/activities": {
         parameters: {
             query?: never;
@@ -1550,6 +1652,108 @@ export interface paths {
         put?: never;
         /** Deploy and start a log-only bot bound to this broker */
         post: operations["deploy_bot_api_brokers__broker__bots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Bots-list roster (single-account alias of the scoped route) (§5) */
+        get: operations["get_catalog_unscoped_api_brokers__broker__bots_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/{sid}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execute one presented action (single-account alias) (§11) */
+        post: operations["run_action_unscoped_api_brokers__broker__bots__sid__actions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/{sid}/chart/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** HISTORY chart pane (single-account alias) (§8) */
+        get: operations["get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/{sid}/chart/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** LIVE chart pane (single-account alias) (§8) */
+        get: operations["get_live_chart_unscoped_api_brokers__broker__bots__sid__chart_live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/{sid}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Operator-gated raw evidence (single-account alias) (§14) */
+        get: operations["get_evidence_unscoped_api_brokers__broker__bots__sid__evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/{sid}/panel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Panel projection (single-account alias) (§7) */
+        get: operations["get_panel_unscoped_api_brokers__broker__bots__sid__panel_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1707,6 +1911,23 @@ export interface paths {
          *     hold (S6) that blocks new submission never blocks reducing exposure.
          */
         delete: operations["cancel_order_api_brokers__broker__orders__order_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/panel-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Closed panel capability profile for this broker (§4) */
+        get: operations["get_panel_profile_api_brokers__broker__panel_profile_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -8479,6 +8700,53 @@ export interface components {
             updated_at_ms?: number | null;
         };
         /**
+         * BotCatalogView
+         * @description One roster row: bot status + slice-0 rollups (§5).
+         *
+         *     Assembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``
+         *     (incremental cache). ``needs_attention`` and ``status_label`` drive the
+         *     attention-first sort and the closed status vocabulary. No journal scan per
+         *     request.
+         */
+        BotCatalogView: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            /**
+             * Desired State
+             * @enum {string}
+             */
+            desired_state: "RUNNING" | "STOPPED";
+            /** Exposure */
+            exposure: {
+                [key: string]: number;
+            };
+            /** Fills Today */
+            fills_today: number;
+            /** Last Activity At Ms */
+            last_activity_at_ms: number | null;
+            /** Needs Attention */
+            needs_attention: boolean;
+            /** Open Pnl */
+            open_pnl: number | null;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
+            /** Realized Pnl Today */
+            realized_pnl_today: number;
+            /** Running */
+            running: boolean;
+            /** Status Label */
+            status_label: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
          * BotDailyLifecycleProjection
          * @description Rev-3 daily lifecycle projection for one bot.
          *
@@ -8733,6 +9001,40 @@ export interface components {
          */
         BotEventType: "evaluation_idle" | "signal_fired" | "order_submitted" | "order_filled" | "order_cancelled" | "order_rejected" | "blocked" | "halted" | "launch_failed";
         /**
+         * BotHealthCard
+         * @description Bot-health card beside the rail (§7.2).
+         *
+         *     ``desired_state`` is narrowed to ``RUNNING | STOPPED`` — the panel never
+         *     emits ``PAUSED`` (decision #10; pinned by a contract test).
+         */
+        BotHealthCard: {
+            /** Decision Stale */
+            decision_stale: boolean;
+            /**
+             * Desired State
+             * @enum {string}
+             */
+            desired_state: "RUNNING" | "STOPPED";
+            /** Desired State Label */
+            desired_state_label: string;
+            duty_outcome: components["schemas"]["DutyOutcomeView"] | null;
+            /** Last Bar At Ms */
+            last_bar_at_ms: number | null;
+            /** Last Decision At Ms */
+            last_decision_at_ms: number | null;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
+            /** Phase Label */
+            phase_label: string;
+            /** Running */
+            running: boolean;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
          * BotLifecycleAction
          * @description One rendered lifecycle action.
          *
@@ -8836,6 +9138,46 @@ export interface components {
              * @default operator
              */
             updated_by?: string;
+        };
+        /**
+         * BotPanelView
+         * @description The full 5s-poll panel projection for one bot (§7).
+         *
+         *     Everything except chart data: bot health, clerk/account state, the six-
+         *     station rail, a journal-tail reference, the presented actions, and the
+         *     panel-state ``revision`` those actions bind to.
+         */
+        BotPanelView: {
+            /** Account Id */
+            account_id: string;
+            /** Actions */
+            actions: components["schemas"]["PanelAction"][];
+            /** Broker */
+            broker: string;
+            clerk: components["schemas"]["ClerkCard"];
+            /** Fills Today */
+            fills_today: number;
+            health: components["schemas"]["BotHealthCard"];
+            /** Journal Tail Ref */
+            journal_tail_ref: string;
+            /** Journal Tail Seq */
+            journal_tail_seq: number | null;
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "log_only";
+            /** Open Pnl */
+            open_pnl: number | null;
+            rail: components["schemas"]["TransactionRail"];
+            /** Realized Pnl Today */
+            realized_pnl_today: number;
+            /** Revision */
+            revision: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * BotRetireReplaceRequest
@@ -9983,6 +10325,59 @@ export interface components {
             stream: "market_data" | "execution";
         };
         /**
+         * ChannelHealthView
+         * @description One market-data / execution channel's health (§7.3).
+         */
+        ChannelHealthView: {
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Reason */
+            reason: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "healthy" | "unhealthy" | "unknown";
+            /**
+             * Stream
+             * @enum {string}
+             */
+            stream: "market_data" | "execution";
+        };
+        /**
+         * ChartBar
+         * @description One source-tagged OHLCV bar for a chart pane (§8).
+         *
+         *     Broker-generic — decoupled from the IBKR-specific ``IbkrMinuteBar``. Prices
+         *     are strings to preserve exact decimal representation over the wire.
+         *     ``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed`` (§8).
+         */
+        ChartBar: {
+            /** Close */
+            close: string;
+            /** End Ms */
+            end_ms: number;
+            /** High */
+            high: string;
+            /** Low */
+            low: string;
+            /** Open */
+            open: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "ibkr" | "polygon" | "mixed";
+            /** Start Ms */
+            start_ms: number;
+            /** Volume */
+            volume: number;
+        };
+        /**
          * ChartDataRequest
          * @description Request for chart data with resampled bars and indicators.
          */
@@ -10039,6 +10434,63 @@ export interface components {
             to_date: string;
         };
         /**
+         * ChartFillMarker
+         * @description One fill marker for a chart pane (§8, §10).
+         *
+         *     Projected from the clerk journal's fill events filtered by the bot's
+         *     namespace. ``side`` and ``price`` render the buy/sell marker.
+         */
+        ChartFillMarker: {
+            /** Filled At Ms */
+            filled_at_ms: number;
+            /** Order Ref */
+            order_ref: string;
+            /** Price */
+            price: number;
+            /** Quantity */
+            quantity: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+        };
+        /**
+         * ChartHistoryResponse
+         * @description Bounded HISTORY-pane response for a fixed preset (§8).
+         *
+         *     The preset → aggregation ladder and the response-size bound are enforced
+         *     server-side; the existing 7-day live resolver is not widened.
+         */
+        ChartHistoryResponse: {
+            /**
+             * Aggregation
+             * @enum {string}
+             */
+            aggregation: "1m" | "5m" | "30m" | "1h" | "1d";
+            /** As Of Ms */
+            as_of_ms: number;
+            /** Bars */
+            bars: components["schemas"]["ChartBar"][];
+            /** Fill Markers */
+            fill_markers: components["schemas"]["ChartFillMarker"][];
+            /** From Ms */
+            from_ms: number;
+            /**
+             * Preset
+             * @enum {string}
+             */
+            preset: "1D" | "5D" | "1M" | "3M" | "1Y" | "All";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Symbol */
+            symbol: string;
+            /** To Ms */
+            to_ms: number;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /**
          * ChartIndicatorEntry
          * @description Single indicator specification.
          */
@@ -10055,6 +10507,36 @@ export interface components {
             params?: Record<string, never>;
         };
         /**
+         * ChartLiveResponse
+         * @description Today's merged, source-tagged LIVE-pane bars + today's fill markers (§8).
+         *
+         *     ``as_of_ms`` and the two session boundaries derive from the canonical NY
+         *     calendar — "today" is the NY trading date, never browser-local midnight.
+         */
+        ChartLiveResponse: {
+            /** As Of Ms */
+            as_of_ms: number;
+            /** Bars */
+            bars: components["schemas"]["ChartBar"][];
+            /** Fill Markers */
+            fill_markers: components["schemas"]["ChartFillMarker"][];
+            /** Overlay Notices */
+            overlay_notices: components["schemas"]["ChartOverlayNoticeView"][];
+            /**
+             * Resolution
+             * @enum {string}
+             */
+            resolution: "5s" | "1m";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Symbol */
+            symbol: string;
+            /** Trading Date Close Ms */
+            trading_date_close_ms: number;
+            /** Trading Date Open Ms */
+            trading_date_open_ms: number;
+        };
+        /**
          * ChartOverlayNotice
          * @description Non-persistent market-data overlay warning for the chart window.
          */
@@ -10065,6 +10547,22 @@ export interface components {
             message: string;
             /** Session Date */
             session_date?: string | null;
+            /**
+             * Source
+             * @default polygon
+             * @constant
+             */
+            source?: "polygon";
+        };
+        /**
+         * ChartOverlayNoticeView
+         * @description An honest chip explaining a fallback overlay (§8).
+         */
+        ChartOverlayNoticeView: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
             /**
              * Source
              * @default polygon
@@ -10167,6 +10665,37 @@ export interface components {
              * @default Operator cleared the exposure hold.
              */
             reason?: string;
+        };
+        /**
+         * ClerkCard
+         * @description Account/clerk card beside the rail (§7.3).
+         */
+        ClerkCard: {
+            /** Account Id */
+            account_id: string;
+            /** Channels */
+            channels: components["schemas"]["ChannelHealthView"][];
+            /** Hold Active */
+            hold_active: boolean;
+            /**
+             * Hold Reason
+             * @enum {string}
+             */
+            hold_reason: "NO_HOLD" | "UNEXPLAINED_ORDER_HOLD" | "STREAM_HEALTH_HOLD";
+            /** Hold Reason Explanation */
+            hold_reason_explanation: string;
+            /** Hold Reason Label */
+            hold_reason_label: string;
+            /** Hold Since Ms */
+            hold_since_ms: number | null;
+            /** Last Sweep At Ms */
+            last_sweep_at_ms: number | null;
+            /** Outstanding Intents */
+            outstanding_intents: number;
+            /** Reconciliation Verdict */
+            reconciliation_verdict: ("clean" | "unexplained_order" | "missing_intent" | "stale") | null;
+            /** Reconciliation Verdict Label */
+            reconciliation_verdict_label: string | null;
         };
         /**
          * ClerkCustodyDurations
@@ -11854,6 +12383,27 @@ export interface components {
             /** Timestamp Ms */
             timestamp_ms: number;
         };
+        /**
+         * DutyOutcomeView
+         * @description Typed terminal duty fact shown on the bot-health card (§7.2).
+         */
+        DutyOutcomeView: {
+            /** Explanation */
+            explanation: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "ON_DUTY" | "STOPPED" | "CRASHED" | "EXITED_UNVERIFIED";
+            /** Label */
+            label: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number | null;
+            /** Run Id */
+            run_id: string | null;
+        };
         /** EdgeScoreBody */
         EdgeScoreBody: {
             /** Bars */
@@ -12306,6 +12856,52 @@ export interface components {
              * @default latest_run_by_ledger
              */
             state?: string;
+        };
+        /**
+         * EvidenceEntry
+         * @description One redacted, size-capped journal entry exposed to the operator lens.
+         */
+        EvidenceEntry: {
+            /** Has More Detail */
+            has_more_detail: boolean;
+            /** Intent Id */
+            intent_id: string | null;
+            /** Kind */
+            kind: string;
+            /** Kind Label */
+            kind_label: string;
+            /** Order Ref */
+            order_ref: string | null;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Seq */
+            seq: number;
+            /** Summary */
+            summary: string;
+        };
+        /**
+         * EvidencePage
+         * @description A bounded page of operator-gated evidence entries (§14).
+         */
+        EvidencePage: {
+            /** Account Id */
+            account_id: string;
+            /** Entries */
+            entries: components["schemas"]["EvidenceEntry"][];
+            /** Next Cursor */
+            next_cursor: number | null;
+            /** Read At Ms */
+            read_at_ms: number;
+            /** Read By */
+            read_by: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Total Entries */
+            total_entries: number;
+            /** Transaction Ref */
+            transaction_ref: string | null;
+            /** Truncated */
+            truncated: boolean;
         };
         /**
          * ExchangeStatus
@@ -19080,6 +19676,98 @@ export interface components {
             results: components["schemas"]["OrderLegResult"][];
         };
         /**
+         * PanelAction
+         * @description One backend-presented action (§11).
+         *
+         *     Angular executes only the closed set of known action ids and renders
+         *     exactly what it is given. ``revision`` binds the action to the panel-state
+         *     revision it was presented against; a stale POST is a 409.
+         */
+        PanelAction: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
+            /** Blockers */
+            blockers: components["schemas"]["OperatorBlocker"][];
+            confirmation: components["schemas"]["OperatorConfirmationCopy"] | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /** Revision */
+            revision: number;
+        };
+        /**
+         * PanelActionRequest
+         * @description Execute one presented action (§11).
+         *
+         *     Identity is NEVER a request field — it derives from the authenticated
+         *     control channel (§14). The form carries only the reason.
+         */
+        PanelActionRequest: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Reason */
+            reason?: string | null;
+            /** Revision */
+            revision: number;
+        };
+        /**
+         * PanelActionResult
+         * @description The outcome of an executed action (§11).
+         *
+         *     On success the caller re-polls the panel; ``applied`` distinguishes a fresh
+         *     application from an idempotent replay (``applied=False`` — the key was seen
+         *     before, the action is a no-op).
+         */
+        PanelActionResult: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
+            /** Applied */
+            applied: boolean;
+            /** Message */
+            message: string;
+            /** Revision */
+            revision: number;
+        };
+        /**
+         * PanelProfile
+         * @description Closed descriptor extending BrokerCapabilities for the panel (§4).
+         *
+         *     Angular renders strictly from this: an inapplicable station renders as
+         *     ``not_applicable``; an unsupported action never renders at all. Snapshot-
+         *     contract-tested per broker.
+         */
+        PanelProfile: {
+            /** Broker */
+            broker: string;
+            /**
+             * Fee Fidelity
+             * @enum {string}
+             */
+            fee_fidelity: "per_fill" | "aggregate" | "none";
+            /** Flatten Supported */
+            flatten_supported: boolean;
+            /** Live Bars Supported */
+            live_bars_supported: boolean;
+            /** Stations */
+            stations: components["schemas"]["StationApplicability"][];
+            /** Supported Action Ids */
+            supported_action_ids: ("deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now")[];
+        };
+        /**
          * ParameterStabilityResponse
          * @description Parameter stability assessment.
          */
@@ -21988,6 +22676,55 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
+         * StationApplicability
+         * @description One station's applicability for this broker/mode (§4, §7).
+         *
+         *     ``applicable=False`` renders the station in the rail's fifth state
+         *     (``not_applicable``); Angular never guesses which stations a broker has.
+         */
+        StationApplicability: {
+            /** Applicable */
+            applicable: boolean;
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /**
+             * Station Id
+             * @enum {string}
+             */
+            station_id: "SIGNAL" | "INTENT" | "SUBMIT_GATE" | "BROKER_ACK" | "FILL" | "RECONCILED";
+        };
+        /**
+         * StationView
+         * @description One of the six transaction-rail stations (§7.1).
+         *
+         *     ``state`` is one of the five states; ``blocker`` is populated only when
+         *     ``state == "blocked"`` (carries the reused OperatorBlocker contract).
+         *     ``evidence_at_ms`` is the ts of the evidence backing this station, if any.
+         */
+        StationView: {
+            blocker: components["schemas"]["OperatorBlocker"] | null;
+            /** Evidence At Ms */
+            evidence_at_ms: number | null;
+            /** Label */
+            label: string;
+            /** Receipt */
+            receipt: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "satisfied" | "waiting" | "blocked" | "unknown_stale" | "not_applicable";
+            /** State Label */
+            state_label: string;
+            /**
+             * Station Id
+             * @enum {string}
+             */
+            station_id: "SIGNAL" | "INTENT" | "SUBMIT_GATE" | "BROKER_ACK" | "FILL" | "RECONCILED";
+        };
+        /**
          * StockEntryLeg
          * @description Stock ``ActionEntity`` — Slice 1B.
          */
@@ -23397,6 +24134,16 @@ export interface components {
             train_start: string;
             /** Train T Stat */
             train_t_stat: number;
+        };
+        /**
+         * TransactionRail
+         * @description The six-station rail rendering one selected transaction (§7.1).
+         */
+        TransactionRail: {
+            /** Stations */
+            stations: components["schemas"]["StationView"][];
+            /** Transaction Ref */
+            transaction_ref: string | null;
         };
         /**
          * TrustedRunRequestModel
@@ -26830,6 +27577,228 @@ export interface operations {
             };
         };
     };
+    get_catalog_scoped_api_brokers__broker__accounts__account_id__bots_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotCatalogView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_action_scoped_api_brokers__broker__accounts__account_id__bots__sid__actions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PanelActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get: {
+        parameters: {
+            query: {
+                preset: string;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartLiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_evidence_scoped_api_brokers__broker__accounts__account_id__bots__sid__evidence_get: {
+        parameters: {
+            query?: {
+                transaction_ref?: string | null;
+                cursor?: number | null;
+                page_size?: number;
+                client_hint?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidencePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_panel_scoped_api_brokers__broker__accounts__account_id__bots__sid__panel_get: {
+        parameters: {
+            query?: {
+                transaction_ref?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotPanelView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_activities_api_brokers__broker__activities_get: {
         parameters: {
             query?: {
@@ -26959,6 +27928,222 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_catalog_unscoped_api_brokers__broker__bots_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotCatalogView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_action_unscoped_api_brokers__broker__bots__sid__actions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PanelActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get: {
+        parameters: {
+            query: {
+                preset: string;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_live_chart_unscoped_api_brokers__broker__bots__sid__chart_live_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartLiveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_evidence_unscoped_api_brokers__broker__bots__sid__evidence_get: {
+        parameters: {
+            query?: {
+                transaction_ref?: string | null;
+                cursor?: number | null;
+                page_size?: number;
+                client_hint?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidencePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_panel_unscoped_api_brokers__broker__bots__sid__panel_get: {
+        parameters: {
+            query?: {
+                transaction_ref?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotPanelView"];
                 };
             };
             /** @description Validation Error */
@@ -27242,6 +28427,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrderCancelResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_panel_profile_api_brokers__broker__panel_profile_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PanelProfile"];
                 };
             };
             /** @description Validation Error */

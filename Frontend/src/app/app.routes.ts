@@ -210,6 +210,22 @@ export const routes: Routes = [
       ),
   },
   {
+    // Broker-v2 bot control panel — trader lens (S3); operator lens adds in S4.
+    // Route binds broker, accountId, sid as component inputs.
+    path: "brokers/:broker/accounts/:accountId/bots/:sid",
+    loadComponent: () =>
+      import(
+        "./components/broker/v2-panel/panel-shell/bot-panel-shell.component"
+      ).then((m) => m.BotPanelShellComponent),
+  },
+  {
+    path: "brokers/:broker/manual",
+    loadComponent: () =>
+      import(
+        "./components/broker/v2-panel/manual-page/broker-v2-manual-page.component"
+      ).then((m) => m.BrokerV2ManualPageComponent),
+  },
+  {
     path: "broker/options-chain",
     loadComponent: () =>
       import(
@@ -374,6 +390,22 @@ export const routes: Routes = [
       import(
         "./components/_ide-sandbox/ide-sandbox.component"
       ).then((m) => m.IdeSandboxComponent),
+  },
+  {
+    // Broker v2 panel — account-scoped bots list
+    path: 'brokers/:broker/accounts/:accountId/bots',
+    loadComponent: () =>
+      import(
+        './components/broker/v2-panel/bots-list-page/bots-list-page.component'
+      ).then((m) => m.BotsListPageComponent),
+  },
+  {
+    // Broker v2 panel — unscoped bots list (all accounts for this broker)
+    path: 'brokers/:broker/bots',
+    loadComponent: () =>
+      import(
+        './components/broker/v2-panel/bots-list-page/bots-list-page.component'
+      ).then((m) => m.BotsListPageComponent),
   },
   { path: "**", redirectTo: "/data-lab" },
 ];

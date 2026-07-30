@@ -1,0 +1,106 @@
+<div class="roster-toolbar" role="search">
+  <input
+    pInputText
+    type="search"
+    placeholder="Filter by bot ID or symbol…"
+    [value]="searchTerm()"
+    (input)="searchTerm.set($any($event.target).value)"
+    aria-label="Filter bots"
+    class="roster-search"
+  />
+  <p-selectbutton
+    [options]="statusOptions"
+    [ngModel]="statusFilter()"
+    (ngModelChange)="statusFilter.set($event)"
+    optionLabel="label"
+    optionValue="value"
+    aria-label="Status filter"
+  />
+</div>
+
+<div class="roster-table-wrap" role="region" aria-label="Bots roster">
+  <table class="roster-table roster-table--header" aria-label="Bots">
+    <thead>
+      <tr>
+        <th scope="col">Bot</th>
+        <th scope="col">Symbol</th>
+        <th scope="col">Status</th>
+        <th scope="col">Exposure</th>
+        <th scope="col">Fills today</th>
+        <th scope="col">Realized P&amp;L</th>
+        <th scope="col">Open P&amp;L</th>
+        <th scope="col">Last activity</th>
+        <th scope="col"><span class="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+  </table>
+
+  @if (filtered().length === 0) {
+    <div class="roster-empty" role="status">No bots match the current filter.</div>
+  } @else {
+    <cdk-virtual-scroll-viewport [itemSize]="itemSize" class="roster-scroll">
+      <table class="roster-table roster-table--body">
+        <tbody>
+          <tr
+            *cdkVirtualFor="let bot of filtered(); trackBy: botTrackFn"
+            class="roster-row"
+            [class.roster-row--attention]="bot.needs_attention"
+            (click)="navigateToBot(bot)"
+            (keydown.enter)="navigateToBot(bot)"
+            tabindex="0"
+            role="row"
+            [attr.aria-label]="'Bot ' + bot.strategy_instance_id"
+          >
+            <td class="roster-cell roster-cell--id">{{ bot.strategy_instance_id }}</td>
+            <td class="roster-cell">{{ bot.symbol }}</td>
+            <td class="roster-cell">
+              <app-bot-status-chip
+                [statusLabel]="bot.status_label"
+                [needsAttention]="bot.needs_attention"
+              />
+            </td>
+            <td class="roster-cell roster-cell--mono">{{ exposureText(bot) }}</td>
+            <td class="roster-cell roster-cell--num">{{ fmtInteger(bot.fills_today) }}</td>
+            <td class="roster-cell roster-cell--num">{{ fmtSignedCurrency(bot.realized_pnl_today) }}</td>
+            <td class="roster-cell roster-cell--num">{{ fmtSignedCurrency(bot.open_pnl) }}</td>
+            <td class="roster-cell">
+              @if (bot.last_activity_at_ms) {
+                <app-timestamp-display [value]="bot.last_activity_at_ms" mode="local" />
+              } @else {
+                <span>—</span>
+              }
+            </td>
+            <td class="roster-cell roster-cell--actions" (click)="$event.stopPropagation()">
+              @if (canStart(bot)) {
+                <button
+                  pButton
+                  type="button"
+                  size="small"
+                  severity="secondary"
+                  label="Start"
+                  (click)="onStart(bot)"
+                  [attr.aria-label]="'Start ' + bot.strategy_instance_id"
+                ></button>
+              }
+              @if (canStop(bot)) {
+                <button
+                  pButton
+                  type="button"
+                  size="small"
+                  severity="secondary"
+                  label="Stop"
+                  (click)="onStop(bot)"
+                  [attr.aria-label]="'Stop ' + bot.strategy_instance_id"
+                ></button>
+              }
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </cdk-virtual-scroll-viewport>
+  }
+</div>
+
+<div class="roster-footer" role="note" aria-label="Fee notice">
+  Fees not reported — P&amp;L figures exclude transaction costs.
+</div>

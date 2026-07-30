@@ -99,12 +99,16 @@ class OrderJournal:
 
     def _account_dir(self) -> Path:
         """Resolve this account's journal directory, guaranteeing containment."""
-        path = (self._root / "accounts" / "alpaca" / self._account_id).resolve()
-        # Defence in depth: the account id is charset-validated above, so this
-        # can only trip on a symlinked root — a fatal journal misconfiguration.
-        if not str(path).startswith(str(self._root)):
-            raise ValueError(f"clerk journal path escapes root: {path}")
-        return path
+        # os.path.realpath + rstrip(os.sep)+os.sep startswith is the CodeQL-recognised
+        # path-injection sanitiser (bare str.startswith without realpath is not).
+        root_real = os.path.realpath(os.fspath(self._root))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        candidate = os.path.realpath(
+            os.fspath(self._root / "accounts" / "alpaca" / self._account_id)
+        )
+        if candidate != root_real and not candidate.startswith(root_prefix):
+            raise ValueError(f"clerk journal path escapes root: {candidate!r}")
+        return Path(candidate)
 
     def append(self, entry: OrderJournalEntry) -> None:
         """Append one entry to the inbox and the journal; ``fsync`` each path.
@@ -184,10 +188,14 @@ class OrderJournal:
 
     def read_entries(self) -> list[OrderJournalEntry]:
         """Replay the canonical ledger into entries (recovery / test seam)."""
-        path = self._dir / JOURNAL_FILENAME
-        if not path.is_file():
+        root_real = os.path.realpath(os.fspath(self._root))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        candidate = os.path.realpath(os.fspath(self._dir / JOURNAL_FILENAME))
+        if not candidate.startswith(root_prefix):
+            raise ValueError(f"clerk journal path escapes root: {candidate!r}")
+        if not os.path.isfile(candidate):
             return []
-        with self._lock, path.open("r", encoding="utf-8") as handle:
+        with self._lock, open(candidate, encoding="utf-8") as handle:
             return [
                 OrderJournalEntry.model_validate_json(stripped)
                 for raw in handle

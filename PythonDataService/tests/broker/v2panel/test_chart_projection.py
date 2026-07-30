@@ -1,0 +1,166 @@
+"""Tests for the chart projections (S1, spec §8).
+
+Covers the bounded HISTORY preset → aggregation ladder + size bound, the LIVE
+pane source-tagging + fill markers, and a regression that the 7-day live
+resolver cap is not widened.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.data_lake.polygon_fetcher import PolygonBar
+from app.services.broker_v2_panel.chart_projection_service import (
+    _MAX_HISTORY_BARS,
+    ChartPresetError,
+    build_history_chart,
+    build_live_chart,
+    coerce_history_preset,
+    live_window,
+)
+from app.services.live_chart_window import MAX_CHART_RANGE_MS, ChartWindowResult
+from tests.broker.v2panel.fixtures import SID, fill_entry
+
+_NOW = 1_700_000_000_000
+
+
+def test_seven_day_live_resolver_cap_unchanged() -> None:
+    """Regression: the existing 7-day cap is not widened by the history contract."""
+    assert MAX_CHART_RANGE_MS == 7 * 86_400_000
+
+
+@pytest.mark.parametrize(
+    ("preset", "aggregation"),
+    [
+        ("1D", "1m"),
+        ("5D", "5m"),
+        ("1M", "30m"),
+        ("3M", "1h"),
+        ("1Y", "1d"),
+        ("All", "1d"),
+    ],
+)
+async def test_history_preset_maps_to_fixed_aggregation(preset, aggregation) -> None:
+    async def _source(symbol, start, end, multiplier, timespan):
+        return []
+
+    result = await build_history_chart(
+        preset,  # type: ignore[arg-type]
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+    )
+    assert result.aggregation == aggregation
+    assert result.preset == preset
+
+
+def test_unknown_preset_is_rejected() -> None:
+    with pytest.raises(ChartPresetError):
+        coerce_history_preset("7D")
+
+
+async def test_history_bars_are_polygon_tagged_and_bounded() -> None:
+    # Return more than the size bound; the response must truncate to the newest.
+    # Space bars 5s apart inside the 1D window so every fixture bar falls in the
+    # lookback and the size bound — not windowing — is what truncates them.
+    bars = [
+        PolygonBar(
+            t_ms=_NOW - (i + 1) * 5_000,
+            open=1.0,
+            high=2.0,
+            low=0.5,
+            close=1.5,
+            volume=10,
+            vwap=1.2,
+            n=3,
+        )
+        for i in range(_MAX_HISTORY_BARS + 50)
+    ]
+
+    async def _source(symbol, start, end, multiplier, timespan):
+        return bars
+
+    result = await build_history_chart(
+        "1D",
+        [],
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+    )
+    assert result.truncated is True
+    assert len(result.bars) == _MAX_HISTORY_BARS
+    assert all(bar.source == "polygon" for bar in result.bars)
+    # Bars are sorted ascending by start_ms after truncation.
+    starts = [bar.start_ms for bar in result.bars]
+    assert starts == sorted(starts)
+
+
+async def test_history_fill_markers_within_window() -> None:
+    entries = [
+        fill_entry(sid=SID, intent="i1", ts_ms=_NOW - 30_000, qty=100, price=500.0),
+        # Outside the 1D lookback → excluded.
+        fill_entry(sid=SID, intent="i2", ts_ms=_NOW - 5 * 86_400_000, qty=50, price=400.0),
+    ]
+
+    async def _source(symbol, start, end, multiplier, timespan):
+        return []
+
+    result = await build_history_chart(
+        "1D",
+        entries,
+        strategy_instance_id=SID,
+        symbol="SPY",
+        bar_source=_source,
+        now_ms=_NOW,
+    )
+    assert len(result.fill_markers) == 1
+    assert result.fill_markers[0].side == "buy"
+    assert result.fill_markers[0].price == 500.0
+
+
+def test_live_chart_tags_source_and_markers() -> None:
+    from decimal import Decimal
+
+    from app.broker.ibkr.models import IbkrMinuteBar
+
+    bar = IbkrMinuteBar(
+        symbol="SPY",
+        start_ms=_NOW - 60_000,
+        end_ms=_NOW,
+        open=Decimal("500"),
+        high=Decimal("501"),
+        low=Decimal("499"),
+        close=Decimal("500.5"),
+        volume=1000,
+        fetched_at_ms=_NOW,
+        source="ibkr",
+    )
+    chart_window = ChartWindowResult(
+        bars=[bar], timeframe="1m", resolution="1m", is_streaming=True
+    )
+    entries = [fill_entry(sid=SID, intent="i1", ts_ms=_NOW - 30_000)]
+
+    result = build_live_chart(
+        chart_window,
+        entries,
+        strategy_instance_id=SID,
+        symbol="SPY",
+        window=(_NOW - 6 * 60 * 60_000, _NOW + 60_000),
+        now_ms=_NOW,
+    )
+    assert result.bars[0].source == "ibkr"
+    assert result.resolution == "1m"
+    # The one fill at _NOW-30s falls inside the passed window.
+    assert len(result.fill_markers) == 1
+    assert result.trading_date_open_ms == _NOW - 6 * 60 * 60_000
+
+
+def test_live_window_falls_back_when_market_closed() -> None:
+    # 2023-11-18 15:00 UTC is a Saturday → not a session → the day fallback.
+    saturday_ms = 1_700_319_600_000
+    open_ms, close_ms = live_window(saturday_ms)
+    assert open_ms <= saturday_ms < close_ms
+    assert close_ms - open_ms == 86_400_000

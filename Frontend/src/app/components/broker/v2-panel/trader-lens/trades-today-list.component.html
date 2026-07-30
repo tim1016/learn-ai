@@ -1,0 +1,63 @@
+<section class="trades-today" aria-label="Trades today">
+  <header class="trades-header">
+    <h3 class="trades-title">Trades today</h3>
+    @if (tradingDateMs()) {
+      <app-timestamp-display
+        [value]="tradingDateMs()"
+        mode="date-et"
+        class="trading-date"
+        aria-label="Trading date"
+      />
+    }
+  </header>
+
+  @if (hasFills()) {
+    <table class="fills-table" aria-label="Fills today">
+      <thead>
+        <tr>
+          <th scope="col">Time</th>
+          <th scope="col">Side</th>
+          <th scope="col">Qty</th>
+          <th scope="col">Price</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (fill of fills(); track fill.order_ref) {
+          <tr
+            class="fill-row"
+            [class.fill-row--buy]="fill.side === 'buy'"
+            [class.fill-row--sell]="fill.side === 'sell'"
+          >
+            <td>
+              <app-timestamp-display
+                [value]="fill.filled_at_ms"
+                mode="local"
+                granularity="time"
+              />
+            </td>
+            <td class="fill-side">{{ fill.side }}</td>
+            <td>{{ fill.quantity }}</td>
+            <td>${{ fill.price.toFixed(2) }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+
+    <div class="pnl-summary" aria-label="P&L summary">
+      <span class="pnl-label">Realized today</span>
+      <span [class]="pnlClass(realizedPnlToday())" aria-label="Realized P&L today">
+        {{ formatPnl(realizedPnlToday()) }}
+      </span>
+      <span class="pnl-separator" aria-hidden="true">·</span>
+      <span class="pnl-label">Open P&amp;L</span>
+      <span [class]="pnlClass(openPnl())" aria-label="Open P&L">
+        {{ formatPnl(openPnl()) }}
+      </span>
+      @if (feesLabel()) {
+        <span class="fees-note">{{ feesLabel() }}</span>
+      }
+    </div>
+  } @else {
+    <p class="no-trades" role="status">No trades today.</p>
+  }
+</section>

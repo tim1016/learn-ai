@@ -1,0 +1,81 @@
+<!-- Bot health card (spec §7.2) -->
+<!-- card-help anchor: bot-lifecycle — wired to S5 drawer in end-phase integration -->
+<section class="health-card" aria-label="Bot health">
+  <header class="health-card__header">
+    <h3 class="health-card__title">Bot health</h3>
+    <button
+      type="button"
+      class="health-card__help"
+      aria-label="Help: bot lifecycle"
+      disabled
+      title="Help drawer wired in S5"
+    >?</button>
+  </header>
+
+  <dl class="health-card__facts">
+    <dt>Phase</dt>
+    <dd>{{ health().phase_label }}</dd>
+
+    <dt>Desired state</dt>
+    <dd>{{ health().desired_state_label }}</dd>
+
+    <dt>Running</dt>
+    <dd>{{ health().running ? 'Yes' : 'No' }}</dd>
+
+    @if (health().duty_outcome) {
+      @let outcome = health().duty_outcome!;
+      <dt>Duty outcome</dt>
+      <dd>
+        {{ outcome.label }}
+        @if (outcome.explanation) {
+          <span class="health-card__sub">{{ outcome.explanation }}</span>
+        }
+        @if (outcome.recorded_at_ms) {
+          <app-timestamp-display [value]="outcome.recorded_at_ms" mode="local" />
+        }
+      </dd>
+    }
+
+    <dt>Last decision</dt>
+    <dd>
+      @if (health().last_decision_at_ms) {
+        <app-timestamp-display [value]="health().last_decision_at_ms" mode="local" />
+        @if (health().decision_stale) {
+          <span class="health-card__stale" role="status" aria-label="Decision data is stale">stale</span>
+        }
+      } @else {
+        <span class="health-card__none">None recorded</span>
+      }
+    </dd>
+
+    <dt>Last bar</dt>
+    <dd>
+      @if (health().last_bar_at_ms) {
+        <app-timestamp-display [value]="health().last_bar_at_ms" mode="local" />
+      } @else {
+        <span class="health-card__none">None</span>
+      }
+    </dd>
+  </dl>
+
+  @if (retireAction()) {
+    @let action = retireAction()!;
+    <div class="health-card__actions">
+      <button
+        type="button"
+        class="health-card__retire-btn"
+        [disabled]="!canRetire() || actionPending()"
+        [attr.aria-disabled]="!canRetire() || actionPending()"
+        [attr.aria-label]="action.label"
+        [title]="action.explanation"
+        (click)="onRetire()"
+      >
+        {{ action.label }}
+      </button>
+
+      @for (blocker of retireBlockers(); track blocker.code) {
+        <p class="health-card__blocker" role="alert">{{ blocker.label }}</p>
+      }
+    </div>
+  }
+</section>

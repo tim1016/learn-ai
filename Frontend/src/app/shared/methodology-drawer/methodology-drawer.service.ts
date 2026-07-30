@@ -1,33 +1,40 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, computed } from '@angular/core';
+import { inject } from '@angular/core';
+import { MarkdownDrawerService } from '../markdown-drawer/markdown-drawer.service';
 
 /**
- * App-wide state for the methodology drawer. The drawer is mounted once at
- * the app shell level; any component can call `open(anchor)` to show the
- * doc at a specific section without prop-drilling through the component
- * tree.
+ * Façade for opening the indicator-reliability methodology document in the
+ * single shell-level markdown drawer host.
+ *
+ * Preserved as a named service so existing consumers (`InfoIconComponent`,
+ * `IndicatorReliabilityComponent`) need no import changes.
+ *
+ * Canonical implementation: `shared/markdown-drawer/markdown-drawer.service.ts`.
+ * This service is a thin pass-through to `MarkdownDrawerService` with
+ * `docId = 'methodology'` hardcoded.
  */
 @Injectable({ providedIn: 'root' })
 export class MethodologyDrawerService {
-  /** Whether the drawer is currently visible. */
-  readonly visible = signal<boolean>(false);
+  private readonly drawer = inject(MarkdownDrawerService);
 
-  /**
-   * Anchor slug to scroll to (without the leading `#`). Changes every time
-   * the drawer opens so the viewer re-scrolls even if the same anchor is
-   * opened twice in a row (e.g. after the user has scrolled away).
-   */
-  readonly anchor = signal<string | null>(null);
+  /** Whether the methodology drawer is currently visible. */
+  readonly visible = computed(() => this.drawer.visible() && this.drawer.activeDocId() === 'methodology');
 
-  /** Monotonic counter — increments each `open()` to bust effect caches. */
-  readonly openTick = signal<number>(0);
+  /** Current anchor slug, or null. */
+  readonly anchor = computed(() =>
+    this.drawer.activeDocId() === 'methodology' ? this.drawer.anchor() : null,
+  );
+
+  /** Monotonic open tick (forwarded from the generic service). */
+  readonly openTick = computed(() =>
+    this.drawer.activeDocId() === 'methodology' ? this.drawer.openTick() : 0,
+  );
 
   open(anchor?: string): void {
-    if (anchor) this.anchor.set(anchor);
-    this.visible.set(true);
-    this.openTick.update(n => n + 1);
+    this.drawer.open('methodology', anchor);
   }
 
   close(): void {
-    this.visible.set(false);
+    this.drawer.close();
   }
 }

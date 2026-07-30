@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AppSidebarComponent } from './shell/app-sidebar.component';
-import { MethodologyDrawerComponent } from './shared/methodology-drawer/methodology-drawer.component';
+import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { BrokerHealthService } from './services/broker-health.service';
 
 // The global JobsDrawer / floating "Jobs" launcher was removed in favor
@@ -15,7 +15,7 @@ import { BrokerHealthService } from './services/broker-health.service';
   imports: [
     RouterOutlet,
     AppSidebarComponent,
-    MethodologyDrawerComponent,
+    MarkdownDrawerHostComponent,
     Toast,
   ],
   styles: [`
@@ -52,7 +52,7 @@ import { BrokerHealthService } from './services/broker-health.service';
         <router-outlet />
       </div>
     </main>
-    <app-methodology-drawer />
+    <app-markdown-drawer-host />
     <p-toast position="top-right" />
   `,
 })

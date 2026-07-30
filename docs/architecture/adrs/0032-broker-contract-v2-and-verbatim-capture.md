@@ -103,3 +103,57 @@ one-line rationale. V2 is greenfield, audited against v1 — not a copy-prune fo
 | 10 | Parquet persistence writers (ticks/account/PnL) | **Deferred** | The JSONL journal covers phase-1 audit; revisit for stream data in phase 3. |
 | 11 | Reconnect monitor, session mirror, client-ID management, gateway babysitting | **N/A** | Exists only because of IBKR's stateful socket model; Alpaca is stateless HTTPS + websocket. |
 | 12 | Contract qualification machinery | **N/A** | Alpaca uses plain symbols / asset IDs; no contract search is needed. |
+
+## Amendment 1 — IBKR as a time-boxed signal-feed bridge for broker-v2 bots
+
+- **Date:** 2026-07-29
+- **Status:** Accepted
+- **Context:** Issue #1297 (broker-v2 bot control panel, S1). Design spec:
+  `docs/superpowers/specs/2026-07-29-broker-v2-bot-control-panel-design.md` §8.
+  Decision register #2.
+
+### The distinction this amendment records
+
+**Market-data strain and execution broker are distinct concerns.** A broker-v2
+bot executes through its own broker (Alpaca in phase 1) but, until a broker
+provides a native live-bar stream, it still needs *live bars* to feed its
+signal evaluation and the panel's LIVE chart pane. Phase 1 has no Alpaca-native
+live-bar strain (the `BrokerBarStreamPort` is a phase-3 non-goal, §2/§19 of the
+spec).
+
+### Decision
+
+1. **IBKR is a time-boxed signal-feed bridge.** For broker-v2 bots, the IBKR
+   `LiveBarAggregator` strain is reused **only** as a live market-data source —
+   never as an execution path. Orders always flow through the bot's own broker's
+   clerk. The bridge is explicitly temporary: it retires when the phase-3
+   `BrokerBarStreamPort` lands and each broker provides its own live bars.
+
+2. **Polygon is display fallback only — never silently promoted to a signal
+   source.** When the IBKR live strain is unavailable (feed down,
+   pre-subscription, closed session), the panel's LIVE pane fills with Polygon
+   bars in the greyed inactive style plus an honest chip
+   (*"Live feed unavailable — showing Polygon (delayed)."*). Bars carry a
+   truthful `ibkr` / `polygon` / `mixed` source tag on the wire and in the
+   render. A Polygon bar is **display fallback**; it must never be quietly fed
+   to a bot's signal evaluation as if it were a live IBKR bar. Any future
+   promotion of Polygon to a signal source is a separate, deliberate decision —
+   not an implicit consequence of a feed outage.
+
+3. **The bounded history pane is Polygon by design.** The panel's HISTORY pane
+   is Polygon-sourced across a fixed preset → aggregation ladder (a new bounded
+   contract, `live_chart_window`'s 7-day cap untouched). That is a display
+   concern and does not touch the signal path.
+
+### Consequences
+
+- The panel's `PanelProfile.live_bars_supported` is `False` for Alpaca in
+  phase 1 — the LIVE pane's provenance is honestly the IBKR bridge with a
+  Polygon fallback, not an Alpaca-native strain.
+- The retirement condition is explicit and testable: when a broker implements
+  `BrokerBarStreamPort`, `live_bars_supported` flips to `True` and the IBKR
+  bridge is removed from that broker's LIVE pane.
+- Nothing in this amendment changes the execution path, the clerk, or the
+  capture journal — it records a market-data-vs-execution separation the panel
+  depends on, so a future reader does not mistake the IBKR bridge for an
+  execution coupling.

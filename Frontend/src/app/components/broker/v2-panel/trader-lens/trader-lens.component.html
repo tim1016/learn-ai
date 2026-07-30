@@ -1,0 +1,76 @@
+<!-- ── Top bar: headline + primary verb ─────────────────────────────────── -->
+<div class="trader-top-bar" role="banner">
+  <div class="bot-identity">
+    <span class="bot-symbol" aria-label="Symbol">{{ symbol() }}</span>
+    <span
+      class="bot-phase"
+      [attr.aria-label]="'Phase: ' + panel().health.phase_label"
+    >
+      {{ panel().health.phase_label }}
+    </span>
+  </div>
+
+  <p class="headline" role="status" aria-live="polite" aria-label="Bot status headline">
+    {{ headline() }}
+  </p>
+
+  @if (primaryButtonLabel()) {
+    <button
+      type="button"
+      class="primary-verb-btn"
+      [class.primary-verb-btn--stop]="primaryAction()?.action_id === 'stop'"
+      [disabled]="!primaryButtonEnabled() || actionPending()"
+      [attr.aria-label]="primaryButtonLabel()!"
+      [attr.aria-busy]="actionPending()"
+      (click)="onPrimaryAction()"
+    >
+      {{ primaryButtonLabel() }}
+    </button>
+  }
+</div>
+
+<!-- ── Dual-pane chart ───────────────────────────────────────────────────── -->
+<div class="chart-section">
+  <app-dual-pane-chart
+    [symbol]="symbol()"
+    [liveBars]="liveBars()"
+    [liveFillMarkers]="liveFillMarkers()"
+    [liveNotices]="liveNotices()"
+    [histBars]="histBars()"
+    [histFillMarkers]="histFillMarkers()"
+    [selectedPreset]="selectedPreset()"
+    (presetChange)="onPresetChange($event)"
+  />
+</div>
+
+<!-- ── Trades / log-only region ─────────────────────────────────────────── -->
+@if (isLogOnly()) {
+  <!-- Log-only degradation: honest observation-only panel (spec §6). -->
+  <section class="log-only-panel" aria-label="Log-only bot notice" role="status">
+    <p class="log-only-message">
+      This bot observes and decides but does not place orders (log-only).
+      Decisions appear below.
+    </p>
+    @if (panel().health.last_decision_at_ms) {
+      <div class="last-decision">
+        <span class="last-decision-label">Last decision</span>
+        <app-timestamp-display
+          [value]="panel().health.last_decision_at_ms"
+          mode="local"
+        />
+        @if (panel().health.decision_stale) {
+          <span class="stale-badge" aria-label="Decision data is stale">stale</span>
+        }
+      </div>
+    }
+  </section>
+} @else {
+  <!-- Order-producing bots: trades list + backend P&L (spec §6, §10). -->
+  <app-trades-today-list
+    [fills]="liveFillMarkers()"
+    [feeFidelity]="profile().fee_fidelity"
+    [tradingDateMs]="tradingDateMs()"
+    [realizedPnlToday]="panel().realized_pnl_today"
+    [openPnl]="panel().open_pnl"
+  />
+}
