@@ -24,6 +24,8 @@ from typing import NoReturn
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import settings
+from app.routers.broker_bots import deploy_bot as _delegate_deploy
+from app.schemas.broker_bots import BotStatusView, DeployBotRequest
 from app.schemas.broker_v2_evidence import EvidencePage
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
@@ -114,6 +116,30 @@ async def get_catalog_scoped(broker: str, account_id: str) -> list[BotCatalogVie
 async def get_catalog_unscoped(broker: str) -> list[BotCatalogView]:
     account_id = await _resolve_default_account(broker)
     return await _catalog(broker, account_id)
+
+
+# ── §5 Deploy (account-scoped alias of the bot-runner deploy route) ──────────
+
+
+@router.post(
+    "/{broker}/accounts/{account_id}/bots",
+    response_model=BotStatusView,
+    status_code=201,
+    summary="Deploy and start a bot for this account (scoped alias) (§5)",
+)
+async def deploy_bot_scoped(
+    broker: str, account_id: str, request: DeployBotRequest
+) -> BotStatusView:
+    default_account = await _resolve_default_account(broker)
+    if account_id != default_account:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": f"Account '{account_id}' is not served by broker '{broker}'.",
+                "why": f"This broker serves account '{default_account}' only.",
+            },
+        )
+    return await _delegate_deploy(broker, request)
 
 
 # ── §7 Panel projection (account-scoped + unscoped alias) ────────────────────
