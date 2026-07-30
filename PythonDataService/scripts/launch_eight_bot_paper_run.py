@@ -12,6 +12,9 @@ Usage::
     # Live deploy (daemon must be up, IBKR Gateway connected, account CLEAN)
     python -m scripts.launch_eight_bot_paper_run
 
+    # Use a non-default dotenv file for the data-plane control secret
+    python -m scripts.launch_eight_bot_paper_run --env-file /path/to/.env
+
     # Custom date prefix (default = today YYYYMMDD in America/Chicago)
     python -m scripts.launch_eight_bot_paper_run --date 20260730
 
@@ -24,6 +27,7 @@ Prerequisites:
     - Account epoch CLEAN and no active suspension
       (curl -s localhost:8000/api/live-instances/account | python3 -m json.tool)
     - All 8 target strategy_instance_ids are off-roster or don't exist yet
+    - DATA_PLANE_CONTROL_SECRET in the repo-root .env (or --env-file)
 """
 
 from __future__ import annotations
@@ -39,8 +43,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
-
-_CONTROL_SECRET = os.environ.get("DATA_PLANE_CONTROL_SECRET", "")
+from dotenv import dotenv_values
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SPEC_PATH = (
@@ -62,6 +65,9 @@ _QC_CLOUD_BACKTEST_ID = "d2fe45a7142e88575f6fbd75229f8681"
 _SYMBOLS = ("SPY", "QQQ", "AAPL", "MSFT", "NVDA", "AMD", "AMZN", "META")
 
 _DATA_PLANE = "http://127.0.0.1:8000"
+_CONTROL_SECRET_ENV_VAR = "DATA_PLANE_CONTROL_SECRET"
+_CONTROL_SECRET_HEADER = "X-Data-Plane-Control-Secret"
+_DEPLOY_TIMEOUT_S = 120.0
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +116,14 @@ def _today_date_prefix() -> str:
     return ct.strftime("%Y%m%d")
 
 
+def _resolve_control_secret(env_file: Path) -> str:
+    """Resolve the live-control secret, preferring the process environment."""
+
+    if _CONTROL_SECRET_ENV_VAR in os.environ:
+        return os.environ[_CONTROL_SECRET_ENV_VAR].strip()
+    return (dotenv_values(env_file).get(_CONTROL_SECRET_ENV_VAR) or "").strip()
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="scripts.launch_eight_bot_paper_run",
@@ -126,6 +140,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=60,
         metavar="SECONDS",
         help="Seconds to wait between each deploy+start (default: 60)",
+    )
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=_REPO_ROOT / ".env",
+        metavar="PATH",
+        help="Dotenv file providing DATA_PLANE_CONTROL_SECRET (default: repo-root .env)",
     )
     parser.add_argument(
         "--dry-run",
@@ -162,9 +183,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n[dry-run] would deploy {len(bots)} bots with {stagger_s}s stagger")
         return 0
 
+    control_secret = _resolve_control_secret(args.env_file)
+    if not control_secret:
+        logger.error(
+            "%s is required for live deployment; set it in the process environment or %s",
+            _CONTROL_SECRET_ENV_VAR,
+            args.env_file,
+        )
+        return 2
+
     results: list[dict] = []
-    headers = {"X-Data-Plane-Control-Secret": _CONTROL_SECRET} if _CONTROL_SECRET else {}
-    with httpx.Client(base_url=_DATA_PLANE, timeout=120.0, headers=headers) as client:
+    headers = {_CONTROL_SECRET_HEADER: control_secret}
+    with httpx.Client(base_url=_DATA_PLANE, timeout=_DEPLOY_TIMEOUT_S, headers=headers) as client:
         for i, bot in enumerate(bots):
             symbol = bot["symbol"]
             payload = bot["payload"]
