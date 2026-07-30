@@ -1,0 +1,64 @@
+<!-- Transaction rail (spec §7.1). One selected transaction's six stations. -->
+<section class="rail" aria-label="Transaction pipeline rail">
+  @if (!hasTransaction()) {
+    <p class="rail__empty" role="status">No active transaction. Start the bot to see pipeline activity.</p>
+  }
+
+  @if (hasTransaction()) {
+    <p class="rail__ref" aria-label="Transaction reference">
+      <span class="rail__ref-label">Transaction</span>
+      <code class="rail__ref-value">{{ transactionRef() }}</code>
+    </p>
+  }
+
+  <ol class="rail__stations" aria-label="Pipeline stations">
+    @for (station of stations(); track trackStation($index, station)) {
+      <li
+        class="station"
+        [class.station--satisfied]="station.state === 'satisfied'"
+        [class.station--waiting]="station.state === 'waiting'"
+        [class.station--blocked]="station.state === 'blocked'"
+        [class.station--unknown_stale]="station.state === 'unknown_stale'"
+        [class.station--not_applicable]="station.state === 'not_applicable'"
+        [attr.aria-label]="stationAriaLabel(station)"
+      >
+        <!-- Icon + label — two channels: icon is decorative, label carries meaning (AXE) -->
+        <span class="station__icon" aria-hidden="true">{{ stationIcon(station.state) }}</span>
+        <span class="station__label">{{ station.label }}</span>
+        <span class="station__state-label">{{ station.state_label }}</span>
+
+        @if (station.state !== 'not_applicable') {
+          <!-- Receipt text (backend-authored) -->
+          <p class="station__receipt">{{ station.receipt }}</p>
+
+          @if (station.evidence_at_ms !== null) {
+            <span class="station__evidence-ts">
+              <app-timestamp-display
+                [value]="station.evidence_at_ms"
+                mode="local"
+              />
+            </span>
+          }
+
+          @if (station.blocker) {
+            <div class="station__blocker" role="alert" aria-label="Station blocker">
+              <strong class="station__blocker-headline">{{ station.blocker.label }}</strong>
+              <p class="station__blocker-detail">{{ station.blocker.explanation }}</p>
+            </div>
+          }
+
+          @if (hasTransaction()) {
+            <button
+              type="button"
+              class="station__evidence-link"
+              [attr.aria-label]="'View raw evidence for ' + station.label"
+              (click)="onEvidenceClick(station)"
+            >
+              View evidence
+            </button>
+          }
+        }
+      </li>
+    }
+  </ol>
+</section>

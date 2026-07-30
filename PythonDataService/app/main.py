@@ -33,6 +33,7 @@ from app.routers import (
     broker_bots,
     broker_capability,
     broker_session,
+    broker_v2_panel,
     brokers,
     chart,
     clerk_transactions,
@@ -664,6 +665,14 @@ app.include_router(
 # Control actions on live broker state — always-on data-plane secret.
 app.include_router(
     broker_bots.router,
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+)
+# Broker-v2 bot control panel contracts + projections (S1 — #1297).
+# panel-profile / catalog / panel / presented-actions / chart (live + bounded
+# history). Account-scoped reads and control actions on live broker state, so
+# every route requires the always-on data-plane control secret.
+app.include_router(
+    broker_v2_panel.router,
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.

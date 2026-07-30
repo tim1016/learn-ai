@@ -1,0 +1,60 @@
+@if (loadError()) {
+  <div class="load-error" role="alert" aria-live="assertive">
+    <p>{{ loadError() }}</p>
+  </div>
+}
+
+@if (!isLoaded()) {
+  <div class="loading-state" role="status" aria-live="polite" aria-label="Loading bot panel">
+    <span class="loading-text">Loading…</span>
+  </div>
+}
+
+@if (isLoaded()) {
+  @let panelData = panel()!;
+  @let profileData = profile()!;
+
+  <!-- Lens tab bar (spec §6 — Trader default, Operator unlocked in S4) -->
+  <div class="lens-toggle" role="tablist" aria-label="Panel lens">
+    <button
+      role="tab"
+      class="lens-toggle__tab"
+      [class.lens-toggle__tab--active]="activeLens() === 'trader'"
+      [attr.aria-selected]="activeLens() === 'trader'"
+      (click)="selectLens('trader')"
+    >Trader</button>
+    <button
+      role="tab"
+      class="lens-toggle__tab"
+      [class.lens-toggle__tab--active]="activeLens() === 'operator'"
+      [attr.aria-selected]="activeLens() === 'operator'"
+      (click)="selectLens('operator')"
+    >Operator</button>
+  </div>
+
+  @switch (activeLens()) {
+    @case ('trader') {
+      <app-trader-lens
+        [panel]="panelData"
+        [profile]="profileData"
+        [liveChart]="liveChart()"
+        [histChart]="histChart()"
+        [selectedPreset]="selectedPreset()"
+        [actionPending]="actionPending()"
+        (presetChange)="onPresetChange($event)"
+        (actionRequested)="onActionRequested($event)"
+      />
+    }
+    @case ('operator') {
+      <app-operator-lens
+        [panel]="panelData"
+        [profile]="profileData"
+        [actionPending]="actionPending()"
+        [actionRequested]="onActionRequested.bind(this)"
+        [broker]="broker()"
+        [accountId]="accountId()"
+        [sid]="sid()"
+      />
+    }
+  }
+}

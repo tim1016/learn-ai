@@ -1,0 +1,136 @@
+:host {
+  display: block;
+}
+
+.dual-pane-chart {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+
+  // Narrow viewports — stack panes
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+  }
+
+  // When one pane is fullscreen, hide the other and expand
+  &.fullscreen-live {
+    .chart-pane--history { display: none; }
+    .chart-pane--live { grid-column: 1 / -1; }
+  }
+
+  &.fullscreen-history {
+    .chart-pane--live { display: none; }
+    .chart-pane--history { grid-column: 1 / -1; }
+  }
+}
+
+.chart-pane {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-card, #1f2937);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--surface-border, #374151);
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-section, #111827);
+  border-bottom: 1px solid var(--surface-border, #374151);
+  min-height: 2.25rem;
+}
+
+.pane-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-color-secondary, #9ca3af);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex: 1;
+}
+
+.source-chip {
+  font-size: 0.65rem;
+  font-weight: 500;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  background: #374151;
+  color: #22c55e;
+
+  &--polygon {
+    color: #9ca3af;
+    background: #1f2937;
+    border: 1px solid #374151;
+  }
+}
+
+.expand-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-color-secondary, #9ca3af);
+  font-size: 1rem;
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  line-height: 1;
+
+  &:hover {
+    color: var(--text-color, #f9fafb);
+    background: #374151;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--primary-color, #6366f1);
+    outline-offset: 1px;
+  }
+}
+
+.preset-bar {
+  display: flex;
+  gap: 0.125rem;
+}
+
+.preset-btn {
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  color: var(--text-color-secondary, #9ca3af);
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  line-height: 1.4;
+
+  &:hover {
+    color: var(--text-color, #f9fafb);
+    background: #374151;
+  }
+
+  &--active {
+    color: var(--primary-color, #6366f1);
+    border-color: var(--primary-color, #6366f1);
+    background: rgba(99, 102, 241, 0.1);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--primary-color, #6366f1);
+    outline-offset: 1px;
+  }
+}
+
+.overlay-notice {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  color: #9ca3af;
+  background: #1f2937;
+  border-bottom: 1px solid #374151;
+}
+
+.chart-container {
+  flex: 1;
+  min-height: 240px;
+  position: relative;
+}
