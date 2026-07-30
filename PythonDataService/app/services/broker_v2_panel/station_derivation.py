@@ -21,11 +21,15 @@ threshold on the evidence timestamp against ``now_ms``.
 
 from __future__ import annotations
 
+import logging
+
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.v2panel.vocabulary import STATION_IDS, StationId, StationState, copy_for
 from app.engine.live.order_identity import build_bot_order_namespace, parse_order_ref
 from app.schemas.broker_v2_panel import StationView
+
+logger = logging.getLogger(__name__)
 
 # Evidence older than this is rendered ``unknown_stale`` (§7). One trading day
 # in ms — a decision or sweep older than the current session cannot be trusted
@@ -59,6 +63,21 @@ def transaction_refs_for_bot(sid: str, entries: list[OrderJournalEntry]) -> list
 
 def _entries_for_ref(ref: str, entries: list[OrderJournalEntry]) -> list[OrderJournalEntry]:
     return [entry for entry in entries if entry.order_ref == ref]
+
+
+def _validate_transaction_ownership(transaction_ref: str, sid: str) -> bool:
+    """Return True iff ``transaction_ref`` belongs to bot ``sid``'s namespace.
+
+    Parses the ref via ``parse_order_ref`` and compares its namespace to the
+    expected value from ``build_bot_order_namespace``. A mismatch means a
+    cross-bot order ref slipped through the caller's filter — the order-scoped
+    stations must not render as this bot's evidence.
+    """
+    try:
+        namespace, _ = parse_order_ref(transaction_ref)
+    except ValueError:
+        return False
+    return namespace == build_bot_order_namespace(sid)
 
 
 def _station(
@@ -176,12 +195,27 @@ def _fill_station(txn_entries: list[OrderJournalEntry]) -> StationView:
 
 
 def _reconciled_station(
-    latest_reconciliation: OrderJournalEntry | None, now_ms: int
+    latest_reconciliation: OrderJournalEntry | None,
+    now_ms: int,
+    transaction_submitted_at_ms: int | None = None,
 ) -> StationView:
     if latest_reconciliation is None or latest_reconciliation.verdict is None:
         return _station("RECONCILED", "waiting", "No reconciliation sweep has run yet.")
     verdict = latest_reconciliation.verdict
     at_ms = latest_reconciliation.recorded_at_ms
+    # Causal gate: a sweep that predates the transaction's submission cannot
+    # confirm this transaction is reconciled — it only saw the prior state.
+    if (
+        transaction_submitted_at_ms is not None
+        and at_ms <= transaction_submitted_at_ms
+    ):
+        return _station(
+            "RECONCILED",
+            "blocked",
+            "The last reconciliation sweep predates this transaction's submission; "
+            "re-run a sweep.",
+            evidence_at_ms=at_ms,
+        )
     if verdict == "clean":
         state = _freshness("satisfied", at_ms, now_ms)
         return _station(
@@ -205,6 +239,7 @@ def _reconciled_station(
 
 def derive_stations(
     *,
+    sid: str,
     transaction_ref: str | None,
     all_entries: list[OrderJournalEntry],
     latest_decision: DecisionReceipt | None,
@@ -216,16 +251,62 @@ def derive_stations(
     ``transaction_ref`` selects the transaction; ``None`` means the bot has no
     order intent yet, so every order-scoped station is ``waiting``. SIGNAL and
     RECONCILED are bot/account-scoped and derived regardless.
+
+    Ownership validation: if ``transaction_ref`` is set but does not belong to
+    ``sid``'s namespace (cross-bot contamination), the order-scoped stations
+    (INTENT, SUBMIT_GATE, BROKER_ACK, FILL) are blocked with an explanatory
+    receipt. SIGNAL and RECONCILED are derived normally because they are
+    bot/account-scoped, not transaction-scoped.
+
+    Causal reconciliation gate: if the selected transaction has a SUBMIT_ACKED
+    entry, any reconciliation sweep whose timestamp is <= the submission timestamp
+    predates the transaction and must not be treated as confirming evidence.
     """
-    txn_entries = (
-        _entries_for_ref(transaction_ref, all_entries) if transaction_ref else []
+    ownership_ok = True
+    if transaction_ref is not None and not _validate_transaction_ownership(
+        transaction_ref, sid
+    ):
+        logger.warning(
+            "Transaction ownership mismatch: ref=%s does not belong to sid=%s",
+            transaction_ref,
+            sid,
+            extra={"transaction_ref": transaction_ref, "sid": sid},
+        )
+        ownership_ok = False
+
+    if transaction_ref is not None and ownership_ok:
+        txn_entries = _entries_for_ref(transaction_ref, all_entries)
+    else:
+        txn_entries = []
+
+    if ownership_ok:
+        intent_station = _intent_station(txn_entries)
+        submit_gate_station = _submit_gate_station(txn_entries)
+        broker_ack_station = _broker_ack_station(txn_entries)
+        fill_station = _fill_station(txn_entries)
+    else:
+        _cross_bot_receipt = (
+            f"Transaction {transaction_ref!r} belongs to a different bot; "
+            "this station cannot show evidence from another bot's order."
+        )
+        intent_station = _station("INTENT", "blocked", _cross_bot_receipt)
+        submit_gate_station = _station("SUBMIT_GATE", "blocked", _cross_bot_receipt)
+        broker_ack_station = _station("BROKER_ACK", "blocked", _cross_bot_receipt)
+        fill_station = _station("FILL", "blocked", _cross_bot_receipt)
+
+    submitted_at_ms = next(
+        (e.recorded_at_ms for e in txn_entries if e.kind is ClerkEntryKind.SUBMIT_ACKED),
+        None,
     )
+
     builders = {
         "SIGNAL": _signal_station(latest_decision, now_ms),
-        "INTENT": _intent_station(txn_entries),
-        "SUBMIT_GATE": _submit_gate_station(txn_entries),
-        "BROKER_ACK": _broker_ack_station(txn_entries),
-        "FILL": _fill_station(txn_entries),
-        "RECONCILED": _reconciled_station(latest_reconciliation, now_ms),
+        "INTENT": intent_station,
+        "SUBMIT_GATE": submit_gate_station,
+        "BROKER_ACK": broker_ack_station,
+        "FILL": fill_station,
+        "RECONCILED": _reconciled_station(
+            latest_reconciliation, now_ms, submitted_at_ms
+        ),
     }
     return [builders[station_id] for station_id in STATION_IDS]

@@ -19,7 +19,6 @@ from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.models import ClerkStatus, OrderJournalEntry
-from app.broker.alpaca.clerk.rollup_cache import BotRollupCache
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
@@ -35,13 +34,10 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
 )
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
+from app.services.broker_v2_panel.account_projection_owner import get_or_create_owner
 from app.services.broker_v2_panel.action_execution_service import (
     ActionPerformer,
     execute_action,
-)
-from app.services.broker_v2_panel.catalog_projection_service import (
-    bootstrap_rollup_cache,
-    build_catalog,
 )
 from app.services.broker_v2_panel.chart_projection_service import (
     build_history_chart,
@@ -204,16 +200,11 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     resolved = await _validate_account(broker, account_id)
     statuses = _bot_statuses(broker)
     entries = _read_order_journal(resolved)
-    cache = BotRollupCache()
     sids = [status.strategy_instance_id for status in statuses]
-    bootstrap_rollup_cache(cache, sids, entries)
-    # Fold decision receipts into the cache so needs_attention reflects the
-    # latest 'blocked' decision (spec §5 attention-first sort).
-    for sid in sids:
-        decision = _latest_decision(resolved, sid)
-        if decision is not None:
-            cache.on_decision_appended(decision, sid=sid)
-    return build_catalog(statuses, cache, account_id=resolved)
+    decisions = {sid: _latest_decision(resolved, sid) for sid in sids}
+    owner = get_or_create_owner(resolved, broker)
+    owner.sync(entries, sids, decisions=decisions)
+    return owner.snapshot_catalog(statuses)
 
 
 async def get_panel(
@@ -226,9 +217,9 @@ async def get_panel(
     clerk_status = await _clerk_status()
     decision = _latest_decision(resolved, sid)
 
-    cache = BotRollupCache()
-    bootstrap_rollup_cache(cache, [sid], entries)
-    rollup = cache.get_rollup(sid)
+    owner = get_or_create_owner(resolved, broker)
+    owner.sync(entries, [sid], decisions={sid: decision})
+    rollup = owner.get_rollup(sid)
 
     profile = panel_profile_for(broker)
     flatten_supported = profile.flatten_supported if profile is not None else False

@@ -11,7 +11,8 @@ same discipline as ``BrokerCapabilities`` (ADR 0032 principle #2).
 
 from __future__ import annotations
 
-from app.broker.v2panel.vocabulary import ACTION_IDS, STATION_IDS, copy_for
+from app.broker.v2panel.action_policy import supported_action_ids_for
+from app.broker.v2panel.vocabulary import STATION_IDS, copy_for
 from app.schemas.broker_v2_panel import PanelProfile, StationApplicability
 
 # Broker → the profile facts that differ per broker/mode. A broker absent here
@@ -55,7 +56,7 @@ def alpaca_panel_profile() -> PanelProfile:
         flatten_supported=True,
         live_bars_supported=False,
         stations=_stations_for(_ALPACA_INAPPLICABLE_STATIONS),
-        supported_action_ids=list(ACTION_IDS),
+        supported_action_ids=supported_action_ids_for("alpaca"),
     )
 
 

@@ -1,0 +1,43 @@
+{
+  "scenarios": {
+    "overnight_position": {
+      "description": "BUY 100 @ $10 on day 1 (ts=1000), BUY 50 @ $11 on day 1 (ts=2000), SELL 80 @ $13 on day 2 (ts=86401000). Overnight position test.",
+      "fills": [
+        {"side": "BUY", "qty": 100, "price": 10.0, "ts_ms": 1000, "symbol": "SPY", "event_key": "exec:buy1", "fee": null},
+        {"side": "BUY", "qty": 50, "price": 11.0, "ts_ms": 2000, "symbol": "SPY", "event_key": "exec:buy2", "fee": null},
+        {"side": "SELL", "qty": 80, "price": 13.0, "ts_ms": 86401000, "symbol": "SPY", "event_key": "exec:sell1", "fee": null}
+      ]
+    },
+    "duplicate_delivery": {
+      "description": "Same event_key delivered twice — must not double-count.",
+      "fills": [
+        {"side": "BUY", "qty": 100, "price": 10.0, "ts_ms": 1000, "symbol": "SPY", "event_key": "exec:dup1", "fee": null},
+        {"side": "BUY", "qty": 100, "price": 10.0, "ts_ms": 1000, "symbol": "SPY", "event_key": "exec:dup1", "fee": null},
+        {"side": "SELL", "qty": 100, "price": 12.0, "ts_ms": 2000, "symbol": "SPY", "event_key": "exec:close1", "fee": null}
+      ]
+    },
+    "partial_fill_sequence": {
+      "description": "Partial fill for 60 shares then completing fill for 40 shares (different event_keys, same logical order).",
+      "fills": [
+        {"side": "BUY", "qty": 60, "price": 10.0, "ts_ms": 1000, "symbol": "SPY", "event_key": "exec:partial1", "fee": null},
+        {"side": "BUY", "qty": 40, "price": 10.0, "ts_ms": 1001, "symbol": "SPY", "event_key": "exec:complete1", "fee": null},
+        {"side": "SELL", "qty": 100, "price": 12.0, "ts_ms": 2000, "symbol": "SPY", "event_key": "exec:close1", "fee": null}
+      ]
+    },
+    "reversal": {
+      "description": "BUY 100 @ $10 then SELL 150 @ $12 — reversal into short position.",
+      "fills": [
+        {"side": "BUY", "qty": 100, "price": 10.0, "ts_ms": 1000, "symbol": "SPY", "event_key": "exec:buy1", "fee": null},
+        {"side": "SELL", "qty": 150, "price": 12.0, "ts_ms": 2000, "symbol": "SPY", "event_key": "exec:sell1", "fee": null}
+      ]
+    },
+    "incomplete_marks": {
+      "description": "Two-symbol portfolio with mark for only one symbol — open_pnl must be None.",
+      "fills": [
+        {"side": "BUY", "qty": 100, "price": 10.0, "ts_ms": 1000, "symbol": "SPY", "event_key": "exec:spy1", "fee": null},
+        {"side": "BUY", "qty": 50, "price": 200.0, "ts_ms": 1001, "symbol": "AAPL", "event_key": "exec:aapl1", "fee": null}
+      ],
+      "mark_prices": {"SPY": 11.0}
+    }
+  }
+}

@@ -17,33 +17,18 @@ Lifecycle semantics (§12) drive the enablement:
 - ``cancel_order`` — a working order exists.
 - ``clear_hold`` — an active hold whose root condition is healthy + fresh.
 - ``reconcile_now`` — always available (triggers a sweep).
+
+Enablement logic lives in ``app.broker.v2panel.action_policy.ACTION_REGISTRY``
+(the single canonical location per decision #18). This module is the stable
+public entry point so callers (``panel_projection_service``) keep the same
+import path.
 """
 
 from __future__ import annotations
 
-from app.broker.v2panel.vocabulary import ActionId, copy_for
+from app.broker.v2panel.action_policy import ActionGuardContext, build_actions_from_registry
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import ClerkCard, PanelAction
-from app.schemas.operator_blocker import OperatorConfirmationCopy
-
-
-def _action(
-    action_id: ActionId,
-    *,
-    enabled: bool,
-    revision: int,
-    confirmation: OperatorConfirmationCopy | None = None,
-) -> PanelAction:
-    copy = copy_for(action_id)
-    return PanelAction(
-        action_id=action_id,
-        label=copy.label,
-        explanation=copy.explanation,
-        enabled=enabled,
-        blockers=[],
-        confirmation=confirmation,
-        revision=revision,
-    )
 
 
 def build_actions(
@@ -63,42 +48,12 @@ def build_actions(
     rollup) — it gates ``flatten_stop`` when the bot is stopped but still holds
     a position.
     """
-    retired = status.phase == "RETIRED"
-    running = status.running
-    has_exposure = any(abs(qty) > 0 for qty in exposure.values())
-
-    actions: list[PanelAction] = []
-
-    # start — off duty and not retired.
-    actions.append(
-        _action("start", enabled=not running and not retired, revision=revision)
+    ctx = ActionGuardContext(
+        running=status.running,
+        phase=status.phase,
+        hold_active=clerk.hold_active,
+        channel_fresh=channel_fresh,
+        has_exposure=any(abs(qty) > 0 for qty in exposure.values()),
+        flatten_supported=flatten_supported,
     )
-    # stop — running.
-    actions.append(_action("stop", enabled=running, revision=revision))
-    # flatten_stop — only when the broker supports flatten and the bot is
-    # running or holds exposure.
-    actions.append(
-        _action(
-            "flatten_stop",
-            enabled=flatten_supported and (running or has_exposure),
-            revision=revision,
-        )
-    )
-    # retire — any non-retired bot (terminal; Button-Rule confirm).
-    actions.append(_action("retire", enabled=not retired, revision=revision))
-    # cancel_order — presented always; the specific order id is chosen in the UI
-    # from the working-orders list. Enabled whenever the bot is not retired.
-    actions.append(_action("cancel_order", enabled=not retired, revision=revision))
-    # clear_hold — an active hold whose root condition is healthy + freshly
-    # observed (§7.3). No force-override path.
-    actions.append(
-        _action(
-            "clear_hold",
-            enabled=clerk.hold_active and channel_fresh,
-            revision=revision,
-        )
-    )
-    # reconcile_now — always available (triggers a sweep).
-    actions.append(_action("reconcile_now", enabled=True, revision=revision))
-
-    return actions
+    return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
