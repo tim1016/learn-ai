@@ -5,7 +5,6 @@ import {
   inject,
   input,
   resource,
-  signal,
 } from '@angular/core';
 import { TagModule } from 'primeng/tag';
 
@@ -34,23 +33,25 @@ export class AccountStripComponent {
 
   private readonly brokers = inject(BrokersService);
   private readonly destroyRef = inject(DestroyRef);
-  private readonly refreshEpoch = signal(0);
 
   protected readonly account = resource({
-    params: () => ({ broker: this.broker(), epoch: this.refreshEpoch() }),
-    loader: ({ params }: { params: { broker: string; epoch: number } }) =>
+    params: () => ({ broker: this.broker() }),
+    loader: ({ params }: { params: { broker: string } }) =>
       this.brokers.getAccount(params.broker),
   });
 
   protected readonly clerkStatus = resource({
-    params: () => ({ broker: this.broker(), epoch: this.refreshEpoch() }),
-    loader: ({ params }: { params: { broker: string; epoch: number } }) =>
+    params: () => ({ broker: this.broker() }),
+    loader: ({ params }: { params: { broker: string } }) =>
       this.brokers.getClerkStatus(params.broker),
   });
 
   constructor() {
+    // Poll via reload(): keeps the previous value while refreshing and
+    // no-ops when a load is already in flight (see bots-list-page).
     const timer = setInterval(() => {
-      this.refreshEpoch.update((epoch) => epoch + 1);
+      this.account.reload();
+      this.clerkStatus.reload();
     }, 15_000);
     this.destroyRef.onDestroy(() => clearInterval(timer));
   }

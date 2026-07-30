@@ -43,7 +43,6 @@ export class BotsListPageComponent {
 
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly destroyRef = inject(DestroyRef);
-  private readonly refreshEpoch = signal(0);
 
   protected readonly deployVisible = signal(false);
   protected readonly actionError = signal<string | null>(null);
@@ -52,12 +51,11 @@ export class BotsListPageComponent {
     params: () => ({
       broker: this.broker(),
       accountId: this.accountId(),
-      epoch: this.refreshEpoch(),
     }),
     loader: ({
       params,
     }: {
-      params: { broker: string; accountId: string; epoch: number };
+      params: { broker: string; accountId: string };
     }) => this.panelService.getCatalog(params.broker, params.accountId),
   });
 
@@ -68,8 +66,12 @@ export class BotsListPageComponent {
   });
 
   constructor() {
+    // Poll via reload(): keeps the previous value while refreshing and
+    // no-ops when a load is already in flight. Driving the refresh through
+    // a params-epoch instead aborts and resets the resource each tick,
+    // which never converges when the endpoint is slower than the interval.
     const timer = setInterval(() => {
-      this.refreshEpoch.update((epoch) => epoch + 1);
+      this.catalog.reload();
     }, 5_000);
     this.destroyRef.onDestroy(() => clearInterval(timer));
   }
