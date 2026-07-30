@@ -254,13 +254,30 @@ never branch on those strings. This retires `recovery-flatten-*`,
   is not sufficient account identity.
 - **Account observation proof** — a fresh, clean Account Truth assessment for
   one broker account. It proves that current account state is attributable and
-  may include non-zero exposure owned by an active bot; it is the right proof
-  for ongoing trading permission, not a claim that the account is flat.
+  may include non-zero account exposure attributed to an active strategy
+  instance; it is the right proof for ongoing trading permission, not a claim
+  that the account is flat.
+- **Account exposure** — the broker-observed net position of the connected
+  trading account. A bot does not own a broker position.
+- **Instance-attributed account exposure** — the Account Clerk's projection of
+  the portion of account exposure supported by exact order and fill identity
+  for one `strategy_instance_id`. _Avoid_: bot exposure, bot-owned position.
+- **Clean strategy exit** — a terminal Clerk effect proving that working entry
+  and exit orders are resolved and the instance-attributed account exposure is
+  zero. An exit that deliberately leaves exposure open is a carryover stop, not
+  a clean exit.
+- **Carryover stop checkpoint** — the durable Clerk-backed account-exposure
+  evidence captured when an approved STOP leaves instance-attributed exposure
+  in place.
+- **Resume custody proof** — a fresh proof that immutable strategy
+  configuration, current Clerk attribution, and broker account truth exactly
+  match the carryover stop checkpoint. A new run may attach to the stopped
+  instance only when this proof passes.
 - **Account recovery proof** — the stricter account reconciliation receipt used
   for recovery actions such as freeze clearing and ADR-required flat starts.
   It combines observation proof with accepted resolved exposure/flatness and
-  must not be used to stop a healthy bot merely because it holds an owned
-  position.
+  must not be used to stop a healthy bot merely because account exposure is
+  attributed to its strategy instance.
 - **Recovery-required broker exposure** — a current broker position or working
   order attributable to a known retired bot but lacking an active manager. It
   is known rather than foreign, yet blocks ordinary account trading until
