@@ -77,6 +77,9 @@ export class BotPanelShellComponent {
     () => this.panel() !== null && this.profile() !== null,
   );
 
+  private panelInFlight = false;
+  private liveChartInFlight = false;
+
   // ── Polling timers ────────────────────────────────────────────────────────
 
   private readonly POLL_MS = 5_000;
@@ -152,8 +155,6 @@ export class BotPanelShellComponent {
   // In-flight guards: the panel/live-chart endpoints can take longer than
   // POLL_MS; without the guard each tick stacks another concurrent request
   // and the pile-up degrades the backend for every panel consumer.
-  private panelInFlight = false;
-  private liveChartInFlight = false;
 
   private async loadPanel(): Promise<void> {
     if (this.panelInFlight) return;

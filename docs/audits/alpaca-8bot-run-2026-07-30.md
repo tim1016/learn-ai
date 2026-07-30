@@ -10,8 +10,8 @@ UI operators, watchers, investigators). Design spec:
 
 | Criterion | Result |
 |---|---|
-| ≥15 min with all 8 bots concurrently running | ✅ **20+ min** (T0 16:47:14Z → 17:07:14Z, then continued) |
-| Every bot submits ≥1 real filled order | ⚠️ 6 of 8 traded (41 orders, **41/41 filled**); QQQ + AMZN never met the 2-green-bars entry during the window — honest strategy behavior, not a defect |
+| ≥15 min with all 8 bots concurrently running | ✅ **20+ min** (T0 16:47:14Z → 17:07:14Z), then ~2 h total until wind-down |
+| Every bot submits ≥1 real filled order | ⚠️ All 6 **trade-mode** bots traded; QQQ + AMZN turned out to have been deployed in `log_only` (dialog default left unchanged by the operator agent — discovered at wind-down). Full day: **152 bot orders, 76 buys / 76 sells, 152/152 filled** |
 | Account ends flat, clean reconciliation | ✅ (wind-down section below) |
 | Evidence report written | ✅ this document |
 
@@ -35,8 +35,13 @@ UI operators, watchers, investigators). Design spec:
 - **41 orders, 41 fills** (21 buys / 20 sells) by 17:07Z; max simultaneous
   exposure 5 shares (cap 8). Per-bot at T0+20m: MSFT 8 fills (−$0.89),
   NVDA 7 (+$0.44), SPY 6 (+$0.17), AAPL 6 (−$0.49), AMD 6 (−$1.17),
-  META 6 (+$0.80), QQQ/AMZN 0. Net realized **−$1.14** (paper; fees not
-  reported by Alpaca paper).
+  META 6 (+$0.80), QQQ/AMZN 0. Net realized **−$1.14** at that snapshot
+  (paper; fees not reported by Alpaca paper).
+- **Correction to the watcher's read**: QQQ and AMZN were not "no-signal" —
+  they had been deployed `log_only` (dialog default). Follow-up: for a
+  trade-run dialog, defaulting to the silent mode is a UX trap.
+- Full-day totals at wind-down: **152 bot orders (76 buys / 76 sells),
+  152/152 filled**, ~13 round-trips per trade-mode symbol over ~2 h.
 - IBKR 5-second-bar delivery gaps occurred and **self-healed** through the
   `live_idempotent` redelivery policy (one exact-redelivery skip observed) —
   the temporal-rigor subscription relaxation working as designed.
@@ -59,10 +64,28 @@ that had only ever seen fixtures.
 | 8 | `526834fb` | Chart history 500'd for every symbol | Polygon Starter answers `status=DELAYED` (15-min delayed entitlement); fetcher treated it as an error |
 | 9 | `ecfdc9e2` | Panel/catalog ~8–18 s per request | Every request re-validated the static account id with a full Alpaca REST `get_account` (5–15 s on the paper API that day) + the sweep made its two ~7 s broker reads sequentially. 60 s port-keyed cache + `asyncio.gather` |
 
+**Defect #10 — found, NOT fixed today (the run's biggest open finding):**
+the panel's presented-action **stop** could never land on an actively trading
+bot. The action handler re-fetches the panel (then ~18 s stale) to obtain the
+action `revision`, and a trading bot advances its revision faster than that
+window — every stop POST returned **409 revision-stale**. Two independent
+operator agents each spent 30+ minutes failing to stop a single bot before
+this was diagnosed. Wind-down had to bypass the presented-action route (see
+below). Remediation candidates: server-tolerant revision matching for
+idempotent actions like stop, a revision-free stop, or simply the now-fast
+panel shrinking the staleness window — needs a deliberate design decision
+against the presented-actions contract (spec §11).
+
 Unresolved observations (follow-ups, not fixed today):
 
 - **META transient deploy failure**: first attempt returned the dialog's
   generic error, immediate retry succeeded. Cause not established.
+- Panel/catalog latency after the account-id cache: ~4.4 s consistent —
+  one residual per-request Alpaca REST call remains somewhere in the
+  catalog/panel path (cache-hit second call did not improve); trace it.
+- Chart history ~17 s (Polygon backfill fetch per request).
+- Deploy dialog defaults to `log_only` — silent-no-op trap for trade runs
+  (see QQQ/AMZN above).
 - `clerk.status()` takes the exclusive intake lock for a pure read
   (3–20 s under load); investigator proposes a lock-free read path.
 - Panel row actions fetch the full panel before executing (adds the panel
@@ -102,13 +125,34 @@ detection that correctly caught the pre-run stale share (below).
 - **Take 2** wedged: with defect #7 breaking evidence views and ~18 s pages
   (defect #9), the operator burned its window verifying state and never
   executed a stop. Stopped by the director.
-- **Take 3** ran after the restart with all fixes live — results below.
-
-<!-- COMPLETED AT END OF DAY -->
+- **Honest outcome: the churn drill was never executed.** Take 1 was blocked
+  by verdict noise (defect #5, fixed), take 2 by page latency + evidence 500s
+  (defects #7/#9, fixed) — and the decisive blocker for any take was defect
+  #10: the UI stop action 409s on a trading bot, so the 8→5 drawdown was
+  impossible through the panel. The 5-always-running invariant remains
+  untested. It is re-runnable once #10 is resolved; the rest of the stack is
+  now fast and clean.
 
 ## Wind-down and final state
 
-<!-- COMPLETED AT END OF DAY -->
+With the UI stop path broken (defect #10) and two operator agents burned on
+it, wind-down deviated from D5, documented here: the 7 flat bots were stopped
+via the bot-runner's own `POST /api/brokers/alpaca/bots/{sid}/stop` (the same
+operation the panel action ultimately performs, minus the revision contract),
+reason recorded on each. AAPL was in-position; its natural 3-bar exit was
+awaited (position closed on its own), then it was stopped the same way.
+
+End state, verified:
+
+- Bots running: **0** (all 8 stopped with recorded reasons).
+- Positions: **none**; open orders: none. 76 buys / 76 sells — every entry
+  closed by its exit.
+- Data plane restarted with all fixes; post-restart: reconciliation verdict
+  **clean** (stable — the flicker is gone with the account flat and defect #5
+  fixed), no hold, 0 outstanding intents; evidence endpoint 200 (was 500);
+  chart history 200 (was 500); panel/catalog ~4.4 s (from 8–18 s).
+- Net realized P&L for the day: ≈ **−$1** on ~$100k paper equity (fees not
+  reported by Alpaca paper).
 
 ## Process notes (orchestration)
 

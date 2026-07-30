@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  computed,
   effect,
   inject,
   input,
@@ -76,12 +77,10 @@ export class DeployDialogComponent {
 
   // Track mode reactively via toSignal so @if in the template updates on change.
   private readonly modeValue = toSignal(this.form.controls.mode.valueChanges, {
-    initialValue: 'log_only' as 'log_only' | 'trade',
+    initialValue: this.form.controls.mode.value,
   });
 
-  protected get isTradeMode(): boolean {
-    return this.modeValue() === 'trade';
-  }
+  protected readonly isTradeMode = computed(() => this.modeValue() === 'trade');
 
   constructor() {
     // Enable/disable quantity based on mode. Managed via the form API to avoid

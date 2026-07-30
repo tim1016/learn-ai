@@ -62,7 +62,7 @@
         class="field__input"
         aria-required="true"
       />
-      @if (!isTradeMode) {
+      @if (!isTradeMode()) {
         <span class="field__hint">Quantity is ignored in log-only mode</span>
       }
     </div>
@@ -98,7 +98,6 @@
       form="deploy-form"
       [loading]="submitting()"
       [disabled]="form.invalid || submitting()"
-      (click)="submit()"
     >Deploy</button>
   </ng-template>
 </p-dialog>

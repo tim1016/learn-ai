@@ -1,6 +1,7 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
+import type { components } from '../../../../api/broker.types';
 import type {
   BotCatalogView,
   BotPanelView,
@@ -13,17 +14,7 @@ import type {
   PanelProfile,
 } from './broker-v2-panel.types';
 
-/**
- * Deploy payload — local interface extension until broker.types.ts (CODEGEN)
- * is regenerated to include `mode` and `quantity`. Reconcile at merge.
- */
-export interface DeployBotBody {
-  strategy_instance_id: string;
-  symbol: string;
-  use_rth: boolean;
-  mode: 'log_only' | 'trade';
-  quantity: number;
-}
+export type DeployBotBody = components['schemas']['DeployBotRequest'];
 
 /**
  * HTTP client for the broker-v2 panel surface.
@@ -46,9 +37,6 @@ export class BrokerV2PanelService {
     );
   }
 
-  // NOTE: `DeployBotBody` intentionally lives here rather than in broker.types.ts
-  // (a CODEGEN file). When the backend regenerates its types the orchestrator
-  // should reconcile DeployBotBody with the new generated interface.
   deployBot(
     broker: string,
     accountId: string,
