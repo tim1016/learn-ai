@@ -44,7 +44,8 @@ Usage::
     fills = project_instance_fills(sid, journal.read_all())
     result = compute_fifo_pnl(fills)
     # result.realized_pnl  — closed lots only; may be 0.0 on no closed trades
-    # result.open_pnl      — None until a mark_price is supplied
+    # result.open_pnl      — None until mark_prices are supplied for ALL open symbols
+    # result.marks_complete — True only when all open-lot symbols have mark coverage
     # result.fee_total     — None when any fill has fee=None ("Fees not reported")
 """
 
@@ -112,9 +113,21 @@ class PnLResult:
         ``0.0`` when no lots have been closed.
 
     ``open_pnl``:
-        ``None`` when no current mark price is available (the bot has open
-        exposure but the caller did not supply a mark).  ``0.0`` when there
-        is no open exposure (fully flat).
+        ``None`` when no current mark price is available OR when any open-lot
+        symbol is missing a mark (marks_complete=False).  ``0.0`` when there
+        is no open exposure (fully flat, marks_complete=True).  Non-None only
+        when ALL open-lot symbols have mark coverage.
+
+        IMPORTANT: ``open_pnl`` is never a partial sum.  If SPY and AAPL
+        both have open lots but only SPY has a mark, ``open_pnl`` is ``None``
+        (not just SPY's unrealized).  Callers must check ``marks_complete``
+        before using ``open_pnl``.
+
+    ``marks_complete``:
+        ``True`` when either (a) there are no open lots (bot is flat) or
+        (b) every open-lot symbol has a mark in ``mark_prices``.
+        ``False`` otherwise.  Only when ``marks_complete`` is ``True`` is
+        ``open_pnl`` meaningful.
 
     ``fee_total``:
         ``None`` when ANY fill has fee=None — the broker did not report all
@@ -131,12 +144,93 @@ class PnLResult:
 
     realized_pnl: float = 0.0
     open_pnl: float | None = None
+    marks_complete: bool = False
     fee_total: float | None = None
     closed_lots: list[ClosedLot] = field(default_factory=list)
     open_lots: list[OpenLot] = field(default_factory=list)
 
 
 # ── FIFO engine ───────────────────────────────────────────────────────────────
+
+
+def apply_fill_to_lots(
+    lots: dict[str, deque[_Lot]],
+    fill: FillRecord,
+    closed_out: list[ClosedLot],
+    realized_accumulator: list[float],
+) -> None:
+    """Apply one fill to the FIFO lot queues in-place.
+
+    Extracted from ``compute_fifo_pnl``'s inner loop so that the rollup cache
+    can maintain FIFO state incrementally (O(1) per fill on append) without
+    calling ``compute_fifo_pnl`` over the full history on every read.
+
+    Parameters
+    ----------
+    lots:
+        Per-symbol FIFO lot queues (oldest-first).  Mutated in-place.
+    fill:
+        The new fill to apply.
+    closed_out:
+        List to which newly closed ``ClosedLot`` records are appended.
+    realized_accumulator:
+        Single-element list holding the running realized P&L total.  Updated
+        in-place.  A list (not a plain float) so callers can hold a reference
+        to a mutable accumulator without boxing/unboxing.
+
+    Formula:
+        Same FIFO rules as ``compute_fifo_pnl``.  See module docstring.
+    Canonical implementation: this file (delegate of compute_fifo_pnl).
+    Validated against:
+        PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py and
+        PythonDataService/tests/broker/alpaca/clerk/test_rollup_cache.py.
+    """
+    sym = fill.symbol
+    price = fill.fill_price
+    qty = fill.quantity
+    ts = fill.filled_at_ms
+
+    queue = lots.setdefault(sym, deque())
+    remaining = qty
+
+    if not queue:
+        queue.append(_Lot(qty=remaining, cost=price, opened_at_ms=ts, side=fill.side))
+        remaining = 0.0
+    else:
+        top_lot = queue[0]
+        if fill.side == top_lot.side:
+            queue.append(_Lot(qty=remaining, cost=price, opened_at_ms=ts, side=fill.side))
+            remaining = 0.0
+        else:
+            while remaining > _ZERO_ABS_TOL and queue and queue[0].side != fill.side:
+                lot = queue[0]
+                close_qty = min(remaining, lot.qty)
+                if lot.side is OrderSide.BUY:
+                    r_pnl = (price - lot.cost) * close_qty
+                else:
+                    r_pnl = (lot.cost - price) * close_qty
+                closed_out.append(
+                    ClosedLot(
+                        symbol=sym,
+                        qty=close_qty,
+                        entry_price=lot.cost,
+                        exit_price=price,
+                        opened_at_ms=lot.opened_at_ms,
+                        closed_at_ms=ts,
+                        realized_pnl=r_pnl,
+                        fee=fill.fee,
+                    )
+                )
+                realized_accumulator[0] += r_pnl
+                remaining -= close_qty
+                lot.qty -= close_qty
+                if math.isclose(lot.qty, 0.0, rel_tol=0.0, abs_tol=_ZERO_ABS_TOL):
+                    queue.popleft()
+
+            if remaining > _ZERO_ABS_TOL:
+                queue.append(
+                    _Lot(qty=remaining, cost=price, opened_at_ms=ts, side=fill.side)
+                )
 
 
 def compute_fifo_pnl(
@@ -160,9 +254,10 @@ def compute_fifo_pnl(
         Ordered chronologically (ascending ``filled_at_ms``).  Produced by
         ``project_instance_fills``.
     mark_prices:
-        Optional ``{symbol: current_price}`` for open-P&L calculation.  When
-        omitted (or the symbol is missing), ``open_pnl`` stays ``None`` for
-        that symbol.
+        Optional ``{symbol: current_price}`` for open-P&L calculation.
+        ``open_pnl`` is ``None`` unless ALL open-lot symbols appear in this
+        dict.  A partial mark set never produces a partial sum — ``open_pnl``
+        remains ``None`` when any symbol is uncovered.
 
     Notes
     -----
@@ -173,84 +268,41 @@ def compute_fifo_pnl(
     - Fee tracking: ``fee_total`` is ``None`` when any fill reports no fee
       (``fee=None``). This propagates "Fees not reported" honestly rather than
       masking unknown fees as $0.
+    - ``marks_complete``: ``True`` iff bot is flat OR all open-lot symbols
+      have a mark in ``mark_prices``.  Check this before using ``open_pnl``.
     """
-    # Per-symbol FIFO lot queues: deque is ordered oldest-first (FIFO).
     lots: dict[str, deque[_Lot]] = {}
     result = PnLResult()
     any_fee_missing = False
+    realized_acc = [0.0]
 
     for fill in fills:
-        sym = fill.symbol
-        price = fill.fill_price
-        qty = fill.quantity  # always positive (sign carried by side)
-        ts = fill.filled_at_ms
-
         # Fee tracking
         if fill.fee is None:
             any_fee_missing = True
         elif not any_fee_missing:
             result.fee_total = (result.fee_total or 0.0) + fill.fee
 
-        queue = lots.setdefault(sym, deque())
-        remaining = qty
+        apply_fill_to_lots(lots, fill, result.closed_lots, realized_acc)
 
-        if not queue:
-            # No open lots: open a new lot
-            queue.append(_Lot(qty=remaining, cost=price, opened_at_ms=ts, side=fill.side))
-            remaining = 0.0
-        else:
-            # Check if this fill is in the same direction or opposite
-            top_lot = queue[0]
-            if fill.side == top_lot.side:
-                # Same direction — add to the lot stack (new lot at the back)
-                queue.append(
-                    _Lot(qty=remaining, cost=price, opened_at_ms=ts, side=fill.side)
-                )
-                remaining = 0.0
-            else:
-                # Opposite direction — close existing lots (FIFO)
-                while remaining > _ZERO_ABS_TOL and queue and queue[0].side != fill.side:
-                    lot = queue[0]
-                    close_qty = min(remaining, lot.qty)
-                    # Realized P&L for this partial or full lot closure
-                    if lot.side is OrderSide.BUY:
-                        r_pnl = (price - lot.cost) * close_qty
-                    else:
-                        r_pnl = (lot.cost - price) * close_qty
-                    closed_lot = ClosedLot(
-                        symbol=sym,
-                        qty=close_qty,
-                        entry_price=lot.cost,
-                        exit_price=price,
-                        opened_at_ms=lot.opened_at_ms,
-                        closed_at_ms=ts,
-                        realized_pnl=r_pnl,
-                        fee=fill.fee,
-                    )
-                    result.closed_lots.append(closed_lot)
-                    result.realized_pnl += r_pnl
-                    remaining -= close_qty
-                    lot.qty -= close_qty
-                    if math.isclose(lot.qty, 0.0, rel_tol=0.0, abs_tol=_ZERO_ABS_TOL):
-                        queue.popleft()
-
-                # Any remaining quantity after closing opens a new lot (reversal)
-                if remaining > _ZERO_ABS_TOL:
-                    queue.append(
-                        _Lot(qty=remaining, cost=price, opened_at_ms=ts, side=fill.side)
-                    )
+    result.realized_pnl = realized_acc[0]
 
     # Propagate fee_total honesty
     if any_fee_missing:
         result.fee_total = None
 
     # Build open lots + compute open P&L
-    total_open_pnl: float | None = None
+    # Track which symbols have open lots and which have mark coverage.
+    symbols_with_open_lots: set[str] = set()
+    total_open_pnl: float = 0.0
+    marks = mark_prices or {}
+
     for sym, queue in lots.items():
-        mark = (mark_prices or {}).get(sym)
+        mark = marks.get(sym)
         for lot in queue:
             if lot.qty <= _ZERO_ABS_TOL:
                 continue
+            symbols_with_open_lots.add(sym)
             result.open_lots.append(
                 OpenLot(
                     symbol=sym,
@@ -265,13 +317,18 @@ def compute_fifo_pnl(
                     pnl_lot = (mark - lot.cost) * lot.qty
                 else:
                     pnl_lot = (lot.cost - mark) * lot.qty
-                total_open_pnl = (total_open_pnl or 0.0) + pnl_lot
+                total_open_pnl += pnl_lot
 
     if not result.open_lots:
+        # Flat — open_pnl is definitively $0; marks_complete is True.
         result.open_pnl = 0.0
-    elif total_open_pnl is not None:
+        result.marks_complete = True
+    elif marks.keys() >= symbols_with_open_lots:
+        # All open-lot symbols have marks — sum is complete.
         result.open_pnl = total_open_pnl
-    # else: open lots exist but no mark price — open_pnl stays None
+        result.marks_complete = True
+    # else: open lots exist but at least one symbol lacks a mark.
+    # open_pnl stays None, marks_complete stays False — never return a partial sum.
 
     return result
 
@@ -282,11 +339,21 @@ def realized_pnl_today(
     session_open_ms: int,
     session_close_ms: int,
 ) -> float:
-    """Realized P&L for fills whose close occurred within today's session window.
+    """Realized P&L for lots whose close fell within today's session window.
+
+    Runs FIFO over the COMPLETE fill history, then filters the resulting
+    closed lots to those with ``closed_at_ms in [session_open_ms,
+    session_close_ms)``.
+
+    IMPORTANT: Do NOT pre-filter fills to today before calling FIFO.  A buy
+    from a prior session and a sell today would be incorrectly treated as a
+    new short if the buy were excluded.  The correct path is:
+        all fills → FIFO → filter closed lots by closed_at_ms.
 
     Formula:
-        Filter fills to those with ``filled_at_ms in [session_open_ms, session_close_ms)``,
-        then apply ``compute_fifo_pnl`` on that subset.
+        realized_today = Σ lot.realized_pnl
+                         for lot in compute_fifo_pnl(all_fills).closed_lots
+                         where session_open_ms <= lot.closed_at_ms < session_close_ms
     Reference: Same FIFO method as above; session window from the canonical
         NYSE calendar module (``app/lean_sidecar/trading_calendar.py``).
     Canonical implementation: this file (derived from ``compute_fifo_pnl``).
@@ -296,11 +363,9 @@ def realized_pnl_today(
     (no calendar I/O).  The caller derives it from
     ``trading_calendar.session_window_for_date``.
     """
-    today_fills = [
-        f
-        for f in fills
-        if session_open_ms <= f.filled_at_ms < session_close_ms
-    ]
-    if not today_fills:
-        return 0.0
-    return compute_fifo_pnl(today_fills).realized_pnl
+    result = compute_fifo_pnl(fills)  # run over complete history
+    return sum(
+        lot.realized_pnl
+        for lot in result.closed_lots
+        if session_open_ms <= lot.closed_at_ms < session_close_ms
+    )

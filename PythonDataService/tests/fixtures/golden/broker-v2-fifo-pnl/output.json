@@ -1,0 +1,46 @@
+{
+  "scenarios": {
+    "overnight_position": {
+      "realized_pnl": 240.0,
+      "open_pnl": null,
+      "marks_complete": false,
+      "closed_lots_count": 1,
+      "open_lots_count": 2,
+      "arithmetic": "Lot1=BUY 100@$10 (ts=1000); Lot2=BUY 50@$11 (ts=2000). SELL 80@$13 (ts=86401000): FIFO takes 80 from Lot1 (oldest). Realized=(13-10)x80=$240. Remaining open: 20sh@$10 (lot1 residual) + 50sh@$11 (lot2 intact). No marks supplied => marks_complete=false, open_pnl=null."
+    },
+    "duplicate_delivery": {
+      "realized_pnl": 200.0,
+      "open_pnl": 0.0,
+      "marks_complete": true,
+      "closed_lots_count": 1,
+      "open_lots_count": 0,
+      "arithmetic": "event_key exec:dup1 appears twice; second delivery dropped by dedup (compute_fifo_pnl sees only unique FillRecords). Effective: BUY 100@$10, SELL 100@$12. FIFO closes lot: realized=(12-10)x100=$200. Flat after close => open_pnl=0.0, marks_complete=true."
+    },
+    "partial_fill_sequence": {
+      "realized_pnl": 200.0,
+      "open_pnl": 0.0,
+      "marks_complete": true,
+      "closed_lots_count": 2,
+      "open_lots_count": 0,
+      "arithmetic": "Two distinct event_keys: exec:partial1 (60sh@$10, ts=1000) + exec:complete1 (40sh@$10, ts=1001) = 100sh total BUY@$10. SELL 100@$12 (ts=2000): FIFO: closes exec:partial1 lot entirely (60sh): realized=(12-10)x60=$120; closes exec:complete1 lot entirely (40sh): realized=(12-10)x40=$80. Total realized=$200. Flat => open_pnl=0.0, marks_complete=true."
+    },
+    "reversal": {
+      "realized_pnl": 200.0,
+      "open_pnl": null,
+      "marks_complete": false,
+      "closed_lots_count": 1,
+      "open_lots_count": 1,
+      "arithmetic": "BUY 100@$10 (ts=1000). SELL 150@$12 (ts=2000): FIFO closes 100 long shares: realized=(12-10)x100=$200. Surplus 50 opens a short lot@$12. No mark supplied => marks_complete=false, open_pnl=null."
+    },
+    "incomplete_marks": {
+      "realized_pnl": 0.0,
+      "open_pnl": null,
+      "marks_complete": false,
+      "closed_lots_count": 0,
+      "open_lots_count": 2,
+      "arithmetic": "SPY: BUY 100sh@$10 open (mark=11). AAPL: BUY 50sh@$200 open (NO mark). Two symbols with open lots; only SPY has a mark. marks_complete=false => open_pnl=null (never return a partial sum). If only SPY were open, SPY unrealized=(11-10)x100=$100, but that is not returned because AAPL is uncovered. realized_pnl=0.0 (no lots closed)."
+    }
+  },
+  "tolerance": {"atol": 1e-9, "rtol": 0.0},
+  "reference": "GAAP FIFO inventory method; Kieso, Weygandt & Warfield, Intermediate Accounting (17e) Ch.8. Arithmetic hand-derived 2026-07-29."
+}
