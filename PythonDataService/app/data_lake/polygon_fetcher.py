@@ -159,7 +159,9 @@ def _raise_for_status(resp: httpx.Response, symbol: str) -> None:
 
 def _raise_for_payload_status(payload: dict, symbol: str, http_code: int) -> None:
     status = payload.get("status")
-    if status == "OK" or status is None:
+    # "DELAYED" is a success status on delayed-entitlement plans (Polygon
+    # Starter serves 15-minute-delayed data); the payload shape is identical.
+    if status in ("OK", "DELAYED") or status is None:
         return
     if status in ("NOT_FOUND", "ERROR_NOT_FOUND"):
         raise PolygonUnknownSymbolError(f"Polygon status={status} for {symbol}", http_code)

@@ -124,10 +124,10 @@ def _redact_summary(entry: OrderJournalEntry) -> tuple[str, bool]:
     elif kind is ClerkEntryKind.ORDER_EVENT:
         if entry.event:
             parts.append(f"event={entry.event.event_type}")
-            if entry.event.filled_quantity:
-                parts.append(
-                    f"filled={entry.event.filled_quantity}@{entry.event.filled_avg_price}"
-                )
+            # BrokerOrderEvent carries per-event quantity/price (not the
+            # order-level filled_quantity/filled_avg_price field names).
+            if entry.event.quantity:
+                parts.append(f"filled={entry.event.quantity}@{entry.event.price}")
         has_more = bool(entry.event)
 
     elif kind is ClerkEntryKind.RECONCILIATION:

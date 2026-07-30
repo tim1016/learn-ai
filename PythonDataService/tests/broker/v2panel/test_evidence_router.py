@@ -329,3 +329,32 @@ async def test_evidence_account_mismatch_returns_404(app_and_tmp) -> None:
             f"/api/brokers/alpaca/accounts/wrong-account/bots/{SID}/evidence"
         )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_evidence_renders_order_event_fill_line(app_and_tmp) -> None:
+    """Regression (2026-07-30 live run): ORDER_EVENT rendering read
+    ``event.filled_quantity``/``filled_avg_price`` — fields that do not exist
+    on BrokerOrderEvent (they are ``quantity``/``price``) — so the first real
+    fill made every evidence page 500."""
+    from tests.broker.v2panel.fixtures import fill_entry
+
+    fast_app, tmp_path = app_and_tmp
+    _write_journal(
+        tmp_path,
+        [
+            intent_entry(sid=SID, intent="i1", ts_ms=_T0),
+            fill_entry(sid=SID, intent="i1", qty=1.0, price=740.02, ts_ms=_T0 + 500),
+        ],
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app), base_url="http://test"
+    ) as client:
+        resp = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/evidence"
+        )
+
+    assert resp.status_code == 200
+    lines = [e["summary"] for e in resp.json()["entries"]]
+    assert any("filled=1.0@740.02" in line for line in lines)
