@@ -37,6 +37,7 @@ def _status(*, desired_state: str = "RUNNING", running: bool = True) -> BotStatu
         broker="alpaca",
         symbol="SPY",
         mode="log_only",
+        quantity=1,
         running=running,
         phase="ON_DUTY" if running else "OFF_DUTY",
         desired_state=desired_state,  # type: ignore[arg-type]

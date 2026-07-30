@@ -70,6 +70,8 @@ async def deploy_bot(broker: str, request: DeployBotRequest) -> BotStatusView:
             strategy_instance_id=request.strategy_instance_id,
             symbol=request.symbol,
             use_rth=request.use_rth,
+            mode=request.mode,
+            quantity=request.quantity,
         )
     except BotRunnerError as error:
         _raise_runner_error(error)

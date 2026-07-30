@@ -40,6 +40,7 @@ def _status(
         broker="alpaca",
         symbol="SPY",
         mode="log_only",
+        quantity=1,
         running=running,
         phase=phase,  # type: ignore[arg-type]
         desired_state=desired_state,  # type: ignore[arg-type]

@@ -9164,9 +9164,9 @@ export interface components {
             journal_tail_seq: number | null;
             /**
              * Mode
-             * @constant
+             * @enum {string}
              */
-            mode: "log_only";
+            mode: "log_only" | "trade";
             /** Open Pnl */
             open_pnl: number | null;
             rail: components["schemas"]["TransactionRail"];
@@ -9295,14 +9295,16 @@ export interface components {
             last_transition_at_ms: number | null;
             /**
              * Mode
-             * @constant
+             * @enum {string}
              */
-            mode: "log_only";
+            mode: "log_only" | "trade";
             /**
              * Phase
              * @enum {string}
              */
             phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
+            /** Quantity */
+            quantity: number;
             /** Running */
             running: boolean;
             /** Strategy Instance Id */
@@ -12140,9 +12142,20 @@ export interface components {
         };
         /**
          * DeployBotRequest
-         * @description Deploy (and start) a log-only bot bound to ``{broker}``.
+         * @description Deploy (and start) a bot bound to ``{broker}``.
          */
         DeployBotRequest: {
+            /**
+             * Mode
+             * @default log_only
+             * @enum {string}
+             */
+            mode?: "log_only" | "trade";
+            /**
+             * Quantity
+             * @default 1
+             */
+            quantity?: number;
             /** Strategy Instance Id */
             strategy_instance_id: string;
             /** Symbol */

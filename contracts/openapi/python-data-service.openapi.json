@@ -7840,8 +7840,12 @@
             "title": "Journal Tail Seq"
           },
           "mode": {
-            "const": "log_only",
-            "title": "Mode"
+            "enum": [
+              "log_only",
+              "trade"
+            ],
+            "title": "Mode",
+            "type": "string"
           },
           "open_pnl": {
             "anyOf": [
@@ -8115,8 +8119,12 @@
             "title": "Last Transition At Ms"
           },
           "mode": {
-            "const": "log_only",
-            "title": "Mode"
+            "enum": [
+              "log_only",
+              "trade"
+            ],
+            "title": "Mode",
+            "type": "string"
           },
           "phase": {
             "enum": [
@@ -8126,6 +8134,10 @@
             ],
             "title": "Phase",
             "type": "string"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "integer"
           },
           "running": {
             "title": "Running",
@@ -8145,6 +8157,7 @@
           "broker",
           "symbol",
           "mode",
+          "quantity",
           "running",
           "phase",
           "desired_state",
@@ -14663,8 +14676,24 @@
       },
       "DeployBotRequest": {
         "additionalProperties": false,
-        "description": "Deploy (and start) a log-only bot bound to ``{broker}``.",
+        "description": "Deploy (and start) a bot bound to ``{broker}``.",
         "properties": {
+          "mode": {
+            "default": "log_only",
+            "enum": [
+              "log_only",
+              "trade"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "quantity": {
+            "default": 1,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Quantity",
+            "type": "integer"
+          },
           "strategy_instance_id": {
             "maxLength": 128,
             "minLength": 1,

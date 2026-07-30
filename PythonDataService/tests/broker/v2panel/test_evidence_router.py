@@ -67,6 +67,7 @@ def _make_status(sid: str) -> BotStatusView:
         broker="alpaca",
         symbol="SPY",
         mode="log_only",
+        quantity=1,
         running=True,
         phase="ON_DUTY",
         desired_state="RUNNING",

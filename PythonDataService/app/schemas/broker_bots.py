@@ -15,13 +15,15 @@ from app.schemas.live_runs import BotDutyOutcomeView
 
 
 class DeployBotRequest(BaseModel):
-    """Deploy (and start) a log-only bot bound to ``{broker}``."""
+    """Deploy (and start) a bot bound to ``{broker}``."""
 
     model_config = ConfigDict(extra="forbid")
 
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     symbol: str = Field(min_length=1, max_length=12)
     use_rth: bool = True
+    mode: Literal["log_only", "trade"] = "log_only"
+    quantity: int = Field(default=1, ge=1, le=100)
 
     @field_validator("strategy_instance_id")
     @classmethod
@@ -58,7 +60,8 @@ class BotStatusView(BaseModel):
     strategy_instance_id: str
     broker: str
     symbol: str
-    mode: Literal["log_only"]
+    mode: Literal["log_only", "trade"]
+    quantity: int
     running: bool
     phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
     desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]

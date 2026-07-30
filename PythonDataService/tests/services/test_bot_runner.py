@@ -147,6 +147,7 @@ async def test_deploy_produces_running_task_and_durable_on_duty_evidence(tmp_pat
     assert binding["broker"] == "alpaca"
     assert binding["symbol"] == "SPY"
     assert binding["mode"] == "log_only"
+    assert binding["quantity"] == 1
     assert isinstance(binding["created_at_ms"], int)
 
     await registry.stop("alpaca", _SID)
@@ -445,3 +446,312 @@ async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path
         f"live_state/{_SID}/desired_state.json",
         f"live_state/{_SID}/lifecycle_state.json",
     ]
+
+
+# ── trade bot ─────────────────────────────────────────────────────────────────
+#
+# 2024-01-02 is a regular NYSE trading day (Tuesday after New Year's).
+# All bar timestamps below are int64 ms UTC (temporal-rigor rule).
+#
+# ET = EST on 2024-01-02 (UTC-5):
+#   session_open  = 09:30 ET = 14:30 UTC = 1_704_205_800_000 ms
+#   session_close = 16:00 ET = 21:00 UTC = 1_704_229_200_000 ms
+#   window_start  = open  + 15min = 1_704_206_700_000 ms  (09:45 ET)
+#   window_end    = close - 15min = 1_704_228_300_000 ms  (15:45 ET)
+#
+# Verified against the canonical calendar module (session_window_for_date).
+# bar.end_ms is the bar-close boundary per MarketDataBar semantics.
+
+_SESSION_OPEN_MS  = 1_704_205_800_000   # 2024-01-02 09:30 ET (EST = UTC-5)
+_SESSION_CLOSE_MS = 1_704_229_200_000   # 2024-01-02 16:00 ET
+_WIN_START_MS     = _SESSION_OPEN_MS  + 15 * 60 * 1_000   # 09:45 ET = 1_704_206_700_000
+_WIN_END_MS       = _SESSION_CLOSE_MS - 15 * 60 * 1_000   # 15:45 ET = 1_704_228_300_000
+
+
+def _trade_bar(
+    end_ms: int,
+    *,
+    open_price: str = "400.00",
+    close_price: str = "401.00",
+    symbol: str = "SPY",
+) -> MarketDataBar:
+    """A single 1-minute bar whose end_ms (bar-close) falls at a specific instant."""
+    return MarketDataBar(
+        symbol=symbol,
+        start_ms=end_ms - 60_000,
+        end_ms=end_ms,
+        open=Decimal(open_price),
+        high=Decimal(close_price),
+        low=Decimal(open_price),
+        close=Decimal(close_price),
+        volume=500,
+        fetched_at_ms=end_ms + 100,
+        feed_id="fake",
+        session_phase="RTH",
+    )
+
+
+def _red_bar(end_ms: int, symbol: str = "SPY") -> MarketDataBar:
+    """A bar where close < open (red candle — no green streak contribution)."""
+    return _trade_bar(end_ms, open_price="401.00", close_price="400.00", symbol=symbol)
+
+
+def _green_bar(end_ms: int, symbol: str = "SPY") -> MarketDataBar:
+    """A bar where close > open (green candle)."""
+    return _trade_bar(end_ms, open_price="400.00", close_price="401.00", symbol=symbol)
+
+
+class _FakeLegResult:
+    """Minimal per-leg result duck-type (only order_ref is accessed by the bot)."""
+
+    def __init__(self, order_ref: str) -> None:
+        self.order_ref = order_ref
+
+
+class _FakeSubmitResult:
+    """Minimal submit-result duck-type for the trade bot (accesses results[0].order_ref)."""
+
+    def __init__(self, order_ref: str) -> None:
+        self.results = [_FakeLegResult(order_ref)]
+
+
+class _FakeClerk:
+    """Minimal AlpacaClerk double that captures submit_for_instance calls."""
+
+    def __init__(self, *, should_raise: Exception | None = None) -> None:
+        self.calls: list[dict] = []
+        self._should_raise = should_raise
+
+    async def submit_for_instance(
+        self, *, strategy_instance_id: str, legs: list
+    ) -> _FakeSubmitResult:
+        if self._should_raise is not None:
+            raise self._should_raise
+
+        call = {
+            "strategy_instance_id": strategy_instance_id,
+            "legs": [{"side": leg.side.value, "quantity": leg.quantity} for leg in legs],
+        }
+        self.calls.append(call)
+        return _FakeSubmitResult(
+            order_ref=f"learn-ai/{strategy_instance_id}/v1:fake{len(self.calls):02d}"
+        )
+
+
+def _install_fake_clerk(monkeypatch: pytest.MonkeyPatch, clerk: _FakeClerk) -> None:
+    """Patch the process-level Alpaca clerk for the duration of a test."""
+    import app.broker.alpaca.clerk.clerk as clerk_mod
+
+    monkeypatch.setattr(clerk_mod, "_clerk", clerk)
+
+
+# ── entry after exactly 2 green bars in-window ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trade_bot_enters_after_two_green_bars_in_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+
+    # One red bar then two green bars inside the detection window, then hold.
+    bars = [
+        _red_bar(_WIN_START_MS + 60_000),
+        _green_bar(_WIN_START_MS + 120_000),
+        _green_bar(_WIN_START_MS + 180_000),
+    ]
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=2
+    )
+    await _wait_for(lambda: feed.bars_consumed == 3)
+    await registry.stop("alpaca", _SID)
+
+    # One BUY after the second consecutive green bar.
+    assert len(clerk.calls) == 1
+    assert clerk.calls[0]["legs"][0]["side"] == "buy"
+    assert clerk.calls[0]["legs"][0]["quantity"] == 2.0
+    assert clerk.calls[0]["strategy_instance_id"] == _SID
+
+
+# ── no entry before detection window ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trade_bot_no_entry_before_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+
+    # Two green bars strictly before the 09:45 ET window start.
+    pre_window_1 = _SESSION_OPEN_MS + 60_000   # 09:31 ET
+    pre_window_2 = _SESSION_OPEN_MS + 120_000  # 09:32 ET
+    bars = [
+        _green_bar(pre_window_1),
+        _green_bar(pre_window_2),
+    ]
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade"
+    )
+    await _wait_for(lambda: feed.bars_consumed == 2)
+    await registry.stop("alpaca", _SID)
+
+    assert clerk.calls == []
+
+
+# ── exit 3 bars after entry ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trade_bot_exits_three_bars_after_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+
+    base = _WIN_START_MS + 60_000
+    bars = [
+        _green_bar(base),
+        _green_bar(base + 60_000),        # entry triggered after this bar
+        _red_bar(base + 120_000),          # in-position bar 1
+        _red_bar(base + 180_000),          # in-position bar 2
+        _green_bar(base + 240_000),        # in-position bar 3 → exit
+    ]
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=3
+    )
+    await _wait_for(lambda: feed.bars_consumed == 5)
+    await registry.stop("alpaca", _SID)
+
+    assert len(clerk.calls) == 2
+    assert clerk.calls[0]["legs"][0]["side"] == "buy"
+    assert clerk.calls[1]["legs"][0]["side"] == "sell"
+    assert clerk.calls[1]["legs"][0]["quantity"] == 3.0
+
+
+# ── window-end flatten when holding ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trade_bot_flattens_at_window_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+
+    base = _WIN_START_MS + 60_000
+    bars = [
+        _green_bar(base),
+        _green_bar(base + 60_000),                  # triggers BUY
+        _red_bar(base + 120_000),                   # bar 1 in position
+        _green_bar(_WIN_END_MS + 1),                # past window end → FLATTEN
+    ]
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=1
+    )
+    await _wait_for(lambda: feed.bars_consumed == 4)
+    await registry.stop("alpaca", _SID)
+
+    assert len(clerk.calls) == 2
+    assert clerk.calls[0]["legs"][0]["side"] == "buy"
+    assert clerk.calls[1]["legs"][0]["side"] == "sell"
+
+
+# ── quantity plumbed through correctly ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trade_bot_quantity_plumbed_from_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+
+    base = _WIN_START_MS + 60_000
+    bars = [_green_bar(base), _green_bar(base + 60_000)]
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=7
+    )
+    await _wait_for(lambda: feed.bars_consumed == 2)
+    await registry.stop("alpaca", _SID)
+
+    assert clerk.calls[0]["legs"][0]["quantity"] == 7.0
+
+    # Binding artifact also carries quantity.
+    binding = _binding_json(tmp_path)
+    assert binding["quantity"] == 7
+    assert binding["mode"] == "trade"
+
+
+# ── submit exception → task errors (no silent handler) ───────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trade_bot_submit_exception_crashes_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.broker.contract.errors import BrokerError
+
+    error = BrokerError("forced failure", detail="test")
+    clerk = _FakeClerk(should_raise=error)
+    _install_fake_clerk(monkeypatch, clerk)
+
+    base = _WIN_START_MS + 60_000
+    bars = [_green_bar(base), _green_bar(base + 60_000)]
+    feed = _FakeFeed(bars, mode="finite")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade"
+    )
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    view = registry.status("alpaca", _SID)
+    assert view.duty_outcome is not None
+    assert view.duty_outcome.kind == "CRASHED"
+    assert view.duty_outcome.reason_code == "BrokerError"
+
+
+# ── log_only behavior unchanged ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_log_only_bot_unchanged_after_trade_mode_added(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Regression: adding trade mode must not alter log_only behavior."""
+    feed = _FakeFeed([_bar(_T0), _bar(_T0 + 60_000)], mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    with caplog.at_level("INFO", logger="app.services.bot_runner"):
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+            mode="log_only",
+        )
+        await _wait_for(lambda: feed.bars_consumed == 2)
+        await registry.stop("alpaca", _SID)
+
+    decisions = [r for r in caplog.records if getattr(r, "action", None) == "bot_decision"]
+    assert len(decisions) == 2
+    assert all(d.decision == "HOLD" for d in decisions)
+
+    binding = _binding_json(tmp_path)
+    assert binding["mode"] == "log_only"
