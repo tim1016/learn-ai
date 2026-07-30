@@ -17473,7 +17473,7 @@ export interface components {
              * Initial Cash Usd
              * @default 100000
              */
-            initial_cash_usd?: string;
+            initial_cash_usd?: number | string;
             /**
              * Playback Minutes
              * @default 60
