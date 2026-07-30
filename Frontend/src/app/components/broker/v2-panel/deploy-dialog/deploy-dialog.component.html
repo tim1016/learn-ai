@@ -39,6 +39,34 @@
       />
     </div>
 
+    <div class="field">
+      <label for="mode" class="field__label">Trade mode</label>
+      <p-select
+        inputId="mode"
+        formControlName="mode"
+        [options]="modeOptions"
+        optionLabel="label"
+        optionValue="value"
+        class="field__input"
+        aria-required="true"
+      />
+    </div>
+
+    <div class="field">
+      <label for="quantity" class="field__label">Quantity</label>
+      <p-inputnumber
+        inputId="quantity"
+        formControlName="quantity"
+        [min]="1"
+        [max]="100"
+        class="field__input"
+        aria-required="true"
+      />
+      @if (!isTradeMode) {
+        <span class="field__hint">Quantity is ignored in log-only mode</span>
+      }
+    </div>
+
     <div class="field field--inline">
       <p-checkbox
         formControlName="use_rth"
