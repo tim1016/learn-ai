@@ -17,7 +17,7 @@ import { SelectButtonModule } from 'primeng/selectbutton';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtInteger, fmtSignedCurrency } from '../../format';
 import { BotStatusChipComponent } from '../bot-status-chip/bot-status-chip.component';
-import type { ActionId, BotCatalogView, PanelProfile } from '../models/broker-v2-panel.types';
+import type { ActionId, BotCatalogView, PanelProfile } from '../lib/broker-v2-panel.types';
 
 export interface RowActionEvent {
   bot: BotCatalogView;
@@ -120,6 +120,10 @@ export class BotsRosterComponent {
 
   protected onStop(bot: BotCatalogView): void {
     this.rowAction.emit({ bot, action: 'stop' });
+  }
+
+  protected botTrackFn(_index: number, bot: BotCatalogView): string {
+    return bot.strategy_instance_id;
   }
 
   protected navigateToBot(bot: BotCatalogView): void {

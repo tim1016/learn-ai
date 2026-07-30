@@ -34,6 +34,19 @@ export class BrokerV2PanelService {
     );
   }
 
+  deployBot(
+    broker: string,
+    accountId: string,
+    body: { strategy_instance_id: string; symbol: string; use_rth: boolean },
+  ): Promise<unknown> {
+    return firstValueFrom(
+      this.http.post<unknown>(
+        `${this.base(broker, accountId)}/bots`,
+        body,
+      ),
+    );
+  }
+
   getCatalog(broker: string, accountId: string): Promise<BotCatalogView[]> {
     return firstValueFrom(
       this.http.get<BotCatalogView[]>(`${this.base(broker, accountId)}/bots/catalog`),

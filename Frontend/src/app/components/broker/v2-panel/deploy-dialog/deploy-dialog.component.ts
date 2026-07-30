@@ -13,7 +13,7 @@ import { DialogModule } from 'primeng/dialog';
 import { InputTextModule } from 'primeng/inputtext';
 import { MessageModule } from 'primeng/message';
 
-import { BrokerV2PanelService } from '../broker-v2-panel.service';
+import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 
 /**
  * Deploy-bot dialog. Collects strategy_instance_id, symbol, and rth_only
@@ -36,6 +36,7 @@ import { BrokerV2PanelService } from '../broker-v2-panel.service';
 })
 export class DeployDialogComponent {
   readonly broker = input.required<string>();
+  readonly accountId = input.required<string>();
   readonly visible = input(false);
   readonly visibleChange = output<boolean>();
   readonly deployed = output();
@@ -54,11 +55,11 @@ export class DeployDialogComponent {
       nonNullable: true,
       validators: [Validators.required],
     }),
-    rth_only: new FormControl(true, { nonNullable: true }),
+    use_rth: new FormControl(true, { nonNullable: true }),
   });
 
   protected close(): void {
-    this.form.reset({ rth_only: true });
+    this.form.reset({ use_rth: true });
     this.submitError.set(null);
     this.visibleChange.emit(false);
   }
@@ -67,12 +68,12 @@ export class DeployDialogComponent {
     if (this.form.invalid || this.submitting()) return;
     this.submitting.set(true);
     this.submitError.set(null);
-    const { strategy_instance_id, symbol, rth_only } = this.form.getRawValue();
+    const { strategy_instance_id, symbol, use_rth } = this.form.getRawValue();
     try {
-      await this.panelService.deployBot(this.broker(), {
+      await this.panelService.deployBot(this.broker(), this.accountId(), {
         strategy_instance_id,
         symbol: symbol.toUpperCase(),
-        rth_only,
+        use_rth,
       });
       this.deployed.emit();
       this.close();

@@ -5,6 +5,7 @@ import {
   DestroyRef,
   ElementRef,
   computed,
+  effect,
   inject,
   input,
   output,
@@ -84,10 +85,10 @@ export const HISTORY_PRESETS: readonly ChartHistoryPreset[] = [
  * overlay notice chip renders (from `overlay_notices` on the response) —
  * Angular never fabricates the message.
  *
- * The parent shell controls data loading and preset selection; this component
- * only handles rendering. Chart data is rendered once on `ngAfterViewInit`;
- * the parent calls `refreshLive()` / `refreshHistory()` to push subsequent
- * updates (wired in S4 when real-time polling drives visible chart updates).
+ * Chart series update reactively: `effect()` calls track the signal inputs and
+ * call the render helpers on any change. The chart instances are created once
+ * in `ngAfterViewInit`; the effects are no-ops before that (guarded by null
+ * series check inside each render helper).
  */
 @Component({
   selector: 'app-dual-pane-chart',
@@ -142,6 +143,22 @@ export class DualPaneChartComponent implements AfterViewInit {
 
   private readonly destroyRef = inject(DestroyRef);
 
+  // ── Constructor ───────────────────────────────────────────────────────────
+
+  constructor() {
+    // Re-render live pane whenever live bars or fill markers change.
+    // Guard inside renderLive() is a no-op before ngAfterViewInit.
+    effect(() => {
+      this.liveFillMarkers(); // track for future marker rendering
+      this.renderLive();
+    });
+    // Re-render history pane whenever history bars or fill markers change.
+    effect(() => {
+      this.histFillMarkers(); // track for future marker rendering
+      this.renderHistory();
+    });
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   ngAfterViewInit(): void {
@@ -161,18 +178,6 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.renderHistory();
 
     this.destroyRef.onDestroy(() => this.cleanup());
-  }
-
-  // ── Public API for parent shell ───────────────────────────────────────────
-
-  /** Call after live data changes to push updates to the chart. */
-  refreshLive(): void {
-    this.renderLive();
-  }
-
-  /** Call after history data changes to push updates to the chart. */
-  refreshHistory(): void {
-    this.renderHistory();
   }
 
   // ── Template handlers ─────────────────────────────────────────────────────

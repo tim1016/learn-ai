@@ -5,6 +5,7 @@ import type {
   BotPanelView,
   ClerkCard,
   EvidencePage,
+  PanelAction,
   PanelProfile,
   TransactionRail,
 } from '../lib/broker-v2-panel.types';
@@ -75,6 +76,9 @@ function makePanel(): BotPanelView {
     journal_tail_ref: '',
     journal_tail_seq: null,
     actions: [],
+    fills_today: 0,
+    realized_pnl_today: 0.0,
+    open_pnl: null,
   };
 }
 
@@ -118,9 +122,9 @@ function makeEvidencePage(): EvidencePage {
 
 function makeFakePanelService(evidencePage?: EvidencePage) {
   return {
-    getEvidence: vi.fn<[string, string, string, Record<string, unknown>], Promise<EvidencePage>>(
+    getEvidence: vi.fn(
       () => Promise.resolve(evidencePage ?? makeEvidencePage()),
-    ),
+    ) as unknown as (broker: string, accountId: string, sid: string, params: Record<string, unknown>) => Promise<EvidencePage>,
   };
 }
 
@@ -135,7 +139,7 @@ describe('OperatorLensComponent', () => {
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
-        actionRequested: vi.fn(),
+        actionRequested: vi.fn() as unknown as (action: PanelAction) => void,
         broker: 'alpaca',
         accountId: 'acc-1',
         sid: 'sid-1',
@@ -143,7 +147,7 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getByText('Live')).toBeInTheDocument();
+    expect(screen.getByText('Live')).toBeTruthy();
   });
 
   it('renders the transaction rail with the station from the panel', async () => {
@@ -154,7 +158,7 @@ describe('OperatorLensComponent', () => {
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
-        actionRequested: vi.fn(),
+        actionRequested: vi.fn() as unknown as (action: PanelAction) => void,
         broker: 'alpaca',
         accountId: 'acc-1',
         sid: 'sid-1',
@@ -162,7 +166,7 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getByText('Signal')).toBeInTheDocument();
+    expect(screen.getByText('Signal')).toBeTruthy();
   });
 
   it('calls getEvidence on mount to load the journal tail', async () => {
@@ -173,7 +177,7 @@ describe('OperatorLensComponent', () => {
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
-        actionRequested: vi.fn(),
+        actionRequested: vi.fn() as unknown as (action: PanelAction) => void,
         broker: 'alpaca',
         accountId: 'acc-1',
         sid: 'sid-1',
@@ -197,7 +201,7 @@ describe('OperatorLensComponent', () => {
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
-        actionRequested: vi.fn(),
+        actionRequested: vi.fn() as unknown as (action: PanelAction) => void,
         broker: 'alpaca',
         accountId: 'acc-1',
         sid: 'sid-1',
@@ -206,7 +210,8 @@ describe('OperatorLensComponent', () => {
     });
 
     // The journal tail renders the kind_label from the entry.
-    expect(await screen.findByText('Order submitted')).toBeInTheDocument();
+    const matches = await screen.findAllByText('Order submitted');
+    expect(matches.length).toBeGreaterThan(0);
   });
 
   it('flatten-stop button is present when the action is in the panel', async () => {
@@ -231,7 +236,7 @@ describe('OperatorLensComponent', () => {
         panel,
         profile: makeProfile(),
         actionPending: false,
-        actionRequested: vi.fn(),
+        actionRequested: vi.fn() as unknown as (action: PanelAction) => void,
         broker: 'alpaca',
         accountId: 'acc-1',
         sid: 'sid-1',
@@ -239,7 +244,7 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getByRole('button', { name: /flatten & stop/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /flatten & stop/i })).toBeTruthy();
   });
 
   it('flatten-stop button is disabled when action is disabled', async () => {
@@ -264,7 +269,7 @@ describe('OperatorLensComponent', () => {
         panel,
         profile: makeProfile(),
         actionPending: false,
-        actionRequested: vi.fn(),
+        actionRequested: vi.fn() as unknown as (action: PanelAction) => void,
         broker: 'alpaca',
         accountId: 'acc-1',
         sid: 'sid-1',
@@ -273,12 +278,12 @@ describe('OperatorLensComponent', () => {
     });
 
     const btn = screen.getByRole('button', { name: /flatten & stop/i });
-    expect(btn).toBeDisabled();
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('clicking flatten-stop calls actionRequested with the action', async () => {
     const fakeSvc = makeFakePanelService();
-    const onActionRequested = vi.fn();
+    const onActionRequested = vi.fn() as unknown as (action: PanelAction) => void;
     const flattenAction = {
       action_id: 'flatten_stop' as const,
       label: 'Flatten & Stop',
@@ -319,7 +324,7 @@ describe('OperatorLensComponent', () => {
         panel: makePanel(),
         profile: makeProfile(),
         actionPending: false,
-        actionRequested: vi.fn(),
+        actionRequested: vi.fn() as unknown as (action: PanelAction) => void,
         broker: 'alpaca',
         accountId: 'acc-1',
         sid: 'sid-1',
@@ -358,7 +363,7 @@ describe('OperatorLensComponent', () => {
         panel,
         profile: makeProfile(),
         actionPending: false,
-        actionRequested: vi.fn(),
+        actionRequested: vi.fn() as unknown as (action: PanelAction) => void,
         broker: 'alpaca',
         accountId: 'acc-1',
         sid: 'sid-1',
@@ -366,6 +371,6 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getByText('This will close all open positions.')).toBeInTheDocument();
+    expect(screen.getByText('This will close all open positions.')).toBeTruthy();
   });
 });

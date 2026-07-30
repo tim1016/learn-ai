@@ -14,7 +14,7 @@ import { BrokersService } from '../../../../services/brokers.service';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { fmtCurrency } from '../../format';
 import { ChannelHealthDotComponent } from '../channel-health-dot/channel-health-dot.component';
-import type { ChannelState } from '../models/broker-v2-panel.types';
+import type { ChannelState } from '../lib/broker-v2-panel.types';
 
 /**
  * Account-level strip: equity · cash · buying power · PAPER badge ·

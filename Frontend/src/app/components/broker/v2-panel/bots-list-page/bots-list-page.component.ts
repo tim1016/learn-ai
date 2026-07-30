@@ -9,8 +9,8 @@ import {
 } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
-import { BrokerV2PanelService } from '../broker-v2-panel.service';
-import type { BotCatalogView, PanelActionRequest } from '../models/broker-v2-panel.types';
+import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import type { BotCatalogView, PanelActionRequest } from '../lib/broker-v2-panel.types';
 import { AccountStripComponent } from '../account-strip/account-strip.component';
 import { BotsRosterComponent, type RowActionEvent } from '../bots-roster/bots-roster.component';
 import { DeployDialogComponent } from '../deploy-dialog/deploy-dialog.component';
@@ -39,7 +39,7 @@ import { DeployDialogComponent } from '../deploy-dialog/deploy-dialog.component'
 export class BotsListPageComponent {
   // Route params bound via withComponentInputBinding()
   readonly broker = input('alpaca');
-  readonly accountId = input<string | undefined>(undefined);
+  readonly accountId = input.required<string>();
 
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly destroyRef = inject(DestroyRef);
@@ -57,7 +57,7 @@ export class BotsListPageComponent {
     loader: ({
       params,
     }: {
-      params: { broker: string; accountId: string | undefined; epoch: number };
+      params: { broker: string; accountId: string; epoch: number };
     }) => this.panelService.getCatalog(params.broker, params.accountId),
   });
 
@@ -80,28 +80,28 @@ export class BotsListPageComponent {
 
   protected async onRowAction(event: RowActionEvent): Promise<void> {
     this.actionError.set(null);
-    const accountId = this.accountId() ?? event.bot.account_id;
-    const idempotencyKey = crypto.randomUUID();
-    const revision = 0; // the catalog view does not surface revision; the backend validates
-
-    const request: PanelActionRequest = {
-      action_id: event.action,
-      revision,
-      idempotency_key: idempotencyKey,
-    };
+    const broker = this.broker();
+    const accountId = this.accountId();
+    const sid = event.bot.strategy_instance_id;
 
     try {
-      await this.panelService.runAction(
-        this.broker(),
-        accountId,
-        event.bot.strategy_instance_id,
-        request,
-      );
+      // Fetch panel to get the current revision and presented-action state.
+      const panel = await this.panelService.getPanel(broker, accountId, sid);
+      const action = panel.actions.find((a) => a.action_id === event.action);
+      if (!action?.enabled) {
+        this.actionError.set(`Action "${event.action}" is not available for bot ${sid}.`);
+        return;
+      }
+      const request: PanelActionRequest = {
+        action_id: action.action_id,
+        revision: action.revision,
+        idempotency_key: crypto.randomUUID(),
+        reason: null,
+      };
+      await this.panelService.runAction(broker, accountId, sid, request);
       this.catalog.reload();
     } catch {
-      this.actionError.set(
-        `Action "${event.action}" failed for bot ${event.bot.strategy_instance_id}.`,
-      );
+      this.actionError.set(`Action "${event.action}" failed for bot ${sid}.`);
     }
   }
 

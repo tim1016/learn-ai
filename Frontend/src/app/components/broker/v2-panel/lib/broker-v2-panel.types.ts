@@ -7,6 +7,10 @@
  * backend's job (backend-authored copy authority, spec §13).
  */
 
+// ── Channel health state (closed vocabulary) ─────────────────────────────────
+
+export type ChannelState = 'healthy' | 'unhealthy' | 'unknown';
+
 // ── Action ids (closed vocabulary, spec §11) ─────────────────────────────────
 
 export type ActionId =
@@ -157,6 +161,9 @@ export interface BotPanelView {
   readonly journal_tail_ref: string;
   readonly journal_tail_seq: number | null;
   readonly actions: readonly PanelAction[];
+  readonly fills_today: number;
+  readonly realized_pnl_today: number;
+  readonly open_pnl: number | null;
 }
 
 // ── §11 Action execution ─────────────────────────────────────────────────────

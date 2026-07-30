@@ -35,19 +35,19 @@ describe('TransactionRailComponent', () => {
     });
 
     // Each station must have icon + text both present
-    expect(screen.getByText('✓')).toBeInTheDocument();  // satisfied icon
-    expect(screen.getByText('⏳')).toBeInTheDocument(); // waiting icon
-    expect(screen.getByText('⚠')).toBeInTheDocument(); // blocked icon
+    expect(screen.getByText('✓')).toBeTruthy();  // satisfied icon
+    expect(screen.getByText('⏳')).toBeTruthy(); // waiting icon
+    expect(screen.getByText('⚠')).toBeTruthy(); // blocked icon
 
     // Text labels
-    expect(screen.getByText('Signal')).toBeInTheDocument();
-    expect(screen.getByText('Lock')).toBeInTheDocument();
-    expect(screen.getByText('Submit')).toBeInTheDocument();
+    expect(screen.getByText('Signal')).toBeTruthy();
+    expect(screen.getByText('Lock')).toBeTruthy();
+    expect(screen.getByText('Submit')).toBeTruthy();
 
     // State labels
-    expect(screen.getByText('Ready')).toBeInTheDocument();
-    expect(screen.getByText('Pending')).toBeInTheDocument();
-    expect(screen.getByText('Blocked')).toBeInTheDocument();
+    expect(screen.getByText('Ready')).toBeTruthy();
+    expect(screen.getByText('Pending')).toBeTruthy();
+    expect(screen.getByText('Blocked')).toBeTruthy();
   });
 
   it('satisfied station has station--satisfied CSS class', async () => {
@@ -92,7 +92,7 @@ describe('TransactionRailComponent', () => {
       on: { evidenceRequested: onEvidence },
     });
 
-    const btn = screen.getByRole('button', { name: /view evidence/i });
+    const btn = screen.getByRole('button', { name: /view raw evidence/i });
     fireEvent.click(btn);
 
     await fixture.whenStable();
@@ -120,7 +120,7 @@ describe('TransactionRailComponent', () => {
       inputs: { rail: makeRail(stations) },
     });
 
-    expect(screen.getByText('No live binding')).toBeInTheDocument();
+    expect(screen.getByText('No live binding')).toBeTruthy();
   });
 
   it('not-applicable station uses — icon and N/A text', async () => {
@@ -132,8 +132,8 @@ describe('TransactionRailComponent', () => {
       inputs: { rail: makeRail(stations) },
     });
 
-    expect(screen.getByText('—')).toBeInTheDocument();
-    expect(screen.getByText('N/A')).toBeInTheDocument();
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.getByText('N/A')).toBeTruthy();
   });
 
   it('null transaction_ref shows no-transaction message', async () => {
@@ -141,7 +141,7 @@ describe('TransactionRailComponent', () => {
       inputs: { rail: { transaction_ref: null, stations: [] } },
     });
 
-    expect(screen.getByText(/no active transaction/i)).toBeInTheDocument();
+    expect(screen.getByText(/no active transaction/i)).toBeTruthy();
   });
 
   it('each station list item has an aria-label for WCAG AA', async () => {

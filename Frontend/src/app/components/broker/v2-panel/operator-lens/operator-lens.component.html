@@ -23,8 +23,8 @@
         </p>
       }
 
-      @for (blocker of fsa.blockers; track blocker.condition.id) {
-        <p class="operator-lens__flatten-blocker" role="alert">{{ blocker.headline }}</p>
+      @for (blocker of fsa.blockers; track blocker.code) {
+        <p class="operator-lens__flatten-blocker" role="alert">{{ blocker.label }}</p>
       }
     </div>
   }

@@ -9155,6 +9155,8 @@ export interface components {
             /** Broker */
             broker: string;
             clerk: components["schemas"]["ClerkCard"];
+            /** Fills Today */
+            fills_today: number;
             health: components["schemas"]["BotHealthCard"];
             /** Journal Tail Ref */
             journal_tail_ref: string;
@@ -9165,7 +9167,11 @@ export interface components {
              * @constant
              */
             mode: "log_only";
+            /** Open Pnl */
+            open_pnl: number | null;
             rail: components["schemas"]["TransactionRail"];
+            /** Realized Pnl Today */
+            realized_pnl_today: number;
             /** Revision */
             revision: number;
             /** Strategy Instance Id */

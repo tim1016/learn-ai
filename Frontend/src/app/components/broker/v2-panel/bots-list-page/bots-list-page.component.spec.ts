@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
-import { BrokerV2PanelService } from '../broker-v2-panel.service';
-import type { BotCatalogView, PanelProfile } from '../models/broker-v2-panel.types';
+import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import type { BotCatalogView, PanelProfile } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
@@ -99,7 +99,7 @@ async function renderPage(
       { provide: BrokersService, useValue: mockBrokersService },
       { provide: BrokerV2PanelService, useValue: mockPanelService },
     ],
-    componentInputs: { broker: 'alpaca' },
+    componentInputs: { broker: 'alpaca', accountId: 'PA9' },
   });
 }
 

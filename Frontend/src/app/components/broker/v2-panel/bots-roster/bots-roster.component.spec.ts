@@ -2,7 +2,7 @@ import { render, screen, fireEvent } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it } from 'vitest';
 
-import type { BotCatalogView, PanelProfile } from '../models/broker-v2-panel.types';
+import type { BotCatalogView, PanelProfile } from '../lib/broker-v2-panel.types';
 import { BotsRosterComponent } from './bots-roster.component';
 
 function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
@@ -80,11 +80,12 @@ describe('BotsRosterComponent', () => {
     ];
     await renderRoster(bots);
 
-    const rows = await screen.findAllByRole('row');
-    // First data row (index 1 if header is row 0, or just check text order)
-    const allText = rows.map((r) => r.textContent ?? '').join('|');
-    const urgentIdx = allText.indexOf('urgent-bot');
-    const normalIdx = allText.indexOf('normal-bot');
+    // Wait for both to render, then check order in page text.
+    await screen.findByText('urgent-bot');
+    await screen.findByText('normal-bot');
+    const bodyText = document.body.textContent ?? '';
+    const urgentIdx = bodyText.indexOf('urgent-bot');
+    const normalIdx = bodyText.indexOf('normal-bot');
     expect(urgentIdx).toBeLessThan(normalIdx);
   });
 });

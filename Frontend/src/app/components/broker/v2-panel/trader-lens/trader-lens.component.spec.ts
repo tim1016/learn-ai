@@ -63,6 +63,9 @@ const BASE_PANEL: BotPanelView = {
   rail: { transaction_ref: null, stations: [] },
   journal_tail_ref: '/api/brokers/alpaca/accounts/DUM284968/bots/sid-001/journal',
   journal_tail_seq: null,
+  fills_today: 0,
+  realized_pnl_today: 0.0,
+  open_pnl: null,
   actions: [
     {
       action_id: 'stop',

@@ -65,10 +65,12 @@
     }
   </section>
 } @else {
-  <!-- Order-producing bots: trades list + P&L (spec §6, §10). -->
+  <!-- Order-producing bots: trades list + backend P&L (spec §6, §10). -->
   <app-trades-today-list
     [fills]="liveFillMarkers()"
     [feeFidelity]="profile().fee_fidelity"
     [tradingDateMs]="tradingDateMs()"
+    [realizedPnlToday]="panel().realized_pnl_today"
+    [openPnl]="panel().open_pnl"
   />
 }

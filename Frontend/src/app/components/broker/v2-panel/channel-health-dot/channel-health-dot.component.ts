@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import type { ChannelState } from '../models/broker-v2-panel.types';
+import type { ChannelState } from '../lib/broker-v2-panel.types';
 
 /**
  * Tiny dot indicator for channel health (market_data, execution streams).

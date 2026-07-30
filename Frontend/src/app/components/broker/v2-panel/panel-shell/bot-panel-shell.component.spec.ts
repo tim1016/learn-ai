@@ -65,6 +65,9 @@ const PANEL: BotPanelView = {
   journal_tail_ref: '/api/brokers/alpaca/accounts/DUM284968/bots/sid-001/journal',
   journal_tail_seq: null,
   actions: [],
+  fills_today: 0,
+  realized_pnl_today: 0.0,
+  open_pnl: null,
 };
 
 const mockService = {

@@ -73,8 +73,8 @@
         {{ action.label }}
       </button>
 
-      @for (blocker of retireBlockers(); track blocker.condition.id) {
-        <p class="health-card__blocker" role="alert">{{ blocker.headline }}</p>
+      @for (blocker of retireBlockers(); track blocker.code) {
+        <p class="health-card__blocker" role="alert">{{ blocker.label }}</p>
       }
     </div>
   }

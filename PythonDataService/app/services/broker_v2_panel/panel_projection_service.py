@@ -203,6 +203,9 @@ def build_panel(
     *,
     account_id: str,
     exposure: dict[str, float],
+    fills_today: int,
+    realized_pnl_today: float,
+    open_pnl: float | None,
     latest_decision: DecisionReceipt | None,
     last_bar_at_ms: int | None,
     journal_tail_ref: str,
@@ -267,4 +270,7 @@ def build_panel(
         journal_tail_ref=journal_tail_ref,
         journal_tail_seq=journal_tail_seq,
         actions=actions,
+        fills_today=fills_today,
+        realized_pnl_today=realized_pnl_today,
+        open_pnl=open_pnl,
     )

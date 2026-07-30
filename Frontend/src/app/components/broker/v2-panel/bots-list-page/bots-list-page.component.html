@@ -42,6 +42,7 @@
 
 <app-deploy-dialog
   [broker]="broker()"
+  [accountId]="accountId()"
   [visible]="deployVisible()"
   (visibleChange)="deployVisible.set($event)"
   (deployed)="onDeployed()"

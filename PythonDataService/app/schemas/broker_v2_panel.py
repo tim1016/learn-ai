@@ -251,6 +251,11 @@ class BotPanelView(BaseModel):
     journal_tail_ref: str
     journal_tail_seq: int | None
     actions: list[PanelAction]
+    # S0 rollup summary — backend-computed FIFO P&L (§10).  Frontend renders,
+    # never recomputes.  "Fees not reported" renders when fee_fidelity="none".
+    fills_today: int
+    realized_pnl_today: float
+    open_pnl: float | None
 
 
 # ── §11 Presented-actions execution request/response ─────────────────────────

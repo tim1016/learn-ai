@@ -7817,6 +7817,10 @@
           "clerk": {
             "$ref": "#/components/schemas/ClerkCard"
           },
+          "fills_today": {
+            "title": "Fills Today",
+            "type": "integer"
+          },
           "health": {
             "$ref": "#/components/schemas/BotHealthCard"
           },
@@ -7839,8 +7843,23 @@
             "const": "log_only",
             "title": "Mode"
           },
+          "open_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Pnl"
+          },
           "rail": {
             "$ref": "#/components/schemas/TransactionRail"
+          },
+          "realized_pnl_today": {
+            "title": "Realized Pnl Today",
+            "type": "number"
           },
           "revision": {
             "title": "Revision",
@@ -7867,7 +7886,10 @@
           "rail",
           "journal_tail_ref",
           "journal_tail_seq",
-          "actions"
+          "actions",
+          "fills_today",
+          "realized_pnl_today",
+          "open_pnl"
         ],
         "title": "BotPanelView",
         "type": "object"

@@ -93,8 +93,8 @@
       >
         {{ ra.label }}
       </button>
-      @for (blocker of reconcileBlockers(); track blocker.condition.id) {
-        <p class="clerk-card__blocker" role="alert">{{ blocker.headline }}</p>
+      @for (blocker of reconcileBlockers(); track blocker.code) {
+        <p class="clerk-card__blocker" role="alert">{{ blocker.label }}</p>
       }
     }
 
@@ -119,8 +119,8 @@
         </p>
       }
 
-      @for (blocker of clearHoldBlockers(); track blocker.condition.id) {
-        <p class="clerk-card__blocker" role="alert">{{ blocker.headline }}</p>
+      @for (blocker of clearHoldBlockers(); track blocker.code) {
+        <p class="clerk-card__blocker" role="alert">{{ blocker.label }}</p>
       }
     }
   </div>
