@@ -39,6 +39,12 @@ from app.lean_sidecar.trading_calendar import session_window_for_date
 
 _NY = ZoneInfo("America/New_York")
 
+# Sentinel for "caller did not supply a session window" (distinguishes None =
+# "market closed today" from the default "compute it now").
+class _UNSET:
+    pass
+
+
 # ── Rollup snapshot (the per-bot row the catalog reads) ──────────────────────
 
 
@@ -216,6 +222,7 @@ class BotRollupCache:
         sid: str,
         *,
         mark_prices: dict[str, float] | None = None,
+        _session: tuple[int, int] | None | type[_UNSET] = _UNSET,
     ) -> BotRollup:
         """Return the current rollup snapshot for one bot.
 
@@ -224,6 +231,10 @@ class BotRollupCache:
         the trading day so catalog reads never scan the full lifetime journal.
         The session window call is deliberately outside the lock: it is a pure
         calendar computation and does not access any shared state.
+
+        ``_session`` is an internal parameter used by ``snapshot_all`` to pass
+        a pre-computed session window so the calendar is queried only once per
+        catalog read (not once per bot).  External callers should omit it.
         """
         now_ms = int(time.time() * 1000)
 
@@ -243,7 +254,9 @@ class BotRollupCache:
             )
 
         # Session window is pure calendar I/O — safe outside the lock.
-        session = _current_session_window()
+        # When called from snapshot_all the window is pre-computed (one call for
+        # all bots); direct callers compute it here.
+        session = _current_session_window() if _session is _UNSET else _session
 
         with self._lock:
             fills_snapshot = list(state.fills)
@@ -299,14 +312,21 @@ class BotRollupCache:
         ``mark_prices`` maps ``{sid: {symbol: price}}``.
         This is the catalog endpoint's read path — O(total_fills) worst case
         across all bots but each bot's get_rollup is independent.
+
+        The session window is computed once here (not once per bot) to avoid
+        O(bots) calendar calls on the hot catalog path.
         """
         with self._lock:
             sids = list(self._bots.keys())
+
+        # Compute the session window once for all bots in this snapshot.
+        session = _current_session_window()
 
         return {
             sid: self.get_rollup(
                 sid,
                 mark_prices=(mark_prices or {}).get(sid),
+                _session=session,
             )
             for sid in sids
         }
