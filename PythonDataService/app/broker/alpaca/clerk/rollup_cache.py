@@ -222,7 +222,7 @@ class BotRollupCache:
         sid: str,
         *,
         mark_prices: dict[str, float] | None = None,
-        _session: tuple[int, int] | None | type[_UNSET] = _UNSET,
+        _session: tuple[int, int] | type[_UNSET] | None = _UNSET,
     ) -> BotRollup:
         """Return the current rollup snapshot for one bot.
 
