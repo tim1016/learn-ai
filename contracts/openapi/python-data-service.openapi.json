@@ -26596,6 +26596,451 @@
         "title": "OHLCVBar",
         "type": "object"
       },
+      "OfflineReplayBotResult": {
+        "description": "Current or terminal result for one isolated simulated bot account.",
+        "properties": {
+          "bars_processed": {
+            "minimum": 0.0,
+            "title": "Bars Processed",
+            "type": "integer"
+          },
+          "data_sha256": {
+            "title": "Data Sha256",
+            "type": "string"
+          },
+          "decisions_emitted": {
+            "minimum": 0.0,
+            "title": "Decisions Emitted",
+            "type": "integer"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Message"
+          },
+          "fills_observed": {
+            "minimum": 0.0,
+            "title": "Fills Observed",
+            "type": "integer"
+          },
+          "final_equity_usd": {
+            "title": "Final Equity Usd",
+            "type": "string"
+          },
+          "open_position_quantity": {
+            "title": "Open Position Quantity",
+            "type": "integer"
+          },
+          "orders_submitted": {
+            "minimum": 0.0,
+            "title": "Orders Submitted",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "stopped"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "symbol": {
+            "enum": [
+              "SPY",
+              "TSLA"
+            ],
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "status",
+          "run_id",
+          "bars_processed",
+          "decisions_emitted",
+          "orders_submitted",
+          "fills_observed",
+          "open_position_quantity",
+          "final_equity_usd",
+          "data_sha256"
+        ],
+        "title": "OfflineReplayBotResult",
+        "type": "object"
+      },
+      "OfflineReplayCatalogResponse": {
+        "description": "Recent completed sessions and the recommended launch date.",
+        "properties": {
+          "recommended_session_date_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Session Date Ms"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineReplayCatalogSession"
+            },
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions",
+          "recommended_session_date_ms"
+        ],
+        "title": "OfflineReplayCatalogResponse",
+        "type": "object"
+      },
+      "OfflineReplayCatalogSession": {
+        "description": "One selectable historical NYSE session.",
+        "properties": {
+          "cached_symbols": {
+            "items": {
+              "enum": [
+                "SPY",
+                "TSLA"
+              ],
+              "type": "string"
+            },
+            "title": "Cached Symbols",
+            "type": "array"
+          },
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "session_close_ms": {
+            "title": "Session Close Ms",
+            "type": "integer"
+          },
+          "session_date_ms": {
+            "title": "Session Date Ms",
+            "type": "integer"
+          },
+          "session_open_ms": {
+            "title": "Session Open Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_date_ms",
+          "session_open_ms",
+          "session_close_ms",
+          "eligible",
+          "cached_symbols"
+        ],
+        "title": "OfflineReplayCatalogSession",
+        "type": "object"
+      },
+      "OfflineReplayCommandRequest": {
+        "description": "Media-style command for an active replay.",
+        "properties": {
+          "action": {
+            "enum": [
+              "pause",
+              "resume",
+              "step",
+              "set_speed",
+              "stop"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "enum": [
+                  1,
+                  10,
+                  60
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speed"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "OfflineReplayCommandRequest",
+        "type": "object"
+      },
+      "OfflineReplayCreateRequest": {
+        "description": "Launch one synchronized SPY/TSLA offline replay session.",
+        "properties": {
+          "auto_fetch": {
+            "default": true,
+            "title": "Auto Fetch",
+            "type": "boolean"
+          },
+          "initial_cash_usd": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "default": "100000",
+            "title": "Initial Cash Usd"
+          },
+          "playback_minutes": {
+            "default": 60,
+            "enum": [
+              30,
+              60
+            ],
+            "title": "Playback Minutes",
+            "type": "integer"
+          },
+          "session_date_ms": {
+            "exclusiveMinimum": 0.0,
+            "title": "Session Date Ms",
+            "type": "integer"
+          },
+          "speed": {
+            "default": 60,
+            "enum": [
+              1,
+              10,
+              60
+            ],
+            "title": "Speed",
+            "type": "integer"
+          },
+          "symbols": {
+            "items": {
+              "enum": [
+                "SPY",
+                "TSLA"
+              ],
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_date_ms"
+        ],
+        "title": "OfflineReplayCreateRequest",
+        "type": "object"
+      },
+      "OfflineReplaySessionListResponse": {
+        "description": "Newest-first replay session listing.",
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineReplaySessionResponse"
+            },
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "title": "OfflineReplaySessionListResponse",
+        "type": "object"
+      },
+      "OfflineReplaySessionResponse": {
+        "description": "Durable replay-session projection consumed by the control panel.",
+        "properties": {
+          "bots": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineReplayBotResult"
+            },
+            "title": "Bots",
+            "type": "array"
+          },
+          "completed_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At Ms"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "failure_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Message"
+          },
+          "playback_end_ms": {
+            "title": "Playback End Ms",
+            "type": "integer"
+          },
+          "playback_minutes": {
+            "enum": [
+              30,
+              60
+            ],
+            "title": "Playback Minutes",
+            "type": "integer"
+          },
+          "playhead_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playhead Ms"
+          },
+          "session_close_ms": {
+            "title": "Session Close Ms",
+            "type": "integer"
+          },
+          "session_date_ms": {
+            "title": "Session Date Ms",
+            "type": "integer"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "session_open_ms": {
+            "title": "Session Open Ms",
+            "type": "integer"
+          },
+          "speed": {
+            "enum": [
+              1,
+              10,
+              60
+            ],
+            "title": "Speed",
+            "type": "integer"
+          },
+          "started_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At Ms"
+          },
+          "status": {
+            "enum": [
+              "preparing",
+              "warming_up",
+              "running",
+              "paused",
+              "stopping",
+              "completed",
+              "stopped",
+              "failed",
+              "interrupted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "strategy_key": {
+            "const": "ema_crossover_signal",
+            "title": "Strategy Key"
+          },
+          "symbols": {
+            "items": {
+              "enum": [
+                "SPY",
+                "TSLA"
+              ],
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          },
+          "warmup_end_ms": {
+            "title": "Warmup End Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "status",
+          "strategy_key",
+          "session_date_ms",
+          "session_open_ms",
+          "session_close_ms",
+          "warmup_end_ms",
+          "playback_end_ms",
+          "playhead_ms",
+          "playback_minutes",
+          "speed",
+          "created_at_ms",
+          "started_at_ms",
+          "completed_at_ms",
+          "symbols",
+          "bots"
+        ],
+        "title": "OfflineReplaySessionResponse",
+        "type": "object"
+      },
       "OhlcvBar": {
         "description": "Single OHLCV bar for indicator calculation",
         "properties": {
@@ -53257,6 +53702,181 @@
         "summary": "Get Market Status",
         "tags": [
           "market"
+        ]
+      }
+    },
+    "/api/offline-replay/catalog": {
+      "get": {
+        "operationId": "catalog_api_offline_replay_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineReplayCatalogResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List recent completed NYSE sessions available for replay",
+        "tags": [
+          "offline-replay"
+        ]
+      }
+    },
+    "/api/offline-replay/sessions": {
+      "get": {
+        "operationId": "list_sessions_api_offline_replay_sessions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineReplaySessionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List active and archived offline replay sessions",
+        "tags": [
+          "offline-replay"
+        ]
+      },
+      "post": {
+        "operationId": "create_session_api_offline_replay_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineReplayCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineReplaySessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Launch synchronized one-bot-per-symbol offline replay",
+        "tags": [
+          "offline-replay"
+        ]
+      }
+    },
+    "/api/offline-replay/sessions/{session_id}": {
+      "get": {
+        "operationId": "get_session_api_offline_replay_sessions__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineReplaySessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read the latest durable replay projection",
+        "tags": [
+          "offline-replay"
+        ]
+      }
+    },
+    "/api/offline-replay/sessions/{session_id}/commands": {
+      "post": {
+        "operationId": "command_api_offline_replay_sessions__session_id__commands_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OfflineReplayCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfflineReplaySessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pause, resume, step, change speed, or stop a replay",
+        "tags": [
+          "offline-replay"
         ]
       }
     },

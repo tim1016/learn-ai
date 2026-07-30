@@ -1,0 +1,48 @@
+@use './offline-replay-shared' as *;
+
+:host {
+  display: block;
+}
+
+.transport {
+  @include flex-row;
+
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-light);
+  border-radius: 9px;
+  background: var(--bg-sunken);
+}
+
+button {
+  @include control-base;
+  @include button-interactions;
+
+  background: var(--bg-surface);
+}
+
+.speed-buttons {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: auto;
+}
+
+.speed-buttons button {
+  min-width: 48px;
+}
+
+.speed-buttons button.active {
+  border-color: #00c896;
+  color: #00c896;
+}
+
+.stop-action {
+  color: var(--verdict-blocked);
+}
+
+@media (max-width: 700px) {
+  .speed-buttons {
+    margin-left: 0;
+  }
+}

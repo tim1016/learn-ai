@@ -283,6 +283,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "broker/offline-replay",
+    loadComponent: () =>
+      import(
+        "./components/broker/offline-replay/offline-replay-page.component"
+      ).then((m) => m.OfflineReplayPageComponent),
+  },
+  {
     path: "broker/bot-manual",
     loadComponent: () =>
       import(

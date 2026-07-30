@@ -4254,6 +4254,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/offline-replay/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List recent completed NYSE sessions available for replay */
+        get: operations["catalog_api_offline_replay_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/offline-replay/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List active and archived offline replay sessions */
+        get: operations["list_sessions_api_offline_replay_sessions_get"];
+        put?: never;
+        /** Launch synchronized one-bot-per-symbol offline replay */
+        post: operations["create_session_api_offline_replay_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/offline-replay/sessions/{session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the latest durable replay projection */
+        get: operations["get_session_api_offline_replay_sessions__session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/offline-replay/sessions/{session_id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pause, resume, step, change speed, or stop a replay */
+        post: operations["command_api_offline_replay_sessions__session_id__commands_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/options/contracts": {
         parameters: {
             query?: never;
@@ -17314,6 +17383,175 @@ export interface components {
             timestamp: number;
             /** Volume */
             volume: number;
+        };
+        /**
+         * OfflineReplayBotResult
+         * @description Current or terminal result for one isolated simulated bot account.
+         */
+        OfflineReplayBotResult: {
+            /** Bars Processed */
+            bars_processed: number;
+            /** Data Sha256 */
+            data_sha256: string;
+            /** Decisions Emitted */
+            decisions_emitted: number;
+            /** Failure Code */
+            failure_code?: string | null;
+            /** Failure Message */
+            failure_message?: string | null;
+            /** Fills Observed */
+            fills_observed: number;
+            /** Final Equity Usd */
+            final_equity_usd: string;
+            /** Open Position Quantity */
+            open_position_quantity: number;
+            /** Orders Submitted */
+            orders_submitted: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "completed" | "failed" | "stopped";
+            /**
+             * Symbol
+             * @enum {string}
+             */
+            symbol: "SPY" | "TSLA";
+        };
+        /**
+         * OfflineReplayCatalogResponse
+         * @description Recent completed sessions and the recommended launch date.
+         */
+        OfflineReplayCatalogResponse: {
+            /** Recommended Session Date Ms */
+            recommended_session_date_ms: number | null;
+            /** Sessions */
+            sessions: components["schemas"]["OfflineReplayCatalogSession"][];
+        };
+        /**
+         * OfflineReplayCatalogSession
+         * @description One selectable historical NYSE session.
+         */
+        OfflineReplayCatalogSession: {
+            /** Cached Symbols */
+            cached_symbols: ("SPY" | "TSLA")[];
+            /** Eligible */
+            eligible: boolean;
+            /** Session Close Ms */
+            session_close_ms: number;
+            /** Session Date Ms */
+            session_date_ms: number;
+            /** Session Open Ms */
+            session_open_ms: number;
+        };
+        /**
+         * OfflineReplayCommandRequest
+         * @description Media-style command for an active replay.
+         */
+        OfflineReplayCommandRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "pause" | "resume" | "step" | "set_speed" | "stop";
+            /** Speed */
+            speed?: (1 | 10 | 60) | null;
+        };
+        /**
+         * OfflineReplayCreateRequest
+         * @description Launch one synchronized SPY/TSLA offline replay session.
+         */
+        OfflineReplayCreateRequest: {
+            /**
+             * Auto Fetch
+             * @default true
+             */
+            auto_fetch?: boolean;
+            /**
+             * Initial Cash Usd
+             * @default 100000
+             */
+            initial_cash_usd?: number | string;
+            /**
+             * Playback Minutes
+             * @default 60
+             * @enum {integer}
+             */
+            playback_minutes?: 30 | 60;
+            /** Session Date Ms */
+            session_date_ms: number;
+            /**
+             * Speed
+             * @default 60
+             * @enum {integer}
+             */
+            speed?: 1 | 10 | 60;
+            /** Symbols */
+            symbols?: ("SPY" | "TSLA")[];
+        };
+        /**
+         * OfflineReplaySessionListResponse
+         * @description Newest-first replay session listing.
+         */
+        OfflineReplaySessionListResponse: {
+            /** Sessions */
+            sessions: components["schemas"]["OfflineReplaySessionResponse"][];
+        };
+        /**
+         * OfflineReplaySessionResponse
+         * @description Durable replay-session projection consumed by the control panel.
+         */
+        OfflineReplaySessionResponse: {
+            /** Bots */
+            bots: components["schemas"]["OfflineReplayBotResult"][];
+            /** Completed At Ms */
+            completed_at_ms: number | null;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Failure Code */
+            failure_code?: string | null;
+            /** Failure Message */
+            failure_message?: string | null;
+            /** Playback End Ms */
+            playback_end_ms: number;
+            /**
+             * Playback Minutes
+             * @enum {integer}
+             */
+            playback_minutes: 30 | 60;
+            /** Playhead Ms */
+            playhead_ms: number | null;
+            /** Session Close Ms */
+            session_close_ms: number;
+            /** Session Date Ms */
+            session_date_ms: number;
+            /** Session Id */
+            session_id: string;
+            /** Session Open Ms */
+            session_open_ms: number;
+            /**
+             * Speed
+             * @enum {integer}
+             */
+            speed: 1 | 10 | 60;
+            /** Started At Ms */
+            started_at_ms: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "preparing" | "warming_up" | "running" | "paused" | "stopping" | "completed" | "stopped" | "failed" | "interrupted";
+            /**
+             * Strategy Key
+             * @constant
+             */
+            strategy_key: "ema_crossover_signal";
+            /** Symbols */
+            symbols: ("SPY" | "TSLA")[];
+            /** Warmup End Ms */
+            warmup_end_ms: number;
         };
         /**
          * OhlcvBar
@@ -30546,6 +30784,145 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MarketStatusResponse"];
+                };
+            };
+        };
+    };
+    catalog_api_offline_replay_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfflineReplayCatalogResponse"];
+                };
+            };
+        };
+    };
+    list_sessions_api_offline_replay_sessions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfflineReplaySessionListResponse"];
+                };
+            };
+        };
+    };
+    create_session_api_offline_replay_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OfflineReplayCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfflineReplaySessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_api_offline_replay_sessions__session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfflineReplaySessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    command_api_offline_replay_sessions__session_id__commands_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OfflineReplayCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfflineReplaySessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
