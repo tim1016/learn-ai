@@ -43,7 +43,6 @@ from app.services.broker_v2_panel.chart_projection_service import (
 )
 from app.services.broker_v2_panel.evidence_service import (
     PAGE_SIZE_DEFAULT,
-    PAGE_SIZE_MAX,
     read_evidence_page,
 )
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
