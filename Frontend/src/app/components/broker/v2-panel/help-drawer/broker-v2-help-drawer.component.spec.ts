@@ -1,4 +1,4 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { TestBed } from '@angular/core/testing';
 import { RouterModule } from '@angular/router';
 import { describe, expect, it, beforeEach } from 'vitest';
 import { BrokerV2HelpDrawerComponent } from './broker-v2-help-drawer.component';

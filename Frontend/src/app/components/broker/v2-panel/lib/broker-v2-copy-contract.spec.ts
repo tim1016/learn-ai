@@ -26,11 +26,8 @@ describe('broker-v2 copy contract', () => {
         missing.push(code);
       }
     }
-    expect(missing).toEqual(
-      [],
-      `Emergency-fallback copy is missing entries for: ${missing.join(', ')}. ` +
-        'Add them to broker-v2-emergency-copy.ts.',
-    );
+    // failure output: `missing` lists the codes absent from BROKER_V2_EMERGENCY_COPY
+    expect(missing).toEqual([]);
   });
 
   it('every fallback entry has a non-empty label and explanation', () => {
@@ -42,10 +39,8 @@ describe('broker-v2 copy contract', () => {
         invalid.push(code);
       }
     }
-    expect(invalid).toEqual(
-      [],
-      `Fallback entries with empty label or explanation: ${invalid.join(', ')}`,
-    );
+    // failure output: `invalid` lists codes with empty label or explanation
+    expect(invalid).toEqual([]);
   });
 
   it('no code in the snapshot produces an unknown label (server-omit simulation)', () => {
@@ -60,10 +55,8 @@ describe('broker-v2 copy contract', () => {
         failures.push(code);
       }
     }
-    expect(failures).toEqual(
-      [],
-      `No fallback label available for codes when server omits copy: ${failures.join(', ')}`,
-    );
+    // failure output: `failures` lists codes with no emergency label when server omits copy
+    expect(failures).toEqual([]);
   });
 
   it('no code in the snapshot produces an unknown explanation (server-omit simulation)', () => {
@@ -76,10 +69,8 @@ describe('broker-v2 copy contract', () => {
         failures.push(code);
       }
     }
-    expect(failures).toEqual(
-      [],
-      `No fallback explanation available for codes when server omits copy: ${failures.join(', ')}`,
-    );
+    // failure output: `failures` lists codes with no emergency explanation when server omits copy
+    expect(failures).toEqual([]);
   });
 });
 
