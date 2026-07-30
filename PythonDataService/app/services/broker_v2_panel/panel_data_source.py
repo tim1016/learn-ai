@@ -14,6 +14,7 @@ a stale deep link never reads another account's evidence.
 from __future__ import annotations
 
 import logging
+import time
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
@@ -87,6 +88,14 @@ class UnknownBotError(PanelDataError):
 # Only Alpaca has a panel-backing clerk in phase 1.
 _PANEL_BROKER = "alpaca"
 
+# Account-id resolution cache. The broker's account id is static for the life
+# of a registered port, but resolving it costs a full Alpaca REST round-trip
+# (measured 5-15s against the paper API on 2026-07-30) — and every panel and
+# catalog request validates the account. Keyed by the resolved port's identity
+# so a re-registered port (tests, reconnect) naturally misses the cache.
+_ACCOUNT_ID_TTL_S = 60.0
+_account_id_cache: dict[tuple[str, int], tuple[str, float]] = {}
+
 
 async def resolve_account_id(broker: str) -> str:
     """Return the broker's real account id (the source the clerk uses).
@@ -97,11 +106,26 @@ async def resolve_account_id(broker: str) -> str:
     _require_panel_broker(broker)
     try:
         port = get_broker_registry().resolve(broker)
+    except BrokerError as exc:
+        raise PanelUnavailableError(
+            "The broker account could not be read.", detail=exc.detail
+        ) from exc
+    cache_key = (broker, id(port))
+    cached = _account_id_cache.get(cache_key)
+    if cached is not None:
+        account_id, expires_at = cached
+        if time.monotonic() < expires_at:
+            return account_id
+    try:
         account = await port.get_account()
     except BrokerError as exc:
         raise PanelUnavailableError(
             "The broker account could not be read.", detail=exc.detail
         ) from exc
+    _account_id_cache[cache_key] = (
+        account.account_id,
+        time.monotonic() + _ACCOUNT_ID_TTL_S,
+    )
     return account.account_id
 
 
