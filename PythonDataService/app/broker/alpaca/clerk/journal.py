@@ -191,12 +191,11 @@ class OrderJournal:
         root_real = os.path.realpath(os.fspath(self._root))
         root_prefix = root_real.rstrip(os.sep) + os.sep
         candidate = os.path.realpath(os.fspath(self._dir / JOURNAL_FILENAME))
-        if candidate != root_real and not candidate.startswith(root_prefix):
+        if not candidate.startswith(root_prefix):
             raise ValueError(f"clerk journal path escapes root: {candidate!r}")
-        path = Path(candidate)
-        if not path.is_file():
+        if not os.path.isfile(candidate):
             return []
-        with self._lock, path.open("r", encoding="utf-8") as handle:
+        with self._lock, open(candidate, encoding="utf-8") as handle:
             return [
                 OrderJournalEntry.model_validate_json(stripped)
                 for raw in handle
