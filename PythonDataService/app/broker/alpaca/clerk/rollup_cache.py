@@ -55,7 +55,8 @@ from app.broker.alpaca.clerk.fifo_pnl import (
     compute_open_pnl,
     realized_pnl_for_window,
 )
-from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.fills import FillRecord, project_instance_fills
+from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.contract.models import OrderSide
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.utils.timestamps import now_ms_utc
@@ -189,6 +190,13 @@ def _apply_fill_delta(state: _BotState, fill: FillRecord) -> None:
         state.last_activity_at_ms = fill.filled_at_ms
 
 
+def _reset_inventory_state(state: _BotState) -> None:
+    """Cut current custody to flat while preserving immutable fill history."""
+
+    state.exposure.clear()
+    state.fifo_lots.clear()
+
+
 def _current_session_window() -> tuple[int, int] | None:
     """Return (open_ms, close_ms) for today's NY session, or None if closed."""
     now_utc = datetime.fromtimestamp(now_ms_utc() / 1000, tz=UTC)
@@ -271,6 +279,31 @@ class BotRollupCache:
             self._bots[sid] = state
             for f in fills:
                 _apply_fill_delta(state, f)
+
+    def bootstrap_from_journal(
+        self, sid: str, entries: list[OrderJournalEntry]
+    ) -> None:
+        """Cold-start one bot with inventory-baseline cutover semantics.
+
+        Fill history, realized P&L, and activity remain historical evidence.
+        The latest account inventory baseline clears all earlier open lots and
+        attributed exposure; only later fills establish current bot custody.
+        """
+
+        with self._lock:
+            state = _BotState(sid=sid)
+            self._bots[sid] = state
+            segment: list[OrderJournalEntry] = []
+            for entry in entries:
+                if entry.kind is not ClerkEntryKind.BROKER_EVIDENCE_BASELINE:
+                    segment.append(entry)
+                    continue
+                for fill in project_instance_fills(sid, segment):
+                    _apply_fill_delta(state, fill)
+                segment = []
+                _reset_inventory_state(state)
+            for fill in project_instance_fills(sid, segment):
+                _apply_fill_delta(state, fill)
 
     # ── Read (O(1) exposure; O(closed_lots_in_session) for realized_today) ────
 

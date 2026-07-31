@@ -26,7 +26,12 @@ import logging
 from app.broker.alpaca.clerk import derive, reconcile, recovery
 from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
 from app.broker.alpaca.clerk.effects import ClerkEffectOperations
-from app.broker.alpaca.clerk.exposure import project_instance_exposure, verify_flatten
+from app.broker.alpaca.clerk.exposure import (
+    project_expected_account_exposure,
+    project_instance_exposure,
+    signed_broker_position_quantity,
+    verify_flatten,
+)
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.leg_identity import Clock, LegIdentity, default_clock, leg_error
 from app.broker.alpaca.clerk.models import (
@@ -59,6 +64,10 @@ from app.broker.contract.models import (
     BrokerOrderRequest,
 )
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.engine.live.account_clerk_journal_models import (
+    AccountClerkBrokerEvidenceBaseline,
+    AccountClerkPositionEvidence,
+)
 from app.engine.live.order_identity import (
     build_bot_order_namespace,
     build_manual_order_namespace,
@@ -69,6 +78,14 @@ from app.engine.live.order_identity import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class InventoryBaselineRefusedError(Exception):
+    """The account is not in a safe state for an inventory cutover."""
+
+    def __init__(self, message: str, *, detail: str) -> None:
+        super().__init__(message)
+        self.detail = detail
 
 
 class AlpacaClerk(ClerkEffectOperations):
@@ -500,6 +517,137 @@ class AlpacaClerk(ClerkEffectOperations):
                     extra={"action": "hold_clear_noop", "account_id": account_id},
                 )
             return self._status_from(account_id, entries)
+
+    async def record_inventory_baseline(
+        self,
+        *,
+        operator: str,
+        reason: str,
+        strategy_instance_id: str | None = None,
+    ) -> AccountClerkBrokerEvidenceBaseline:
+        """Record a confirmed broker-inventory cutover and reconcile it.
+
+        This recovery is deliberately operator initiated. It is available only
+        for a ``missing_intent`` freeze, or for a stopped bot whose historical
+        exposure remains attributed while the reconciled account is flat. No
+        unresolved intents or working orders may exist. The intake lock spans
+        the fresh broker reads and durable append, so no submit or lifecycle
+        callback can race into the snapshot.
+
+        Earlier order rows remain immutable audit history. The baseline starts
+        account-level expected exposure from the freshly observed positions and
+        never assigns those positions to a bot or manual namespace. It also
+        retires pre-cutover instance exposure, without deleting fill history.
+        """
+
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            entries = journal.read_entries()
+            latest = derive.latest_reconciliation(entries)
+            missing_intent_recovery = (
+                latest is not None and latest.verdict == "missing_intent"
+            )
+            stale_attribution_recovery = False
+            if (
+                latest is not None
+                and latest.verdict == "clean"
+                and strategy_instance_id is not None
+                and not project_expected_account_exposure(entries)
+            ):
+                namespace = build_bot_order_namespace(strategy_instance_id)
+                stale_attribution_recovery = bool(
+                    project_instance_exposure(entries, namespace=namespace)
+                )
+            if not missing_intent_recovery and not stale_attribution_recovery:
+                raise InventoryBaselineRefusedError(
+                    "Inventory baseline recovery is not available.",
+                    detail=(
+                        "Run reconciliation first. Recovery requires a current "
+                        "missing-intent freeze or stale bot attribution on a "
+                        "reconciled flat account."
+                    ),
+                )
+            if derive.unresolved_intents(entries):
+                raise InventoryBaselineRefusedError(
+                    "Inventory baseline recovery is blocked by unresolved intents.",
+                    detail="Resolve every uncertain submit before adopting broker inventory.",
+                )
+
+            orders, positions = await asyncio.gather(
+                self._read.list_orders(status="open", limit=500),
+                self._read.list_positions(),
+            )
+            working_orders = [
+                order
+                for order in orders
+                if order.status.lower() not in reconcile.RECONCILIATION_TERMINAL_ORDER_STATUSES
+            ]
+            if working_orders:
+                raise InventoryBaselineRefusedError(
+                    "Inventory baseline recovery is blocked by working orders.",
+                    detail=(
+                        "Cancel or settle every working order, then reconcile before "
+                        "recording a baseline."
+                    ),
+                )
+            if stale_attribution_recovery and any(
+                position.quantity != 0 for position in positions
+            ):
+                raise InventoryBaselineRefusedError(
+                    "Inventory baseline recovery requires a freshly flat account.",
+                    detail=(
+                        "Broker inventory changed after the clean reconciliation. "
+                        "Reconcile again before retiring bot attribution."
+                    ),
+                )
+
+            observed_at_ms = self._clock()
+            baseline = AccountClerkBrokerEvidenceBaseline(
+                account_id=account_id,
+                observed_at_ms=observed_at_ms,
+                positions=tuple(
+                    AccountClerkPositionEvidence(
+                        symbol=position.symbol.upper(),
+                        signed_quantity=signed_broker_position_quantity(position),
+                        evidence_observed_at_ms=position.observed_at_ms,
+                    )
+                    for position in positions
+                    if position.quantity != 0
+                ),
+            )
+            await journal.append_async(
+                OrderJournalEntry(
+                    kind=ClerkEntryKind.BROKER_EVIDENCE_BASELINE,
+                    account_id=account_id,
+                    operator=operator,
+                    reason=reason,
+                    recorded_at_ms=observed_at_ms,
+                    broker_evidence_baseline=baseline,
+                )
+            )
+            plan = reconcile.plan(
+                journal.read_entries(),
+                [],
+                positions,
+                self._known_namespaces(journal),
+                account_id=account_id,
+                now_ms=observed_at_ms,
+            )
+            if plan.verdict != "clean":
+                raise RuntimeError(
+                    "the durable inventory baseline did not reconcile to its broker snapshot"
+                )
+            await self._apply_reconcile_plan(journal, account_id, plan)
+            logger.info(
+                "alpaca clerk recorded an operator-confirmed inventory baseline",
+                extra={
+                    "action": "broker_evidence_baseline",
+                    "account_id": account_id,
+                    "operator": operator,
+                    "position_count": len(baseline.positions),
+                },
+            )
+            return baseline
 
     def _status_from(
         self, account_id: str, entries: list[OrderJournalEntry]

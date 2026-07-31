@@ -53,11 +53,11 @@ ephemeral session id:
   model and trained the `live-{order_id}` mistake; kept only as a transitional
   alias at external compatibility edges, if any).
 - **Manual operator order** — an account-scoped paper order initiated through
-  the operator ticket, not a deployed strategy. Its identity is
-  `manual/operator/v1:{intent_id}` and it is accepted only through the Account
-  Clerk's durable intent/acknowledgement lane. It has no fabricated bot binding;
-  the Clerk journal is its canonical submit receipt and its broker callbacks
-  retain the same `order_ref`.
+  the operator ticket, not a deployed strategy. Its identity uses the broker's
+  `manual/{operator}/v1:{intent_id}` namespace and it is accepted only through
+  the Account Clerk's durable intent/acknowledgement lane. It has no fabricated
+  bot binding; the Clerk journal is its canonical submit receipt and its broker
+  callbacks retain the same `order_ref`.
 - **Order history** — a read-side transaction-history projection over canonical
   Clerk receipts and broker callbacks. It is not a fresh broker sweep and does
   not become an authority for order state. The operator view may show its full
@@ -259,6 +259,12 @@ never branch on those strings. This retires `recovery-flatten-*`,
   that the account is flat.
 - **Account exposure** — the broker-observed net position of the connected
   trading account. A bot does not own a broker position.
+- **Broker inventory baseline** — an operator-confirmed, fresh broker-position
+  snapshot that begins a new account-exposure accounting cutover without
+  deleting earlier Clerk history or assigning the inventory to any instance.
+  Pre-cutover instance attribution is retired as current custody, while its
+  fills remain visible as historical evidence.
+  _Avoid_: trade deletion, synthetic fill, bot position.
 - **Instance-attributed account exposure** — the Account Clerk's projection of
   the portion of account exposure supported by exact order and fill identity
   for one `strategy_instance_id`. _Avoid_: bot exposure, bot-owned position.

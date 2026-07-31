@@ -40,6 +40,8 @@ class ActionGuardContext:
     desired_state: str
     hold_active: bool
     freeze_active: bool
+    reconciliation_verdict: str | None
+    outstanding_intents: int
     channel_fresh: bool
     has_exposure: bool
     carryover_resume_ready: bool
@@ -48,6 +50,8 @@ class ActionGuardContext:
     strategy_instance_id: str
     exposure: dict[str, float]
     working_order_count: int
+    account_working_order_count: int
+    inventory_recovery_needed: bool
 
 
 @dataclass(frozen=True)
@@ -248,6 +252,56 @@ def _guard_reconcile_now(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBl
     return True, []
 
 
+def _guard_record_inventory_baseline(
+    ctx: ActionGuardContext,
+) -> tuple[bool, list[OperatorBlocker]]:
+    blockers: list[OperatorBlocker] = []
+    if ctx.running:
+        blockers.append(
+            _blocker(
+                "BOT_RUNNING",
+                scope="bot",
+                headline="Stop the bot before retiring inventory attribution.",
+                detail="Stop strategy evaluation, then refresh the recovery controls.",
+                evidence={"strategy_instance_id": ctx.strategy_instance_id},
+            )
+        )
+    if not ctx.inventory_recovery_needed:
+        blockers.append(
+            _blocker(
+                "INVENTORY_BASELINE_NOT_REQUIRED",
+                scope="account",
+                headline="No inventory cutover recovery is active.",
+                detail=(
+                    "This recovery appears only for a missing-intent freeze or a "
+                    "stopped bot whose stale attribution remains while the account is flat."
+                ),
+                evidence={"account_id": ctx.account_id},
+            )
+        )
+    if ctx.outstanding_intents:
+        blockers.append(
+            _blocker(
+                "UNRESOLVED_INTENTS",
+                scope="account",
+                headline="Unresolved order intents block inventory recovery.",
+                detail="Resolve every uncertain submit before recording an inventory baseline.",
+                evidence={"outstanding_intents": ctx.outstanding_intents},
+            )
+        )
+    if ctx.account_working_order_count:
+        blockers.append(
+            _blocker(
+                "WORKING_ORDERS_PRESENT",
+                scope="account",
+                headline="Working orders block inventory recovery.",
+                detail="Cancel or settle every working order, then reconcile again.",
+                evidence={"working_order_count": ctx.account_working_order_count},
+            )
+        )
+    return (not blockers), blockers
+
+
 ACTION_REGISTRY: dict[str, ActionPolicy] = {
     # deploy is a list-page action (broker/bots list), not a per-bot panel action.
     # The profile advertises it; the per-bot build skips it (list_page_only=True).
@@ -315,6 +369,19 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         guard=_guard_clear_hold,
         revision_inputs=lambda ctx: (ctx.hold_active, ctx.channel_fresh),
     ),
+    "record_inventory_baseline": ActionPolicy(
+        action_id="record_inventory_baseline",
+        supported_brokers=frozenset({"alpaca"}),
+        list_page_only=False,
+        guard=_guard_record_inventory_baseline,
+        revision_inputs=lambda ctx: (
+            ctx.running,
+            ctx.reconciliation_verdict,
+            ctx.outstanding_intents,
+            ctx.account_working_order_count,
+            ctx.inventory_recovery_needed,
+        ),
+    ),
     "reconcile_now": ActionPolicy(
         action_id="reconcile_now",
         supported_brokers=frozenset({"alpaca"}),
@@ -332,6 +399,58 @@ def supported_action_ids_for(broker: str) -> list[ActionId]:
     and contract-test-stable.
     """
     return [action_id for action_id in ACTION_IDS if broker in ACTION_REGISTRY[action_id].supported_brokers]
+
+
+def _confirmation_for_action(
+    action_id: str,
+    *,
+    enabled: bool,
+    ctx: ActionGuardContext,
+) -> OperatorConfirmationCopy | None:
+    """Build the typed blast-radius copy for consequential actions."""
+
+    if not enabled:
+        return None
+    if action_id == "flatten_stop":
+        return OperatorConfirmationCopy(
+            title="Flatten attributed exposure and stop?",
+            body=(
+                f"This command targets {ctx.strategy_instance_id} on account "
+                f"{ctx.account_id}. Attributed exposure: "
+                + (
+                    ", ".join(
+                        f"{symbol} {quantity:g}"
+                        for symbol, quantity in sorted(ctx.exposure.items())
+                    )
+                    or "none"
+                )
+                + f". Working orders: {ctx.working_order_count}."
+            ),
+            consequence=(
+                "The runtime stops first. The Clerk then cancels working entry "
+                "orders and submits reducing orders; fills may complete later."
+            ),
+            confirm_label="Flatten & stop",
+            required_token="FLATTEN",
+        )
+    if action_id == "record_inventory_baseline":
+        return OperatorConfirmationCopy(
+            title="Adopt current broker inventory as the accounting baseline?",
+            body=(
+                f"This account-level recovery targets {ctx.account_id}. "
+                "It reads current Alpaca positions and records an audited "
+                "cutover in the Clerk journal."
+            ),
+            consequence=(
+                "Earlier trades remain in history but stop contributing to "
+                "current account or bot exposure. All pre-cutover bot "
+                "attribution is retired; current broker positions remain "
+                "unassigned."
+            ),
+            confirm_label="Recover inventory baseline",
+            required_token="BASELINE",
+        )
+    return None
 
 
 def build_actions_from_registry(
@@ -377,27 +496,10 @@ def build_actions_from_registry(
                 explanation=copy.explanation,
                 enabled=enabled,
                 blockers=blockers,
-                confirmation=(
-                    OperatorConfirmationCopy(
-                        title="Flatten attributed exposure and stop?",
-                        body=(
-                            f"This command targets {ctx.strategy_instance_id} on account "
-                            f"{ctx.account_id}. Attributed exposure: "
-                            + (
-                                ", ".join(f"{symbol} {quantity:g}" for symbol, quantity in sorted(ctx.exposure.items()))
-                                or "none"
-                            )
-                            + f". Working orders: {ctx.working_order_count}."
-                        ),
-                        consequence=(
-                            "The runtime stops first. The Clerk then cancels working entry "
-                            "orders and submits reducing orders; fills may complete later."
-                        ),
-                        confirm_label="Flatten & stop",
-                        required_token="FLATTEN",
-                    )
-                    if action_id == "flatten_stop" and enabled
-                    else None
+                confirmation=_confirmation_for_action(
+                    action_id,
+                    enabled=enabled,
+                    ctx=ctx,
                 ),
                 revision=revision,
                 concurrency_token=concurrency_token,

@@ -4,14 +4,21 @@
     <h2 id="trader-status-title">{{ headline() }}</h2>
     <p>{{ panel().execution_policy }}</p>
   </div>
-  @if (primaryAction(); as action) {
-    <app-panel-action-button
-      [action]="action"
-      [pending]="actionPending()"
-      [tone]="action.action_id === 'stop' ? 'danger' : 'primary'"
-      (triggered)="actionRequested.emit($event)"
-    />
-  }
+  <div class="trader-command__actions">
+    <a
+      class="trader-command__manual-link"
+      routerLink="/brokers/alpaca"
+      title="Open the account-scoped order ticket; every order intent is recorded before Alpaca is called."
+    >Manual order ticket</a>
+    @if (primaryAction(); as action) {
+      <app-panel-action-button
+        [action]="action"
+        [pending]="actionPending()"
+        [tone]="action.action_id === 'stop' ? 'danger' : 'primary'"
+        (triggered)="actionRequested.emit($event)"
+      />
+    }
+  </div>
 </section>
 
 <app-trader-metrics [panel]="panel()" />
@@ -22,10 +29,14 @@
     [liveBars]="liveBars()"
     [liveFillMarkers]="liveFillMarkers()"
     [liveNotices]="liveNotices()"
+    [liveLoading]="liveChartLoading()"
+    [historyLoading]="histChartLoading()"
+    [liveResolution]="liveResolution()"
     [histBars]="histBars()"
     [histFillMarkers]="histFillMarkers()"
     [selectedPreset]="selectedPreset()"
     (presetChange)="onPresetChange($event)"
+    (liveResolutionChange)="liveResolutionChange.emit($event)"
   />
 </section>
 

@@ -30,6 +30,9 @@ export class OperatorReadinessComponent {
   protected readonly clearHoldAction = computed(() =>
     this.findAction('clear_hold'),
   );
+  protected readonly inventoryBaselineAction = computed(() =>
+    this.findAction('record_inventory_baseline'),
+  );
 
   private findAction(actionId: PanelAction['action_id']): PanelAction | null {
     return this.panel().actions.find((action) => action.action_id === actionId) ?? null;

@@ -10,6 +10,9 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     OrderSide,
 )
+from app.engine.live.account_clerk_journal_models import (
+    AccountClerkBrokerEvidenceBaseline,
+)
 from app.engine.live.order_identity import NAMESPACE_ROOT
 
 ACCT = "test-acct"
@@ -137,6 +140,21 @@ def reconciliation_entry(
         recorded_at_ms=ts_ms,
         verdict=verdict,  # type: ignore[arg-type]
         operator="op",
+    )
+
+
+def inventory_baseline_entry(*, ts_ms: int, account_id: str = ACCT) -> OrderJournalEntry:
+    return OrderJournalEntry(
+        kind=ClerkEntryKind.BROKER_EVIDENCE_BASELINE,
+        account_id=account_id,
+        operator="operator",
+        reason="confirmed flat inventory",
+        recorded_at_ms=ts_ms,
+        broker_evidence_baseline=AccountClerkBrokerEvidenceBaseline(
+            account_id=account_id,
+            observed_at_ms=ts_ms,
+            positions=(),
+        ),
     )
 
 

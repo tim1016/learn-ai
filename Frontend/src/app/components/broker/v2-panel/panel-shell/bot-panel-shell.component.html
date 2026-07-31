@@ -56,9 +56,13 @@
           [profile]="profileData"
           [liveChart]="liveChart.value() ?? null"
           [histChart]="histChart.value() ?? null"
+          [liveChartLoading]="liveChart.isLoading()"
+          [histChartLoading]="histChart.isLoading()"
+          [liveResolution]="liveResolution()"
           [selectedPreset]="selectedPreset()"
           [actionPending]="actionPending()"
           (presetChange)="onPresetChange($event)"
+          (liveResolutionChange)="onLiveResolutionChange($event)"
           (actionRequested)="onActionRequested($event)"
         />
       </div>

@@ -444,4 +444,47 @@ describe('OperatorLensComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Flatten & Stop' }));
     expect(screen.getByText('This will close all open positions.')).toBeTruthy();
   });
+
+  it('shows the inventory recovery action with typed confirmation', async () => {
+    const fakeSvc = makeFakePanelService();
+    const panel: BotPanelView = {
+      ...makePanel(),
+      actions: [
+        {
+          action_id: 'record_inventory_baseline',
+          label: 'Recover inventory baseline',
+          explanation: 'Record a verified accounting cutover.',
+          enabled: true,
+          blockers: [],
+          confirmation: {
+            title: 'Adopt current broker inventory?',
+            body: 'Reads the current Alpaca positions.',
+            consequence: 'Earlier trades remain in audit history.',
+            confirm_label: 'Recover inventory baseline',
+            required_token: 'BASELINE',
+          },
+          revision: 1,
+          concurrency_token: 'baseline-token',
+        },
+      ],
+    };
+
+    await render(OperatorLensComponent, {
+      inputs: {
+        panel,
+        profile: makeProfile(),
+        actionPending: false,
+        broker: 'alpaca',
+        accountId: 'acc-1',
+        sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Recover inventory baseline' }),
+    );
+    expect(screen.getByText('Reads the current Alpaca positions.')).toBeTruthy();
+    expect(screen.getByText('BASELINE')).toBeTruthy();
+  });
 });

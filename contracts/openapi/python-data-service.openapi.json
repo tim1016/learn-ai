@@ -32682,6 +32682,7 @@
               "retire",
               "cancel_order",
               "clear_hold",
+              "record_inventory_baseline",
               "reconcile_now"
             ],
             "title": "Action Id",
@@ -32751,6 +32752,7 @@
               "retire",
               "cancel_order",
               "clear_hold",
+              "record_inventory_baseline",
               "reconcile_now"
             ],
             "title": "Action Id",
@@ -32807,6 +32809,7 @@
               "retire",
               "cancel_order",
               "clear_hold",
+              "record_inventory_baseline",
               "reconcile_now"
             ],
             "title": "Action Id",
@@ -32895,6 +32898,7 @@
                 "retire",
                 "cancel_order",
                 "clear_hold",
+                "record_inventory_baseline",
                 "reconcile_now"
               ],
               "type": "string"
@@ -34529,6 +34533,7 @@
               "retire",
               "cancel_order",
               "clear_hold",
+              "record_inventory_baseline",
               "reconcile_now"
             ],
             "title": "Operation",
@@ -50135,6 +50140,20 @@
             }
           },
           {
+            "in": "query",
+            "name": "resolution",
+            "required": false,
+            "schema": {
+              "default": "1m",
+              "enum": [
+                "5s",
+                "1m"
+              ],
+              "title": "Resolution",
+              "type": "string"
+            }
+          },
+          {
             "in": "header",
             "name": "X-Data-Plane-Control-Secret",
             "required": false,
@@ -50173,7 +50192,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "LIVE chart pane: today's merged bars + fill markers (\u00a78)",
+        "summary": "LIVE chart pane: today's IBKR bars + fill markers (\u00a78)",
         "tags": [
           "broker-v2-panel"
         ]
@@ -50959,6 +50978,20 @@
             "required": true,
             "schema": {
               "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution",
+            "required": false,
+            "schema": {
+              "default": "1m",
+              "enum": [
+                "5s",
+                "1m"
+              ],
+              "title": "Resolution",
               "type": "string"
             }
           },

@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
+from app.broker.alpaca.clerk.exposure import project_expected_account_exposure
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
 from app.broker.v2panel.vocabulary import (
@@ -325,6 +326,34 @@ def _working_orders(sid: str, entries: list[OrderJournalEntry]) -> list[WorkingO
     ]
 
 
+def _account_working_order_count(entries: list[OrderJournalEntry]) -> int:
+    """Count current Clerk-owned working orders across every namespace."""
+
+    terminal_refs = {
+        entry.order_ref
+        for entry in entries
+        if entry.order_ref
+        and entry.kind is ClerkEntryKind.ORDER_EVENT
+        and entry.event is not None
+        and entry.event.event_type in _TERMINAL_ORDER_EVENTS
+    }
+    latest_by_ref: dict[str, OrderJournalEntry] = {}
+    for entry in entries:
+        if (
+            entry.order_ref
+            and entry.order_ref not in terminal_refs
+            and entry.order is not None
+        ):
+            latest_by_ref[entry.order_ref] = entry
+    return sum(
+        1
+        for entry in latest_by_ref.values()
+        if entry.order is not None
+        and entry.order.status.lower()
+        not in {"filled", "canceled", "expired", "rejected", "replaced"}
+    )
+
+
 def _recent_decision_views(receipts: list[DecisionReceipt], *, limit: int = 8) -> list[RecentDecisionView]:
     return [
         RecentDecisionView(
@@ -362,6 +391,7 @@ def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[Readiness
         "stop": "Bot lifecycle registry",
         "flatten_stop": "Bot lifecycle registry + Alpaca Clerk",
         "clear_hold": "Alpaca Clerk account hold gate",
+        "record_inventory_baseline": "Alpaca Clerk broker-evidence baseline",
         "reconcile_now": "Alpaca Clerk reconciliation sweep",
     }
     for action in actions:
@@ -525,6 +555,8 @@ def build_panel(
         exposure=exposure,
         account_id=account_id,
         working_order_count=len(working_orders),
+        account_working_order_count=_account_working_order_count(entries),
+        account_expected_exposure=project_expected_account_exposure(entries),
     )
 
     decision_receipts = recent_decisions or ([latest_decision] if latest_decision else [])

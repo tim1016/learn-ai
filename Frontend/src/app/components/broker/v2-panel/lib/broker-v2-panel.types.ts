@@ -28,6 +28,7 @@ export type ActionId =
   | 'retire'
   | 'cancel_order'
   | 'clear_hold'
+  | 'record_inventory_baseline'
   | 'reconcile_now';
 
 // ── Operator-blocker reuse (OperatorBlocker contract) ────────────────────────
@@ -65,6 +66,7 @@ export type PanelActionResult = components['schemas']['PanelActionResult'];
 // ── §8 Chart types ───────────────────────────────────────────────────────────
 
 export type ChartSource = 'ibkr' | 'polygon' | 'mixed';
+export type ChartLiveResolution = '5s' | '1m';
 export type ChartHistoryPreset = '1D' | '5D' | '1M' | '3M' | '1Y' | 'All';
 export type ChartAggregation = '1m' | '5m' | '30m' | '1h' | '1d';
 
@@ -98,7 +100,7 @@ export interface ChartLiveResponse {
   readonly symbol: string;
   readonly trading_date_open_ms: number;
   readonly trading_date_close_ms: number;
-  readonly resolution: '5s' | '1m';
+  readonly resolution: ChartLiveResolution;
   readonly bars: readonly ChartBar[];
   readonly fill_markers: readonly ChartFillMarker[];
   readonly overlay_notices: readonly ChartOverlayNoticeView[];

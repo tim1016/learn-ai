@@ -393,6 +393,28 @@ fresh order/exposure observation cannot be established. Instance uncertainty,
 stream health, and ordinary entry holds remain scoped blocks rather than
 account freezes. A later clean Clerk reconciliation clears either projection.
 
+## Alpaca broker-inventory baseline amendment (2026-07-31)
+
+An Alpaca Clerk journal may attach to a paper account that already holds
+inventory. Deleting a real historical order or fabricating a namespace fill to
+make that inventory balance would violate the journal's append-only custody
+contract. The Clerk therefore accepts an explicit, operator-confirmed broker
+inventory baseline as an account-level accounting cutover. The row preserves
+the fresh broker position evidence, operator identity, reason, and record time;
+it assigns no manual or strategy namespace and leaves every earlier order row
+unchanged.
+
+This recovery is presented in the Operator UI for a current `missing_intent`
+freeze or for a stopped bot with stale attributed exposure on a reconciled flat
+account. It requires a typed confirmation, zero unresolved intents, and zero
+working orders. The Clerk rechecks those conditions against a fresh Alpaca
+order/position snapshot while normal intake is serialized, appends the
+baseline, and records a clean reconciliation against the same snapshot.
+Future expected account exposure starts from the latest baseline plus later
+Clerk-recorded terminal fills. Pre-cutover per-instance exposure and open lots
+are retired as current custody; their fill rows and realized history remain
+immutable evidence. Current baseline positions remain deliberately unassigned.
+
 ## Issue #1044 callback-stream hardening traceability
 
 ## Transaction-history projection amendment (2026-07-25, #1219)

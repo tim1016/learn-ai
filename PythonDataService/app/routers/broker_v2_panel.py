@@ -19,7 +19,7 @@ field.
 from __future__ import annotations
 
 import logging
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -279,9 +279,19 @@ async def run_action_unscoped(broker: str, sid: str, request: PanelActionRequest
 # ── §8 Chart endpoints (account-scoped + unscoped alias) ─────────────────────
 
 
-async def _live_chart(broker: str, account_id: str, sid: str) -> ChartLiveResponse:
+async def _live_chart(
+    broker: str,
+    account_id: str,
+    sid: str,
+    resolution: Literal["5s", "1m"],
+) -> ChartLiveResponse:
     try:
-        return await ds.get_live_chart(broker, account_id, sid)
+        return await ds.get_live_chart(
+            broker,
+            account_id,
+            sid,
+            resolution=resolution,
+        )
     except ds.PanelDataError as error:
         _raise_panel_error(error)
 
@@ -289,10 +299,15 @@ async def _live_chart(broker: str, account_id: str, sid: str) -> ChartLiveRespon
 @router.get(
     "/{broker}/accounts/{account_id}/bots/{sid}/chart/live",
     response_model=ChartLiveResponse,
-    summary="LIVE chart pane: today's merged bars + fill markers (§8)",
+    summary="LIVE chart pane: today's IBKR bars + fill markers (§8)",
 )
-async def get_live_chart_scoped(broker: str, account_id: str, sid: str) -> ChartLiveResponse:
-    return await _live_chart(broker, account_id, sid)
+async def get_live_chart_scoped(
+    broker: str,
+    account_id: str,
+    sid: str,
+    resolution: Literal["5s", "1m"] = Query("1m"),
+) -> ChartLiveResponse:
+    return await _live_chart(broker, account_id, sid, resolution)
 
 
 @router.get(
@@ -300,9 +315,13 @@ async def get_live_chart_scoped(broker: str, account_id: str, sid: str) -> Chart
     response_model=ChartLiveResponse,
     summary="LIVE chart pane (single-account alias) (§8)",
 )
-async def get_live_chart_unscoped(broker: str, sid: str) -> ChartLiveResponse:
+async def get_live_chart_unscoped(
+    broker: str,
+    sid: str,
+    resolution: Literal["5s", "1m"] = Query("1m"),
+) -> ChartLiveResponse:
     account_id = await _resolve_default_account(broker)
-    return await _live_chart(broker, account_id, sid)
+    return await _live_chart(broker, account_id, sid, resolution)
 
 
 async def _history_chart(broker: str, account_id: str, sid: str, preset: str) -> ChartHistoryResponse:

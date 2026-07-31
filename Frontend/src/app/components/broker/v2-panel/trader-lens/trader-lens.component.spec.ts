@@ -188,6 +188,15 @@ describe('TraderLensComponent — live fallback chip', () => {
 });
 
 describe('TraderLensComponent — primary verb button', () => {
+  it('links to the account-scoped click-to-trade ticket', async () => {
+    await render(TraderLensComponent, {
+      inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    const link = screen.getByRole('link', { name: 'Manual order ticket' });
+    expect(link.getAttribute('href')).toBe('/brokers/alpaca');
+  });
+
   it('renders Stop when stop action is presented', async () => {
     await render(TraderLensComponent, {
       inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },

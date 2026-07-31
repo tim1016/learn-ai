@@ -100,6 +100,7 @@ Each station has a **station state** (what happened there) and may carry **evide
 
 **Actions available here.**
 - `reconcile_now` — run a reconciliation sweep against the broker immediately, without waiting for the next scheduled sweep.
+- `record_inventory_baseline` — recover a verified `missing_intent` mismatch or retire stale bot attribution on a reconciled flat account, then reconcile the accounting cutover.
 
 ---
 
@@ -147,6 +148,10 @@ Desired state (`RUNNING` or `STOPPED`) is separate from duty outcome (`ON_DUTY`,
 **When available:** When an exposure hold (`STREAM_HEALTH_HOLD` or `UNEXPLAINED_ORDER_HOLD`) is active and its root condition has been freshly observed as healthy.
 **What it does:** Lifts the account-wide hold and allows new order submissions to proceed.
 
+### `record_inventory_baseline` {#action-record-inventory-baseline}
+**When available:** When the latest verdict is `missing_intent`, or when a stopped bot retains stale attributed exposure while the reconciled account is flat; no unresolved intents or working orders may exist.
+**What it does:** After typed `BASELINE` confirmation, records the freshly observed broker positions as an account accounting cutover and immediately reconciles. It does not delete prior trades. It retires all pre-cutover bot attribution as current custody and leaves current broker positions unassigned.
+
 ### `reconcile_now` {#action-reconcile-now}
 **When available:** Always, when the reconciliation station is visible.
 **What it does:** Runs an immediate reconciliation sweep against the broker. Useful after a hold is cleared or after a manual order intervention.
@@ -169,7 +174,7 @@ Holds are account-wide. When a hold is active, **no bot on the account** can sub
 | Verdict | Meaning | Next step |
 |---|---|---|
 | `clean` | Journal and broker agree. | None. |
-| `missing_intent` | An intent was recorded but no matching broker order exists. | Investigate whether the order was submitted but not confirmed, or was lost. |
+| `missing_intent` | Broker inventory or an owned order does not match the durable journal exposure. | Resolve uncertain/working orders; if the mismatch is verified pre-journal inventory, use `record_inventory_baseline`. |
 | `unexplained_order` | A broker order exists that the journal cannot explain. | Investigate the source of the unexplained order. This triggers an `UNEXPLAINED_ORDER_HOLD`. |
 | `stale` | The last sweep could not reach the broker. | Wait for broker connectivity to restore; run `reconcile_now` when available. |
 

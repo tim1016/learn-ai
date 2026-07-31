@@ -121,7 +121,8 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
   },
   missing_intent: {
     label: 'Missing intent',
-    explanation: 'The last sweep found a recorded intent with no matching broker order.',
+    explanation:
+      'The last sweep found broker inventory or an owned order that does not match the durable journal exposure.',
   },
   not_applicable: {
     label: 'Not applicable',
@@ -130,6 +131,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
   reconcile_now: {
     label: 'Reconcile now',
     explanation: 'Run a reconciliation sweep against the broker immediately.',
+  },
+  record_inventory_baseline: {
+    label: 'Recover inventory baseline',
+    explanation:
+      'Record the freshly observed broker positions as the account accounting cutover, without deleting history or assigning those positions to a bot.',
   },
   retire: {
     label: 'Retire',

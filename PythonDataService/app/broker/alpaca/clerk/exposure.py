@@ -26,7 +26,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
-from app.broker.contract.models import OrderSide
+from app.broker.contract.models import BrokerOrder, BrokerPosition, OrderSide
 from app.engine.live.journal_exposure import (
     ExecutionExposureEffect,
     fold_execution_exposure,
@@ -52,6 +52,18 @@ class FlattenRefusedError(Exception):
         self.detail = detail
 
 
+ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES = frozenset(
+    {"filled", "canceled", "expired", "rejected", "replaced"}
+)
+
+
+def signed_broker_position_quantity(position: BrokerPosition) -> float:
+    """Normalize Alpaca's absolute quantity + side into one signed quantity."""
+
+    quantity = abs(position.quantity)
+    return -quantity if position.side.lower() == "short" else quantity
+
+
 @dataclass(frozen=True)
 class InstanceExposure:
     """One non-zero signed exposure bucket from Alpaca journal fill effects."""
@@ -61,6 +73,61 @@ class InstanceExposure:
     strategy_instance_id: str | None
     symbol: str
     quantity: float
+
+
+def project_expected_account_exposure(
+    entries: Iterable[OrderJournalEntry],
+) -> dict[str, float]:
+    """Project broker inventory expected by the Alpaca account journal.
+
+    Formula: expected[symbol] = latest operator-confirmed broker baseline +
+      the latest terminal filled quantity for each Clerk order recorded after
+      that baseline, signed BUY positive / SELL negative. Without a baseline,
+      the fold starts from zero and retains the legacy full-journal behavior.
+
+    A later baseline is an explicit accounting cutover: older order history
+    remains durable evidence, but it no longer contributes to current account
+    inventory. Baselines are account-scoped and never assign their positions
+    to an instance; they do retire pre-cutover instance exposure below.
+
+    Reference: ADR 0030 (account-rooted, journal-canonical custody).
+    Canonical implementation: this function.
+    Validated against: tests/broker/alpaca/clerk/test_derive.py::
+      test_inventory_baseline_preserves_history_without_phantom_exposure.
+    """
+
+    rows = tuple(entries)
+    baseline_index = -1
+    expected: dict[str, float] = {}
+    for index, entry in enumerate(rows):
+        baseline = entry.broker_evidence_baseline
+        if entry.kind is not ClerkEntryKind.BROKER_EVIDENCE_BASELINE or baseline is None:
+            continue
+        baseline_index = index
+        expected = {}
+        for position in baseline.positions:
+            symbol = position.symbol.upper()
+            expected[symbol] = expected.get(symbol, 0.0) + position.signed_quantity
+
+    latest_order_by_ref: dict[str, BrokerOrder] = {}
+    for entry in rows[baseline_index + 1 :]:
+        if entry.order_ref and entry.order is not None:
+            latest_order_by_ref[entry.order_ref] = entry.order
+
+    for order in latest_order_by_ref.values():
+        if order.status.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES:
+            continue
+        signed_quantity = order.filled_quantity
+        if order.side.lower() == "sell":
+            signed_quantity = -signed_quantity
+        symbol = order.symbol.upper()
+        expected[symbol] = expected.get(symbol, 0.0) + signed_quantity
+
+    return {
+        symbol: quantity
+        for symbol, quantity in sorted(expected.items())
+        if quantity != 0.0
+    }
 
 
 def strategy_instance_id_for_namespace(namespace: str) -> str | None:
@@ -86,12 +153,20 @@ def project_instance_exposure(
     - only owned ``ORDER_EVENT`` fills or partial fills carrying a broker execution identity
       accumulate;
     - dedup on ``(account_id, event_key)`` — never the journal position;
+    - the latest broker inventory baseline retires all earlier effects from
+      current instance custody without deleting their journal rows;
     - zero balances are omitted; output sorted for determinism.
 
     ``namespace`` filters to one ownership scope by exact equality.
     """
+    rows = tuple(entries)
+    baseline_index = -1
+    for index, entry in enumerate(rows):
+        if entry.kind is ClerkEntryKind.BROKER_EVIDENCE_BASELINE:
+            baseline_index = index
+
     effects: list[ExecutionExposureEffect] = []
-    for entry in entries:
+    for entry in rows[baseline_index + 1 :]:
         if entry.kind is not ClerkEntryKind.ORDER_EVENT or entry.owned is not True:
             continue
         event = entry.event

@@ -19,6 +19,7 @@ from typing import Literal, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.engine.live.account_clerk_journal_models import AccountClerkBrokerEvidenceBaseline
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
 
 
@@ -129,6 +130,10 @@ class ClerkEntryKind(StrEnum):
     RECONCILIATION = "reconciliation"
     HOLD_SET = "hold_set"
     HOLD_CLEARED = "hold_cleared"
+    # An operator-confirmed cutover from pre-Clerk broker inventory to
+    # journal-derived exposure. The snapshot is account truth only: it never
+    # fabricates a bot/manual namespace owner and never rewrites older rows.
+    BROKER_EVIDENCE_BASELINE = "broker_evidence_baseline"
     # S7 Clerk-owned strategy effects.  These are journal rows, not a second
     # execution store: one operation can link to zero or more child intents.
     EFFECT_ACCEPTED = "effect_accepted"
@@ -251,6 +256,9 @@ class OrderJournalEntry(BaseModel):
     # prose (backend-authored, rendered unpiped).
     reason_code: str | None = None
     reason: str | None = None
+    # Present only on BROKER_EVIDENCE_BASELINE. Reuse the broker-neutral Clerk
+    # evidence contract so IBKR and Alpaca retain the same snapshot meaning.
+    broker_evidence_baseline: AccountClerkBrokerEvidenceBaseline | None = None
     # Present on EFFECT_* rows.  Child submit rows carry only the stable
     # decision id below, preserving their existing order identity shape.
     effect_receipt: EffectOperationReceipt | None = None
@@ -347,9 +355,41 @@ class OrderJournalEntry(BaseModel):
                 raise ValueError("activity_recovery requires activity")
         elif self.kind in (ClerkEntryKind.HOLD_SET, ClerkEntryKind.HOLD_CLEARED):
             self._require("reason_code", "reason")
+        elif self.kind is ClerkEntryKind.BROKER_EVIDENCE_BASELINE:
+            self._require("operator", "reason")
+            if self.broker_evidence_baseline is None:
+                raise ValueError("broker_evidence_baseline requires broker_evidence_baseline")
+            if self.broker_evidence_baseline.account_id != self.account_id:
+                raise ValueError("broker_evidence_baseline account must match journal account")
+            if any(
+                (
+                    self.intent_id,
+                    self.order_ref,
+                    self.client_order_id,
+                    self.leg,
+                    self.broker_order_id,
+                    self.order,
+                    self.event,
+                    self.activity,
+                    self.verdict,
+                    self.reason_code,
+                    self.effect_receipt,
+                    self.effect_operation_id,
+                )
+            ):
+                raise ValueError(
+                    "broker_evidence_baseline cannot carry order, lifecycle, or effect data"
+                )
         elif self.kind in (ClerkEntryKind.EFFECT_ACCEPTED, ClerkEntryKind.EFFECT_RECEIPT):
             if self.effect_receipt is None:
                 raise ValueError(f"{self.kind.value} requires effect_receipt")
+        if (
+            self.kind is not ClerkEntryKind.BROKER_EVIDENCE_BASELINE
+            and self.broker_evidence_baseline is not None
+        ):
+            raise ValueError(
+                "broker_evidence_baseline is valid only on broker_evidence_baseline rows"
+            )
         return self
 
     def _require(self, *fields: str) -> None:

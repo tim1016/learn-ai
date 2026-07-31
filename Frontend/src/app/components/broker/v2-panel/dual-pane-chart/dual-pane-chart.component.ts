@@ -23,10 +23,18 @@ import {
   createChart,
   createSeriesMarkers,
 } from 'lightweight-charts';
-import type { ChartBar, ChartFillMarker, ChartHistoryPreset, ChartSource } from '../lib/broker-v2-panel.types';
+import type {
+  ChartBar,
+  ChartFillMarker,
+  ChartHistoryPreset,
+  ChartLiveResolution,
+  ChartSource,
+} from '../lib/broker-v2-panel.types';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 
-/** Map a ChartBar to lightweight-charts candle data (seconds UTC). */
+type ChartPane = 'live' | 'polygon';
+
+/** Map a millisecond UTC ChartBar to lightweight-charts candle data. */
 function toCandle(bar: ChartBar): {
   time: UTCTimestamp;
   open: number;
@@ -36,25 +44,25 @@ function toCandle(bar: ChartBar): {
 } {
   return {
     time: Math.floor(bar.start_ms / 1000) as UTCTimestamp,
-    open: parseFloat(bar.open),
-    high: parseFloat(bar.high),
-    low: parseFloat(bar.low),
-    close: parseFloat(bar.close),
+    open: Number(bar.open),
+    high: Number(bar.high),
+    low: Number(bar.low),
+    close: Number(bar.close),
   };
 }
 
+/** Return the exact candle whose half-open interval contains the fill. */
 function markerTime(
   marker: ChartFillMarker,
   bars: readonly ChartBar[],
-): UTCTimestamp {
-  let precedingBar: ChartBar | undefined;
+): UTCTimestamp | null {
   for (const bar of bars) {
     if (bar.start_ms > marker.filled_at_ms) break;
-    precedingBar = bar;
-    if (marker.filled_at_ms < bar.end_ms) break;
+    if (marker.filled_at_ms < bar.end_ms) {
+      return Math.floor(bar.start_ms / 1000) as UTCTimestamp;
+    }
   }
-  const bar = precedingBar ?? bars[0];
-  return Math.floor((bar?.start_ms ?? marker.filled_at_ms) / 1000) as UTCTimestamp;
+  return null;
 }
 
 export function toSeriesMarkers(
@@ -62,15 +70,17 @@ export function toSeriesMarkers(
   bars: readonly ChartBar[],
 ): SeriesMarker<UTCTimestamp>[] {
   return markers
-    .map((marker) => {
+    .flatMap((marker) => {
+      const time = markerTime(marker, bars);
+      if (time === null) return [];
       const isBuy = marker.side === 'buy';
-      return {
-        time: markerTime(marker, bars),
+      return [{
+        time,
         position: isBuy ? 'belowBar' : 'aboveBar',
-        color: isBuy ? '#60a5fa' : '#f97316',
+        color: isBuy ? '#29b6f6' : '#ff9800',
         shape: isBuy ? 'arrowUp' : 'arrowDown',
-        text: `${marker.side.toUpperCase()} ${marker.quantity}`,
-      } satisfies SeriesMarker<UTCTimestamp>;
+        text: `${marker.side.toUpperCase()} ${marker.quantity} @ ${marker.price}`,
+      } satisfies SeriesMarker<UTCTimestamp>];
     })
     .sort((a, b) => a.time - b.time);
 }
@@ -84,47 +94,38 @@ function sourceColors(source: ChartSource): {
   wickDownColor: string;
 } {
   if (source === 'polygon') {
-    // Greyed inactive style for Polygon-only bars (fallback visual).
     return {
-      upColor: '#9ca3af',
-      downColor: '#9ca3af',
-      borderUpColor: '#6b7280',
-      borderDownColor: '#6b7280',
-      wickUpColor: '#6b7280',
-      wickDownColor: '#6b7280',
+      upColor: '#5eead4',
+      downColor: '#fb7185',
+      borderUpColor: '#2dd4bf',
+      borderDownColor: '#f43f5e',
+      wickUpColor: '#2dd4bf',
+      wickDownColor: '#f43f5e',
     };
   }
   return {
-    upColor: '#22c55e',
-    downColor: '#ef4444',
-    borderUpColor: '#16a34a',
-    borderDownColor: '#dc2626',
-    wickUpColor: '#16a34a',
-    wickDownColor: '#dc2626',
+    upColor: '#26a69a',
+    downColor: '#ef5350',
+    borderUpColor: '#26a69a',
+    borderDownColor: '#ef5350',
+    wickUpColor: '#26a69a',
+    wickDownColor: '#ef5350',
   };
 }
 
 export const HISTORY_PRESETS: readonly ChartHistoryPreset[] = [
   '1D', '5D', '1M', '3M', '1Y', 'All',
 ];
+export const LIVE_RESOLUTIONS: readonly ChartLiveResolution[] = ['5s', '1m'];
 
 /**
- * Dual-pane market chart (spec §8).
+ * Source-tabbed market tape for one bot symbol.
  *
- * Two independent `lightweight-charts` instances rendered side-by-side on
- * desktop and stacked on narrow viewports. Each pane has per-pane full-screen
- * expand. LIVE pane uses today's source-tagged bars; HISTORY pane uses
- * bounded presets (1D·5D·1M·3M·1Y·All) with life-of-bot fills.
- *
- * Source provenance is truthfully tagged: `ibkr`=standard colours,
- * `polygon`=greyed inactive style. When the LIVE pane has no IBKR bars, an
- * overlay notice chip renders (from `overlay_notices` on the response) —
- * Angular never fabricates the message.
- *
- * Chart series update reactively: `effect()` calls track the signal inputs and
- * call the render helpers on any change. The chart instances are created once
- * in `ngAfterViewInit`; the effects are no-ops before that (guarded by null
- * series check inside each render helper).
+ * One chart instance keeps the price canvas spacious while a source rail
+ * switches between IBKR live bars and Polygon's delayed archive. The live
+ * interval and Polygon range are independent controls. Fill markers are
+ * projected onto the containing live candle using int64 millisecond UTC input;
+ * conversion to the chart library's seconds happens only at the render edge.
  */
 @Component({
   selector: 'app-dual-pane-chart',
@@ -134,151 +135,145 @@ export const HISTORY_PRESETS: readonly ChartHistoryPreset[] = [
   styleUrl: './dual-pane-chart.component.scss',
 })
 export class DualPaneChartComponent implements AfterViewInit {
-  // ── Inputs ────────────────────────────────────────────────────────────────
-
   readonly symbol = input.required<string>();
   readonly liveBars = input<readonly ChartBar[]>([]);
   readonly liveFillMarkers = input<readonly ChartFillMarker[]>([]);
-  readonly liveNotices = input<
-    readonly { code: string; message: string }[]
-  >([]);
+  readonly liveNotices = input<readonly { code: string; message: string }[]>([]);
+  readonly liveLoading = input(false);
+  readonly historyLoading = input(false);
+  readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly histBars = input<readonly ChartBar[]>([]);
   readonly histFillMarkers = input<readonly ChartFillMarker[]>([]);
   readonly selectedPreset = input<ChartHistoryPreset>('1D');
 
-  // ── Output ────────────────────────────────────────────────────────────────
-
   readonly presetChange = output<ChartHistoryPreset>();
+  readonly liveResolutionChange = output<ChartLiveResolution>();
 
-  // ── View children ─────────────────────────────────────────────────────────
+  private readonly chartContainer =
+    viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
+  private readonly destroyRef = inject(DestroyRef);
 
-  private readonly liveContainer =
-    viewChild.required<ElementRef<HTMLDivElement>>('liveContainer');
-  private readonly histContainer =
-    viewChild.required<ElementRef<HTMLDivElement>>('histContainer');
-
-  // ── Internal state ────────────────────────────────────────────────────────
-
-  protected readonly liveFullscreen = signal(false);
-  protected readonly histFullscreen = signal(false);
+  protected readonly activePane = signal<ChartPane>('live');
+  protected readonly fullscreen = signal(false);
+  protected readonly presets = HISTORY_PRESETS;
+  protected readonly liveResolutions = LIVE_RESOLUTIONS;
 
   protected readonly liveSource = computed<ChartSource | null>(() => {
     const bars = this.liveBars();
     if (!bars.length) return null;
-    const sources = new Set(bars.map((b) => b.source));
-    if (sources.size === 1) return bars[0].source;
-    return 'mixed';
+    const sources = new Set(bars.map((bar) => bar.source));
+    return sources.size === 1 ? bars[0].source : 'mixed';
   });
 
-  protected readonly presets = HISTORY_PRESETS;
+  protected readonly activeBars = computed(() =>
+    this.activePane() === 'live' ? this.liveBars() : this.histBars(),
+  );
+  protected readonly activeMarkers = computed(() =>
+    this.activePane() === 'live' ? this.liveFillMarkers() : this.histFillMarkers(),
+  );
+  protected readonly activeLoading = computed(() =>
+    this.activePane() === 'live' ? this.liveLoading() : this.historyLoading(),
+  );
+  protected readonly visibleFillCount = computed(() =>
+    toSeriesMarkers(this.activeMarkers(), this.activeBars()).length,
+  );
+  protected readonly lastPrice = computed(() => {
+    const bars = this.activeBars();
+    return bars.length ? Number(bars[bars.length - 1].close) : null;
+  });
 
-  private liveChart: IChartApi | null = null;
-  private histChart: IChartApi | null = null;
-  private liveSeries: ISeriesApi<'Candlestick'> | null = null;
-  private histSeries: ISeriesApi<'Candlestick'> | null = null;
-  private liveMarkers: ISeriesMarkersPluginApi<Time> | null = null;
-  private histMarkers: ISeriesMarkersPluginApi<Time> | null = null;
-
-  private readonly destroyRef = inject(DestroyRef);
-
-  // ── Constructor ───────────────────────────────────────────────────────────
+  private chart: IChartApi | null = null;
+  private series: ISeriesApi<'Candlestick'> | null = null;
+  private markers: ISeriesMarkersPluginApi<Time> | null = null;
+  private renderedViewKey: string | null = null;
+  private renderedBarCount = 0;
 
   constructor() {
-    effect(() => this.renderLive());
-    effect(() => this.renderHistory());
+    effect(() => this.renderActivePane());
   }
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
-
   ngAfterViewInit(): void {
-    this.liveChart = createChart(
-      this.liveContainer().nativeElement,
-      this.chartOptions(),
-    );
-    this.liveSeries = this.liveChart.addSeries(CandlestickSeries, {});
-    this.liveMarkers = createSeriesMarkers(this.liveSeries, []);
-
-    this.histChart = createChart(
-      this.histContainer().nativeElement,
-      this.chartOptions(),
-    );
-    this.histSeries = this.histChart.addSeries(CandlestickSeries, {});
-    this.histMarkers = createSeriesMarkers(this.histSeries, []);
-
-    this.renderLive();
-    this.renderHistory();
-
+    this.chart = createChart(this.chartContainer().nativeElement, {
+      layout: {
+        background: { color: 'transparent' },
+        textColor: '#9598a1',
+        fontFamily: 'JetBrains Mono, SFMono-Regular, Consolas, monospace',
+      },
+      grid: {
+        vertLines: { color: 'rgba(42, 46, 57, 0.55)' },
+        horzLines: { color: 'rgba(42, 46, 57, 0.55)' },
+      },
+      rightPriceScale: { borderColor: '#2a2e39' },
+      timeScale: { borderColor: '#2a2e39', timeVisible: true, secondsVisible: true },
+      autoSize: true,
+    });
+    this.series = this.chart.addSeries(CandlestickSeries, {});
+    this.markers = createSeriesMarkers(this.series, []);
+    this.renderActivePane();
     this.destroyRef.onDestroy(() => this.cleanup());
   }
 
-  // ── Template handlers ─────────────────────────────────────────────────────
+  protected selectPane(pane: ChartPane): void {
+    this.activePane.set(pane);
+  }
+
+  protected onTabKeydown(event: KeyboardEvent): void {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const pane = event.key === 'ArrowLeft' || event.key === 'Home' ? 'live' : 'polygon';
+    this.activePane.set(pane);
+    const target = (event.currentTarget as HTMLElement | null)?.parentElement?.querySelector(
+      `[data-chart-pane="${pane}"]`,
+    );
+    if (target instanceof HTMLElement) target.focus();
+  }
+
+  protected selectLiveResolution(resolution: ChartLiveResolution): void {
+    this.liveResolutionChange.emit(resolution);
+  }
 
   protected selectPreset(preset: ChartHistoryPreset): void {
     this.presetChange.emit(preset);
   }
 
-  protected toggleLiveFullscreen(): void {
-    this.liveFullscreen.update((v) => !v);
-    requestAnimationFrame(() => this.liveChart?.timeScale().fitContent());
+  protected toggleFullscreen(): void {
+    this.fullscreen.update((value) => !value);
+    requestAnimationFrame(() => this.chart?.timeScale().fitContent());
   }
 
-  protected toggleHistFullscreen(): void {
-    this.histFullscreen.update((v) => !v);
-    requestAnimationFrame(() => this.histChart?.timeScale().fitContent());
+  protected formatPrice(price: number): string {
+    return price.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    });
   }
 
-  // ── Private helpers ───────────────────────────────────────────────────────
-
-  private chartOptions() {
-    return {
-      layout: {
-        background: { color: 'transparent' },
-        textColor: '#d1d5db',
-      },
-      grid: {
-        vertLines: { color: '#374151' },
-        horzLines: { color: '#374151' },
-      },
-      autoSize: true,
-    };
-  }
-
-  private renderLive(): void {
-    if (!this.liveSeries) return;
-    const bars = this.liveBars();
-    this.liveMarkers?.setMarkers(toSeriesMarkers(this.liveFillMarkers(), bars));
-    if (!bars.length) {
-      this.liveSeries.setData([]);
-      return;
-    }
-    const dominant = this.liveSource() ?? 'ibkr';
-    this.liveSeries.applyOptions(sourceColors(dominant));
-    this.liveSeries.setData(bars.map(toCandle));
-    this.liveChart?.timeScale().fitContent();
-  }
-
-  private renderHistory(): void {
-    if (!this.histSeries) return;
-    const bars = this.histBars();
-    this.histMarkers?.setMarkers(toSeriesMarkers(this.histFillMarkers(), bars));
-    if (!bars.length) {
-      this.histSeries.setData([]);
-      return;
-    }
-    // History pane always uses Polygon bars; match greyed style.
-    this.histSeries.applyOptions(sourceColors('polygon'));
-    this.histSeries.setData(bars.map(toCandle));
-    this.histChart?.timeScale().fitContent();
+  private renderActivePane(): void {
+    const bars = this.activeBars();
+    const fillMarkers = this.activeMarkers();
+    const pane = this.activePane();
+    const liveSource = this.liveSource();
+    const viewKey = pane === 'live'
+      ? `live:${this.liveResolution()}`
+      : `polygon:${this.selectedPreset()}`;
+    if (!this.series) return;
+    this.markers?.setMarkers(toSeriesMarkers(fillMarkers, bars));
+    const source = pane === 'polygon' ? 'polygon' : (liveSource ?? 'ibkr');
+    this.series.applyOptions(sourceColors(source));
+    this.series.setData(bars.map(toCandle));
+    const shouldFit = bars.length > 0
+      && (viewKey !== this.renderedViewKey || this.renderedBarCount === 0);
+    if (shouldFit) this.chart?.timeScale().fitContent();
+    this.renderedViewKey = viewKey;
+    this.renderedBarCount = bars.length;
   }
 
   private cleanup(): void {
-    this.liveChart?.remove();
-    this.histChart?.remove();
-    this.liveChart = null;
-    this.histChart = null;
-    this.liveSeries = null;
-    this.histSeries = null;
-    this.liveMarkers = null;
-    this.histMarkers = null;
+    this.chart?.remove();
+    this.chart = null;
+    this.series = null;
+    this.markers = null;
+    this.renderedViewKey = null;
+    this.renderedBarCount = 0;
   }
 }

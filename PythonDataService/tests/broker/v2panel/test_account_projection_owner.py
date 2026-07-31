@@ -9,7 +9,13 @@ tests pin.
 from __future__ import annotations
 
 from app.services.broker_v2_panel.account_projection_owner import AccountProjectionOwner
-from tests.broker.v2panel.fixtures import ACCT, OTHER_SID, SID, fill_entry
+from tests.broker.v2panel.fixtures import (
+    ACCT,
+    OTHER_SID,
+    SID,
+    fill_entry,
+    inventory_baseline_entry,
+)
 
 
 def _owner() -> AccountProjectionOwner:
@@ -82,3 +88,23 @@ def test_sync_is_idempotent_on_repeated_identical_reads() -> None:
     owner.sync(entries, [SID])
     owner.sync(entries, [SID])
     assert owner.get_rollup(SID).exposure == {"SPY": 100.0}
+
+
+def test_sync_inventory_baseline_retires_prior_exposure_and_accepts_later_fills() -> None:
+    owner = _owner()
+    entries = [
+        fill_entry(sid=SID, intent="old", ts_ms=1_000, qty=100.0),
+    ]
+    owner.sync(entries, [SID])
+    assert owner.get_rollup(SID).exposure == {"SPY": 100.0}
+
+    entries = [*entries, inventory_baseline_entry(ts_ms=2_000)]
+    owner.sync(entries, [SID])
+    assert owner.get_rollup(SID).exposure == {}
+
+    entries = [
+        *entries,
+        fill_entry(sid=SID, intent="new", ts_ms=3_000, qty=25.0),
+    ]
+    owner.sync(entries, [SID])
+    assert owner.get_rollup(SID).exposure == {"SPY": 25.0}

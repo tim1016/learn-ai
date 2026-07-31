@@ -42,6 +42,7 @@ def test_alpaca_profile_advertises_only_actions_with_production_performers() -> 
         "stop",
         "flatten_stop",
         "clear_hold",
+        "record_inventory_baseline",
         "reconcile_now",
     ]
     assert "retire" not in profile.supported_action_ids

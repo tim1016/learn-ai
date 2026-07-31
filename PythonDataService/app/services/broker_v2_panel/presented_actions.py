@@ -16,6 +16,8 @@ Lifecycle semantics (§12) drive the enablement:
                the replacement deploy (not this action).
 - ``cancel_order`` — a working order exists.
 - ``clear_hold`` — an active hold whose root condition is healthy + fresh.
+- ``record_inventory_baseline`` — missing-intent or stale-attribution recovery
+  with no unresolved or working orders.
 - ``reconcile_now`` — always available (triggers a sweep).
 
 Enablement logic lives in ``app.broker.v2panel.action_policy.ACTION_REGISTRY``
@@ -69,6 +71,8 @@ def build_actions(
     exposure: dict[str, float],
     account_id: str,
     working_order_count: int,
+    account_working_order_count: int,
+    account_expected_exposure: dict[str, float],
 ) -> list[PanelAction]:
     """Build the closed presented-action set for one bot (§11, §12).
 
@@ -80,12 +84,23 @@ def build_actions(
     """
     has_exposure = any(abs(qty) > 0 for qty in exposure.values())
     carryover_resume_ready = has_exposure and resume_eligible(status, clerk, exposure)
+    account_expected_flat = not any(
+        abs(quantity) > 0 for quantity in account_expected_exposure.values()
+    )
+    inventory_recovery_needed = clerk.reconciliation_verdict == "missing_intent" or (
+        clerk.reconciliation_verdict == "clean"
+        and not status.running
+        and has_exposure
+        and account_expected_flat
+    )
     ctx = ActionGuardContext(
         running=status.running,
         phase=status.phase,
         desired_state=status.desired_state,
         hold_active=clerk.hold_active,
         freeze_active=clerk.freeze_active,
+        reconciliation_verdict=clerk.reconciliation_verdict,
+        outstanding_intents=clerk.outstanding_intents,
         channel_fresh=channel_fresh,
         has_exposure=has_exposure,
         carryover_resume_ready=carryover_resume_ready,
@@ -94,6 +109,8 @@ def build_actions(
         strategy_instance_id=status.strategy_instance_id,
         exposure=exposure,
         working_order_count=working_order_count,
+        account_working_order_count=account_working_order_count,
+        inventory_recovery_needed=inventory_recovery_needed,
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
 
@@ -125,6 +142,8 @@ def build_roster_action(
             desired_state=status.desired_state,
             hold_active=True,
             freeze_active=True,
+            reconciliation_verdict=None,
+            outstanding_intents=0,
             channel_fresh=False,
             has_exposure=False,
             carryover_resume_ready=False,
@@ -133,6 +152,8 @@ def build_roster_action(
             strategy_instance_id=status.strategy_instance_id,
             exposure=exposure,
             working_order_count=0,
+            account_working_order_count=0,
+            inventory_recovery_needed=False,
         )
         actions = build_actions_from_registry(
             ctx,
@@ -149,6 +170,8 @@ def build_roster_action(
             exposure=exposure,
             account_id=account_id,
             working_order_count=0,
+            account_working_order_count=0,
+            account_expected_exposure={},
         )
     action_id = "stop" if status.running else "start"
     return next(
