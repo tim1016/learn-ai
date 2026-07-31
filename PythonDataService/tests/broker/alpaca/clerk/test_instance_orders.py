@@ -42,6 +42,10 @@ from app.broker.contract.models import (
     BrokerOrderEvent,
     BrokerOrderLeg,
 )
+from app.engine.live.journal_exposure import (
+    ExecutionExposureEffect,
+    fold_execution_exposure,
+)
 from app.engine.live.order_identity import build_bot_order_namespace
 from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
 
@@ -235,6 +239,36 @@ async def test_bot_namespace_submit_fill_attribution_and_projection() -> None:
     assert exposure[0].quantity == 1.0
     assert exposure[0].strategy_instance_id == _SID_A
     assert exposure[0].namespace == build_bot_order_namespace(_SID_A)
+
+
+async def test_alpaca_projection_uses_canonical_execution_fold() -> None:
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    await _submit_and_fill(
+        clerk,
+        _SID_A,
+        symbol="SPY",
+        quantity=2.5,
+        exec_id="canonical-parity",
+    )
+
+    projected = await _owned(clerk, _SID_A)
+    canonical = fold_execution_exposure(
+        [
+            ExecutionExposureEffect(
+                account_id="PA-TEST",
+                group_id=build_bot_order_namespace(_SID_A),
+                symbol="SPY",
+                execution_id="exec:canonical-parity",
+                signed_quantity=2.5,
+            )
+        ]
+    )
+
+    assert {
+        (row.account_id, row.namespace, row.symbol): row.quantity
+        for row in projected
+    } == canonical
 
 
 # ── AC2: two concurrent instances see only their own exposure (07-27 pin) ──

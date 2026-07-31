@@ -275,20 +275,19 @@ class AlpacaClerk(ClerkEffectOperations):
         """
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
-            owning = self._resolve_owning_entry(order_id, journal)
+            owning = derive.order_owner(
+                journal.read_entries(), order_id, kind=ClerkEntryKind.SUBMIT_ACKED
+            )
             owned = owning is not None
 
             def _entry(
                 kind: ClerkEntryKind, *, error: BrokerError | None = None
             ) -> OrderJournalEntry:
-                return OrderJournalEntry(
+                return OrderJournalEntry.attributed_from(
+                    owning,
                     kind=kind,
                     account_id=account_id,
-                    operator=owning.operator if owning is not None else "",
-                    intent_id=owning.intent_id if owning is not None else "",
-                    order_ref=owning.order_ref if owning is not None else "",
                     client_order_id=owning.client_order_id if owning is not None else "",
-                    leg=owning.leg if owning is not None else None,
                     broker_order_id=order_id,
                     owned=owned,
                     recorded_at_ms=self._clock(),
@@ -367,19 +366,16 @@ class AlpacaClerk(ClerkEffectOperations):
                 ClerkEntryKind.ORDER_EVENT if owned else ClerkEntryKind.UNEXPLAINED_ORDER
             )
             owning = (
-                self._resolve_owning_entry_by_ref(client_order_id, journal)
+                derive.order_owner_by_ref(journal.read_entries(), client_order_id)
                 if owned and client_order_id is not None
                 else None
             )
             await journal.append_async(
-                OrderJournalEntry(
+                OrderJournalEntry.attributed_from(
+                    owning,
                     kind=kind,
                     account_id=account_id,
-                    operator=owning.operator if owning is not None else "",
-                    intent_id=owning.intent_id if owning is not None else "",
-                    order_ref=owning.order_ref if owning is not None else "",
                     client_order_id=client_order_id or "",
-                    leg=owning.leg if owning is not None else None,
                     broker_order_id=order.order_id if order is not None else None,
                     owned=owned,
                     recorded_at_ms=self._clock(),
@@ -447,26 +443,6 @@ class AlpacaClerk(ClerkEffectOperations):
                 continue
             namespaces.add(namespace)
         return frozenset(namespaces)
-
-    @staticmethod
-    def _resolve_owning_entry_by_ref(
-        client_order_id: str, journal: OrderJournal
-    ) -> OrderJournalEntry | None:
-        """Find the owning submit entry for a client_order_id (== order_ref).
-
-        Returns the most recent submit-side entry (``submit_acked`` preferred,
-        else ``intent_recorded``) whose ``order_ref`` matches, so the event line
-        can copy the originating identity + leg. ``None`` when unresolvable.
-        """
-        owning: OrderJournalEntry | None = None
-        for entry in journal.read_entries():
-            if (
-                entry.kind
-                in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.INTENT_RECORDED)
-                and entry.order_ref == client_order_id
-            ):
-                owning = entry
-        return owning
 
     # ── S6 exposure hold (account-level, journal-derived) ────────────────────
 
@@ -580,26 +556,6 @@ class AlpacaClerk(ClerkEffectOperations):
                 "reason_code": reason_code,
             },
         )
-
-    @staticmethod
-    def _resolve_owning_entry(
-        order_id: str, journal: OrderJournal
-    ) -> OrderJournalEntry | None:
-        """Find the ``submit_acked`` entry that minted the given broker order_id.
-
-        The ``submit_acked`` line is the sole place the broker-assigned
-        ``order_id`` is bound to our minted ``order_ref``/leg. Return the most
-        recent match (last write wins) or ``None`` when the order is unowned.
-        """
-        owning: OrderJournalEntry | None = None
-        for entry in journal.read_entries():
-            if (
-                entry.kind is ClerkEntryKind.SUBMIT_ACKED
-                and entry.order is not None
-                and entry.order.order_id == order_id
-            ):
-                owning = entry
-        return owning
 
     async def _submit_leg(
         self,

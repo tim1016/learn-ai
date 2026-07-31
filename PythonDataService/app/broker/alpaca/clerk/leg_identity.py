@@ -8,9 +8,7 @@ locking — the clerk owns those.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from app.broker.alpaca.clerk.models import (
     ClerkEntryKind,
@@ -19,16 +17,12 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.utils.timestamps import Clock, now_ms_utc
 
 # An injected clock: the current instant as ``int64`` ms UTC. Defaults to the
 # ingestion-boundary wall clock; tests inject a fixed clock (mirrors the S4
 # ``TradeUpdatesConsumer`` seam) so journaled timestamps are deterministic.
-type Clock = Callable[[], int]
-
-
-def default_clock() -> int:
-    """Current instant as ``int64`` ms UTC (ingestion boundary)."""
-    return int(datetime.now(UTC).timestamp() * 1000)
+default_clock = now_ms_utc
 
 
 def leg_error(exc: BrokerError) -> OrderLegError:

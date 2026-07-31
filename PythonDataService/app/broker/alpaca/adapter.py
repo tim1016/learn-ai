@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -33,6 +33,7 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerPosition,
 )
+from app.utils.timestamps import now_ms_utc
 
 # DST-correct ET zone for anchoring bare dates (never a fixed offset).
 _ET = ZoneInfo("America/New_York")
@@ -41,9 +42,7 @@ _ET = ZoneInfo("America/New_York")
 _OVERLONG_FRACTION = re.compile(r"(?P<head>.*\.\d{6})\d+(?P<tail>.*)")
 
 
-def now_ms() -> int:
-    """Current instant as ``int64`` ms UTC (default ``observed_at_ms``)."""
-    return int(datetime.now(UTC).timestamp() * 1000)
+now_ms = now_ms_utc
 
 
 def to_float(value: Any) -> float:

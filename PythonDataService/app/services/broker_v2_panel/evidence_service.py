@@ -22,7 +22,10 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
-from app.engine.live.order_identity import NAMESPACE_ROOT
+from app.engine.live.order_identity import (
+    build_bot_order_namespace,
+    order_ref_namespace_matches,
+)
 from app.schemas.broker_v2_evidence import EvidenceAuditEntry, EvidenceEntry, EvidencePage
 from app.utils.timestamps import now_ms_utc
 
@@ -76,10 +79,12 @@ def _append_audit_entry(entry: EvidenceAuditEntry) -> None:
 
 def _is_bot_entry(entry: OrderJournalEntry, sid: str) -> bool:
     """Return True if this journal entry belongs to the given bot's namespace."""
-    ns = f"{NAMESPACE_ROOT}/{sid}/v1:"
-    if entry.order_ref and entry.order_ref.startswith(ns):
-        return True
-    return entry.operator == sid
+    return bool(
+        entry.order_ref
+        and order_ref_namespace_matches(
+            entry.order_ref, frozenset({build_bot_order_namespace(sid)})
+        )
+    )
 
 
 def _redact_summary(entry: OrderJournalEntry) -> tuple[str, bool]:

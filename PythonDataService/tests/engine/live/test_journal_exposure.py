@@ -17,6 +17,8 @@ from app.engine.live.account_clerk_journal_models import (
 )
 from app.engine.live.account_clerk_reconciler import namespace_expected_exposure
 from app.engine.live.journal_exposure import (
+    ExecutionExposureEffect,
+    fold_execution_exposure,
     project_journal_account_exposure,
     project_journal_exposure,
 )
@@ -62,6 +64,23 @@ def test_project_journal_exposure_matches_golden_fixture() -> None:
 
     assert _projected_rows(entries, group_by="namespace") == fixture["expected"]["namespace"]
     assert _projected_rows(entries, group_by="strategy_instance") == fixture["expected"]["strategy_instance"]
+
+
+def test_fold_execution_exposure_normalizes_and_deduplicates() -> None:
+    effects = [
+        ExecutionExposureEffect("DUA", "ns-a", "spy", "exec-1", 2.0),
+        ExecutionExposureEffect("DUA", "ns-a", "SPY", "exec-1", 99.0),
+        ExecutionExposureEffect("DUA", "ns-a", "SPY", "exec-2", -0.5),
+        ExecutionExposureEffect("DUB", "ns-a", "spy", "exec-1", 3.0),
+        ExecutionExposureEffect("DUA", "ns-a", "QQQ", "exec-bad", float("nan")),
+        ExecutionExposureEffect("DUA", "ns-flat", "IWM", "exec-3", 1.0),
+        ExecutionExposureEffect("DUA", "ns-flat", "IWM", "exec-4", -1.0),
+    ]
+
+    assert fold_execution_exposure(effects) == {
+        ("DUA", "ns-a", "SPY"): 1.5,
+        ("DUB", "ns-a", "SPY"): 3.0,
+    }
 
 
 def test_project_journal_exposure_redelivery_does_not_change_exposure() -> None:

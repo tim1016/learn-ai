@@ -40,9 +40,7 @@ Provenance (FIFO incremental state):
 
 from __future__ import annotations
 
-import math
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -54,10 +52,13 @@ from app.broker.alpaca.clerk.fifo_pnl import (
     ClosedLot,
     _Lot,
     apply_fill_to_lots,
+    compute_open_pnl,
+    realized_pnl_for_window,
 )
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.contract.models import OrderSide
 from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.utils.timestamps import now_ms_utc
 
 _NY = ZoneInfo("America/New_York")
 
@@ -164,7 +165,7 @@ def _apply_fill_delta(state: _BotState, fill: FillRecord) -> None:
     sign = 1.0 if fill.side is OrderSide.BUY else -1.0
     current = state.exposure.get(fill.symbol, 0.0)
     updated = current + sign * fill.quantity
-    if math.isclose(updated, 0.0, rel_tol=0.0, abs_tol=1e-9):
+    if abs(updated) <= _ZERO_ABS_TOL:
         state.exposure.pop(fill.symbol, None)
     else:
         state.exposure[fill.symbol] = updated
@@ -190,7 +191,7 @@ def _apply_fill_delta(state: _BotState, fill: FillRecord) -> None:
 
 def _current_session_window() -> tuple[int, int] | None:
     """Return (open_ms, close_ms) for today's NY session, or None if closed."""
-    now_utc = datetime.now(UTC)
+    now_utc = datetime.fromtimestamp(now_ms_utc() / 1000, tz=UTC)
     ny_date = now_utc.astimezone(_NY).date()
     try:
         win = session_window_for_date(ny_date)
@@ -202,37 +203,6 @@ def _current_session_window() -> tuple[int, int] | None:
 def _needs_attention(state: _BotState) -> bool:
     """Heuristic: bot needs attention if its last decision was 'blocked'."""
     return state.last_outcome == "blocked"
-
-
-def _compute_open_pnl(
-    fifo_lots: dict[str, deque[_Lot]],
-    mark_prices: dict[str, float],
-) -> float | None:
-    """Compute open P&L from current FIFO queues and mark prices.
-
-    Returns ``None`` if any symbol with open lots is missing a mark (never
-    returns a partial sum).  Returns ``0.0`` if all queues are empty (flat).
-    """
-    symbols_with_open_lots: set[str] = set()
-    total_pnl: float = 0.0
-
-    for sym, queue in fifo_lots.items():
-        mark = mark_prices.get(sym)
-        for lot in queue:
-            if lot.qty <= _ZERO_ABS_TOL:
-                continue
-            symbols_with_open_lots.add(sym)
-            if mark is not None:
-                if lot.side is OrderSide.BUY:
-                    total_pnl += (mark - lot.cost) * lot.qty
-                else:
-                    total_pnl += (lot.cost - mark) * lot.qty
-
-    if not symbols_with_open_lots:
-        return 0.0
-    if mark_prices.keys() >= symbols_with_open_lots:
-        return total_pnl
-    return None  # incomplete marks — never return a partial sum
 
 
 # ── Catalog-facing cache ─────────────────────────────────────────────────────
@@ -326,7 +296,7 @@ class BotRollupCache:
         a pre-computed session window so the calendar is queried only once per
         catalog read (not once per bot).  External callers should omit it.
         """
-        now_ms = int(time.time() * 1000)
+        now_ms = now_ms_utc()
 
         with self._lock:
             state = self._bots.get(sid)
@@ -355,10 +325,10 @@ class BotRollupCache:
             # O(closed_lots_in_session) — bounded by trading day, NOT O(lifetime_fills).
             if session:
                 open_ms, close_ms = session
-                realized_today = sum(
-                    lot.realized_pnl
-                    for lot in state.closed_lots
-                    if open_ms <= lot.closed_at_ms < close_ms
+                realized_today = realized_pnl_for_window(
+                    state.closed_lots,
+                    session_open_ms=open_ms,
+                    session_close_ms=close_ms,
                 )
                 fills_today_count = sum(
                     1 for ts in state.fill_timestamps
@@ -369,15 +339,9 @@ class BotRollupCache:
                 fills_today_count = 0
 
             # open P&L: O(open_lots) from current FIFO queues, never O(lifetime_fills).
-            if mark_prices:
-                open_pnl = _compute_open_pnl(state.fifo_lots, mark_prices)
-            elif not state.fifo_lots or all(
-                all(lot.qty <= _ZERO_ABS_TOL for lot in q)
-                for q in state.fifo_lots.values()
-            ):
-                open_pnl = 0.0
-            else:
-                open_pnl = None
+            open_pnl = compute_open_pnl(
+                state.fifo_lots, mark_prices or {}
+            ).value
 
         return BotRollup(
             sid=sid,

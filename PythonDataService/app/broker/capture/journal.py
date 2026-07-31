@@ -45,6 +45,8 @@ from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.utils.timestamps import now_ms_utc
+
 logger = logging.getLogger(__name__)
 
 # PythonDataService/ — app/broker/capture/journal.py → parents[3].
@@ -102,9 +104,7 @@ class CaptureSettings(BaseSettings):
     dir: Path = _SERVICE_ROOT / "var" / "broker_captures"
 
 
-def _default_clock() -> int:
-    """Return the current instant as ``int64`` ms since Unix epoch UTC."""
-    return int(datetime.now(UTC).timestamp() * 1000)
+_default_clock = now_ms_utc
 
 
 def _utc_day(captured_at_ms: int) -> str:
