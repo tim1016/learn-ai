@@ -25,14 +25,18 @@ import logging
 
 from app.broker.alpaca.clerk import derive, reconcile, recovery
 from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
+from app.broker.alpaca.clerk.effects import ClerkEffectOperations
 from app.broker.alpaca.clerk.exposure import verify_flatten
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.leg_identity import Clock, LegIdentity, default_clock, leg_error
 from app.broker.alpaca.clerk.models import (
     STREAM_HEALTH_HOLD_CODE,
     UNEXPLAINED_ORDER_HOLD_CODE,
+    AlpacaEffectOperation,
     ClerkEntryKind,
     ClerkStatus,
+    EffectOperationReceipt,
+    EffectPurpose,
     OrderCancelResult,
     OrderJournalEntry,
     OrderLegError,
@@ -66,7 +70,7 @@ from app.engine.live.order_identity import (
 logger = logging.getLogger(__name__)
 
 
-class AlpacaClerk:
+class AlpacaClerk(ClerkEffectOperations):
     """Single-writer order-submission facade for one Alpaca account.
 
     ``read`` supplies ``get_account`` (to resolve + cache the account id used
@@ -100,6 +104,10 @@ class AlpacaClerk:
         # Observable counter: unexplained (foreign/absent-coid) lifecycle
         # events; the hold path reads the UNEXPLAINED_ORDER lines themselves.
         self._unexplained_order_count = 0
+        # Caller cancellation must not cancel a Clerk-accepted effect.  The
+        # operation task is intentionally Clerk-owned and awaited through a
+        # shield by ``execute_for_instance``.
+        self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
 
     async def _ensure_journal(self) -> tuple[str, OrderJournal]:
         """Resolve + cache the account id and its journal (once)."""
@@ -349,6 +357,7 @@ class AlpacaClerk:
         An unexplained observation also raises the exposure hold (S6, below).
         Returns the kind journaled (test/observability seam).
         """
+        resume_operation: AlpacaEffectOperation | None = None
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
             owned = order_ref_namespace_matches(
@@ -407,7 +416,13 @@ class AlpacaClerk:
                         "the account is safe."
                     ),
                 )
-            return kind
+            elif owning is not None and owning.effect_operation_id is not None:
+                resume_operation = self._effect_operation_for_decision(
+                    journal.read_entries(), owning.operator, owning.effect_operation_id
+                )
+        if resume_operation is not None and resume_operation.purpose is EffectPurpose.EXIT:
+            self._start_effect_task(resume_operation)
+        return kind
 
     @property
     def unexplained_order_count(self) -> int:
@@ -594,6 +609,7 @@ class AlpacaClerk:
         journal: OrderJournal,
         *,
         namespace: str | None = None,
+        effect_operation_id: str | None = None,
     ) -> OrderLegResult:
         # Mint identity — fail closed. Two failure modes, both surfaced as a
         # typed failed leg with NO journal write and NO broker call:
@@ -630,7 +646,7 @@ class AlpacaClerk:
                 ),
             )
         identity = LegIdentity(
-            account_id, operator, intent_id, order_ref, leg, self._clock
+            account_id, operator, intent_id, order_ref, leg, self._clock, effect_operation_id
         )
 
         # No journal → no order: record + fsync the intent BEFORE the broker call.

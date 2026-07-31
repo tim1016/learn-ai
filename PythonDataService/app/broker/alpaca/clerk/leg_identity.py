@@ -51,6 +51,7 @@ class LegIdentity:
     order_ref: str
     leg: BrokerOrderLeg
     clock: Clock
+    effect_operation_id: str | None = None
 
     def entry(
         self,
@@ -79,6 +80,7 @@ class LegIdentity:
             order=order,
             error_message=error.message if error is not None else None,
             error_detail=error.why if error is not None else None,
+            effect_operation_id=self.effect_operation_id,
         )
 
     @classmethod
@@ -98,4 +100,5 @@ class LegIdentity:
             order_ref=entry.order_ref,
             leg=entry.leg,
             clock=clock,
+            effect_operation_id=entry.effect_operation_id,
         )

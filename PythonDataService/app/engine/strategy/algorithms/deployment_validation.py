@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
@@ -29,6 +30,7 @@ from app.engine.strategy.base import LoggedTrade, Strategy
 _DETECTION_START = time(9, 45)
 _STOP_AND_FLATTEN = time(15, 45)
 _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL = 3
+_NY = ZoneInfo("America/New_York")
 
 
 @dataclass
@@ -44,6 +46,66 @@ class _DeploymentDecisionSnapshot:
     bar_close_ms: int
     signal: str
     intended_price: float
+
+
+class DeploymentValidationDecisionKernel:
+    """Signal-only decision clock shared by Engine Lab and the Alpaca runtime.
+
+    Formula: emit ENTER after two eligible green minute bars, then EXIT after
+    three subsequent closed bars; emit EXIT at the daily stop when active.
+    Reference: Internal deployment-validation strategy specification from user
+    session 2026-06-02.
+    Canonical implementation: this file; the Alpaca runtime calls this class
+    rather than duplicating the cadence.
+    Validated against: tests/engine/test_deployment_validation_strategy.py::
+    test_signal_kernel_emits_semantic_enter_then_exit_without_execution_state.
+
+    It owns consecutive-green detection and the three-bar decision cadence. It
+    never receives an order acknowledgement, fill, position, or broker side;
+    callers send its ``ENTER`` / ``EXIT`` output to their execution authority.
+    """
+
+    def __init__(self) -> None:
+        self._current_date = None
+        self._green_streak = 0
+        self._cycle_active = False
+        self._bars_since_enter = 0
+        self._stopped_for_day = False
+
+    def on_closed_bar(self, *, end_ms: int, open_price: Decimal, close_price: Decimal) -> str:
+        end_time = datetime.fromtimestamp(end_ms / 1000, tz=_NY)
+        if self._current_date != end_time.date():
+            self._current_date = end_time.date()
+            self._green_streak = 0
+            self._cycle_active = False
+            self._bars_since_enter = 0
+            self._stopped_for_day = False
+        if end_time.time() >= _STOP_AND_FLATTEN:
+            self._stopped_for_day = True
+            self._green_streak = 0
+            if self._cycle_active:
+                self._cycle_active = False
+                self._bars_since_enter = 0
+                return "EXIT"
+            return "HOLD"
+        if self._stopped_for_day or end_time.time() < _DETECTION_START:
+            self._green_streak = 0
+            return "HOLD"
+        if self._cycle_active:
+            self._bars_since_enter += 1
+            if self._bars_since_enter >= _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL:
+                self._cycle_active = False
+                self._bars_since_enter = 0
+                self._green_streak = 0
+                return "EXIT"
+            return "HOLD"
+        self._green_streak = self._green_streak + 1 if close_price > open_price else 0
+        if self._green_streak >= 2:
+            self._green_streak = 0
+            self._cycle_active = True
+            self._bars_since_enter = 0
+            return "ENTER"
+        return "HOLD"
 
 
 class DeploymentValidationConsecutiveGreen(Strategy):

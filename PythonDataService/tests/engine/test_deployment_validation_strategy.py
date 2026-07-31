@@ -12,6 +12,7 @@ from app.engine.execution.order import Direction, FillMode
 from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.algorithms.deployment_validation import (
     DeploymentValidationConsecutiveGreen,
+    DeploymentValidationDecisionKernel,
 )
 from app.engine.strategy.base import StrategyContext
 
@@ -78,6 +79,28 @@ def test_two_green_bars_from_0945_enter_next_bar_open_and_exit_cycle() -> None:
     assert events[1].time == datetime(2026, 1, 5, 9, 49, tzinfo=NY)
     assert len(strategy.trade_log) == 1
     assert strategy.trade_log[0].signal_reason == "two_consecutive_green_minute_bars"
+
+
+def test_signal_kernel_emits_semantic_enter_then_exit_without_execution_state() -> None:
+    kernel = DeploymentValidationDecisionKernel()
+    bars = [
+        _bar(9, 44, "100", "101"),
+        _bar(9, 45, "101", "102"),
+        _bar(9, 46, "102", "101"),
+        _bar(9, 47, "101", "100"),
+        _bar(9, 48, "100", "99"),
+    ]
+
+    decisions = [
+        kernel.on_closed_bar(
+            end_ms=int(bar.end_time.timestamp() * 1000),
+            open_price=bar.open,
+            close_price=bar.close,
+        )
+        for bar in bars
+    ]
+
+    assert decisions == ["HOLD", "ENTER", "HOLD", "HOLD", "EXIT"]
 
 
 def test_cross_asset_mode_subscribes_signal_symbol_and_orders_trade_symbol() -> None:

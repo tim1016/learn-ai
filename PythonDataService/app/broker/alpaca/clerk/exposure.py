@@ -1,7 +1,7 @@
 """Per-instance exposure + timeline projections over the Alpaca order journal.
 
-Formula: exposure[account, namespace, symbol] = Σ (+fill_quantity for BUY,
-  -fill_quantity for SELL), once per (account_id, execution ``event_key``);
+Formula: exposure[account, namespace, symbol] = Σ (+execution_quantity for BUY,
+  -execution_quantity for SELL), once per (account_id, execution ``event_key``);
   zero balances are omitted.
 Reference: learn-ai issue #1261 (P3 ownership invariants; 07-27 wave-one
   ownership defect), ADR 0008 (exact-equality namespace matching).
@@ -82,7 +82,7 @@ def project_instance_exposure(
     """Fold owned journal fill effects into per-namespace exposure buckets.
 
     Mirrors the canonical fold's discipline exactly:
-    - only owned ``ORDER_EVENT`` fills carrying a broker execution identity
+    - only owned ``ORDER_EVENT`` fills or partial fills carrying a broker execution identity
       accumulate;
     - dedup on ``(account_id, event_key)`` — never the journal position;
     - zero balances are omitted; output sorted for determinism.
@@ -95,7 +95,11 @@ def project_instance_exposure(
         if entry.kind is not ClerkEntryKind.ORDER_EVENT or entry.owned is not True:
             continue
         event = entry.event
-        if event is None or event.event_type != "fill" or event.quantity is None:
+        if (
+            event is None
+            or event.event_type not in ("fill", "partial_fill")
+            or event.quantity is None
+        ):
             continue
         if not entry.event_key:
             # A fill without a broker execution identity cannot be safely

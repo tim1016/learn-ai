@@ -501,39 +501,44 @@ def _green_bar(end_ms: int, symbol: str = "SPY") -> MarketDataBar:
     return _trade_bar(end_ms, open_price="400.00", close_price="401.00", symbol=symbol)
 
 
-class _FakeLegResult:
-    """Minimal per-leg result duck-type (only order_ref is accessed by the bot)."""
+class _FakeEffectResult:
+    """Minimal Clerk-authored effect receipt used by the strategy adapter."""
 
     def __init__(self, order_ref: str) -> None:
-        self.order_ref = order_ref
-
-
-class _FakeSubmitResult:
-    """Minimal submit-result duck-type for the trade bot (accesses results[0].order_ref)."""
-
-    def __init__(self, order_ref: str) -> None:
-        self.results = [_FakeLegResult(order_ref)]
+        self.state = type("EffectState", (), {"value": "submitted"})()
+        self.child_order_refs = (order_ref,)
 
 
 class _FakeClerk:
-    """Minimal AlpacaClerk double that captures submit_for_instance calls."""
+    """Minimal AlpacaClerk double that captures semantic effect operations."""
 
     def __init__(self, *, should_raise: Exception | None = None) -> None:
         self.calls: list[dict] = []
         self._should_raise = should_raise
 
-    async def submit_for_instance(
-        self, *, strategy_instance_id: str, legs: list
-    ) -> _FakeSubmitResult:
+    async def execute_for_instance(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        decision_id: str,
+        purpose,
+        action_plan,
+        quantity: int,
+    ) -> _FakeEffectResult:
         if self._should_raise is not None:
             raise self._should_raise
 
         call = {
             "strategy_instance_id": strategy_instance_id,
-            "legs": [{"side": leg.side.value, "quantity": leg.quantity} for leg in legs],
+            "run_id": run_id,
+            "decision_id": decision_id,
+            "purpose": purpose.value,
+            "quantity": quantity,
+            "action_plan": action_plan,
         }
         self.calls.append(call)
-        return _FakeSubmitResult(
+        return _FakeEffectResult(
             order_ref=f"learn-ai/{strategy_instance_id}/v1:fake{len(self.calls):02d}"
         )
 
@@ -570,10 +575,11 @@ async def test_trade_bot_enters_after_two_green_bars_in_window(
     await _wait_for(lambda: feed.bars_consumed == 3)
     await registry.stop("alpaca", _SID)
 
-    # One BUY after the second consecutive green bar.
+    # One semantic ENTER after the second consecutive green bar.  The runtime
+    # never supplies a broker side; the Clerk derives that from the plan.
     assert len(clerk.calls) == 1
-    assert clerk.calls[0]["legs"][0]["side"] == "buy"
-    assert clerk.calls[0]["legs"][0]["quantity"] == 2.0
+    assert clerk.calls[0]["purpose"] == "ENTER"
+    assert clerk.calls[0]["quantity"] == 2
     assert clerk.calls[0]["strategy_instance_id"] == _SID
 
 
@@ -634,9 +640,8 @@ async def test_trade_bot_exits_three_bars_after_entry(
     await registry.stop("alpaca", _SID)
 
     assert len(clerk.calls) == 2
-    assert clerk.calls[0]["legs"][0]["side"] == "buy"
-    assert clerk.calls[1]["legs"][0]["side"] == "sell"
-    assert clerk.calls[1]["legs"][0]["quantity"] == 3.0
+    assert [call["purpose"] for call in clerk.calls] == ["ENTER", "EXIT"]
+    assert clerk.calls[1]["quantity"] == 3
 
 
 # ── window-end flatten when holding ──────────────────────────────────────────
@@ -666,8 +671,7 @@ async def test_trade_bot_flattens_at_window_end(
     await registry.stop("alpaca", _SID)
 
     assert len(clerk.calls) == 2
-    assert clerk.calls[0]["legs"][0]["side"] == "buy"
-    assert clerk.calls[1]["legs"][0]["side"] == "sell"
+    assert [call["purpose"] for call in clerk.calls] == ["ENTER", "EXIT"]
 
 
 # ── quantity plumbed through correctly ───────────────────────────────────────
@@ -691,12 +695,13 @@ async def test_trade_bot_quantity_plumbed_from_binding(
     await _wait_for(lambda: feed.bars_consumed == 2)
     await registry.stop("alpaca", _SID)
 
-    assert clerk.calls[0]["legs"][0]["quantity"] == 7.0
+    assert clerk.calls[0]["quantity"] == 7
 
     # Binding artifact also carries quantity.
     binding = _binding_json(tmp_path)
     assert binding["quantity"] == 7
     assert binding["mode"] == "trade"
+    assert binding["action_plan"]["on_enter"][0]["position"] == "long"
 
 
 # ── submit exception → task errors (no silent handler) ───────────────────────
