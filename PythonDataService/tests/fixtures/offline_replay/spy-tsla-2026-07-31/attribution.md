@@ -42,7 +42,9 @@ gate; the pinned outputs and artifact row counts are.
 
 `metadata.json` pins both archive-file SHA-256 values and the replay service's
 canonical 285-bar digest for each symbol. The test also pins the terminal bot
-summary and persisted row counts.
+summary, persisted row counts, and each emitted decision's bar-close timestamp,
+signal, intended price, EMA-5, EMA-10, and RSI. The numeric decision values use
+an absolute tolerance of `1e-9` with zero relative tolerance.
 
 ## Regeneration
 

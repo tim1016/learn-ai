@@ -1,6 +1,5 @@
 {
   "schema_version": 1,
-  "session_date": "2026-07-31",
   "session_open_ms": 1785504600000,
   "session_close_ms": 1785528000000,
   "capture_started_at_ms": 1785530166754,
@@ -21,6 +20,12 @@
       "replay_bar_count": 285,
       "replay_data_sha256": "f2281a4451b0b81195aa5dd4bb18c3d9e5baf6d86be50fa93381679084224034",
       "expected_decisions": 4,
+      "decisions": [
+        {"bar_close_ms": 1785518100000, "signal": "HOLD", "intended_price": 745.225, "ema5": 744.3204142153127, "ema10": 743.442845577612, "rsi": 56.478752149349056},
+        {"bar_close_ms": 1785519000000, "signal": "HOLD", "intended_price": 746.29, "ema5": 744.9769428102085, "ema10": 743.9605100180462, "rsi": 59.34237120590286},
+        {"bar_close_ms": 1785519900000, "signal": "HOLD", "intended_price": 745.8425, "ema5": 745.2654618734723, "ema10": 744.3026900147651, "rsi": 57.62657835608346},
+        {"bar_close_ms": 1785520800000, "signal": "HOLD", "intended_price": 745.44, "ema5": 745.3236412489815, "ema10": 744.5094736484442, "rsi": 56.05663314654695}
+      ],
       "expected_orders": 0,
       "expected_fills": 0,
       "expected_final_equity_usd": "100000.0"
@@ -32,6 +37,12 @@
       "replay_bar_count": 285,
       "replay_data_sha256": "3fe8c23f5b7f8a69680068acd09b4488da471b62d2605d278d14ca80b3eec18c",
       "expected_decisions": 4,
+      "decisions": [
+        {"bar_close_ms": 1785518100000, "signal": "HOLD", "intended_price": 310.45, "ema5": 309.3351988578977, "ema10": 308.4171772865738, "rsi": 52.985535793600214},
+        {"bar_close_ms": 1785519000000, "signal": "HOLD", "intended_price": 310.5, "ema5": 309.72346590526513, "ema10": 308.7958723253786, "rsi": 53.10743796754918},
+        {"bar_close_ms": 1785519900000, "signal": "HOLD", "intended_price": 310.18, "ema5": 309.8756439368434, "ema10": 309.0475319025825, "rsi": 52.175027155787724},
+        {"bar_close_ms": 1785520800000, "signal": "HOLD", "intended_price": 311.09, "ema5": 310.2804292912289, "ema10": 309.4188897384766, "rsi": 54.61529535886275}
+      ],
       "expected_orders": 0,
       "expected_fills": 0,
       "expected_final_equity_usd": "100000.0"

@@ -13,7 +13,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from app.engine.live.live_artifact_io import parquet_row_count
+from app.engine.live.live_artifact_io import parquet_row_count, read_parquet_rows
 from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.schemas.offline_replay import OfflineReplayCreateRequest, OfflineReplaySpeed
 from app.services.offline_replay_clock import OfflineReplayClock
@@ -21,6 +21,8 @@ from app.services.offline_replay_service import OfflineReplayService
 
 _FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "offline_replay" / "spy-tsla-2026-07-31"
 _METADATA = json.loads((_FIXTURE_ROOT / "metadata.json").read_text(encoding="utf-8"))
+_DECISION_NUMERIC_COLUMNS = ("intended_price", "ema5", "ema10", "rsi")
+_DECISION_ABSOLUTE_TOLERANCE = 1e-9
 
 
 async def _no_sleep(_: float) -> None:
@@ -52,6 +54,23 @@ def _assert_fixture_archives() -> None:
         archive_path = _FIXTURE_ROOT / expected["archive"]
         assert _file_sha256(archive_path) == expected["archive_sha256"]
         assert _zip_row_count(archive_path) == expected["archive_bar_count"]
+
+
+def _assert_decision_contents(
+    actual_decisions: list[dict[str, object]],
+    expected_decisions: list[dict[str, object]],
+) -> None:
+    """Pin the strategy outputs emitted from the captured market bars."""
+    assert len(actual_decisions) == len(expected_decisions)
+    for actual, expected in zip(actual_decisions, expected_decisions, strict=True):
+        assert actual["bar_close_ms"] == expected["bar_close_ms"]
+        assert actual["signal"] == expected["signal"]
+        for column in _DECISION_NUMERIC_COLUMNS:
+            assert float(actual[column]) == pytest.approx(
+                float(expected[column]),
+                abs=_DECISION_ABSOLUTE_TOLERANCE,
+                rel=0,
+            )
 
 
 @pytest.mark.asyncio
@@ -120,3 +139,7 @@ async def test_field_capture_replays_while_the_next_market_session_is_open(
         assert parquet_row_count(bot_root / "input_bars.parquet") == expected["replay_bar_count"]
         assert parquet_row_count(bot_root / "decisions.parquet") == expected["expected_decisions"]
         assert parquet_row_count(bot_root / "equity_curve.parquet") == expected["replay_bar_count"]
+        _assert_decision_contents(
+            read_parquet_rows(bot_root / "decisions.parquet"),
+            expected["decisions"],
+        )
