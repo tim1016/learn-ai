@@ -793,9 +793,8 @@ export class DataLabComponent {
     if (this.includeTransactionsColumn()) base.push('transactions');
     const indicatorCols: string[] = [];
     for (const entry of this.entries()) {
-      const info = this.indicatorMap()[entry.name];
       // Estimate columns based on known multi-column indicators
-      const paramStr = Object.entries(entry.params).map(([k, v]) => `${v}`).join('_');
+      const paramStr = Object.values(entry.params).join('_');
       const suffix = paramStr ? `_${paramStr}` : '';
       const multiCol: Record<string, string[]> = {
         bbands: [`bbl${suffix}`, `bbm${suffix}`, `bbu${suffix}`, `bbb${suffix}`, `bbp${suffix}`],
@@ -1037,16 +1036,7 @@ export class DataLabComponent {
    * Called by the chart component's (dataLoaded) event.
    * Captures the chart payload so the next "Save" includes it.
    */
-  onChartDataLoaded(event: {
-    bars: any[];
-    indicators: any[];
-    quality: any;
-    allowedTimeframes: string[];
-    estimatedBarsPerTimeframe: Record<string, number>;
-    recommendedTimeframe: string;
-    visibleIndicatorIds: string[];
-    timeframe: string;
-  }): void {
+  onChartDataLoaded(event: DataLabSessionChartSnapshot): void {
     this.latestChartSnapshot.set({
       timeframe: event.timeframe,
       bars: event.bars,
@@ -1060,8 +1050,9 @@ export class DataLabComponent {
 
     // Auto-update snapshot if this is an active (already-saved) session
     const activeId = this.activeSessionId();
-    if (activeId) {
-      this.sessionService.updateChartSnapshot(activeId, this.latestChartSnapshot()!);
+    const snapshot = this.latestChartSnapshot();
+    if (activeId && snapshot) {
+      this.sessionService.updateChartSnapshot(activeId, snapshot);
     }
 
     // Volume dependency check
@@ -1142,13 +1133,14 @@ export class DataLabComponent {
     this.sessionName.set(session.name);
 
     // Restore chart data from snapshot (no API call)
-    if (session.chartSnapshot) {
-      this.latestChartSnapshot.set(session.chartSnapshot);
+    const chartSnapshot = session.chartSnapshot;
+    if (chartSnapshot) {
+      this.latestChartSnapshot.set(chartSnapshot);
 
       // Mirror the snapshot's timeframe into parent state — the chart no
       // longer owns this signal, so the parent must set it before the
       // chart mounts and reads its `timeframe` input.
-      const parsed = parseChartTimeframe(session.chartSnapshot.timeframe);
+      const parsed = parseChartTimeframe(chartSnapshot.timeframe);
       if (parsed) {
         this.autoBarTimeframe.set(false);
         this.timespan.set(parsed.timespan);
@@ -1164,14 +1156,14 @@ export class DataLabComponent {
         const chart = this.chartComponent();
         if (chart) {
           chart.loadCachedData({
-            bars: session.chartSnapshot!.bars,
-            indicators: session.chartSnapshot!.indicators,
-            quality: session.chartSnapshot!.quality,
-            allowedTimeframes: session.chartSnapshot!.allowedTimeframes,
-            estimatedBarsPerTimeframe: session.chartSnapshot!.estimatedBarsPerTimeframe,
-            recommendedTimeframe: session.chartSnapshot!.recommendedTimeframe,
-            visibleIndicatorIds: session.chartSnapshot!.visibleIndicatorIds,
-            timeframe: session.chartSnapshot!.timeframe,
+            bars: chartSnapshot.bars,
+            indicators: chartSnapshot.indicators,
+            quality: chartSnapshot.quality,
+            allowedTimeframes: chartSnapshot.allowedTimeframes,
+            estimatedBarsPerTimeframe: chartSnapshot.estimatedBarsPerTimeframe,
+            recommendedTimeframe: chartSnapshot.recommendedTimeframe,
+            visibleIndicatorIds: chartSnapshot.visibleIndicatorIds,
+            timeframe: chartSnapshot.timeframe,
           });
         }
       });

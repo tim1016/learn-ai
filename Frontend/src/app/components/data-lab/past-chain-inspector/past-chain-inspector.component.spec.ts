@@ -35,7 +35,11 @@ function buildContractRow(side: 'call' | 'put', strike: number, hasData = true):
     contractType: side,
     strikePrice: strike,
     dailyBar: hasData
-      ? { open: 5, high: 6, low: 4.5, close: 5.5, volume: 1000, timestamp: '2026-02-20T00:00:00Z' } as any
+      ? {
+        id: 1, tickerId: 1, open: 5, high: 6, low: 4.5, close: 5.5,
+        volume: 1000, volumeWeightedAveragePrice: null, timestamp: 1_771_552_000_000,
+        timespan: 'day', multiplier: 1, transactionCount: null,
+      } as NonNullable<PastChainContractRow['dailyBar']>
       : null,
     prevDayClose: hasData ? 5.0 : null,
     changeFromPrevClose: hasData ? 0.5 : null,
@@ -186,7 +190,11 @@ describe('PastChainInspectorComponent', () => {
     it('closeDetail clears state', () => {
       component.detailModalOpen.set(true);
       component.detailTicker.set('O:SPY260220C00590000');
-      component.detailBars.set([{ open: 5, high: 6, low: 4, close: 5.5, volume: 1000, timestamp: '2026-02-20T00:00:00Z' } as any]);
+      component.detailBars.set([{
+        id: 1, tickerId: 1, open: 5, high: 6, low: 4, close: 5.5,
+        volume: 1000, volumeWeightedAveragePrice: null, timestamp: 1_771_552_000_000,
+        timespan: 'day', multiplier: 1, transactionCount: null,
+      }]);
 
       component.closeDetail();
 

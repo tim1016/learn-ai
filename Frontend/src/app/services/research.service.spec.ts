@@ -275,7 +275,8 @@ describe('ResearchService', () => {
 
       const result = await promise;
       expect(result).not.toBeNull();
-      expect(result!.ticker).toBe('AAPL');
+      if (!result) throw new Error('Expected a signal experiment report');
+      expect(result.ticker).toBe('AAPL');
     });
 
     it('should return null when not found', async () => {

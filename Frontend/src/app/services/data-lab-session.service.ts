@@ -2,6 +2,11 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
+import type {
+  ChartBar,
+  ChartIndicatorResult,
+  QualityReport,
+} from '../components/data-lab/data-lab-chart/data-lab-chart.component';
 
 // ─────────────────────────────────────────────────────────────
 // Public interfaces (consumed by components)
@@ -19,9 +24,9 @@ export interface DataLabSessionConfig {
 
 export interface DataLabSessionChartSnapshot {
   timeframe: string;
-  bars: any[];
-  indicators: any[];
-  quality: any;
+  bars: ChartBar[];
+  indicators: ChartIndicatorResult[];
+  quality: QualityReport;
   allowedTimeframes: string[];
   estimatedBarsPerTimeframe: Record<string, number>;
   recommendedTimeframe: string;
@@ -189,7 +194,7 @@ export class DataLabSessionService {
     );
 
     return (resp.dataLabSessions ?? []).map(s => {
-      const entries = this.parseJson<any[]>(s.entriesJson, []);
+      const entries = this.parseJson<DataLabSessionConfig['entries']>(s.entriesJson, []);
       return {
         id: s.id,
         name: s.name,
@@ -332,7 +337,7 @@ export class DataLabSessionService {
     catch { return fallback; }
   }
 
-  private async gql<T>(query: string, variables?: Record<string, any>): Promise<T> {
+  private async gql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
     const resp = await firstValueFrom(
       this.http.post<GqlResponse<T>>(this.url, { query, variables })
     );

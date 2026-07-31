@@ -10,7 +10,7 @@ import {
 import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
 import { ActivatedRoute, ParamMap, RouterModule } from "@angular/router";
-import { HttpClient } from "@angular/common/http";
+import { HttpClient, HttpErrorResponse } from "@angular/common/http";
 import { firstValueFrom, map } from "rxjs";
 import { toSignal } from "@angular/core/rxjs-interop";
 import { environment } from "../../../environments/environment";
@@ -207,19 +207,32 @@ interface EngineBacktestResponse {
   losing_trades: number;
   win_rate: number;
   statistics: Record<string, number | null>;
-  lean_statistics: any | null;
+  lean_statistics: Record<string, unknown> | null;
   trades: EngineTrade[];
   log_lines: string[];
   equity_curve?: { timestamp: number; equity: number; cash: number; holdings_value: number }[];
   chart_bars?: { t: number; o: number; h: number; l: number; c: number; v: number }[];
-  insights?: Record<string, any>[];
-  insight_summary?: Record<string, any>;
+  insights?: Record<string, unknown>[];
+  insight_summary?: Record<string, unknown>;
   validation_analytics?: EngineValidationAnalytics | null;
   /** Auto-saved study row id, populated by the engine before returning so
    *  the Engine Lab can immediately enable the Replay tab. Null when the
    *  best-effort save call to the .NET backend failed. */
   study_id?: number | null;
   error?: string;
+}
+
+function httpErrorDetail(error: unknown): unknown {
+  if (!(error instanceof HttpErrorResponse) || typeof error.error !== "object" || error.error === null) {
+    return undefined;
+  }
+  return (error.error as Record<string, unknown>)["detail"];
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof HttpErrorResponse && error.message) return error.message;
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
 }
 
 interface DataAvailability {
@@ -810,13 +823,13 @@ export class LeanEngineComponent implements OnInit {
         this.http.get<DataAvailability>(url, { params })
       );
       this.availability.set(report);
-    } catch (err: any) {
+    } catch (err: unknown) {
       this.availability.set(null);
-      const detail = err?.error?.detail;
+      const detail = httpErrorDetail(err);
       this.availabilityError.set(
         typeof detail === "string"
           ? detail
-          : err?.message ?? "Availability check failed"
+          : errorMessage(err, "Availability check failed")
       );
     } finally {
       this.availabilityLoading.set(false);
@@ -1061,10 +1074,10 @@ export class LeanEngineComponent implements OnInit {
       this.engineJobId.set(id);
       // The jobEffect (configured in the constructor) will flip
       // running()/setRunStatus()/result() as job events arrive.
-    } catch (err: any) {
-      const detail = err?.error?.detail;
+    } catch (err: unknown) {
+      const detail = httpErrorDetail(err);
       const message =
-        typeof detail === "string" ? detail : err?.message ?? "Backtest request failed";
+        typeof detail === "string" ? detail : errorMessage(err, "Backtest request failed");
       this.runError.set(message);
       this.setRunStatus("failed", "Backtest request failed", message);
       this.updateRunningState();
@@ -1431,8 +1444,8 @@ export class LeanEngineComponent implements OnInit {
         }
         this.activeTab.set("configuration");
       }
-    } catch (err: any) {
-      const message = err?.message ?? "Failed to fetch backtest result";
+    } catch (err: unknown) {
+      const message = errorMessage(err, "Failed to fetch backtest result");
       this.runError.set(message);
       this.setRunStatus("failed", "Failed to fetch backtest result", message);
     } finally {

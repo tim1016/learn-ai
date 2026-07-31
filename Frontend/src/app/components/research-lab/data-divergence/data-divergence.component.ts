@@ -119,7 +119,7 @@ export class DataDivergenceComponent implements OnInit {
       const url = `${environment.pythonServiceUrl}/research/data-divergence/matrix/${tf}`;
       const response = await firstValueFrom(this.http.get<MatrixResponse>(url));
       this.matrixSummary.set(response.rows);
-    } catch (err) {
+    } catch {
       // Non-fatal — the matrix may not be built yet for this timeframe.
       this.matrixSummary.set(null);
     }

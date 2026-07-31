@@ -45,8 +45,10 @@ export class ScenarioExplorerComponent {
     this.loading.set(true);
     this.error.set(null);
 
-    const priceChangePercent = this.priceChange() != null ? this.priceChange()! / 100 : undefined;
-    const ivChangePercent = this.ivChange() != null ? this.ivChange()! / 100 : undefined;
+    const priceChange = this.priceChange();
+    const ivChange = this.ivChange();
+    const priceChangePercent = priceChange != null ? priceChange / 100 : undefined;
+    const ivChangePercent = ivChange != null ? ivChange / 100 : undefined;
     const timeDaysForward = this.thetaDays() ?? undefined;
 
     this.portfolioService.runScenario(

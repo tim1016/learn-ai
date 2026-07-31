@@ -362,7 +362,8 @@ export class FeatureReportComponent {
 
   get falsificationCriteria(): FalsificationCriterion[] {
     const rob = this.result().robustness;
-    const hasTrainTest = !!rob?.trainTest;
+    const trainTest = rob?.trainTest;
+    const hasTrainTest = !!trainTest;
     const regimeState = this.regimeStabilityState;
 
     return [
@@ -372,7 +373,7 @@ export class FeatureReportComponent {
           ? 'Abandon if overall Mean IC or test-period Mean IC drops below 0.01.'
           : 'Abandon if Mean IC drops below 0.01. Train/test split unavailable.',
         triggered: hasTrainTest
-          ? Math.abs(this.result().meanIC) < 0.01 || Math.abs(rob!.trainTest!.testMeanIC) < 0.01
+          ? Math.abs(this.result().meanIC) < 0.01 || Math.abs(trainTest.testMeanIC) < 0.01
           : Math.abs(this.result().meanIC) < 0.01,
         untestable: false,
       },
@@ -395,7 +396,7 @@ export class FeatureReportComponent {
         description: hasTrainTest
           ? 'Abandon if OOS retention falls below 40% (likely overfit).'
           : 'Cannot evaluate — insufficient data for train/test split.',
-        triggered: hasTrainTest ? rob!.trainTest!.oosRetention < 0.40 : false,
+        triggered: hasTrainTest ? trainTest.oosRetention < 0.40 : false,
         untestable: !hasTrainTest,
       },
       {

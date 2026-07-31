@@ -1016,14 +1016,15 @@ export class StrategyBuilderComponent implements OnDestroy {
     side: 'call' | 'put',
     position: 'long' | 'short'
   ): void {
-    if (!contract?.strikePrice) return;
+    const strike = contract?.strikePrice;
+    if (!contract || strike == null) return;
     if (this.legs().length >= 8) return;
 
     const premium = this.resolvePremiumNum(contract);
     const iv = contract.impliedVolatility ?? 0;
 
     const existing = this.legs().findIndex(l =>
-      l.strike === contract.strikePrice &&
+      l.strike === strike &&
       l.optionType === side &&
       l.position === position
     );
@@ -1034,7 +1035,7 @@ export class StrategyBuilderComponent implements OnDestroy {
       ));
     } else {
       this.legs.update(legs => [...legs, {
-        strike: contract.strikePrice!,
+        strike,
         optionType: side,
         position,
         premium,
@@ -1160,8 +1161,8 @@ export class StrategyBuilderComponent implements OnDestroy {
       }
 
       this.analysisResult.set(result);
-    } catch (err: any) {
-      this.error.set(err.message || 'Analysis failed');
+    } catch (err: unknown) {
+      this.error.set(err instanceof Error ? err.message : 'Analysis failed');
     } finally {
       this.analyzing.set(false);
     }

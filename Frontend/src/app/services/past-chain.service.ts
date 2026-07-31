@@ -216,8 +216,11 @@ export class PastChainService {
     // Build scan-results audit table — every strike with at least one side that had data.
     const scanMap = new Map<number, { call?: PastChainContractRow; put?: PastChainContractRow }>();
     for (const row of allRows) {
-      if (!scanMap.has(row.strikePrice)) scanMap.set(row.strikePrice, {});
-      const entry = scanMap.get(row.strikePrice)!;
+      let entry = scanMap.get(row.strikePrice);
+      if (!entry) {
+        entry = {};
+        scanMap.set(row.strikePrice, entry);
+      }
       if (row.contractType === 'call') entry.call = row;
       else entry.put = row;
     }

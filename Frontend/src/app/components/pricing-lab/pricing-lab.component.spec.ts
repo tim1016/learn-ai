@@ -3,7 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { vi } from 'vitest';
 import { PricingLabComponent } from './pricing-lab.component';
-import { SnapshotContractResult } from '../../graphql/types';
+import { PricingCompareResult, SnapshotContractResult } from '../../graphql/types';
 
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
@@ -46,8 +46,8 @@ function buildContract(overrides: Partial<SnapshotContractResult> = {}): Snapsho
     breakEvenPrice: 595,
     impliedVolatility: 0.20,
     openInterest: 1000,
-    greeks: { delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15 } as any,
-    day: { open: 5, high: 6, low: 4.5, close: 5.5, volume: 1000 } as any,
+    greeks: { delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15 },
+    day: { open: 5, high: 6, low: 4.5, close: 5.5, volume: 1000, vwap: null },
     lastTrade: null,
     lastQuote: null,
     ...overrides,
@@ -148,7 +148,10 @@ describe('PricingLabComponent', () => {
     it('clears selected contract and prior server result when fetchChain runs again', async () => {
       // Seed prior state
       component.selectedContract.set(buildContract());
-      component.serverResult.set({ success: true } as any);
+      component.serverResult.set({
+        success: true, strike: 0, optionType: 'call', expirationDate: '',
+        timeToExpiryYears: 0, models: [], error: null,
+      } satisfies PricingCompareResult);
 
       const promise = component.fetchChain('AAPL', '2099-01-01');
 
@@ -226,8 +229,10 @@ describe('PricingLabComponent', () => {
 
       await promise;
 
-      expect(component.serverResult()).not.toBeNull();
-      expect(component.serverResult()!.models.length).toBe(2);
+      const serverResult = component.serverResult();
+      expect(serverResult).not.toBeNull();
+      if (!serverResult) throw new Error('Expected comparison result');
+      expect(serverResult.models.length).toBe(2);
       expect(component.compareLoading()).toBe(false);
       expect(component.statusMessage()?.type).toBe('success');
     });

@@ -1,6 +1,13 @@
 @if (summaryData; as s) {
   <section class="insight-panel">
-    <div class="panel-header" (click)="toggleCollapse()">
+    <div
+      class="panel-header"
+      role="button"
+      tabindex="0"
+      [attr.aria-expanded]="!collapsed()"
+      (click)="toggleCollapse()"
+      (keydown.enter)="toggleCollapse()"
+      (keydown.space)="toggleCollapse(); $event.preventDefault()">
       <h3>
         <span class="panel-icon">🎯</span>
         Insight Analysis
@@ -140,7 +147,14 @@
 
       <!-- Insight Detail Table (expandable) -->
       <div class="sub-section">
-        <div class="table-toggle" (click)="toggleTable()">
+        <div
+          class="table-toggle"
+          role="button"
+          tabindex="0"
+          [attr.aria-expanded]="showTable()"
+          (click)="toggleTable()"
+          (keydown.enter)="toggleTable()"
+          (keydown.space)="toggleTable(); $event.preventDefault()">
           <h4>
             Individual Predictions
             <span class="toggle-icon">{{ showTable() ? '▾' : '▸' }}</span>
