@@ -140,7 +140,9 @@ def test_live_chart_tags_source_and_markers() -> None:
         fetched_at_ms=_NOW,
         source="ibkr",
     )
-    chart_window = ChartWindowResult(bars=[bar], timeframe="1m", resolution="1m", is_streaming=True)
+    chart_window = ChartWindowResult(
+        bars=[bar], timeframe="1m", resolution="1m", is_streaming=True
+    )
     entries = [fill_entry(sid=SID, intent="i1", ts_ms=_NOW - 30_000)]
 
     result = build_live_chart(

@@ -143,7 +143,9 @@ async def resolve_account_snapshot(broker: str) -> BrokerAccountSnapshot:
     try:
         port = get_broker_registry().resolve(broker)
     except BrokerError as exc:
-        raise PanelUnavailableError("The broker account could not be read.", detail=exc.detail) from exc
+        raise PanelUnavailableError(
+            "The broker account could not be read.", detail=exc.detail
+        ) from exc
     cache_key = (broker, id(port))
     cached = _account_cache.get(cache_key)
     if cached is not None:
@@ -153,7 +155,9 @@ async def resolve_account_snapshot(broker: str) -> BrokerAccountSnapshot:
     try:
         account = await port.get_account()
     except BrokerError as exc:
-        raise PanelUnavailableError("The broker account could not be read.", detail=exc.detail) from exc
+        raise PanelUnavailableError(
+            "The broker account could not be read.", detail=exc.detail
+        ) from exc
     _account_cache[cache_key] = (
         account,
         time.monotonic() + _ACCOUNT_ID_TTL_S,
@@ -191,7 +195,9 @@ def _read_order_journal(account_id: str) -> list[OrderJournalEntry]:
 
 
 def _latest_decision(account_id: str, sid: str) -> DecisionReceipt | None:
-    journal = DecisionJournal(account_id=account_id, sid=sid, root=get_clerk_settings().dir)
+    journal = DecisionJournal(
+        account_id=account_id, sid=sid, root=get_clerk_settings().dir
+    )
     tail = journal.tail(1)
     return tail[-1] if tail else None
 
@@ -234,7 +240,9 @@ async def _clerk_status() -> ClerkStatus:
     try:
         return await clerk.status()
     except BrokerError as exc:
-        raise PanelUnavailableError("The clerk status could not be read.", detail=exc.detail) from exc
+        raise PanelUnavailableError(
+            "The clerk status could not be read.", detail=exc.detail
+        ) from exc
 
 
 async def _validate_account(broker: str, account_id: str) -> str:
@@ -369,7 +377,9 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     return owner.snapshot_catalog(statuses)
 
 
-async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: str | None = None) -> BotPanelView:
+async def get_panel(
+    broker: str, account_id: str, sid: str, *, transaction_ref: str | None = None
+) -> BotPanelView:
     """Build the 5s-poll panel projection for one bot (§7)."""
     resolved = await _validate_account(broker, account_id)
     status = _bot_status(broker, sid)
@@ -442,7 +452,9 @@ async def get_live_chart(broker: str, account_id: str, sid: str) -> ChartLiveRes
                 live_aggregator=LIVE_BAR_AGGREGATOR,
             )
         except ChartWindowError as exc:
-            raise PanelDataError("The live chart window is invalid.", detail=str(exc)) from exc
+            raise PanelDataError(
+                "The live chart window is invalid.", detail=str(exc)
+            ) from exc
 
     return build_live_chart(
         chart_window,
@@ -454,7 +466,9 @@ async def get_live_chart(broker: str, account_id: str, sid: str) -> ChartLiveRes
     )
 
 
-async def get_history_chart(broker: str, account_id: str, sid: str, preset: ChartHistoryPreset) -> ChartHistoryResponse:
+async def get_history_chart(
+    broker: str, account_id: str, sid: str, preset: ChartHistoryPreset
+) -> ChartHistoryResponse:
     """Build the bounded HISTORY chart pane for one bot (§8)."""
     resolved = await _validate_account(broker, account_id)
     status = _bot_status(broker, sid)
@@ -480,7 +494,9 @@ async def get_history_chart(broker: str, account_id: str, sid: str, preset: Char
     )
 
 
-def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[str, ActionPerformer]:
+def _action_performers(
+    broker: str, sid: str, *, idempotency_key: str
+) -> dict[str, ActionPerformer]:
     """Map each executable action id to the coroutine that performs it (§11, §12).
 
     Only actions with production custody are wired. The remaining closed-set
@@ -503,7 +519,10 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
         await registry.stop(broker, sid, reason=f"Panel stop by {operator}")
-        return "Bot stopped. The Clerk cancelled any working entry orders; attributed exposure was left untouched."
+        return (
+            "Bot stopped. "
+            "The Clerk cancelled any working entry orders; attributed exposure was left untouched."
+        )
 
     async def _reconcile(operator: str) -> str:
         clerk = get_alpaca_clerk()
