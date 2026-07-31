@@ -26,10 +26,17 @@ from app.broker.alpaca.clerk.models import (
     OrderJournalEntry,
 )
 from app.broker.contract.errors import BrokerError
+from app.broker.contract.models import BrokerAccountSnapshot
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
 from app.data_lake.polygon_fetcher import fetch_aggregate_bars
-from app.schemas.broker_bots import BotStatusView, DeployBotRequest
+from app.schemas.broker_bots import (
+    AlpacaPaperDeployReceipt,
+    AlpacaPaperDeployRequest,
+    AlpacaPaperDeployView,
+    BotStatusView,
+    DeployBotRequest,
+)
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
     BotPanelView,
@@ -53,6 +60,10 @@ from app.services.broker_v2_panel.chart_projection_service import (
 )
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
 from app.services.broker_v2_panel.panel_projection_service import build_panel
+from app.services.broker_v2_panel.paper_deploy_service import (
+    build_alpaca_paper_deploy_receipt,
+    build_alpaca_paper_deploy_view,
+)
 from app.services.live_chart_window import (
     ChartWindowError,
     coerce_chart_timeframe,
@@ -68,9 +79,16 @@ class PanelDataError(Exception):
 
     http_status: int = 500
 
-    def __init__(self, message: str, *, detail: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        detail: str | None = None,
+        next_action: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.detail = detail
+        self.next_action = next_action
 
 
 class PanelUnavailableError(PanelDataError):
@@ -100,8 +118,9 @@ class PanelRunnerError(PanelDataError):
         *,
         detail: str | None,
         http_status: int,
+        next_action: str | None = None,
     ) -> None:
-        super().__init__(message, detail=detail)
+        super().__init__(message, detail=detail, next_action=next_action)
         self.http_status = http_status
 
 
@@ -114,15 +133,11 @@ _PANEL_BROKER = "alpaca"
 # catalog request validates the account. Keyed by the resolved port's identity
 # so a re-registered port (tests, reconnect) naturally misses the cache.
 _ACCOUNT_ID_TTL_S = 60.0
-_account_id_cache: dict[tuple[str, int], tuple[str, float]] = {}
+_account_cache: dict[tuple[str, int], tuple[BrokerAccountSnapshot, float]] = {}
 
 
-async def resolve_account_id(broker: str) -> str:
-    """Return the broker's real account id (the source the clerk uses).
-
-    The unscoped alias routes call this to resolve the single account before
-    delegating to the validated scoped path (§3).
-    """
+async def resolve_account_snapshot(broker: str) -> BrokerAccountSnapshot:
+    """Return the cached broker-authored account posture."""
     _require_panel_broker(broker)
     try:
         port = get_broker_registry().resolve(broker)
@@ -131,22 +146,27 @@ async def resolve_account_id(broker: str) -> str:
             "The broker account could not be read.", detail=exc.detail
         ) from exc
     cache_key = (broker, id(port))
-    cached = _account_id_cache.get(cache_key)
+    cached = _account_cache.get(cache_key)
     if cached is not None:
-        account_id, expires_at = cached
+        account, expires_at = cached
         if time.monotonic() < expires_at:
-            return account_id
+            return account
     try:
         account = await port.get_account()
     except BrokerError as exc:
         raise PanelUnavailableError(
             "The broker account could not be read.", detail=exc.detail
         ) from exc
-    _account_id_cache[cache_key] = (
-        account.account_id,
+    _account_cache[cache_key] = (
+        account,
         time.monotonic() + _ACCOUNT_ID_TTL_S,
     )
-    return account.account_id
+    return account
+
+
+async def resolve_account_id(broker: str) -> str:
+    """Return the broker's real account id (the source the clerk uses)."""
+    return (await resolve_account_snapshot(broker)).account_id
 
 
 def _require_panel_broker(broker: str) -> None:
@@ -262,6 +282,78 @@ async def deploy_bot(
             detail=exc.detail,
             http_status=exc.http_status,
         ) from exc
+
+
+async def get_alpaca_paper_deploy_view(
+    broker: str,
+    account_id: str,
+) -> AlpacaPaperDeployView:
+    """Author the closed paper-deployment form and its current launch verdict."""
+    account = await resolve_account_snapshot(broker)
+    if account.account_id != account_id:
+        raise AccountMismatchError(
+            f"Account '{account_id}' is not the account for broker '{broker}'.",
+            detail=f"The broker's account is '{account.account_id}'.",
+        )
+    if account.account_mode != "paper":
+        raise PanelUnavailableError(
+            "Alpaca live-account deployment is refused.",
+            detail="Phase 1 permits only the broker-authored paper account.",
+            next_action="Reconnect with Alpaca paper credentials and refresh.",
+        )
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+            next_action="Wait for the data plane to become healthy, then refresh.",
+        )
+    clerk_status = await _clerk_status()
+    return build_alpaca_paper_deploy_view(account, clerk_status)
+
+
+async def deploy_alpaca_paper_bot(
+    broker: str,
+    account_id: str,
+    request: AlpacaPaperDeployRequest,
+) -> AlpacaPaperDeployReceipt:
+    """Execute the production paper deployment command through the runner seam."""
+    view = await get_alpaca_paper_deploy_view(broker, account_id)
+    if not view.eligibility.eligible:
+        raise PanelRunnerError(
+            view.eligibility.headline,
+            detail=view.eligibility.explanation,
+            next_action=view.eligibility.next_action,
+            http_status=409,
+        )
+    registry = get_bot_task_registry()
+    if registry is None:  # guarded by the view; retained for type narrowing
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+        )
+    try:
+        bot = await registry.deploy(
+            broker=broker,
+            strategy_instance_id=request.strategy_instance_id,
+            symbol=request.symbol,
+            use_rth=True,
+            mode="trade",
+            quantity=request.sizing.quantity,
+        )
+    except BotRunnerError as exc:
+        raise PanelRunnerError(
+            str(exc),
+            detail=exc.detail,
+            next_action="Correct the deployment inputs or bot state, then submit a new command.",
+            http_status=exc.http_status,
+        ) from exc
+    return build_alpaca_paper_deploy_receipt(
+        broker=broker,
+        view=view,
+        request=request,
+        bot=bot,
+    )
 
 
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:

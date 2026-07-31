@@ -86,7 +86,7 @@ _UPDATED_BY = "bot_runner"
 _STOP_TIMEOUT_S = 5.0
 
 
-def _default_alpaca_action_plan(symbol: str) -> ActionPlan:
+def alpaca_v1_action_plan(symbol: str) -> ActionPlan:
     """Build the v1 stock plan from the existing deploy controls.
 
     The plan becomes durable deployment configuration on the binding; strategy
@@ -259,7 +259,7 @@ class BotTaskRegistry:
             use_rth=use_rth,
             mode=mode,
             quantity=quantity,
-            action_plan=_default_alpaca_action_plan(symbol),
+            action_plan=alpaca_v1_action_plan(symbol),
             run_id=run_id,
             created_at_ms=now,
         )

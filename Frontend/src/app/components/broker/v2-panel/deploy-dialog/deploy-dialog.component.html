@@ -1,103 +1,180 @@
 <p-dialog
-  header="Deploy bot"
+  header="Deploy Alpaca paper bot"
   [visible]="visible()"
   (visibleChange)="visibleChange.emit($event)"
   [modal]="true"
   [closable]="!submitting()"
-  [style]="{ width: '28rem' }"
+  [style]="{ width: '32rem' }"
   (onHide)="close()"
   role="dialog"
   aria-labelledby="deploy-dialog-header"
 >
-  <form [formGroup]="form" (ngSubmit)="submit()" id="deploy-form" aria-label="Deploy bot form">
+  @if (deployView.isLoading()) {
+    <div class="deploy-state" aria-busy="true">Checking Alpaca paper eligibility…</div>
+  } @else if (deployView.error()) {
+    <p-message severity="error">
+      The deployment contract is unavailable. Refresh after the data plane recovers.
+    </p-message>
+  } @else if (deployView.value(); as view) {
+    <section
+      class="eligibility"
+      [class.eligibility--blocked]="!view.eligibility.eligible"
+      aria-label="Deployment eligibility"
+    >
+      <strong>{{ view.eligibility.headline }}</strong>
+      <p>{{ view.eligibility.explanation }}</p>
+      <small>{{ view.eligibility.next_action }}</small>
+    </section>
 
-    <div class="field">
-      <label for="sid" class="field__label">Strategy instance ID</label>
-      <input
-        pInputText
-        id="sid"
-        type="text"
-        formControlName="strategy_instance_id"
-        placeholder="e.g. my-spy-momentum-01"
-        class="field__input"
-        autocomplete="off"
-        aria-required="true"
-      />
-    </div>
+    @if (receipt(); as deployReceipt) {
+      <section class="receipt" role="status" aria-live="polite">
+        <strong>{{ deployReceipt.message }}</strong>
+        <p>{{ deployReceipt.explanation }}</p>
+        <p>{{ deployReceipt.next_action }}</p>
+        <dl>
+          <div>
+            <dt>Bot</dt>
+            <dd>{{ deployReceipt.bot.strategy_instance_id }}</dd>
+          </div>
+          <div>
+            <dt>Run</dt>
+            <dd>{{ deployReceipt.bot.active_run_id }}</dd>
+          </div>
+          <div>
+            <dt>Mode</dt>
+            <dd>Alpaca paper · Clerk governed</dd>
+          </div>
+        </dl>
+      </section>
+    } @else {
+      <form
+        [formGroup]="form"
+        (ngSubmit)="submit()"
+        id="deploy-form"
+        aria-label="Deploy Alpaca paper bot form"
+      >
+        <div class="field">
+          <label for="account" class="field__label">Paper account</label>
+          <p-select
+            inputId="account"
+            formControlName="account_id"
+            [options]="[{ label: view.account_label, value: view.account_id }]"
+            optionLabel="label"
+            optionValue="value"
+            class="field__input"
+            aria-required="true"
+          />
+        </div>
 
-    <div class="field">
-      <label for="symbol" class="field__label">Symbol</label>
-      <input
-        pInputText
-        id="symbol"
-        type="text"
-        formControlName="symbol"
-        placeholder="e.g. SPY"
-        class="field__input"
-        autocomplete="off"
-        aria-required="true"
-      />
-    </div>
+        <div class="field">
+          <label for="strategy" class="field__label">Validated strategy</label>
+          <p-select
+            inputId="strategy"
+            formControlName="strategy_key"
+            [options]="view.strategies"
+            optionLabel="label"
+            optionValue="strategy_key"
+            class="field__input"
+            aria-required="true"
+          />
+          <span class="field__hint">{{ view.strategies[0]?.explanation }}</span>
+        </div>
 
-    <div class="field">
-      <label for="mode" class="field__label">Trade mode</label>
-      <p-select
-        inputId="mode"
-        formControlName="mode"
-        [options]="modeOptions"
-        optionLabel="label"
-        optionValue="value"
-        class="field__input"
-        aria-required="true"
-      />
-    </div>
+        <div class="field">
+          <label for="sid" class="field__label">Strategy instance ID</label>
+          <input
+            pInputText
+            id="sid"
+            type="text"
+            formControlName="strategy_instance_id"
+            placeholder="e.g. alpaca-spy-canary-01"
+            class="field__input"
+            autocomplete="off"
+            aria-required="true"
+          />
+        </div>
 
-    <div class="field">
-      <label for="quantity" class="field__label">Quantity</label>
-      <p-inputnumber
-        inputId="quantity"
-        formControlName="quantity"
-        [min]="1"
-        [max]="100"
-        class="field__input"
-        aria-required="true"
-      />
-      @if (!isTradeMode()) {
-        <span class="field__hint">Quantity is ignored in log-only mode</span>
-      }
-    </div>
+        <div class="field">
+          <label for="symbol" class="field__label">Stock symbol</label>
+          <input
+            pInputText
+            id="symbol"
+            type="text"
+            formControlName="symbol"
+            placeholder="e.g. SPY"
+            class="field__input"
+            autocomplete="off"
+            aria-required="true"
+          />
+          <span class="field__hint">{{ view.action_plan_explanation }}</span>
+        </div>
 
-    <div class="field field--inline">
-      <p-checkbox
-        formControlName="use_rth"
-        [binary]="true"
-        inputId="use_rth"
-        aria-describedby="rth-hint"
-      />
-      <label for="use_rth" class="field__label field__label--inline">RTH only</label>
-      <span id="rth-hint" class="field__hint">Limit trading to regular trading hours</span>
-    </div>
+        <div class="field">
+          <label for="sizing" class="field__label">Sizing</label>
+          <p-select
+            inputId="sizing"
+            formControlName="sizing_preset"
+            [options]="view.sizing_options"
+            optionLabel="label"
+            optionValue="preset"
+            class="field__input"
+            aria-required="true"
+            (onChange)="sizingChanged()"
+          />
+        </div>
 
-    @if (submitError()) {
-      <p-message severity="error" class="deploy-error">{{ submitError() }}</p-message>
+        @if (customSizing()) {
+          <div class="field">
+            <label for="quantity" class="field__label">Custom shares</label>
+            <p-inputnumber
+              inputId="quantity"
+              formControlName="quantity"
+              [min]="1"
+              [max]="100"
+              class="field__input"
+              aria-required="true"
+            />
+          </div>
+        }
+
+        @if (submitError(); as error) {
+          <section class="deploy-error" role="alert" aria-live="assertive">
+            <strong>{{ error.message }}</strong>
+            @if (error.explanation) {
+              <p>{{ error.explanation }}</p>
+            }
+            @if (error.nextAction) {
+              <p>{{ error.nextAction }}</p>
+            }
+          </section>
+        }
+      </form>
     }
-
-  </form>
+  }
 
   <ng-template #footer>
-    <button
-      pButton
-      type="button"
-      severity="secondary"
-      [disabled]="submitting()"
-      (click)="close()"
-    >Cancel</button>
-    <button
-      pButton
-      type="submit"
-      form="deploy-form"
-      [loading]="submitting()"
-      [disabled]="form.invalid || submitting()"
-    >Deploy</button>
+    @if (receipt()) {
+      <button pButton type="button" severity="secondary" (click)="close()">Close</button>
+      <button pButton type="button" (click)="openPanel()">Open bot panel</button>
+    } @else {
+      <button
+        pButton
+        type="button"
+        severity="secondary"
+        [disabled]="submitting()"
+        (click)="close()"
+      >Cancel</button>
+      <button
+        pButton
+        type="submit"
+        form="deploy-form"
+        [loading]="submitting()"
+        [disabled]="
+          !deployView.value()?.eligibility?.eligible
+          || form.invalid
+          || submitting()
+        "
+      >Deploy paper bot</button>
+    }
   </ng-template>
 </p-dialog>

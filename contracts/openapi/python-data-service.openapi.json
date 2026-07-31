@@ -4334,7 +4334,36 @@
         "title": "ActionCapability",
         "type": "object"
       },
-      "ActionPlan": {
+      "ActionPlan-Input": {
+        "additionalProperties": false,
+        "description": "Operator-declared instrument plan, hashed into ``run_id``.\n\nSlice 1A shipped the empty-plan envelope; Slice 1B added stock entry\nlegs + ``close_leg`` exits; Slice 1C adds option entry legs and the\nstrike / expiry selector unions. Hard schema rejections live here.\nParity *warnings* (asymmetric structures, etc.) are computed\nseparately by ``parity_diagnostics`` in Slice 1D (#597).",
+        "properties": {
+          "on_enter": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/StockEntryLeg"
+                },
+                {
+                  "$ref": "#/components/schemas/OptionEntryLeg"
+                }
+              ]
+            },
+            "title": "On Enter",
+            "type": "array"
+          },
+          "on_exit": {
+            "items": {
+              "$ref": "#/components/schemas/CloseLegExit"
+            },
+            "title": "On Exit",
+            "type": "array"
+          }
+        },
+        "title": "ActionPlan",
+        "type": "object"
+      },
+      "ActionPlan-Output": {
         "additionalProperties": false,
         "description": "Operator-declared instrument plan, hashed into ``run_id``.\n\nSlice 1A shipped the empty-plan envelope; Slice 1B added stock entry\nlegs + ``close_leg`` exits; Slice 1C adds option entry legs and the\nstrike / expiry selector unions. Hard schema rejections live here.\nParity *warnings* (asymmetric structures, etc.) are computed\nseparately by ``parity_diagnostics`` in Slice 1D (#597).",
         "properties": {
@@ -5308,6 +5337,275 @@
           "operator"
         ],
         "title": "AlpacaBotControlFixtureEnvelope",
+        "type": "object"
+      },
+      "AlpacaPaperDeployEligibility": {
+        "additionalProperties": false,
+        "description": "Backend-authored launch verdict rendered verbatim by Angular.",
+        "properties": {
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "eligible",
+          "reason_code",
+          "headline",
+          "explanation",
+          "next_action"
+        ],
+        "title": "AlpacaPaperDeployEligibility",
+        "type": "object"
+      },
+      "AlpacaPaperDeployReceipt": {
+        "additionalProperties": false,
+        "description": "Backend-authored terminal receipt for one accepted deployment.",
+        "properties": {
+          "action_plan": {
+            "$ref": "#/components/schemas/ActionPlan-Output"
+          },
+          "bot": {
+            "$ref": "#/components/schemas/BotStatusView"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "panel_path": {
+            "title": "Panel Path",
+            "type": "string"
+          },
+          "status": {
+            "const": "deployed",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "explanation",
+          "next_action",
+          "panel_path",
+          "action_plan",
+          "bot"
+        ],
+        "title": "AlpacaPaperDeployReceipt",
+        "type": "object"
+      },
+      "AlpacaPaperDeployRequest": {
+        "additionalProperties": false,
+        "description": "Closed account-scoped command for the production Alpaca deploy page.",
+        "properties": {
+          "sizing": {
+            "$ref": "#/components/schemas/AlpacaPaperSizingSelection"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "strategy_key": {
+            "const": "deployment_validation",
+            "title": "Strategy Key"
+          },
+          "symbol": {
+            "maxLength": 12,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "strategy_key",
+          "symbol"
+        ],
+        "title": "AlpacaPaperDeployRequest",
+        "type": "object"
+      },
+      "AlpacaPaperDeployStrategy": {
+        "additionalProperties": false,
+        "description": "One validated strategy in the phase-1 closed catalog.",
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "strategy_key": {
+            "const": "deployment_validation",
+            "title": "Strategy Key"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "label",
+          "explanation"
+        ],
+        "title": "AlpacaPaperDeployStrategy",
+        "type": "object"
+      },
+      "AlpacaPaperDeployView": {
+        "additionalProperties": false,
+        "description": "All semantics needed to render the Alpaca paper deploy workflow.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_label": {
+            "title": "Account Label",
+            "type": "string"
+          },
+          "account_mode": {
+            "const": "paper",
+            "title": "Account Mode"
+          },
+          "action_plan_explanation": {
+            "title": "Action Plan Explanation",
+            "type": "string"
+          },
+          "allowed_actions": {
+            "items": {
+              "const": "deploy"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "broker": {
+            "const": "alpaca",
+            "title": "Broker"
+          },
+          "eligibility": {
+            "$ref": "#/components/schemas/AlpacaPaperDeployEligibility"
+          },
+          "sizing_options": {
+            "items": {
+              "$ref": "#/components/schemas/AlpacaPaperSizingOption"
+            },
+            "title": "Sizing Options",
+            "type": "array"
+          },
+          "strategies": {
+            "items": {
+              "$ref": "#/components/schemas/AlpacaPaperDeployStrategy"
+            },
+            "title": "Strategies",
+            "type": "array"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "account_mode",
+          "account_label",
+          "eligibility",
+          "strategies",
+          "sizing_options",
+          "action_plan_explanation",
+          "allowed_actions"
+        ],
+        "title": "AlpacaPaperDeployView",
+        "type": "object"
+      },
+      "AlpacaPaperSizingOption": {
+        "additionalProperties": false,
+        "description": "Backend-authored sizing choice and its bounded quantity contract.",
+        "properties": {
+          "default_quantity": {
+            "minimum": 1.0,
+            "title": "Default Quantity",
+            "type": "integer"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "max_quantity": {
+            "minimum": 1.0,
+            "title": "Max Quantity",
+            "type": "integer"
+          },
+          "min_quantity": {
+            "minimum": 1.0,
+            "title": "Min Quantity",
+            "type": "integer"
+          },
+          "preset": {
+            "enum": [
+              "safe_canary",
+              "custom"
+            ],
+            "title": "Preset",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preset",
+          "label",
+          "explanation",
+          "min_quantity",
+          "max_quantity",
+          "default_quantity"
+        ],
+        "title": "AlpacaPaperSizingOption",
+        "type": "object"
+      },
+      "AlpacaPaperSizingSelection": {
+        "additionalProperties": false,
+        "description": "One closed sizing choice for the Alpaca paper canary workflow.",
+        "properties": {
+          "preset": {
+            "default": "safe_canary",
+            "enum": [
+              "safe_canary",
+              "custom"
+            ],
+            "title": "Preset",
+            "type": "string"
+          },
+          "quantity": {
+            "default": 1,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Quantity",
+            "type": "integer"
+          }
+        },
+        "title": "AlpacaPaperSizingSelection",
         "type": "object"
       },
       "AlphaDecayStatsResponse": {
@@ -48576,7 +48874,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DeployBotRequest"
+                "$ref": "#/components/schemas/AlpacaPaperDeployRequest"
               }
             }
           },
@@ -48587,7 +48885,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BotStatusView"
+                  "$ref": "#/components/schemas/AlpacaPaperDeployReceipt"
                 }
               }
             },
@@ -48604,7 +48902,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Deploy and start a bot for this account (scoped alias) (\u00a75)",
+        "summary": "Deploy one Clerk-governed Alpaca paper bot (\u00a75)",
         "tags": [
           "broker-v2-panel"
         ]
@@ -48676,6 +48974,73 @@
           }
         },
         "summary": "Bots-list roster: status + slice-0 rollups (\u00a75)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/deploy": {
+      "get": {
+        "operationId": "get_alpaca_paper_deploy_view_api_brokers__broker__accounts__account_id__bots_deploy_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlpacaPaperDeployView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Backend-authored Alpaca paper deployment contract",
         "tags": [
           "broker-v2-panel"
         ]
@@ -53765,7 +54130,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ActionPlan"
+                "$ref": "#/components/schemas/ActionPlan-Input"
               }
             }
           },

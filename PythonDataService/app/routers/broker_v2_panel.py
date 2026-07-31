@@ -24,7 +24,11 @@ from typing import NoReturn
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import settings
-from app.schemas.broker_bots import BotStatusView, DeployBotRequest
+from app.schemas.broker_bots import (
+    AlpacaPaperDeployReceipt,
+    AlpacaPaperDeployRequest,
+    AlpacaPaperDeployView,
+)
 from app.schemas.broker_v2_evidence import EvidencePage
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
@@ -56,7 +60,11 @@ router = APIRouter(prefix="/api/brokers", tags=["broker-v2-panel"])
 def _raise_panel_error(error: ds.PanelDataError) -> NoReturn:
     raise HTTPException(
         status_code=error.http_status,
-        detail={"message": str(error), "why": error.detail},
+        detail={
+            "message": str(error),
+            "why": error.detail,
+            "next_action": error.next_action,
+        },
     )
 
 
@@ -120,17 +128,34 @@ async def get_catalog_unscoped(broker: str) -> list[BotCatalogView]:
 # ── §5 Deploy (account-scoped alias of the bot-runner deploy route) ──────────
 
 
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/deploy",
+    response_model=AlpacaPaperDeployView,
+    summary="Backend-authored Alpaca paper deployment contract",
+)
+async def get_alpaca_paper_deploy_view(
+    broker: str,
+    account_id: str,
+) -> AlpacaPaperDeployView:
+    try:
+        return await ds.get_alpaca_paper_deploy_view(broker, account_id)
+    except ds.PanelDataError as error:
+        _raise_panel_error(error)
+
+
 @router.post(
     "/{broker}/accounts/{account_id}/bots",
-    response_model=BotStatusView,
+    response_model=AlpacaPaperDeployReceipt,
     status_code=201,
-    summary="Deploy and start a bot for this account (scoped alias) (§5)",
+    summary="Deploy one Clerk-governed Alpaca paper bot (§5)",
 )
 async def deploy_bot_scoped(
-    broker: str, account_id: str, request: DeployBotRequest
-) -> BotStatusView:
+    broker: str,
+    account_id: str,
+    request: AlpacaPaperDeployRequest,
+) -> AlpacaPaperDeployReceipt:
     try:
-        return await ds.deploy_bot(broker, account_id, request)
+        return await ds.deploy_alpaca_paper_bot(broker, account_id, request)
     except ds.PanelDataError as error:
         _raise_panel_error(error)
 
