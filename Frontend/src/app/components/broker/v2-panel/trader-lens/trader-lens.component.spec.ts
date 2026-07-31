@@ -32,11 +32,22 @@ const PROFILE: PanelProfile = {
 
 const BASE_PANEL: BotPanelView = {
   strategy_instance_id: 'sid-001',
+  strategy_key: 'ema_crossover',
+  strategy_label: 'Ema Crossover',
   broker: 'alpaca',
   account_id: 'DUM284968',
   symbol: 'SPY',
   mode: 'log_only',
+  updated_at_ms: 1_753_800_000_000,
   revision: 1,
+  mission_verdict: {
+    state: 'working',
+    label: 'Working',
+    explanation: 'The runtime is on duty.',
+    next_action: 'Monitor decisions.',
+    evaluated_at_ms: 1_753_800_000_000,
+  },
+  execution_policy: 'Observation only.',
   health: {
     strategy_instance_id: 'sid-001',
     phase: 'ON_DUTY',
@@ -90,6 +101,11 @@ const BASE_PANEL: BotPanelView = {
       concurrency_token: 'test-token',
     },
   ],
+  readiness_checks: [],
+  exposure: {},
+  working_orders: [],
+  recent_decisions: [],
+  recent_fills: [],
 };
 
 describe('TraderLensComponent — headline', () => {
@@ -134,9 +150,7 @@ describe('TraderLensComponent — log-only degradation', () => {
     });
 
     expect(
-      screen.getByText(
-        'This bot observes and decides but does not place orders (log-only). Decisions appear below.',
-      ),
+      screen.getByText('Observation-only mode does not place orders.'),
     ).toBeTruthy();
     // No trade table should exist
     expect(screen.queryByRole('table')).toBeNull();
@@ -186,6 +200,14 @@ describe('TraderLensComponent — primary verb button', () => {
   it('renders Start when start action is presented', async () => {
     const panel: BotPanelView = {
       ...BASE_PANEL,
+      health: {
+        ...BASE_PANEL.health,
+        phase: 'OFF_DUTY',
+        phase_label: 'Off duty',
+        desired_state: 'STOPPED',
+        desired_state_label: 'Stopped',
+        running: false,
+      },
       actions: [
         {
           action_id: 'start',

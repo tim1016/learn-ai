@@ -15,6 +15,7 @@ lets the idempotency key make double-clicks safe (§11).
 from __future__ import annotations
 
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
+from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
 from app.broker.v2panel.vocabulary import (
     HOLD_REASONS,
@@ -29,7 +30,13 @@ from app.schemas.broker_v2_panel import (
     ChannelHealthView,
     ClerkCard,
     DutyOutcomeView,
+    MissionVerdictView,
+    PanelAction,
+    ReadinessCheckView,
+    RecentDecisionView,
+    RecentFillView,
     TransactionRail,
+    WorkingOrderView,
 )
 from app.services.broker_v2_panel.presented_actions import build_actions, resume_eligible
 from app.services.broker_v2_panel.station_derivation import (
@@ -141,10 +148,7 @@ def _build_health_card(
 ) -> BotHealthCard:
     desired_state = "RUNNING" if status.desired_state == "RUNNING" else "STOPPED"
     last_decision_at_ms = latest_decision.ts_ms if latest_decision is not None else None
-    decision_stale = (
-        last_decision_at_ms is not None
-        and now_ms - last_decision_at_ms > STALE_THRESHOLD_MS
-    )
+    decision_stale = last_decision_at_ms is not None and now_ms - last_decision_at_ms > STALE_THRESHOLD_MS
     can_resume = resume_eligible(status, clerk, exposure)
     has_exposure = any(abs(quantity) > 0 for quantity in exposure.values())
     if can_resume and has_exposure:
@@ -155,17 +159,13 @@ def _build_health_card(
         )
     elif can_resume:
         resume_label = "Flat Resume ready"
-        resume_explanation = (
-            "The stopped instance is flat and may start a newly identified run."
-        )
+        resume_explanation = "The stopped instance is flat and may start a newly identified run."
     elif status.running:
         resume_label = "Resume not applicable"
         resume_explanation = "This strategy instance already has a live run."
     else:
         resume_label = "Resume blocked"
-        resume_explanation = (
-            "The backend cannot prove flat state or an exact approved carryover checkpoint."
-        )
+        resume_explanation = "The backend cannot prove flat state or an exact approved carryover checkpoint."
     return BotHealthCard(
         strategy_instance_id=status.strategy_instance_id,
         phase=status.phase,
@@ -194,9 +194,7 @@ def _channel_state(*, healthy: bool, observed_at_ms: int, now_ms: int) -> Channe
 def _channel_views(clerk_status: ClerkStatus, now_ms: int) -> list[ChannelHealthView]:
     views: list[ChannelHealthView] = []
     for health in clerk_status.channel_healths or []:
-        state = _channel_state(
-            healthy=health.healthy, observed_at_ms=health.observed_at_ms, now_ms=now_ms
-        )
+        state = _channel_state(healthy=health.healthy, observed_at_ms=health.observed_at_ms, now_ms=now_ms)
         copy = copy_for(state)
         views.append(
             ChannelHealthView(
@@ -231,14 +229,9 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
         freeze_label=(
             "Account state unattributable"
             if freeze.category == "ACCOUNT_STATE_UNATTRIBUTABLE"
-            else (
-                "Account state unprovable"
-                if freeze.category == "ACCOUNT_STATE_UNPROVABLE"
-                else "No account freeze"
-            )
+            else ("Account state unprovable" if freeze.category == "ACCOUNT_STATE_UNPROVABLE" else "No account freeze")
         ),
-        freeze_explanation=freeze.explanation
-        or "The Clerk has current, attributable account truth.",
+        freeze_explanation=freeze.explanation or "The Clerk has current, attributable account truth.",
         freeze_next_step=freeze.next_step,
         freeze_observed_at_ms=freeze.observed_at_ms,
         reconciliation_verdict=verdict,  # type: ignore[arg-type]
@@ -258,9 +251,180 @@ def channel_health_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
     channels = clerk_status.channel_healths or []
     if not channels:
         return False
-    return all(
-        now_ms - health.observed_at_ms <= CHANNEL_FRESH_THRESHOLD_MS and health.healthy
-        for health in channels
+    return all(now_ms - health.observed_at_ms <= CHANNEL_FRESH_THRESHOLD_MS and health.healthy for health in channels)
+
+
+_TERMINAL_ORDER_EVENTS = frozenset({"fill", "canceled", "rejected", "expired"})
+
+
+def _working_orders(sid: str, entries: list[OrderJournalEntry]) -> list[WorkingOrderView]:
+    """Return Clerk-owned submitted orders without a terminal lifecycle event."""
+    owned_refs = set(transaction_refs_for_bot(sid, entries))
+    terminal_refs = {
+        entry.order_ref
+        for entry in entries
+        if entry.order_ref in owned_refs
+        and entry.kind is ClerkEntryKind.ORDER_EVENT
+        and entry.event is not None
+        and entry.event.event_type in _TERMINAL_ORDER_EVENTS
+    }
+    latest_by_ref: dict[str, OrderJournalEntry] = {}
+    for entry in entries:
+        if (
+            entry.order_ref in owned_refs
+            and entry.order_ref not in terminal_refs
+            and entry.order is not None
+            and entry.kind in {ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.ORDER_EVENT}
+        ):
+            latest_by_ref[entry.order_ref] = entry
+    return [
+        WorkingOrderView(
+            order_ref=entry.order_ref,
+            broker_order_id=entry.order.order_id,
+            symbol=entry.order.symbol,
+            side=entry.order.side,
+            quantity=entry.order.quantity,
+            filled_quantity=entry.order.filled_quantity,
+            status=entry.order.status,
+            observed_at_ms=entry.order.observed_at_ms,
+        )
+        for entry in latest_by_ref.values()
+        if entry.order is not None
+    ]
+
+
+def _recent_decision_views(receipts: list[DecisionReceipt], *, limit: int = 8) -> list[RecentDecisionView]:
+    return [
+        RecentDecisionView(
+            seq=receipt.seq,
+            recorded_at_ms=receipt.ts_ms,
+            outcome=receipt.outcome,
+            reason_code=receipt.reason_code,
+            bar_ref=receipt.bar_ref,
+            order_ref=receipt.order_ref or None,
+        )
+        for receipt in reversed(receipts[-limit:])
+    ]
+
+
+def _recent_fill_views(sid: str, entries: list[OrderJournalEntry], *, limit: int = 8) -> list[RecentFillView]:
+    fills = project_instance_fills(sid, entries)
+    return [
+        RecentFillView(
+            order_ref=fill.order_ref,
+            symbol=fill.symbol,
+            side=fill.side.value,
+            quantity=fill.quantity,
+            price=fill.fill_price,
+            filled_at_ms=fill.filled_at_ms,
+        )
+        for fill in reversed(fills[-limit:])
+    ]
+
+
+def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[ReadinessCheckView]:
+    """Project present-tense enforcement checks from the canonical action guards."""
+    checks: list[ReadinessCheckView] = []
+    authorities = {
+        "start": "Bot lifecycle registry + Clerk custody proof",
+        "stop": "Bot lifecycle registry",
+        "flatten_stop": "Bot lifecycle registry + Alpaca Clerk",
+        "clear_hold": "Alpaca Clerk account hold gate",
+        "reconcile_now": "Alpaca Clerk reconciliation sweep",
+    }
+    for action in actions:
+        blocker = action.blockers[0] if action.blockers else None
+        checks.append(
+            ReadinessCheckView(
+                operation=action.action_id,
+                label=action.label,
+                ready=action.enabled,
+                scope=(blocker.condition.scope if blocker else "bot"),
+                authority=authorities.get(action.action_id, "Panel action policy"),
+                explanation=(
+                    action.explanation
+                    if action.enabled
+                    else (
+                        blocker.headline
+                        if blocker is not None
+                        else "This operation is unavailable in the current state."
+                    )
+                ),
+                evidence=(blocker.condition.evidence if blocker else {}),
+                evaluated_at_ms=now_ms,
+                cure=(blocker.detail if blocker is not None else None),
+            )
+        )
+    return checks
+
+
+def _mission_verdict(
+    status: BotStatusView,
+    clerk: ClerkCard,
+    actions: list[PanelAction],
+    *,
+    now_ms: int,
+) -> MissionVerdictView:
+    start = next((action for action in actions if action.action_id == "start"), None)
+    if status.phase == "RETIRED":
+        return MissionVerdictView(
+            state="retired",
+            label="Retired",
+            explanation="This immutable strategy instance is permanently off duty.",
+            next_action="Deploy a replacement strategy instance.",
+            evaluated_at_ms=now_ms,
+        )
+    if clerk.freeze_active or clerk.hold_active:
+        reason = clerk.freeze_explanation if clerk.freeze_active else clerk.hold_reason_explanation
+        next_action = clerk.freeze_next_step or "Restore the root condition, reconcile, then clear the hold."
+        return MissionVerdictView(
+            state="blocked",
+            label="Mission blocked",
+            explanation=reason,
+            next_action=next_action,
+            evaluated_at_ms=now_ms,
+        )
+    if status.mode == "trade":
+        channel_states = {channel.stream: channel.state for channel in clerk.channels}
+        unhealthy_channels = [
+            stream
+            for stream in ("market_data", "execution")
+            if channel_states.get(stream) != "healthy"
+        ]
+        if unhealthy_channels:
+            return MissionVerdictView(
+                state="blocked",
+                label="Mission blocked",
+                explanation=(
+                    "Required Clerk channels are not healthy: "
+                    f"{', '.join(unhealthy_channels)}."
+                ),
+                next_action="Restore fresh market-data and execution health before expecting order effects.",
+                evaluated_at_ms=now_ms,
+            )
+    if status.running:
+        return MissionVerdictView(
+            state="working",
+            label="Working",
+            explanation="The runtime is on duty and the Clerk has not raised an account gate.",
+            next_action="Monitor decisions, fills, and custody evidence.",
+            evaluated_at_ms=now_ms,
+        )
+    if start is not None and start.enabled:
+        return MissionVerdictView(
+            state="ready",
+            label="Ready to start",
+            explanation="Lifecycle and Clerk custody checks currently allow Start.",
+            next_action="Start the bot when the execution session is intended to run.",
+            evaluated_at_ms=now_ms,
+        )
+    blocker = start.blockers[0] if start is not None and start.blockers else None
+    return MissionVerdictView(
+        state="off_duty",
+        label="Off duty",
+        explanation=(blocker.headline if blocker is not None else "The bot is not evaluating bars."),
+        next_action=(blocker.detail if blocker is not None else "Review readiness before Start."),
+        evaluated_at_ms=now_ms,
     )
 
 
@@ -281,6 +445,7 @@ def build_panel(
     flatten_supported: bool,
     now_ms: int,
     selected_transaction_ref: str | None = None,
+    recent_decisions: list[DecisionReceipt] | None = None,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
 
@@ -318,6 +483,7 @@ def build_panel(
         last_decision_at_ms=health.last_decision_at_ms,
     )
 
+    working_orders = _working_orders(status.strategy_instance_id, entries)
     actions = build_actions(
         status,
         clerk,
@@ -325,21 +491,39 @@ def build_panel(
         flatten_supported=flatten_supported,
         channel_fresh=channel_health_fresh(clerk_status, now_ms),
         exposure=exposure,
+        account_id=account_id,
+        working_order_count=len(working_orders),
     )
+
+    decision_receipts = recent_decisions or ([latest_decision] if latest_decision else [])
 
     return BotPanelView(
         strategy_instance_id=status.strategy_instance_id,
+        strategy_key=status.strategy_key,
+        strategy_label=status.strategy_key.replace("_", " ").replace("-", " ").title(),
         broker=status.broker,
         account_id=account_id,
         symbol=status.symbol,
         mode=status.mode,
+        updated_at_ms=now_ms,
         revision=revision,
+        mission_verdict=_mission_verdict(status, clerk, actions, now_ms=now_ms),
+        execution_policy=(
+            "Observation only. Decisions are recorded, but the Clerk will not place orders."
+            if status.mode == "log_only"
+            else "Paper execution. Only the Clerk may submit, cancel, or reduce broker orders."
+        ),
         health=health,
         clerk=clerk,
         rail=TransactionRail(transaction_ref=transaction_ref, stations=stations),
         journal_tail_ref=journal_tail_ref,
         journal_tail_seq=journal_tail_seq,
         actions=actions,
+        readiness_checks=_readiness_checks(actions, now_ms),
+        exposure=exposure,
+        working_orders=working_orders,
+        recent_decisions=_recent_decision_views(decision_receipts),
+        recent_fills=_recent_fill_views(status.strategy_instance_id, entries),
         fills_today=fills_today,
         realized_pnl_today=realized_pnl_today,
         open_pnl=open_pnl,

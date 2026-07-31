@@ -287,6 +287,7 @@ async def test_action_stale_revision_is_409(api) -> None:
             },
         )
     assert response.status_code == 409
+    assert response.json()["detail"]["receipt_id"] is None
 
 
 async def test_action_idempotent_repost_is_noop(api) -> None:
@@ -310,6 +311,39 @@ async def test_action_idempotent_repost_is_noop(api) -> None:
             f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions", json=body
         )
     assert first.json()["applied"] is True
+    assert second.json()["applied"] is False
+
+
+async def test_completed_stop_replay_survives_current_disabled_state(api) -> None:
+    app, _clerk, registry = api
+    await _deploy_bot(registry)
+    async with _client(app) as client:
+        panel = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/panel"
+        )
+        action = next(
+            item
+            for item in panel.json()["actions"]
+            if item["action_id"] == "stop"
+        )
+        body = {
+            "action_id": "stop",
+            "revision": panel.json()["revision"],
+            "concurrency_token": action["concurrency_token"],
+            "idempotency_key": "stop-replay",
+        }
+        first = await client.post(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
+            json=body,
+        )
+        second = await client.post(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
+            json=body,
+        )
+
+    assert first.status_code == 200
+    assert first.json()["applied"] is True
+    assert second.status_code == 200
     assert second.json()["applied"] is False
 
 

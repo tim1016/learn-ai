@@ -1,12 +1,10 @@
 @if (loadError()) {
-  <div class="load-error" role="alert" aria-live="assertive">
-    <p>{{ loadError() }}</p>
-  </div>
+  <div class="load-error" role="alert" aria-live="assertive">{{ loadError() }}</div>
 }
 
 @if (!isLoaded()) {
   <div class="loading-state" role="status" aria-live="polite" aria-label="Loading bot panel">
-    <span class="loading-text">Loading…</span>
+    <span class="loading-text">Loading bot control…</span>
   </div>
 }
 
@@ -14,47 +12,70 @@
   @let panelData = panel.value()!;
   @let profileData = profile.value()!;
 
-  <!-- Lens tab bar (spec §6 — Trader default, Operator unlocked in S4) -->
-  <div class="lens-toggle" role="tablist" aria-label="Panel lens">
+  <app-panel-header [panel]="panelData" />
+
+  <div class="lens-toggle" role="tablist" aria-label="Bot control perspective">
     <button
+      id="trader-tab"
+      data-lens="trader"
       role="tab"
       class="lens-toggle__tab"
       [class.lens-toggle__tab--active]="activeLens() === 'trader'"
       [attr.aria-selected]="activeLens() === 'trader'"
+      [attr.tabindex]="activeLens() === 'trader' ? 0 : -1"
+      aria-controls="trader-panel"
       (click)="selectLens('trader')"
+      (keydown)="onLensKeydown($event)"
     >Trader</button>
     <button
+      id="operator-tab"
+      data-lens="operator"
       role="tab"
       class="lens-toggle__tab"
       [class.lens-toggle__tab--active]="activeLens() === 'operator'"
       [attr.aria-selected]="activeLens() === 'operator'"
+      [attr.tabindex]="activeLens() === 'operator' ? 0 : -1"
+      aria-controls="operator-panel"
       (click)="selectLens('operator')"
+      (keydown)="onLensKeydown($event)"
     >Operator</button>
   </div>
 
+  @if (actionReceipt(); as receipt) {
+    <app-panel-action-receipt
+      [receipt]="receipt"
+      (dismissed)="dismissActionReceipt()"
+    />
+  }
+
   @switch (activeLens()) {
     @case ('trader') {
-      <app-trader-lens
-        [panel]="panelData"
-        [profile]="profileData"
-        [liveChart]="liveChart.value() ?? null"
-        [histChart]="histChart.value() ?? null"
-        [selectedPreset]="selectedPreset()"
-        [actionPending]="actionPending()"
-        (presetChange)="onPresetChange($event)"
-        (actionRequested)="onActionRequested($event)"
-      />
+      <div id="trader-panel" role="tabpanel" aria-labelledby="trader-tab">
+        <app-trader-lens
+          [panel]="panelData"
+          [profile]="profileData"
+          [liveChart]="liveChart.value() ?? null"
+          [histChart]="histChart.value() ?? null"
+          [selectedPreset]="selectedPreset()"
+          [actionPending]="actionPending()"
+          (presetChange)="onPresetChange($event)"
+          (actionRequested)="onActionRequested($event)"
+        />
+      </div>
     }
     @case ('operator') {
-      <app-operator-lens
-        [panel]="panelData"
-        [profile]="profileData"
-        [actionPending]="actionPending()"
-        (actionRequested)="onActionRequested($event)"
-        [broker]="broker()"
-        [accountId]="accountId()"
-        [sid]="sid()"
-      />
+      <div id="operator-panel" role="tabpanel" aria-labelledby="operator-tab">
+        <app-operator-lens
+          [panel]="panelData"
+          [profile]="profileData"
+          [actionPending]="actionPending()"
+          [broker]="broker()"
+          [accountId]="accountId()"
+          [sid]="sid()"
+          (transactionSelected)="onTransactionSelected($event)"
+          (actionRequested)="onActionRequested($event)"
+        />
+      </div>
     }
   }
 }

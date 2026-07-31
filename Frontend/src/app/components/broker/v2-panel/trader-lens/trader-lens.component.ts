@@ -17,6 +17,8 @@ import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.compo
 import { TradesTodayListComponent } from './trades-today-list.component';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { TraderMetricsComponent } from './trader-metrics.component';
 
 /**
  * Trader lens (spec §6).
@@ -38,6 +40,8 @@ import { PanelActionButtonComponent } from '../panel-action-button/panel-action-
     TradesTodayListComponent,
     TimestampDisplayComponent,
     PanelActionButtonComponent,
+    ReceiptLabelPipe,
+    TraderMetricsComponent,
   ],
   templateUrl: './trader-lens.component.html',
   styleUrl: './trader-lens.component.scss',
@@ -78,11 +82,8 @@ export class TraderLensComponent {
 
   /** The one primary verb action (start or stop) — exactly one at a time. */
   protected readonly primaryAction = computed<PanelAction | null>(() => {
-    const actions = this.panel().actions;
-    return (
-      actions.find((a) => a.action_id === 'start' || a.action_id === 'stop') ??
-      null
-    );
+    const actionId = this.panel().health.running ? 'stop' : 'start';
+    return this.panel().actions.find((action) => action.action_id === actionId) ?? null;
   });
 
   protected readonly liveBars = computed(() => this.liveChart()?.bars ?? []);
@@ -107,5 +108,4 @@ export class TraderLensComponent {
   protected onPresetChange(preset: ChartHistoryPreset): void {
     this.presetChange.emit(preset);
   }
-
 }

@@ -1,8 +1,10 @@
-import { render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen } from '@testing-library/angular';
+import { HttpErrorResponse } from '@angular/common/http';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotPanelView, PanelProfile } from '../lib/broker-v2-panel.types';
+import { provideRouter, Router } from '@angular/router';
 
 // DualPaneChartComponent -> lightweight-charts: mock for unit tests.
 vi.mock('lightweight-charts', () => {
@@ -33,11 +35,22 @@ const PROFILE: PanelProfile = {
 
 const PANEL: BotPanelView = {
   strategy_instance_id: 'sid-001',
+  strategy_key: 'ema_crossover',
+  strategy_label: 'Ema Crossover',
   broker: 'alpaca',
   account_id: 'DUM284968',
   symbol: 'QQQ',
   mode: 'log_only',
+  updated_at_ms: 1_753_800_000_000,
   revision: 1,
+  mission_verdict: {
+    state: 'working',
+    label: 'Working',
+    explanation: 'The runtime is on duty.',
+    next_action: 'Monitor decisions.',
+    evaluated_at_ms: 1_753_800_000_000,
+  },
+  execution_policy: 'Observation only.',
   health: {
     strategy_instance_id: 'sid-001',
     phase: 'ON_DUTY',
@@ -77,6 +90,11 @@ const PANEL: BotPanelView = {
   journal_tail_ref: '/api/brokers/alpaca/accounts/DUM284968/bots/sid-001/journal',
   journal_tail_seq: null,
   actions: [],
+  readiness_checks: [],
+  exposure: {},
+  working_orders: [],
+  recent_decisions: [],
+  recent_fills: [],
   fills_today: 0,
   realized_pnl_today: 0.0,
   open_pnl: null,
@@ -108,6 +126,38 @@ const mockService = {
     truncated: false,
     as_of_ms: 1_753_800_000_000,
   }),
+  getEvidence: vi.fn().mockResolvedValue({
+    strategy_instance_id: 'sid-001',
+    account_id: 'DUM284968',
+    transaction_ref: 'tx-001',
+    entries: [
+      {
+        seq: 1,
+        kind: 'submit_acked',
+        kind_label: 'Submit acknowledged',
+        recorded_at_ms: 1_753_800_000_000,
+        order_ref: 'tx-001',
+        intent_id: 'intent-001',
+        summary: 'The broker acknowledged the order.',
+        has_more_detail: false,
+      },
+    ],
+    next_cursor: null,
+    total_entries: 1,
+    truncated: false,
+    read_by: 'operator:test',
+    read_at_ms: 1_753_800_000_000,
+  }),
+  runBotAction: vi.fn().mockResolvedValue({
+    action_id: 'start',
+    outcome: 'success',
+    receipt_id: 'receipt-001',
+    recorded_at_ms: 1_753_800_000_000,
+    applied: true,
+    revision: 1,
+    concurrency_token: 'start-token',
+    message: 'Bot start requested.',
+  }),
 };
 
 describe('BotPanelShellComponent', () => {
@@ -118,7 +168,7 @@ describe('BotPanelShellComponent', () => {
   it('shows loading state initially then renders the trader lens', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [{ provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
     });
 
     // Wait for async initial load
@@ -126,22 +176,20 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     // Symbol from the loaded panel should appear
-    expect(screen.getByText('QQQ')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'QQQ' })).toBeTruthy();
   });
 
   it('shows log-only degradation panel after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [{ provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
     });
 
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(
-      screen.getByText(
-        'This bot observes and decides but does not place orders (log-only). Decisions appear below.',
-      ),
+      screen.getByText('Observation-only mode does not place orders.'),
     ).toBeTruthy();
   });
 
@@ -150,12 +198,137 @@ describe('BotPanelShellComponent', () => {
 
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [{ provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
     });
 
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(screen.getByRole('alert')).toBeTruthy();
+  });
+
+  it('persists keyboard lens changes in the query string', async () => {
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Trader' }), {
+      key: 'ArrowRight',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByRole('tab', { name: 'Operator' }).getAttribute('aria-selected')).toBe('true');
+    expect(fixture.debugElement.injector.get(Router).url).toContain('lens=operator');
+  });
+
+  it('fetches a new server projection for a selected transaction', async () => {
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+    });
+    await fixture.whenStable();
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: /Submit acknowledged at/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select transaction tx-001 on rail' }));
+    await fixture.whenStable();
+
+    expect(mockService.getPanel).toHaveBeenLastCalledWith(
+      'alpaca',
+      'DUM284968',
+      'sid-001',
+      'tx-001',
+    );
+  });
+
+  it('renders the durable receipt returned by a bot action', async () => {
+    mockService.getPanel.mockResolvedValueOnce({
+      ...PANEL,
+      health: { ...PANEL.health, running: false },
+      actions: [
+        {
+          action_id: 'start',
+          label: 'Start',
+          explanation: 'Start evaluating bars.',
+          enabled: true,
+          blockers: [],
+          confirmation: null,
+          revision: 1,
+          concurrency_token: 'start-token',
+        },
+      ],
+    });
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('Bot start requested.')).toBeTruthy();
+    expect(screen.getByText('receipt-001')).toBeTruthy();
+  });
+
+  it('renders backend-authored remediation for an unknown action outcome', async () => {
+    mockService.getPanel.mockResolvedValueOnce({
+      ...PANEL,
+      health: { ...PANEL.health, running: false },
+      actions: [
+        {
+          action_id: 'start',
+          label: 'Start',
+          explanation: 'Start evaluating bars.',
+          enabled: true,
+          blockers: [],
+          confirmation: null,
+          revision: 1,
+          concurrency_token: 'start-token',
+        },
+      ],
+    });
+    mockService.runBotAction.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 500,
+        error: {
+          detail: {
+            action_id: 'start',
+            outcome: 'unknown',
+            receipt_id: 'receipt-unknown',
+            recorded_at_ms: 1_753_800_000_000,
+            message: 'The command did not return a terminal receipt.',
+            why: 'Inspect Clerk evidence before issuing another lifecycle command.',
+          },
+        },
+      }),
+    );
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(
+      screen.getByText('The command did not return a terminal receipt.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Inspect Clerk evidence before issuing another lifecycle command.',
+      ),
+    ).toBeTruthy();
   });
 });

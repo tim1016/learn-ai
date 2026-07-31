@@ -75,17 +75,33 @@ function makeRail(): TransactionRail {
 function makePanel(): BotPanelView {
   return {
     strategy_instance_id: 'sid-1',
+    strategy_key: 'ema_crossover',
+    strategy_label: 'Ema Crossover',
     broker: 'alpaca',
     account_id: 'acc-1',
     symbol: 'SPY',
     mode: 'log_only',
+    updated_at_ms: 1_700_000_001_000,
     revision: 1,
+    mission_verdict: {
+      state: 'working',
+      label: 'Working',
+      explanation: 'The runtime is on duty.',
+      next_action: 'Monitor evidence.',
+      evaluated_at_ms: 1_700_000_001_000,
+    },
+    execution_policy: 'Observation only.',
     health: makeHealth(),
     clerk: makeClerk(),
     rail: makeRail(),
     journal_tail_ref: '',
     journal_tail_seq: null,
     actions: [],
+    readiness_checks: [],
+    exposure: {},
+    working_orders: [],
+    recent_decisions: [],
+    recent_fills: [],
     fills_today: 0,
     realized_pnl_today: 0.0,
     open_pnl: null,
@@ -425,6 +441,7 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Flatten & Stop' }));
     expect(screen.getByText('This will close all open positions.')).toBeTruthy();
   });
 });

@@ -1,0 +1,19 @@
+:host { display: block; }
+
+.action-receipt {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+
+  &[data-outcome='success'] { border-left: 3px solid var(--bull); }
+  &[data-outcome='unknown'] { border-left: 3px solid var(--warn); }
+  div { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: baseline; }
+  strong { text-transform: capitalize; }
+  button { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; }
+}

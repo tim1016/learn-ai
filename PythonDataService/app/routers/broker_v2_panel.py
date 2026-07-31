@@ -41,7 +41,11 @@ from app.schemas.broker_v2_panel import (
     PanelProfile,
 )
 from app.services.broker_v2_panel import panel_data_source as ds
-from app.services.broker_v2_panel.action_execution_service import ActionExecutionError
+from app.services.broker_v2_panel.action_execution_service import (
+    ActionExecutionError,
+    ActionOutcomeUnknownError,
+    StaleRevisionError,
+)
 from app.services.broker_v2_panel.chart_projection_service import (
     ChartPresetError,
     coerce_history_preset,
@@ -51,6 +55,7 @@ from app.services.broker_v2_panel.evidence_service import (
     read_evidence_page,
 )
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +73,23 @@ def _raise_panel_error(error: ds.PanelDataError) -> NoReturn:
     )
 
 
-def _raise_action_error(error: ActionExecutionError) -> NoReturn:
+def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest) -> NoReturn:
+    outcome_unknown = isinstance(error, ActionOutcomeUnknownError)
+    outcome = (
+        "unknown"
+        if outcome_unknown
+        else ("conflict" if isinstance(error, StaleRevisionError) else "failure")
+    )
     raise HTTPException(
         status_code=error.http_status,
-        detail={"message": str(error), "why": error.detail},
+        detail={
+            "action_id": request.action_id,
+            "outcome": outcome,
+            "receipt_id": request.idempotency_key if outcome_unknown else None,
+            "recorded_at_ms": now_ms_utc(),
+            "message": str(error),
+            "why": error.detail,
+        },
     )
 
 
@@ -163,13 +181,9 @@ async def deploy_bot_scoped(
 # ── §7 Panel projection (account-scoped + unscoped alias) ────────────────────
 
 
-async def _panel(
-    broker: str, account_id: str, sid: str, transaction_ref: str | None
-) -> BotPanelView:
+async def _panel(broker: str, account_id: str, sid: str, transaction_ref: str | None) -> BotPanelView:
     try:
-        return await ds.get_panel(
-            broker, account_id, sid, transaction_ref=transaction_ref
-        )
+        return await ds.get_panel(broker, account_id, sid, transaction_ref=transaction_ref)
     except ds.PanelDataError as error:
         _raise_panel_error(error)
 
@@ -205,9 +219,7 @@ async def get_panel_unscoped(
 # ── §11 Presented-action execution (account-scoped + unscoped alias) ─────────
 
 
-async def _run_action(
-    broker: str, account_id: str, sid: str, request: PanelActionRequest
-) -> PanelActionResult:
+async def _run_action(broker: str, account_id: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
     try:
         return await ds.run_action(
             broker,
@@ -219,7 +231,7 @@ async def _run_action(
     except ds.PanelDataError as error:
         _raise_panel_error(error)
     except ActionExecutionError as error:
-        _raise_action_error(error)
+        _raise_action_error(error, request)
 
 
 @router.post(
@@ -227,9 +239,7 @@ async def _run_action(
     response_model=PanelActionResult,
     summary="Execute one presented action (revision-guarded, idempotent) (§11)",
 )
-async def run_action_scoped(
-    broker: str, account_id: str, sid: str, request: PanelActionRequest
-) -> PanelActionResult:
+async def run_action_scoped(broker: str, account_id: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
     return await _run_action(broker, account_id, sid, request)
 
 
@@ -238,9 +248,7 @@ async def run_action_scoped(
     response_model=PanelActionResult,
     summary="Execute one presented action (single-account alias) (§11)",
 )
-async def run_action_unscoped(
-    broker: str, sid: str, request: PanelActionRequest
-) -> PanelActionResult:
+async def run_action_unscoped(broker: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
     account_id = await _resolve_default_account(broker)
     return await _run_action(broker, account_id, sid, request)
 
@@ -260,9 +268,7 @@ async def _live_chart(broker: str, account_id: str, sid: str) -> ChartLiveRespon
     response_model=ChartLiveResponse,
     summary="LIVE chart pane: today's merged bars + fill markers (§8)",
 )
-async def get_live_chart_scoped(
-    broker: str, account_id: str, sid: str
-) -> ChartLiveResponse:
+async def get_live_chart_scoped(broker: str, account_id: str, sid: str) -> ChartLiveResponse:
     return await _live_chart(broker, account_id, sid)
 
 
@@ -276,9 +282,7 @@ async def get_live_chart_unscoped(broker: str, sid: str) -> ChartLiveResponse:
     return await _live_chart(broker, account_id, sid)
 
 
-async def _history_chart(
-    broker: str, account_id: str, sid: str, preset: str
-) -> ChartHistoryResponse:
+async def _history_chart(broker: str, account_id: str, sid: str, preset: str) -> ChartHistoryResponse:
     try:
         coerced = coerce_history_preset(preset)
     except ChartPresetError as exc:
@@ -358,14 +362,10 @@ async def get_evidence_scoped(
     sid: str,
     transaction_ref: str | None = Query(default=None, max_length=256),
     cursor: int | None = Query(default=None, ge=0),
-    page_size: int = Query(
-        default=PAGE_SIZE_DEFAULT, ge=1
-    ),
+    page_size: int = Query(default=PAGE_SIZE_DEFAULT, ge=1),
     client_hint: str | None = Query(default=None, max_length=256),
 ) -> EvidencePage:
-    return await _read_evidence(
-        broker, account_id, sid, transaction_ref, cursor, page_size, client_hint
-    )
+    return await _read_evidence(broker, account_id, sid, transaction_ref, cursor, page_size, client_hint)
 
 
 @router.get(
@@ -378,15 +378,11 @@ async def get_evidence_unscoped(
     sid: str,
     transaction_ref: str | None = Query(default=None, max_length=256),
     cursor: int | None = Query(default=None, ge=0),
-    page_size: int = Query(
-        default=PAGE_SIZE_DEFAULT, ge=1
-    ),
+    page_size: int = Query(default=PAGE_SIZE_DEFAULT, ge=1),
     client_hint: str | None = Query(default=None, max_length=256),
 ) -> EvidencePage:
     account_id = await _resolve_default_account(broker)
-    return await _read_evidence(
-        broker, account_id, sid, transaction_ref, cursor, page_size, client_hint
-    )
+    return await _read_evidence(broker, account_id, sid, transaction_ref, cursor, page_size, client_hint)
 
 
 # ── Shared helpers ───────────────────────────────────────────────────────────

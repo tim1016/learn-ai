@@ -1,0 +1,53 @@
+<section class="trader-metrics" aria-label="Bot attributed trading summary">
+  <article>
+    <span>Attributed exposure</span>
+    @if (exposure().length === 0) {
+      <strong>Flat</strong><small>Zero Clerk-attributed quantity</small>
+    } @else {
+      @for (position of exposure(); track position[0]) {
+        <strong>{{ position[0] }} {{ position[1] }}</strong>
+      }
+    }
+  </article>
+  <article>
+    <span>Realized today</span>
+    <strong [class.positive]="panel().realized_pnl_today > 0" [class.negative]="panel().realized_pnl_today < 0">
+      {{ panel().realized_pnl_today | currency:'USD':'symbol':'1.2-2' }}
+    </strong>
+    <small>{{ panel().fills_today }} fills today</small>
+  </article>
+  <article>
+    <span>Open P&amp;L</span>
+    @if (panel().open_pnl === null) {
+      <strong>Not available</strong><small>No complete mark coverage</small>
+    } @else {
+      <strong [class.positive]="panel().open_pnl! > 0" [class.negative]="panel().open_pnl! < 0">
+        {{ panel().open_pnl | currency:'USD':'symbol':'1.2-2' }}
+      </strong>
+      <small>Backend FIFO attribution</small>
+    }
+  </article>
+  <article>
+    <span>Order custody</span>
+    <strong>{{ panel().working_orders.length }} working</strong>
+    <small>{{ panel().clerk.outstanding_intents }} unresolved intents</small>
+  </article>
+  <article>
+    <span>Latest decision</span>
+    @if (panel().health.last_decision_at_ms) {
+      <strong><app-timestamp-display [value]="panel().health.last_decision_at_ms" mode="local" /></strong>
+      <small>{{ panel().health.decision_stale ? 'Stale decision evidence' : 'Decision evidence current' }}</small>
+    } @else {
+      <strong>None yet</strong><small>No bar decision recorded</small>
+    }
+  </article>
+  <article>
+    <span>Last evaluated bar</span>
+    @if (panel().health.last_bar_at_ms) {
+      <strong><app-timestamp-display [value]="panel().health.last_bar_at_ms" mode="local" /></strong>
+    } @else {
+      <strong>None yet</strong>
+    }
+    <small>{{ panel().health.resume_label }}</small>
+  </article>
+</section>

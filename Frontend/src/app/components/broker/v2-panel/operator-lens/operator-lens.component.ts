@@ -1,17 +1,15 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  DestroyRef,
   computed,
-  effect,
   inject,
   input,
   output,
+  resource,
   signal,
 } from '@angular/core';
 import type {
   BotPanelView,
-  EvidencePage,
   PanelAction,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
@@ -21,7 +19,8 @@ import { HealthCardComponent } from './health-card.component';
 import { ClerkCardComponent } from './clerk-card.component';
 import { JournalTailComponent } from './journal-tail.component';
 import { EvidenceDrawerComponent } from './evidence-drawer.component';
-import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+import { OperatorReadinessComponent } from './operator-readiness.component';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 
 /**
  * Operator lens (spec §7).
@@ -45,7 +44,8 @@ import { PanelActionButtonComponent } from '../panel-action-button/panel-action-
     ClerkCardComponent,
     JournalTailComponent,
     EvidenceDrawerComponent,
-    PanelActionButtonComponent,
+    OperatorReadinessComponent,
+    ReceiptLabelPipe,
   ],
   templateUrl: './operator-lens.component.html',
   styleUrl: './operator-lens.component.scss',
@@ -58,6 +58,7 @@ export class OperatorLensComponent {
   readonly actionPending = input(false);
 
   readonly actionRequested = output<PanelAction>();
+  readonly transactionSelected = output<string>();
 
   // Route context — needed for the evidence endpoint calls.
   readonly broker = input.required<string>();
@@ -67,12 +68,8 @@ export class OperatorLensComponent {
   // ── Services ──────────────────────────────────────────────────────────────
 
   private readonly panelSvc = inject(BrokerV2PanelService);
-  private readonly destroyRef = inject(DestroyRef);
 
   // ── Local state ───────────────────────────────────────────────────────────
-
-  /** Currently selected transaction_ref (drives the rail). */
-  protected readonly selectedTransactionRef = signal<string | null>(null);
 
   /** Whether the evidence drawer is open. */
   protected readonly evidenceDrawerOpen = signal(false);
@@ -80,10 +77,20 @@ export class OperatorLensComponent {
   /** The transaction_ref whose evidence the drawer is showing. */
   protected readonly evidenceDrawerRef = signal<string | null>(null);
 
-  /** Journal tail evidence page (operator-gated endpoint). */
-  protected readonly journalPage = signal<EvidencePage | null>(null);
-  protected readonly journalLoading = signal(false);
-  protected readonly journalError = signal<string | null>(null);
+  /** Reloads only when the journal cursor changes; panel polling alone is inert. */
+  protected readonly journalPage = resource({
+    params: () =>
+      [
+        this.broker(),
+        this.accountId(),
+        this.sid(),
+        this.panel().journal_tail_seq ?? 'empty',
+      ].join('|'),
+    loader: () =>
+      this.panelSvc.getEvidence(this.broker(), this.accountId(), this.sid(), {
+        clientHint: 'operator-lens-journal-tail',
+      }),
+  });
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
@@ -91,59 +98,10 @@ export class OperatorLensComponent {
   protected readonly clerk = computed(() => this.panel().clerk);
   protected readonly rail = computed(() => this.panel().rail);
 
-  /** Operator-lens actions (operator-relevant subset). */
-  protected readonly retireAction = computed<PanelAction | null>(
-    () => this.panel().actions.find((a) => a.action_id === 'retire') ?? null,
-  );
-
-  protected readonly reconcileAction = computed<PanelAction | null>(
-    () => this.panel().actions.find((a) => a.action_id === 'reconcile_now') ?? null,
-  );
-
-  protected readonly clearHoldAction = computed<PanelAction | null>(
-    () => this.panel().actions.find((a) => a.action_id === 'clear_hold') ?? null,
-  );
-
-  protected readonly flattenStopAction = computed<PanelAction | null>(
-    () => this.panel().actions.find((a) => a.action_id === 'flatten_stop') ?? null,
-  );
-
-  /**
-   * The rail to render: if the user has selected a different transaction via
-   * the journal tail, we override the rail's transaction_ref locally.
-   *
-   * For S4 the rail itself is still the full server-provided one (the server
-   * selects the most-recent transaction). A future slice can make the panel
-   * poll with `?transaction_ref=` once the user selects a different row.
-   */
-  protected readonly displayRail = computed(() => {
-    const ref = this.selectedTransactionRef();
-    const serverRail = this.rail();
-    if (!ref) return serverRail;
-    // Re-use the server rail; the transaction_ref override drives what the
-    // user "thinks" is selected. Full per-transaction rail switching is a
-    // panel-poll concern (poll with ?transaction_ref=); mark the current
-    // selection for visual feedback only.
-    return { ...serverRail, transaction_ref: ref };
-  });
-
-  constructor() {
-    this.destroyRef.onDestroy(() => {
-      // Nothing to clean up (no timers — the shell owns the poll cycle).
-    });
-
-    // Load the journal tail when the panel loads (bot + account known).
-    effect(() => {
-      const panelData = this.panel();
-      if (!panelData) return;
-      void this.loadJournalPage();
-    });
-  }
-
   // ── Template handlers ─────────────────────────────────────────────────────
 
   protected onTransactionSelected(ref: string): void {
-    this.selectedTransactionRef.set(ref);
+    this.transactionSelected.emit(ref);
   }
 
   protected onEvidenceRequested(ref: string): void {
@@ -160,27 +118,4 @@ export class OperatorLensComponent {
     this.actionRequested.emit(action);
   }
 
-  // ── Private ───────────────────────────────────────────────────────────────
-
-  private async loadJournalPage(): Promise<void> {
-    this.journalLoading.set(true);
-    this.journalError.set(null);
-    try {
-      const page = await this.panelSvc.getEvidence(
-        this.broker(),
-        this.accountId(),
-        this.sid(),
-        { clientHint: 'operator-lens-journal-tail' },
-      );
-      this.journalPage.set(page);
-    } catch (error) {
-      this.journalError.set(
-        error instanceof Error
-          ? error.message
-          : 'Could not load journal evidence.',
-      );
-    } finally {
-      this.journalLoading.set(false);
-    }
-  }
 }

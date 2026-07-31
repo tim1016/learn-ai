@@ -23,7 +23,12 @@ from dataclasses import dataclass
 
 from app.broker.v2panel.vocabulary import ACTION_IDS, ActionId, copy_for
 from app.schemas.broker_v2_panel import PanelAction
-from app.schemas.operator_blocker import OperatorBlocker
+from app.schemas.operator_blocker import (
+    SURFACE_ANCHOR,
+    ConditionScope,
+    OperatorBlocker,
+    OperatorConfirmationCopy,
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,10 @@ class ActionGuardContext:
     has_exposure: bool
     carryover_resume_ready: bool
     flatten_supported: bool
+    account_id: str
+    strategy_instance_id: str
+    exposure: dict[str, float]
+    working_order_count: int
 
 
 @dataclass(frozen=True)
@@ -65,53 +74,178 @@ class ActionPolicy:
     revision_inputs: Callable[[ActionGuardContext], tuple]
 
 
-def _no_blockers(enabled: bool) -> tuple[bool, list[OperatorBlocker]]:
-    return enabled, []
+def _blocker(
+    condition_id: str,
+    *,
+    scope: ConditionScope,
+    headline: str,
+    detail: str,
+    evidence: dict[str, str | int | float | bool | None] | None = None,
+) -> OperatorBlocker:
+    return OperatorBlocker.for_host(
+        condition_id=condition_id,
+        scope=scope,
+        host="bot_cockpit",
+        anchor=SURFACE_ANCHOR,
+        audience="both",
+        disposition="wait",
+        headline=headline,
+        detail=detail,
+        applies_to="run",
+        evidence=evidence,
+    )
+
+
+def _disabled(*blockers: OperatorBlocker) -> tuple[bool, list[OperatorBlocker]]:
+    return False, list(blockers)
 
 
 def _guard_deploy(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
     # deploy is a list-page action; the per-bot panel always presents it disabled.
-    return _no_blockers(False)
+    return _disabled()
 
 
 def _guard_start(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    enabled = (
-        not ctx.running
-        and ctx.phase != "RETIRED"
-        and ctx.desired_state == "STOPPED"
-        and not ctx.hold_active
-        and not ctx.freeze_active
-        and (not ctx.has_exposure or ctx.carryover_resume_ready)
-    )
-    return _no_blockers(enabled)
+    blockers: list[OperatorBlocker] = []
+    if ctx.running:
+        blockers.append(
+            _blocker(
+                "BOT_ALREADY_RUNNING",
+                scope="bot",
+                headline="The bot is already running.",
+                detail="Use Stop before attempting another lifecycle transition.",
+            )
+        )
+    if ctx.phase == "RETIRED":
+        blockers.append(
+            _blocker(
+                "BOT_RETIRED",
+                scope="bot",
+                headline="A retired bot cannot be started.",
+                detail="Deploy a replacement strategy instance; this SID remains immutable.",
+            )
+        )
+    if ctx.desired_state != "STOPPED":
+        blockers.append(
+            _blocker(
+                "STOP_NOT_DURABLE",
+                scope="bot",
+                headline="The durable desired state is not stopped.",
+                detail="Wait for the current lifecycle command to settle, then refresh.",
+            )
+        )
+    if ctx.hold_active:
+        blockers.append(
+            _blocker(
+                "ACCOUNT_HOLD_ACTIVE",
+                scope="account",
+                headline="An account exposure hold blocks Start.",
+                detail="Restore the hold's root condition, reconcile, then use Clear hold.",
+                evidence={"account_id": ctx.account_id},
+            )
+        )
+    if ctx.freeze_active:
+        blockers.append(
+            _blocker(
+                "ACCOUNT_CUSTODY_UNPROVABLE",
+                scope="account",
+                headline="The Clerk cannot prove current account custody.",
+                detail="Restore broker observation and run Reconcile now before Start.",
+                evidence={"account_id": ctx.account_id},
+            )
+        )
+    if ctx.has_exposure and not ctx.carryover_resume_ready:
+        blockers.append(
+            _blocker(
+                "CARRYOVER_NOT_PROVED",
+                scope="bot",
+                headline="Attributed exposure is not approved for Resume.",
+                detail="Flatten the attributed exposure or restore an exact approved carryover checkpoint.",
+                evidence={"strategy_instance_id": ctx.strategy_instance_id},
+            )
+        )
+    return (not blockers), blockers
 
 
 def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _no_blockers(ctx.running)
-
-
-def _guard_flatten_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _no_blockers(
-        ctx.flatten_supported
-        and not ctx.freeze_active
-        and (ctx.running or ctx.has_exposure)
+    if ctx.running:
+        return True, []
+    return _disabled(
+        _blocker(
+            "BOT_NOT_RUNNING",
+            scope="bot",
+            headline="The bot is already off duty.",
+            detail="Use Start when you are ready to resume bar evaluation.",
+        )
     )
 
 
+def _guard_flatten_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
+    blockers: list[OperatorBlocker] = []
+    if not ctx.flatten_supported:
+        blockers.append(
+            _blocker(
+                "FLATTEN_UNSUPPORTED",
+                scope="broker",
+                headline="This broker does not support panel flattening.",
+                detail="Use the broker's custody surface to reduce exposure safely.",
+            )
+        )
+    if ctx.freeze_active:
+        blockers.append(
+            _blocker(
+                "ACCOUNT_CUSTODY_UNPROVABLE",
+                scope="account",
+                headline="The Clerk cannot prove the exposure to flatten.",
+                detail="Restore broker observation and run Reconcile now before flattening.",
+                evidence={"account_id": ctx.account_id},
+            )
+        )
+    if not ctx.running and not ctx.has_exposure:
+        blockers.append(
+            _blocker(
+                "BOT_ALREADY_FLAT_AND_STOPPED",
+                scope="bot",
+                headline="The bot is already stopped with no attributed exposure.",
+                detail="No flatten command is necessary.",
+            )
+        )
+    return (not blockers), blockers
+
+
 def _guard_retire(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _no_blockers(ctx.phase != "RETIRED")
+    return _disabled()
 
 
 def _guard_cancel_order(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _no_blockers(ctx.phase != "RETIRED")
+    return _disabled()
 
 
 def _guard_clear_hold(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _no_blockers(ctx.hold_active and ctx.channel_fresh)
+    if not ctx.hold_active:
+        return _disabled(
+            _blocker(
+                "NO_ACCOUNT_HOLD",
+                scope="account",
+                headline="No account hold is active.",
+                detail="There is nothing to clear.",
+            )
+        )
+    if not ctx.channel_fresh:
+        return _disabled(
+            _blocker(
+                "HOLD_ROOT_NOT_RECOVERED",
+                scope="account",
+                headline="The hold's root condition is not healthy and fresh.",
+                detail="Restore both channels and reconcile before clearing the hold.",
+                evidence={"account_id": ctx.account_id},
+            )
+        )
+    return True, []
 
 
 def _guard_reconcile_now(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _no_blockers(True)
+    return True, []
 
 
 ACTION_REGISTRY: dict[str, ActionPolicy] = {
@@ -154,20 +288,22 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         revision_inputs=lambda ctx: (
             ctx.running,
             ctx.has_exposure,
+            tuple(sorted(ctx.exposure.items())),
+            ctx.working_order_count,
             ctx.flatten_supported,
             ctx.freeze_active,
         ),
     ),
     "retire": ActionPolicy(
         action_id="retire",
-        supported_brokers=frozenset({"alpaca"}),
+        supported_brokers=frozenset(),
         list_page_only=False,
         guard=_guard_retire,
         revision_inputs=lambda ctx: (ctx.phase,),
     ),
     "cancel_order": ActionPolicy(
         action_id="cancel_order",
-        supported_brokers=frozenset({"alpaca"}),
+        supported_brokers=frozenset(),
         list_page_only=False,
         guard=_guard_cancel_order,
         revision_inputs=lambda ctx: (ctx.phase,),
@@ -195,11 +331,7 @@ def supported_action_ids_for(broker: str) -> list[ActionId]:
     Preserves ``ACTION_IDS`` order so the profile is deterministically ordered
     and contract-test-stable.
     """
-    return [
-        action_id
-        for action_id in ACTION_IDS
-        if broker in ACTION_REGISTRY[action_id].supported_brokers
-    ]
+    return [action_id for action_id in ACTION_IDS if broker in ACTION_REGISTRY[action_id].supported_brokers]
 
 
 def build_actions_from_registry(
@@ -245,7 +377,28 @@ def build_actions_from_registry(
                 explanation=copy.explanation,
                 enabled=enabled,
                 blockers=blockers,
-                confirmation=None,
+                confirmation=(
+                    OperatorConfirmationCopy(
+                        title="Flatten attributed exposure and stop?",
+                        body=(
+                            f"This command targets {ctx.strategy_instance_id} on account "
+                            f"{ctx.account_id}. Attributed exposure: "
+                            + (
+                                ", ".join(f"{symbol} {quantity:g}" for symbol, quantity in sorted(ctx.exposure.items()))
+                                or "none"
+                            )
+                            + f". Working orders: {ctx.working_order_count}."
+                        ),
+                        consequence=(
+                            "The runtime stops first. The Clerk then cancels working entry "
+                            "orders and submits reducing orders; fills may complete later."
+                        ),
+                        confirm_label="Flatten & stop",
+                        required_token="FLATTEN",
+                    )
+                    if action_id == "flatten_stop" and enabled
+                    else None
+                ),
                 revision=revision,
                 concurrency_token=concurrency_token,
             )

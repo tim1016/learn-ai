@@ -7,6 +7,8 @@ desired_state (never PAUSED).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ChannelHealth,
@@ -41,13 +43,14 @@ def _status(
     carryover_account_policy_enabled: bool = True,
     checkpoint_exposure: dict[str, float] | None = None,
     checkpoint_matches: bool = False,
+    mode: Literal["log_only", "trade"] = "log_only",
 ) -> BotStatusView:
     resolved_desired_state = desired_state or ("RUNNING" if running else "STOPPED")
     return BotStatusView(
         strategy_instance_id=SID,
         broker="alpaca",
         symbol="SPY",
-        mode="log_only",
+        mode=mode,
         quantity=1,
         carryover_policy=carryover_policy,  # type: ignore[arg-type]
         carryover_account_policy_enabled=carryover_account_policy_enabled,
@@ -80,18 +83,12 @@ def _clerk_status(
             since_ms=_NOW - 100 if hold else None,
         ),
         freeze=freeze or AccountFreezeState(),
-        latest_reconciliation=ReconciliationSummary(
-            verdict="clean", recorded_at_ms=_NOW - 200
-        ),
+        latest_reconciliation=ReconciliationSummary(verdict="clean", recorded_at_ms=_NOW - 200),
         outstanding_intents=0,
         observed_at_ms=_NOW,
         channel_healths=[
-            ChannelHealth(
-                stream="market_data", healthy=healthy, reason="", observed_at_ms=_NOW - 10
-            ),
-            ChannelHealth(
-                stream="execution", healthy=healthy, reason="", observed_at_ms=_NOW - 10
-            ),
+            ChannelHealth(stream="market_data", healthy=healthy, reason="", observed_at_ms=_NOW - 10),
+            ChannelHealth(stream="execution", healthy=healthy, reason="", observed_at_ms=_NOW - 10),
         ],
     )
 
@@ -129,9 +126,7 @@ def test_panel_composes_cards_rail_and_actions() -> None:
         fill_entry(sid=SID, intent="i1", ts_ms=_NOW - 800),
         reconciliation_entry(verdict="clean", ts_ms=_NOW - 700),
     ]
-    decision = decision_receipt(
-        seq=3, ts_ms=_NOW - 500, outcome="entered", reason_code="CROSS_UP"
-    )
+    decision = decision_receipt(seq=3, ts_ms=_NOW - 500, outcome="entered", reason_code="CROSS_UP")
     panel = _panel(_status(), _clerk_status(), entries, decision)
 
     assert panel.strategy_instance_id == SID
@@ -148,11 +143,97 @@ def test_panel_composes_cards_rail_and_actions() -> None:
         "start",
         "stop",
         "flatten_stop",
-        "retire",
-        "cancel_order",
         "clear_hold",
         "reconcile_now",
     }
+    assert panel.mission_verdict.state == "working"
+    assert panel.strategy_key == "deployment_validation"
+    assert panel.exposure == {"SPY": 100.0}
+    assert panel.recent_decisions[0].reason_code == "CROSS_UP"
+    assert {check.operation for check in panel.readiness_checks} == action_ids
+
+
+def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -> None:
+    panel = _panel(_status(), _clerk_status(), [], exposure={"SPY": 2.0})
+    changed_exposure = _panel(_status(), _clerk_status(), [], exposure={"SPY": 3.0})
+
+    assert "retire" not in {action.action_id for action in panel.actions}
+    assert "cancel_order" not in {action.action_id for action in panel.actions}
+    confirmation = _action(panel, "flatten_stop").confirmation
+    assert confirmation is not None
+    assert confirmation.required_token == "FLATTEN"
+    assert "SPY 2" in confirmation.body
+    assert (
+        _action(panel, "flatten_stop").concurrency_token != _action(changed_exposure, "flatten_stop").concurrency_token
+    )
+
+
+def test_disabled_action_explains_backend_blocker_and_safe_next_step() -> None:
+    panel = _panel(
+        _status(running=False),
+        _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"),
+        [],
+        exposure={},
+    )
+
+    start = _action(panel, "start")
+    assert start.enabled is False
+    assert start.blockers[0].condition.scope == "account"
+    assert start.blockers[0].detail is not None
+    readiness = next(check for check in panel.readiness_checks if check.operation == "start")
+    assert readiness.ready is False
+    assert readiness.cure is not None
+
+
+def test_working_orders_and_fills_are_bounded_clerk_attributed_projections() -> None:
+    open_entries = [
+        intent_entry(sid=SID, intent="open", ts_ms=_NOW - 1_000),
+        submit_acked_entry(sid=SID, intent="open", ts_ms=_NOW - 900),
+    ]
+    working = _panel(_status(), _clerk_status(), open_entries)
+    assert len(working.working_orders) == 1
+    assert working.working_orders[0].order_ref == working.rail.transaction_ref
+
+    filled = _panel(
+        _status(),
+        _clerk_status(),
+        [*open_entries, fill_entry(sid=SID, intent="open", ts_ms=_NOW - 800)],
+    )
+    assert filled.working_orders == []
+    assert len(filled.recent_fills) == 1
+    assert filled.recent_fills[0].symbol == "SPY"
+
+
+def test_recent_fills_reuse_canonical_fill_deduplication() -> None:
+    first = fill_entry(
+        sid=SID,
+        intent="open",
+        ts_ms=_NOW - 800,
+        event_key="exec:redelivered",
+    )
+    redelivery = fill_entry(
+        sid=SID,
+        intent="open",
+        ts_ms=_NOW - 700,
+        event_key="exec:redelivered",
+    )
+
+    panel = _panel(_status(), _clerk_status(), [first, redelivery])
+
+    assert len(panel.recent_fills) == 1
+    assert panel.recent_fills[0].filled_at_ms == _NOW - 800
+
+
+def test_unhealthy_required_channel_blocks_trade_mode_mission() -> None:
+    panel = _panel(
+        _status(mode="trade"),
+        _clerk_status(healthy=False),
+        [],
+    )
+
+    assert panel.mission_verdict.state == "blocked"
+    assert "market_data" in panel.mission_verdict.explanation
+    assert "execution" in panel.mission_verdict.explanation
 
 
 def test_panel_never_emits_paused_desired_state() -> None:
@@ -183,9 +264,7 @@ def test_stop_outcome_copy_distinguishes_approved_carryover() -> None:
 
 def test_stop_enabled_only_when_running() -> None:
     running_panel = _panel(_status(running=True), _clerk_status(), [])
-    stopped_panel = _panel(
-        _status(running=False), _clerk_status(), [], exposure={}
-    )
+    stopped_panel = _panel(_status(running=False), _clerk_status(), [], exposure={})
     assert _action(running_panel, "stop").enabled is True
     assert _action(stopped_panel, "stop").enabled is False
     assert _action(stopped_panel, "start").enabled is True
@@ -209,12 +288,8 @@ def test_start_requires_flat_exposure_and_no_clerk_hold() -> None:
     assert _action(flat, "start").enabled is True
     assert _action(exposed, "start").enabled is False
     assert _action(held, "start").enabled is False
-    assert _action(flat, "start").concurrency_token != _action(
-        exposed, "start"
-    ).concurrency_token
-    assert _action(flat, "start").concurrency_token != _action(
-        held, "start"
-    ).concurrency_token
+    assert _action(flat, "start").concurrency_token != _action(exposed, "start").concurrency_token
+    assert _action(flat, "start").concurrency_token != _action(held, "start").concurrency_token
 
 
 def test_start_requires_exact_approved_carryover_projection() -> None:

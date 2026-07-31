@@ -33,6 +33,7 @@ from typing import Literal
 
 from app.broker.v2panel.vocabulary import ActionId
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
+from app.utils.timestamps import now_ms_utc
 
 
 class ActionExecutionError(Exception):
@@ -63,10 +64,16 @@ class UnknownActionError(ActionExecutionError):
     http_status = 422
 
 
+class ActionOutcomeUnknownError(ActionExecutionError):
+    """A performer began but did not return a terminal command receipt (500)."""
+
+    http_status = 500
+
+
 # A performer runs one action and returns a human-readable outcome message.
 ActionPerformer = Callable[[str], Awaitable[str]]
 
-_IN_FLIGHT_WAIT_SECONDS = 5.0
+_DEFAULT_IN_FLIGHT_WAIT_SECONDS = 5.0
 
 
 @dataclass
@@ -90,13 +97,12 @@ class IdempotencyStore:
     safe (§11).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, wait_timeout_s: float = _DEFAULT_IN_FLIGHT_WAIT_SECONDS) -> None:
         self._lock = asyncio.Lock()
         self._records: dict[tuple[str, str, str], IdempotencyRecord] = {}
+        self._wait_timeout_s = wait_timeout_s
 
-    async def reserve_or_get(
-        self, sid: str, action_id: str, key: str
-    ) -> IdempotencyRecord | None:
+    async def reserve_or_get(self, sid: str, action_id: str, key: str) -> IdempotencyRecord | None:
         """Reserve key for new execution, returning None; or return existing record.
 
         If None: key is new, caller should execute and then call complete() or fail().
@@ -118,14 +124,12 @@ class IdempotencyStore:
 
         # Wait outside the lock so the first caller can complete/fail
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(event.wait(), timeout=_IN_FLIGHT_WAIT_SECONDS)
+            await asyncio.wait_for(event.wait(), timeout=self._wait_timeout_s)
 
         async with self._lock:
             return self._records.get(compound)
 
-    async def complete(
-        self, sid: str, action_id: str, key: str, result: PanelActionResult
-    ) -> None:
+    async def complete(self, sid: str, action_id: str, key: str, result: PanelActionResult) -> None:
         compound = (sid, action_id, key)
         async with self._lock:
             record = self._records.get(compound)
@@ -168,8 +172,13 @@ class DurableIdempotencyStore(IdempotencyStore):
     operator to inspect its Clerk evidence and issue a fresh command.
     """
 
-    def __init__(self, path: Path) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        path: Path,
+        *,
+        wait_timeout_s: float = _DEFAULT_IN_FLIGHT_WAIT_SECONDS,
+    ) -> None:
+        super().__init__(wait_timeout_s=wait_timeout_s)
         self._path = path
         self._loaded = False
 
@@ -180,14 +189,22 @@ class DurableIdempotencyStore(IdempotencyStore):
         if not self._path.is_file():
             return
         raw = json.loads(self._path.read_text(encoding="utf-8"))
+        legacy_observed_at_ms = self._path.stat().st_mtime_ns // 1_000_000
         for compound, payload in raw.items():
             sid, action_id, key = compound.split("\u001f", 2)
             state = payload["state"]
             if state == "succeeded":
-                result = PanelActionResult.model_validate(payload["result"])
-                self._records[(sid, action_id, key)] = IdempotencyRecord(
-                    state="succeeded", result=result
-                )
+                result_payload = dict(payload["result"])
+                # Receipt files written before the outcome contract carried
+                # only the action result. Preserve them as successful legacy
+                # receipts instead of making an upgrade re-fire a command.
+                result_payload.setdefault("receipt_id", key)
+                # Legacy receipts did not persist their recording time. The
+                # file modification time is the earliest durable observation
+                # available after upgrade; use it instead of fabricating 1970.
+                result_payload.setdefault("recorded_at_ms", legacy_observed_at_ms)
+                result = PanelActionResult.model_validate(result_payload)
+                self._records[(sid, action_id, key)] = IdempotencyRecord(state="succeeded", result=result)
             else:
                 self._records[(sid, action_id, key)] = IdempotencyRecord(
                     state="failed",
@@ -208,9 +225,7 @@ class DurableIdempotencyStore(IdempotencyStore):
                 "result": record.result.model_dump() if record.result is not None else None,
                 "error_detail": record.error_detail,
             }
-        descriptor, temporary = tempfile.mkstemp(
-            prefix=f".{self._path.name}.", dir=self._path.parent, text=True
-        )
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{self._path.name}.", dir=self._path.parent, text=True)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
@@ -221,18 +236,14 @@ class DurableIdempotencyStore(IdempotencyStore):
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    async def reserve_or_get(
-        self, sid: str, action_id: str, key: str
-    ) -> IdempotencyRecord | None:
+    async def reserve_or_get(self, sid: str, action_id: str, key: str) -> IdempotencyRecord | None:
         self._load()
         record = await super().reserve_or_get(sid, action_id, key)
         if record is None:
             self._persist()
         return record
 
-    async def complete(
-        self, sid: str, action_id: str, key: str, result: PanelActionResult
-    ) -> None:
+    async def complete(self, sid: str, action_id: str, key: str, result: PanelActionResult) -> None:
         await super().complete(sid, action_id, key, result)
         self._persist()
 
@@ -274,6 +285,7 @@ async def execute_action(
     operator_identity: str,
     current_concurrency_token: str,
     store: IdempotencyStore | None = None,
+    availability_error: ActionNotAvailableError | None = None,
 ) -> PanelActionResult:
     """Execute one presented action under the three invariants (§11).
 
@@ -292,6 +304,8 @@ async def execute_action(
         if record.state == "succeeded" and record.result is not None:
             return PanelActionResult(
                 action_id=request.action_id,
+                receipt_id=record.result.receipt_id,
+                recorded_at_ms=record.result.recorded_at_ms,
                 applied=False,
                 revision=current_revision,
                 concurrency_token=current_concurrency_token,
@@ -302,21 +316,32 @@ async def execute_action(
                 "This action previously failed; the idempotency key cannot be reused.",
                 detail=record.error_detail,
             )
-        # state is still in_flight after timeout — treat as a new execution
-        # by falling through (the first caller may have crashed). We do not own
-        # this reservation, so we must not release/complete it below.
+        # A timed-out waiter cannot distinguish a slow command from a crashed
+        # process. Re-firing a lifecycle command is unsafe in both cases: keep
+        # the reservation and require the caller to inspect the eventual Clerk
+        # receipt before issuing a new key.
+        raise ActionOutcomeUnknownError(
+            "This command is still processing.",
+            detail=(
+                "No terminal receipt arrived before the idempotency wait expired. "
+                "Do not retry this key; inspect Clerk evidence for the final outcome."
+            ),
+        )
 
     try:
+        # Availability is checked only after idempotency recovery. A retry of
+        # a completed Start/Stop may observe the action disabled precisely
+        # because its first request succeeded.
+        if availability_error is not None:
+            raise availability_error
+
         # 1. Action-specific concurrency guard.  Display revisions intentionally
         # advance for unrelated evidence; only this action's declared inputs may
         # invalidate a presented command.
         if request.concurrency_token != current_concurrency_token:
             raise StaleRevisionError(
                 "This action changed since it was presented.",
-                detail=(
-                    "The action's current concurrency token no longer matches. "
-                    "Refresh and retry."
-                ),
+                detail=("The action's current concurrency token no longer matches. Refresh and retry."),
             )
 
         performer = performers.get(request.action_id)
@@ -340,10 +365,15 @@ async def execute_action(
         # re-fire an action that may have partially applied.
         if reserved_fresh:
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
-        raise
+        raise ActionOutcomeUnknownError(
+            "The command did not return a terminal receipt.",
+            detail=("Its outcome is unknown. Inspect Clerk evidence before issuing another lifecycle command."),
+        ) from err
 
     result = PanelActionResult(
         action_id=request.action_id,
+        receipt_id=request.idempotency_key,
+        recorded_at_ms=now_ms_utc(),
         applied=True,
         revision=current_revision,
         concurrency_token=current_concurrency_token,

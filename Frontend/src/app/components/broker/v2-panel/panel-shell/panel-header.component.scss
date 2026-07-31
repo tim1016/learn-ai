@@ -1,0 +1,71 @@
+:host { display: block; }
+
+.control-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.75fr);
+  gap: var(--space-3) var(--space-6);
+  padding: var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--bg-surface), var(--bg-elevated));
+  box-shadow: var(--shadow-card);
+}
+
+.control-header__crumbs,
+.control-header__updated { color: var(--text-subtle); font-size: var(--fs-xs); }
+
+.control-header__crumbs {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--space-2);
+
+  a { color: var(--accent-text); text-decoration: none; }
+}
+
+.control-header__identity {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+
+  h1 { margin: 0.1rem 0; font-size: clamp(1.7rem, 3vw, 2.5rem); line-height: 1; }
+  code { color: var(--text-secondary); }
+}
+
+.eyebrow { color: var(--accent-text); font-size: var(--fs-xxs); font-weight: var(--fw-bold); letter-spacing: var(--ls-caps); text-transform: uppercase; }
+
+.identity-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+
+  span { padding: 0.2rem 0.45rem; border: 1px solid var(--border-light); border-radius: 999px; background: var(--bg-sunken); color: var(--text-secondary); font-size: var(--fs-xs); }
+  .paper-chip { border-color: rgba(255, 152, 0, 0.55); color: var(--warn); }
+}
+
+.mission-verdict {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.15rem;
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--bull);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+
+  &[data-state='blocked'], &[data-state='retired'] { border-left-color: var(--bear); }
+  &[data-state='off_duty'] { border-left-color: var(--warn); }
+  strong { color: var(--text-primary); font-size: var(--fs-xs); }
+}
+
+.mission-verdict__label { color: var(--text-primary); font-size: var(--fs-lg); font-weight: var(--fw-bold); }
+.control-header__updated { grid-column: 1 / -1; text-align: right; }
+
+@media (max-width: 800px) {
+  .control-header { grid-template-columns: 1fr; }
+  .control-header__identity { align-items: flex-start; flex-direction: column; }
+  .identity-chips { justify-content: flex-start; }
+  .mission-verdict { border-left-width: 2px; }
+}
