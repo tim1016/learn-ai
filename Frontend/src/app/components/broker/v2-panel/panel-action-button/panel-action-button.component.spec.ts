@@ -83,6 +83,57 @@ describe('PanelActionButtonComponent', () => {
     );
   });
 
+  it('can suppress only the blocker its parent already presents', async () => {
+    await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({
+          enabled: false,
+          blockers: [
+            {
+              condition: {
+                id: 'BOT_ALREADY_STOPPED',
+                severity: 'blocking',
+                scope: 'bot',
+              },
+              host: 'bot_cockpit',
+              anchor: { kind: 'surface', subject_key: null },
+              audience: 'both',
+              disposition: 'terminal',
+              headline: 'The bot is already stopped.',
+              detail: 'No stop command is necessary.',
+              primary_move: null,
+              secondary_moves: [],
+              applies_to: 'run',
+            },
+            {
+              condition: {
+                id: 'ACCOUNT_CUSTODY_UNPROVABLE',
+                severity: 'blocking',
+                scope: 'account',
+              },
+              host: 'bot_cockpit',
+              anchor: { kind: 'surface', subject_key: null },
+              audience: 'both',
+              disposition: 'fix_elsewhere',
+              headline: 'The Clerk cannot prove current account custody.',
+              detail: 'Restore broker observation and reconcile.',
+              primary_move: null,
+              secondary_moves: [],
+              applies_to: 'run',
+            },
+          ],
+        }),
+        suppressedBlockerId: 'BOT_ALREADY_STOPPED',
+      },
+    });
+
+    expect(screen.queryByText('The bot is already stopped.')).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain(
+      'The Clerk cannot prove current account custody.',
+    );
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+  });
+
   it('does not emit a destructive action until the backend token is confirmed', async () => {
     const triggered = vi.fn();
     await render(PanelActionButtonComponent, {

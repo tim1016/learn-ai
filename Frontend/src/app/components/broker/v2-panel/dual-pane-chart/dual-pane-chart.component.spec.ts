@@ -150,6 +150,8 @@ describe('DualPaneChartComponent', () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
+    await fixture.whenStable();
+    chartMocks.setData.mockClear();
 
     fixture.componentRef.setInput('liveBars', [
       {
