@@ -46,6 +46,17 @@ describe('AccountStripComponent', () => {
     expect(screen.getByRole('status').textContent).toContain('Resolving paper account');
   });
 
+  it('keeps an account lookup failure explicit without claiming the fleet is hidden', async () => {
+    await render(AccountStripComponent, {
+      componentInputs: { accountUnavailable: true },
+    });
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Account confirmation unavailable');
+    expect(alert.textContent).toContain('The roster can still refresh');
+    expect(alert.textContent).not.toContain('fleet remains hidden');
+  });
+
   it('renders reconciliation and channel health as text, not color alone', async () => {
     await render(AccountStripComponent, {
       componentInputs: { account, clerkStatus },

@@ -2,10 +2,24 @@ import { describe, expect, it } from 'vitest';
 
 import { AccountMonitorRedirectComponent } from './components/broker/account-monitor-redirect/account-monitor-redirect.component';
 import { BotOperatorManualPageComponent } from './components/broker/bot-operator-manual/bot-operator-manual-page.component';
+import { BrokerDeployPageComponent } from './components/broker/broker-deploy-page/broker-deploy-page.component';
 import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
 import { routes } from './app.routes';
 
 describe('routes', () => {
+  it('uses one Broker Deploy page for legacy and broker-aware routes', async () => {
+    const paths = [
+      'broker/deploy',
+      'brokers/:broker/deploy',
+      'brokers/:broker/accounts/:accountId/deploy',
+    ];
+    for (const path of paths) {
+      const route = routes.find((candidate) => candidate.path === path);
+      if (route?.loadComponent === undefined) throw new Error(`Deploy route is missing: ${path}`);
+      expect(await route.loadComponent()).toBe(BrokerDeployPageComponent);
+    }
+  });
+
   it('redirects the retired Broker Status bookmark to the account roster', () => {
     const route = routes.find((candidate) => candidate.path === 'broker');
 

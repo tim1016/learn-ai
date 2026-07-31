@@ -14,6 +14,8 @@ lets the idempotency key make double-clicks safe (§11).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
@@ -48,6 +50,17 @@ from app.services.broker_v2_panel.station_derivation import (
 # A channel-health observation older than this is not "fresh" for the clear-hold
 # gate (§7.3). Reuse the station staleness threshold — one trading day.
 CHANNEL_FRESH_THRESHOLD_MS = STALE_THRESHOLD_MS
+_REQUIRED_CLERK_CHANNELS = ("market_data", "execution")
+
+
+@dataclass(frozen=True)
+class ChannelHealthEvaluation:
+    """Canonical health/freshness verdict for Clerk submission channels."""
+
+    ready: bool
+    missing: tuple[str, ...]
+    stale: tuple[str, ...]
+    unhealthy: tuple[str, ...]
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -242,16 +255,35 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
     )
 
 
-def channel_health_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
-    """True iff every channel health was freshly observed (clear-hold gate, §7.3).
+def evaluate_channel_health(
+    clerk_status: ClerkStatus,
+    now_ms: int,
+) -> ChannelHealthEvaluation:
+    """Evaluate the exact channel set required by every submission gate."""
+    by_stream = {health.stream: health for health in clerk_status.channel_healths or []}
+    missing = tuple(stream for stream in _REQUIRED_CLERK_CHANNELS if stream not in by_stream)
+    stale = tuple(
+        stream
+        for stream in _REQUIRED_CLERK_CHANNELS
+        if stream in by_stream
+        and now_ms - by_stream[stream].observed_at_ms > CHANNEL_FRESH_THRESHOLD_MS
+    )
+    unhealthy = tuple(
+        stream
+        for stream in _REQUIRED_CLERK_CHANNELS
+        if stream in by_stream and not by_stream[stream].healthy
+    )
+    return ChannelHealthEvaluation(
+        ready=not missing and not stale and not unhealthy,
+        missing=missing,
+        stale=stale,
+        unhealthy=unhealthy,
+    )
 
-    An empty channel list is treated as not-fresh — the clear-hold action stays
-    disabled until the health of the hold's root condition is observed.
-    """
-    channels = clerk_status.channel_healths or []
-    if not channels:
-        return False
-    return all(now_ms - health.observed_at_ms <= CHANNEL_FRESH_THRESHOLD_MS and health.healthy for health in channels)
+
+def channel_health_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
+    """True iff market-data and execution health are both healthy and fresh."""
+    return evaluate_channel_health(clerk_status, now_ms).ready
 
 
 _TERMINAL_ORDER_EVENTS = frozenset({"fill", "canceled", "rejected", "expired"})
@@ -363,6 +395,7 @@ def _mission_verdict(
     clerk: ClerkCard,
     actions: list[PanelAction],
     *,
+    channel_health: ChannelHealthEvaluation,
     now_ms: int,
 ) -> MissionVerdictView:
     start = next((action for action in actions if action.action_id == "start"), None)
@@ -384,24 +417,22 @@ def _mission_verdict(
             next_action=next_action,
             evaluated_at_ms=now_ms,
         )
-    if status.mode == "trade":
-        channel_states = {channel.stream: channel.state for channel in clerk.channels}
-        unhealthy_channels = [
-            stream
-            for stream in ("market_data", "execution")
-            if channel_states.get(stream) != "healthy"
-        ]
-        if unhealthy_channels:
-            return MissionVerdictView(
-                state="blocked",
-                label="Mission blocked",
-                explanation=(
-                    "Required Clerk channels are not healthy: "
-                    f"{', '.join(unhealthy_channels)}."
-                ),
-                next_action="Restore fresh market-data and execution health before expecting order effects.",
-                evaluated_at_ms=now_ms,
-            )
+    if status.mode == "trade" and not channel_health.ready:
+        blocked_channels = (
+            *channel_health.missing,
+            *channel_health.stale,
+            *channel_health.unhealthy,
+        )
+        return MissionVerdictView(
+            state="blocked",
+            label="Mission blocked",
+            explanation=(
+                "Required Clerk channels are not healthy: "
+                f"{', '.join(dict.fromkeys(blocked_channels))}."
+            ),
+            next_action="Restore fresh market-data and execution health before expecting order effects.",
+            evaluated_at_ms=now_ms,
+        )
     if status.running:
         return MissionVerdictView(
             state="working",
@@ -484,12 +515,13 @@ def build_panel(
     )
 
     working_orders = _working_orders(status.strategy_instance_id, entries)
+    channel_health = evaluate_channel_health(clerk_status, now_ms)
     actions = build_actions(
         status,
         clerk,
         revision=revision,
         flatten_supported=flatten_supported,
-        channel_fresh=channel_health_fresh(clerk_status, now_ms),
+        channel_fresh=channel_health.ready,
         exposure=exposure,
         account_id=account_id,
         working_order_count=len(working_orders),
@@ -507,7 +539,13 @@ def build_panel(
         mode=status.mode,
         updated_at_ms=now_ms,
         revision=revision,
-        mission_verdict=_mission_verdict(status, clerk, actions, now_ms=now_ms),
+        mission_verdict=_mission_verdict(
+            status,
+            clerk,
+            actions,
+            channel_health=channel_health,
+            now_ms=now_ms,
+        ),
         execution_policy=(
             "Observation only. Decisions are recorded, but the Clerk will not place orders."
             if status.mode == "log_only"

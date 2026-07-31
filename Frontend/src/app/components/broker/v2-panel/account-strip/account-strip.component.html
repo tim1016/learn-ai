@@ -10,8 +10,8 @@
     </div>
   } @else if (accountUnavailable() && !account()) {
     <div class="account-posture__unavailable" role="alert">
-      <strong>Account posture unavailable</strong>
-      <span>The fleet remains hidden until Alpaca confirms the selected account.</span>
+      <strong>Account confirmation unavailable</strong>
+      <span>The roster can still refresh, but account-sensitive actions remain blocked until Alpaca confirms this account.</span>
     </div>
   } @else if (account(); as snap) {
     <div class="account-posture__identity">

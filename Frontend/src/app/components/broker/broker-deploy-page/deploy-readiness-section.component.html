@@ -1,0 +1,26 @@
+<section class="readiness" aria-labelledby="deploy-readiness-title">
+  <header>
+    <span>Admission authority</span>
+    <h2 id="deploy-readiness-title">Current deployment readiness</h2>
+    <p>Every check below is evaluated by the same server path that admits this deployment.</p>
+  </header>
+  <div class="readiness__grid">
+    @for (check of checks(); track check.gate_id) {
+      <article [class.readiness__check--blocked]="!check.ready">
+        <div class="readiness__check-head">
+          <span>{{ check.ready ? 'Ready' : 'Blocked' }}</span>
+          <strong>{{ check.label }}</strong>
+        </div>
+        <p>{{ check.headline }}</p>
+        <small>{{ check.evidence_summary }}</small>
+        <dl>
+          <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
+          <div><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
+        </dl>
+        @if (check.recovery) {
+          <p class="readiness__recovery">Next: {{ check.recovery }}</p>
+        }
+      </article>
+    }
+  </div>
+</section>

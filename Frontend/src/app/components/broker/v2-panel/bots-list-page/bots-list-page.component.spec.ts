@@ -182,6 +182,13 @@ describe('BotsListPageComponent', () => {
     expect((await screen.findAllByText(/Updated/i)).length).toBeGreaterThan(0);
   });
 
+  it('navigates to the account-scoped Broker Deploy page', async () => {
+    await renderPage([]);
+
+    expect((await screen.findByRole('link', { name: /Deploy strategy/i })).getAttribute('href'))
+      .toBe('/brokers/alpaca/accounts/PA9/deploy');
+  });
+
   it('renders the retry state when a transient catalog load fails', async () => {
     await renderPage([], {
       getCatalog: () => Promise.reject(new Error('data plane restarting')),

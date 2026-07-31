@@ -11,6 +11,7 @@ import {
   signal,
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
+import { RouterLink } from '@angular/router';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
@@ -18,7 +19,6 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { AccountStripComponent } from '../account-strip/account-strip.component';
 import { BotsRosterComponent, type RowActionEvent } from '../bots-roster/bots-roster.component';
-import { DeployDialogComponent } from '../deploy-dialog/deploy-dialog.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView } from '../lib/broker-v2-panel.types';
 
@@ -37,7 +37,7 @@ interface ScopedSnapshot<T> {
   imports: [
     AccountStripComponent,
     BotsRosterComponent,
-    DeployDialogComponent,
+    RouterLink,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
   ],
@@ -59,7 +59,6 @@ export class BotsListPageComponent {
   private readonly accountSnapshot = signal<ScopedSnapshot<BrokerAccountSnapshot> | null>(null);
   private readonly clerkSnapshot = signal<ScopedSnapshot<ClerkStatus> | null>(null);
 
-  protected readonly deployVisible = signal(false);
   protected readonly actionNotice = signal<{ tone: 'success' | 'danger'; message: string } | null>(
     null,
   );
@@ -187,10 +186,6 @@ export class BotsListPageComponent {
     this.actionNotice.set(null);
     this.account.reload();
     this.clerkStatus.reload();
-    this.catalog.reload();
-  }
-
-  protected onDeployed(): void {
     this.catalog.reload();
   }
 

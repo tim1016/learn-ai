@@ -73,14 +73,33 @@ describe('AppSidebarComponent', () => {
     expect(links.has('Reconciliation')).toBe(false);
   });
 
-  it('adds Alpaca as a sibling broker group with its account desk and bot list', () => {
+  it('adds Alpaca as a sibling broker group with one Deploy entry', () => {
     const fixture = setup();
 
     clickGroup(fixture, 'Alpaca');
 
     const links = navLinks(fixture);
     expect(links.get('Accounts')).toBe('/brokers/alpaca');
+    expect(links.get('Deploy')).toBe('/brokers/alpaca/deploy');
     expect(links.get('Bots')).toBe('/brokers/alpaca/bots');
+  });
+
+  it('maps account-scoped Alpaca Deploy and Bots routes to their navigation slots', async () => {
+    const fixture = setup();
+    const router = TestBed.inject(Router);
+    router.resetConfig([{
+      path: 'brokers/:broker/accounts/:accountId/:surface',
+      component: AppSidebarComponent,
+    }]);
+
+    for (const [surface, expectedLabel] of [['deploy', 'Deploy'], ['bots', 'Bots']]) {
+      await router.navigateByUrl(`/brokers/alpaca/accounts/PA9/${surface}`);
+      fixture.detectChanges();
+      const activeLabels = Array.from(
+        (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>('a.nav-link.active'),
+      ).map((link) => link.textContent?.trim());
+      expect(activeLabels).toEqual([expectedLabel]);
+    }
   });
 
   it('surfaces live options visualizations in the Options menu', () => {

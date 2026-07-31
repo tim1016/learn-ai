@@ -59,6 +59,7 @@
   color: var(--text-primary);
   font-size: var(--fs-sm);
   font-weight: var(--fw-semi);
+  text-decoration: none;
   cursor: pointer;
 
   &:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-text); }

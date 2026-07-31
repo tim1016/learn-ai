@@ -18,14 +18,13 @@
           <span aria-hidden="true">↻</span>
           {{ refreshing() ? 'Refreshing' : 'Refresh' }}
         </button>
-        <button
-          type="button"
+        <a
           class="command-button command-button--primary"
-          (click)="deployVisible.set(true)"
+          [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'deploy']"
         >
           <span aria-hidden="true">＋</span>
           Deploy strategy
-        </button>
+        </a>
       </div>
     </div>
 
@@ -94,11 +93,3 @@
     }
   </section>
 </main>
-
-<app-deploy-dialog
-  [broker]="broker()"
-  [accountId]="accountId()"
-  [visible]="deployVisible()"
-  (visibleChange)="deployVisible.set($event)"
-  (deployed)="onDeployed()"
-/>

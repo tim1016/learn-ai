@@ -76,6 +76,11 @@ from app.services.live_chart_window import (
     coerce_chart_timeframe,
     resolve_chart_window,
 )
+from app.services.strategy_validation_manifest import (
+    StrategyValidationManifestError,
+    load_strategy_validation_entries,
+    strategy_registry_seeds,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -126,9 +131,11 @@ class PanelRunnerError(PanelDataError):
         detail: str | None,
         http_status: int,
         next_action: str | None = None,
+        operation_attempted: bool = False,
     ) -> None:
         super().__init__(message, detail=detail, next_action=next_action)
         self.http_status = http_status
+        self.operation_attempted = operation_attempted
 
 
 # Only Alpaca has a panel-backing clerk in phase 1.
@@ -290,7 +297,15 @@ async def get_alpaca_paper_deploy_view(
             next_action="Wait for the data plane to become healthy, then refresh.",
         )
     clerk_status = await _clerk_status()
-    return build_alpaca_paper_deploy_view(account, clerk_status)
+    try:
+        validation_entries = load_strategy_validation_entries(strategy_registry_seeds())
+    except StrategyValidationManifestError as exc:
+        raise PanelUnavailableError(
+            "The strategy validation catalog could not be verified.",
+            detail="Deploy remains closed until current validation evidence is readable and hash-valid.",
+            next_action="Restore the validation manifest and evidence artifacts, then refresh.",
+        ) from exc
+    return build_alpaca_paper_deploy_view(account, clerk_status, validation_entries)
 
 
 async def deploy_alpaca_paper_bot(
@@ -305,6 +320,13 @@ async def deploy_alpaca_paper_bot(
             view.eligibility.headline,
             detail=view.eligibility.explanation,
             next_action=view.eligibility.next_action,
+            http_status=409,
+        )
+    if not any(strategy.strategy_key == request.strategy_key for strategy in view.strategies):
+        raise PanelRunnerError(
+            "The selected strategy is not currently accepted for Alpaca deployment.",
+            detail="Its latest validation evidence is missing, superseded, invalidated, or not accepted for deploy.",
+            next_action="Review the strategy in Strategy Validation, then refresh this page.",
             http_status=409,
         )
     if request.carryover_policy == "ALLOW" and not view.carryover_available:
@@ -337,6 +359,7 @@ async def deploy_alpaca_paper_bot(
             detail=exc.detail,
             next_action="Correct the deployment inputs or bot state, then submit a new command.",
             http_status=exc.http_status,
+            operation_attempted=True,
         ) from exc
     return build_alpaca_paper_deploy_receipt(
         broker=broker,
