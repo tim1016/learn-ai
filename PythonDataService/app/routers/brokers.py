@@ -41,6 +41,7 @@ from app.broker.contract.models import (
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
 from app.security.data_plane_control import require_data_plane_control_secret
+from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 
@@ -90,7 +91,10 @@ async def _run[T](broker: str, call: Callable[[BrokerReadPort], Awaitable[T]]) -
 
 @router.get("/{broker}/account", response_model=BrokerAccountSnapshot)
 async def get_account(broker: str) -> BrokerAccountSnapshot:
-    return await _run(broker, lambda port: port.get_account())
+    try:
+        return await resolve_broker_account_snapshot(broker)
+    except BrokerError as error:
+        _raise_http(error)
 
 
 @router.get("/{broker}/positions", response_model=list[BrokerPosition])

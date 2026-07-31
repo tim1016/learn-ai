@@ -78,6 +78,29 @@ class PanelProfile(BaseModel):
 # ── §5 Catalog view (bots list roster row) ───────────────────────────────────
 
 
+class PanelAction(BaseModel):
+    """One backend-presented action (§11).
+
+    Angular executes only the closed set of known action ids and renders
+    exactly what it is given. ``revision`` binds the action to the panel-state
+    revision it was presented against; a stale POST is a 409.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    action_id: ActionId
+    label: str
+    explanation: str
+    enabled: bool
+    blockers: list[OperatorBlocker]
+    confirmation: OperatorConfirmationCopy | None
+    revision: int
+    # An action-scoped optimistic-concurrency token. This deliberately is
+    # narrower than the display revision: a new chart point or journal receipt
+    # must not make a presented STOP falsely stale.
+    concurrency_token: str
+
+
 class BotCatalogView(BaseModel):
     """One roster row: bot status + slice-0 rollups (§5).
 
@@ -90,14 +113,18 @@ class BotCatalogView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     strategy_instance_id: str
+    strategy_key: str
     broker: str
     account_id: str
     symbol: str
+    mode: Literal["log_only", "trade"]
     phase: Phase
     desired_state: DesiredState
     running: bool
     # Closed status label from the vocabulary: Working / Off duty / Retired.
     status_label: str
+    # Backend-authored, trader-facing explanation for the row's current state.
+    status_explanation: str
     # Rollups (S0 BotRollup) — never account-net; attributed to this bot.
     exposure: dict[str, float]
     fills_today: int
@@ -105,6 +132,10 @@ class BotCatalogView(BaseModel):
     open_pnl: float | None
     last_activity_at_ms: int | None
     needs_attention: bool
+    # The one routine lifecycle command appropriate for this row. It carries
+    # the same server-authored guard/token contract as panel actions so the
+    # roster never performs a full-panel preflight before a mutation.
+    row_action: PanelAction | None = None
 
 
 # ── §7 Panel view (single bot control panel) ─────────────────────────────────
@@ -219,29 +250,6 @@ class TransactionRail(BaseModel):
     # row can select another). ``None`` when the bot has no transaction yet.
     transaction_ref: str | None
     stations: list[StationView]
-
-
-class PanelAction(BaseModel):
-    """One backend-presented action (§11).
-
-    Angular executes only the closed set of known action ids and renders
-    exactly what it is given. ``revision`` binds the action to the panel-state
-    revision it was presented against; a stale POST is a 409.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    action_id: ActionId
-    label: str
-    explanation: str
-    enabled: bool
-    blockers: list[OperatorBlocker]
-    confirmation: OperatorConfirmationCopy | None
-    revision: int
-    # An action-scoped optimistic-concurrency token.  This deliberately is
-    # narrower than the display revision: a new chart point or journal receipt
-    # must not make a presented STOP falsely stale.
-    concurrency_token: str
 
 
 class BotPanelView(BaseModel):

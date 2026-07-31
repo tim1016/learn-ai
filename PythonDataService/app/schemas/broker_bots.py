@@ -160,6 +160,7 @@ class BotStatusView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     strategy_instance_id: str
+    strategy_key: str = "deployment_validation"
     broker: str
     symbol: str
     mode: Literal["log_only", "trade"]

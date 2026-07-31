@@ -92,3 +92,55 @@ def build_actions(
         flatten_supported=flatten_supported,
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
+
+
+def build_roster_action(
+    status: BotStatusView,
+    clerk: ClerkCard | None,
+    *,
+    revision: int,
+    flatten_supported: bool,
+    channel_fresh: bool,
+    exposure: dict[str, float],
+) -> PanelAction | None:
+    """Present only the routine Start/Stop command needed by a roster row.
+
+    Start fails closed when Clerk posture is unavailable. Stop remains
+    available because its canonical action token depends only on runtime
+    liveness, not account posture.
+    """
+    if status.phase == "RETIRED":
+        return None
+    if clerk is None:
+        if not status.running:
+            return None
+        ctx = ActionGuardContext(
+            running=True,
+            phase=status.phase,
+            desired_state=status.desired_state,
+            hold_active=True,
+            freeze_active=True,
+            channel_fresh=False,
+            has_exposure=False,
+            carryover_resume_ready=False,
+            flatten_supported=flatten_supported,
+        )
+        actions = build_actions_from_registry(
+            ctx,
+            revision=revision,
+            broker="alpaca",
+        )
+    else:
+        actions = build_actions(
+            status,
+            clerk,
+            revision=revision,
+            flatten_supported=flatten_supported,
+            channel_fresh=channel_fresh,
+            exposure=exposure,
+        )
+    action_id = "stop" if status.running else "start"
+    return next(
+        (action for action in actions if action.action_id == action_id),
+        None,
+    )

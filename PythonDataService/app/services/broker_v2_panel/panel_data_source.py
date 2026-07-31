@@ -14,7 +14,6 @@ a stale deep link never reads another account's evidence.
 from __future__ import annotations
 
 import logging
-import time
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
@@ -27,7 +26,6 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
-from app.broker.contract.registry import get_broker_registry
 from app.config import settings
 from app.data_lake.polygon_fetcher import fetch_aggregate_bars
 from app.schemas.broker_bots import (
@@ -47,6 +45,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
 )
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
+from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_v2_panel.account_projection_owner import get_or_create_owner
 from app.services.broker_v2_panel.action_execution_service import (
     ActionPerformer,
@@ -59,11 +58,17 @@ from app.services.broker_v2_panel.chart_projection_service import (
     live_window,
 )
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
-from app.services.broker_v2_panel.panel_projection_service import build_panel
+from app.services.broker_v2_panel.panel_projection_service import (
+    build_clerk_card,
+    build_panel,
+    channel_health_fresh,
+    compute_revision,
+)
 from app.services.broker_v2_panel.paper_deploy_service import (
     build_alpaca_paper_deploy_receipt,
     build_alpaca_paper_deploy_view,
 )
+from app.services.broker_v2_panel.presented_actions import build_roster_action
 from app.services.live_chart_window import (
     ChartWindowError,
     ChartWindowResult,
@@ -128,41 +133,16 @@ class PanelRunnerError(PanelDataError):
 # Only Alpaca has a panel-backing clerk in phase 1.
 _PANEL_BROKER = "alpaca"
 
-# Account-id resolution cache. The broker's account id is static for the life
-# of a registered port, but resolving it costs a full Alpaca REST round-trip
-# (measured 5-15s against the paper API on 2026-07-30) — and every panel and
-# catalog request validates the account. Keyed by the resolved port's identity
-# so a re-registered port (tests, reconnect) naturally misses the cache.
-_ACCOUNT_ID_TTL_S = 60.0
-_account_cache: dict[tuple[str, int], tuple[BrokerAccountSnapshot, float]] = {}
-
 
 async def resolve_account_snapshot(broker: str) -> BrokerAccountSnapshot:
     """Return the cached broker-authored account posture."""
     _require_panel_broker(broker)
     try:
-        port = get_broker_registry().resolve(broker)
+        return await resolve_broker_account_snapshot(broker)
     except BrokerError as exc:
         raise PanelUnavailableError(
             "The broker account could not be read.", detail=exc.detail
         ) from exc
-    cache_key = (broker, id(port))
-    cached = _account_cache.get(cache_key)
-    if cached is not None:
-        account, expires_at = cached
-        if time.monotonic() < expires_at:
-            return account
-    try:
-        account = await port.get_account()
-    except BrokerError as exc:
-        raise PanelUnavailableError(
-            "The broker account could not be read.", detail=exc.detail
-        ) from exc
-    _account_cache[cache_key] = (
-        account,
-        time.monotonic() + _ACCOUNT_ID_TTL_S,
-    )
-    return account
 
 
 async def resolve_account_id(broker: str) -> str:
@@ -344,6 +324,7 @@ async def deploy_alpaca_paper_bot(
         bot = await registry.deploy(
             broker=broker,
             strategy_instance_id=request.strategy_instance_id,
+            strategy_key=request.strategy_key,
             symbol=request.symbol,
             use_rth=True,
             mode="trade",
@@ -374,7 +355,51 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     decisions = {sid: _latest_decision(resolved, sid) for sid in sids}
     owner = get_or_create_owner(resolved, broker)
     owner.sync(entries, sids, decisions=decisions)
-    return owner.snapshot_catalog(statuses)
+    rows = owner.snapshot_catalog(statuses)
+
+    now_ms = now_ms_utc()
+    try:
+        clerk_status = await _clerk_status()
+    except PanelUnavailableError as exc:
+        logger.warning(
+            "broker panel roster actions are failing closed because Clerk posture is unavailable",
+            extra={"broker": broker, "account_id": account_id, "detail": exc.detail},
+        )
+        clerk_status = None
+    clerk = (
+        build_clerk_card(clerk_status, now_ms)
+        if clerk_status is not None
+        else None
+    )
+    profile = panel_profile_for(broker)
+    flatten_supported = profile.flatten_supported if profile is not None else False
+    clerk_channel_fresh = (
+        channel_health_fresh(clerk_status, now_ms)
+        if clerk_status is not None
+        else False
+    )
+    status_by_sid = {status.strategy_instance_id: status for status in statuses}
+    row_actions: list[BotCatalogView] = []
+    for row in rows:
+        status = status_by_sid[row.strategy_instance_id]
+        decision = decisions[row.strategy_instance_id]
+        revision = compute_revision(
+            journal_len=len(entries),
+            last_transition_at_ms=status.last_transition_at_ms,
+            desired_state=status.desired_state,
+            hold_active=clerk_status.hold.active if clerk_status is not None else False,
+            last_decision_at_ms=decision.ts_ms if decision is not None else None,
+        )
+        action = build_roster_action(
+            status,
+            clerk,
+            revision=revision,
+            flatten_supported=flatten_supported,
+            channel_fresh=clerk_channel_fresh,
+            exposure=dict(row.exposure),
+        )
+        row_actions.append(row.model_copy(update={"row_action": action}))
+    return row_actions
 
 
 async def get_panel(

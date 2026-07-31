@@ -163,6 +163,9 @@ class BrokerBotBinding(BaseModel):
 
     schema_version: Literal[2] = 2
     strategy_instance_id: str
+    # Version-2 Alpaca bindings predated this field and all used the only
+    # available deployment strategy. The default lifts those durable records.
+    strategy_key: str = "deployment_validation"
     broker: str
     symbol: str
     use_rth: bool = True
@@ -249,6 +252,7 @@ class BotTaskRegistry:
         *,
         broker: str,
         strategy_instance_id: str,
+        strategy_key: str = "deployment_validation",
         symbol: str,
         use_rth: bool = True,
         mode: Literal["log_only", "trade"] = "log_only",
@@ -268,6 +272,7 @@ class BotTaskRegistry:
             return await self._launch(
                 broker=broker,
                 strategy_instance_id=strategy_instance_id,
+                strategy_key=strategy_key,
                 symbol=symbol,
                 use_rth=use_rth,
                 mode=mode,
@@ -291,6 +296,7 @@ class BotTaskRegistry:
             return await self._launch(
                 broker=binding.broker,
                 strategy_instance_id=binding.strategy_instance_id,
+                strategy_key=binding.strategy_key,
                 symbol=binding.symbol,
                 use_rth=binding.use_rth,
                 mode=binding.mode,
@@ -305,6 +311,7 @@ class BotTaskRegistry:
         *,
         broker: str,
         strategy_instance_id: str,
+        strategy_key: str,
         symbol: str,
         use_rth: bool,
         mode: Literal["log_only", "trade"],
@@ -334,6 +341,7 @@ class BotTaskRegistry:
         run_id = uuid4().hex
         binding = BrokerBotBinding(
             strategy_instance_id=strategy_instance_id,
+            strategy_key=strategy_key,
             broker=broker,
             symbol=symbol,
             use_rth=use_rth,
@@ -962,6 +970,7 @@ class BotTaskRegistry:
         )
         return BotStatusView(
             strategy_instance_id=sid,
+            strategy_key=binding.strategy_key,
             broker=binding.broker,
             symbol=binding.symbol,
             mode=binding.mode,

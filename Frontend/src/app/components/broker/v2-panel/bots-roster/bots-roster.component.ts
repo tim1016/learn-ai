@@ -1,147 +1,126 @@
-import { ScrollingModule } from '@angular/cdk/scrolling';
-import {
-  ChangeDetectionStrategy,
-  Component,
-  computed,
-  inject,
-  input,
-  output,
-  signal,
-} from '@angular/core';
-import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
-import { ButtonModule } from 'primeng/button';
-import { InputTextModule } from 'primeng/inputtext';
-import { SelectButtonModule } from 'primeng/selectbutton';
+import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
+import { formatReceiptLabel, ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import { fmtInteger, fmtSignedCurrency } from '../../format';
+import { fmtInteger, fmtSignedCurrency, fmtSignedQuantity } from '../../format';
 import { BotStatusChipComponent } from '../bot-status-chip/bot-status-chip.component';
-import type { ActionId, BotCatalogView, PanelProfile } from '../lib/broker-v2-panel.types';
+import type { ActionId, BotCatalogView } from '../lib/broker-v2-panel.types';
 
 export interface RowActionEvent {
   bot: BotCatalogView;
   action: ActionId;
 }
 
-type StatusFilter = 'all' | 'working' | 'off_duty' | 'retired';
+type StatusFilter = 'all' | 'working' | 'off_duty' | 'attention' | 'retired';
 
-const ITEM_SIZE = 48; // px — one table row height
+interface StatusOption {
+  readonly label: string;
+  readonly value: StatusFilter;
+}
 
 @Component({
   selector: 'app-bots-roster',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [
-    FormsModule,
-    ButtonModule,
-    InputTextModule,
-    SelectButtonModule,
-    ScrollingModule,
-    BotStatusChipComponent,
-    TimestampDisplayComponent,
-  ],
+  imports: [RouterLink, ReceiptLabelPipe, BotStatusChipComponent, TimestampDisplayComponent],
   templateUrl: './bots-roster.component.html',
   styleUrl: './bots-roster.component.scss',
-  // Flex column filling the parent's height: .roster-table-wrap relies on
-  // `flex: 1` — under a block host it collapses to the header row and the
-  // CDK virtual-scroll viewport renders 0px tall (roster showed no bots).
   host: { class: 'flex min-h-0 flex-1 flex-col' },
 })
 export class BotsRosterComponent {
   readonly bots = input.required<BotCatalogView[]>();
-  readonly profile = input<PanelProfile | null>(null);
   readonly broker = input.required<string>();
   readonly accountId = input<string | undefined>(undefined);
+  readonly pendingBotIds = input<ReadonlySet<string>>(new Set());
   readonly rowAction = output<RowActionEvent>();
 
   protected readonly searchTerm = signal('');
   protected readonly statusFilter = signal<StatusFilter>('all');
-
-  protected readonly itemSize = ITEM_SIZE;
   protected readonly fmtSignedCurrency = fmtSignedCurrency;
   protected readonly fmtInteger = fmtInteger;
 
-  readonly statusOptions = [
+  protected readonly statusOptions: readonly StatusOption[] = [
     { label: 'All', value: 'all' },
     { label: 'Working', value: 'working' },
     { label: 'Off duty', value: 'off_duty' },
+    { label: 'Needs attention', value: 'attention' },
     { label: 'Retired', value: 'retired' },
   ];
-
-  private readonly router = inject(Router);
 
   protected readonly filtered = computed(() => {
     const term = this.searchTerm().toLowerCase().trim();
     const filter = this.statusFilter();
-    const bots = this.bots();
-
-    const passed = bots.filter((b) => {
+    const passed = this.bots().filter((bot) => {
+      const strategyLabel = formatReceiptLabel(bot.strategy_key).toLowerCase();
       const matchesTerm =
         !term ||
-        b.strategy_instance_id.toLowerCase().includes(term) ||
-        b.symbol.toLowerCase().includes(term);
-
+        bot.strategy_instance_id.toLowerCase().includes(term) ||
+        bot.symbol.toLowerCase().includes(term) ||
+        bot.strategy_key.toLowerCase().includes(term) ||
+        strategyLabel.includes(term);
       const matchesFilter =
         filter === 'all' ||
-        (filter === 'working' && b.phase === 'ON_DUTY' && b.running) ||
-        (filter === 'off_duty' && b.phase === 'OFF_DUTY') ||
-        (filter === 'retired' && b.phase === 'RETIRED');
-
+        (filter === 'working' && bot.running) ||
+        (filter === 'off_duty' && !bot.running && bot.phase !== 'RETIRED') ||
+        (filter === 'attention' && bot.needs_attention) ||
+        (filter === 'retired' && bot.phase === 'RETIRED');
       return matchesTerm && matchesFilter;
     });
 
-    // Attention-first sort, then by last_activity_at_ms desc
-    return passed.sort((a, b) => {
-      if (a.needs_attention !== b.needs_attention) {
-        return a.needs_attention ? -1 : 1;
+    return passed.sort((left, right) => {
+      if (left.needs_attention !== right.needs_attention) {
+        return left.needs_attention ? -1 : 1;
       }
-      const aMs = a.last_activity_at_ms ?? 0;
-      const bMs = b.last_activity_at_ms ?? 0;
-      return bMs - aMs;
+      return (right.last_activity_at_ms ?? 0) - (left.last_activity_at_ms ?? 0);
     });
   });
 
+  protected readonly emptyMessage = computed(() =>
+    this.bots().length === 0
+      ? 'No Alpaca bots yet. Deploy a strategy to create the first fleet member.'
+      : 'No bots match these filters. Clear the search or choose another state.',
+  );
+
   protected onSearch(event: Event): void {
-    this.searchTerm.set((event.target as HTMLInputElement).value);
+    const target = event.target;
+    this.searchTerm.set(target instanceof HTMLInputElement ? target.value : '');
+  }
+
+  protected selectFilter(filter: StatusFilter): void {
+    this.statusFilter.set(filter);
   }
 
   protected exposureText(bot: BotCatalogView): string {
     const entries = Object.entries(bot.exposure);
-    if (entries.length === 0) return '—';
-    return entries.map(([sym, qty]) => `${sym}: ${qty}`).join(', ');
+    if (entries.length === 0) return 'Flat';
+    return entries
+      .map(([symbol, quantity]) => `${fmtSignedQuantity(quantity)} ${symbol}`)
+      .join(', ');
   }
 
-  protected canStart(bot: BotCatalogView): boolean {
-    const ids = this.profile()?.supported_action_ids ?? [];
-    return bot.phase === 'OFF_DUTY' && ids.includes('start');
+  protected isPending(bot: BotCatalogView): boolean {
+    return this.pendingBotIds().has(bot.strategy_instance_id);
   }
 
-  protected canStop(bot: BotCatalogView): boolean {
-    const ids = this.profile()?.supported_action_ids ?? [];
-    return bot.phase === 'ON_DUTY' && ids.includes('stop');
-  }
-
-  protected onStart(bot: BotCatalogView): void {
-    this.rowAction.emit({ bot, action: 'start' });
-  }
-
-  protected onStop(bot: BotCatalogView): void {
-    this.rowAction.emit({ bot, action: 'stop' });
-  }
-
-  protected botTrackFn(_index: number, bot: BotCatalogView): string {
-    return bot.strategy_instance_id;
-  }
-
-  protected navigateToBot(bot: BotCatalogView): void {
-    const accountId = this.accountId() ?? bot.account_id;
-    void this.router.navigate([
+  protected botLink(bot: BotCatalogView): readonly string[] {
+    return [
       '/brokers',
       this.broker(),
       'accounts',
-      accountId,
+      this.accountId() ?? bot.account_id,
       'bots',
       bot.strategy_instance_id,
-    ]);
+    ];
+  }
+
+  protected pnlTone(value: number | null | undefined): 'positive' | 'negative' | 'neutral' {
+    if (value == null || value === 0) return 'neutral';
+    return value > 0 ? 'positive' : 'negative';
+  }
+
+  protected onAction(bot: BotCatalogView): void {
+    const action = bot.row_action?.action_id;
+    if (action !== 'start' && action !== 'stop') return;
+    this.rowAction.emit({ bot, action });
   }
 }

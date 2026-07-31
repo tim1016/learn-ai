@@ -57,7 +57,7 @@ function markerTime(
   return Math.floor((bar?.start_ms ?? marker.filled_at_ms) / 1000) as UTCTimestamp;
 }
 
-function toSeriesMarkers(
+export function toSeriesMarkers(
   markers: readonly ChartFillMarker[],
   bars: readonly ChartBar[],
 ): SeriesMarker<UTCTimestamp>[] {

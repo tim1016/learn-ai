@@ -29,6 +29,9 @@ from app.config import settings
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
 from app.services.bot_runner import set_bot_task_registry
+from app.services.broker_account_snapshot import (
+    clear_broker_account_snapshot_cache_for_testing,
+)
 from app.services.broker_v2_panel import panel_data_source
 from tests.broker.v2panel.fixtures import ACCT, SID
 
@@ -78,7 +81,7 @@ class _FakeDeployRegistry:
 @pytest.fixture()
 def deploy_app(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
-    panel_data_source._account_cache.clear()
+    clear_broker_account_snapshot_cache_for_testing()
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())  # type: ignore[arg-type]
     registry = _FakeDeployRegistry()
@@ -102,7 +105,7 @@ def deploy_app(tmp_path: Path, monkeypatch):
         yield fast_app, registry
     finally:
         set_bot_task_registry(None)
-        panel_data_source._account_cache.clear()
+        clear_broker_account_snapshot_cache_for_testing()
         reset_broker_registry_for_testing()
 
 

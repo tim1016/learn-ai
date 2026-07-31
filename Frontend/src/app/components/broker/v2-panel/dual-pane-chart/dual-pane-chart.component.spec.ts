@@ -1,6 +1,9 @@
 import { render, screen } from '@testing-library/angular';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { DualPaneChartComponent } from './dual-pane-chart.component';
+import {
+  DualPaneChartComponent,
+  toSeriesMarkers,
+} from './dual-pane-chart.component';
 
 const chartMocks = vi.hoisted(() => ({
   setMarkers: vi.fn(),
@@ -97,37 +100,34 @@ describe('DualPaneChartComponent', () => {
     ).toBeTruthy();
   });
 
-  it('renders live fill markers on the candle series', async () => {
-    await render(DualPaneChartComponent, {
-      inputs: {
-        symbol: 'SPY',
-        liveBars: [
-          {
-            start_ms: 1_700_000_000_000,
-            end_ms: 1_700_000_060_000,
-            open: '100',
-            high: '102',
-            low: '99',
-            close: '101',
-            volume: 1_000,
-            source: 'ibkr',
-          },
-        ],
-        liveFillMarkers: [
-          {
-            filled_at_ms: 1_700_000_030_000,
-            side: 'buy',
-            quantity: 2,
-            price: 101,
-            order_ref: 'order-1',
-          },
-        ],
-        histBars: [],
-      },
-    });
+  it('projects live fills into candle-series markers', () => {
+    const markers = toSeriesMarkers(
+      [
+        {
+          filled_at_ms: 1_700_000_030_000,
+          side: 'buy',
+          quantity: 2,
+          price: 101,
+          order_ref: 'order-1',
+        },
+      ],
+      [
+        {
+          start_ms: 1_700_000_000_000,
+          end_ms: 1_700_000_060_000,
+          open: '100',
+          high: '102',
+          low: '99',
+          close: '101',
+          volume: 1_000,
+          source: 'ibkr',
+        },
+      ],
+    );
 
-    expect(chartMocks.setMarkers).toHaveBeenCalledWith([
+    expect(markers).toEqual([
       expect.objectContaining({
+        time: 1_700_000_000,
         position: 'belowBar',
         shape: 'arrowUp',
         text: 'BUY 2',

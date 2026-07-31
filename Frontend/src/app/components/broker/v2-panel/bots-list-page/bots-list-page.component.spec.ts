@@ -1,11 +1,11 @@
-import { render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import type { BotCatalogView, PanelProfile } from '../lib/broker-v2-panel.types';
+import type { BotCatalogView } from '../lib/broker-v2-panel.types';
 import { BotsListPageComponent } from './bots-list-page.component';
 
 function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAccountSnapshot {
@@ -49,7 +49,10 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
     phase: 'ON_DUTY',
     desired_state: 'RUNNING',
     running: true,
+    strategy_key: 'deployment_validation',
+    mode: 'trade',
     status_label: 'Working',
+    status_explanation: 'Running under Account Clerk custody.',
     exposure: {},
     fills_today: 2,
     realized_pnl_today: 45.5,
@@ -60,14 +63,18 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
   };
 }
 
-function fakeProfile(): PanelProfile {
+function fakeRowAction(
+  actionId: 'start' | 'stop',
+): NonNullable<BotCatalogView['row_action']> {
   return {
-    broker: 'alpaca',
-    fee_fidelity: 'none',
-    flatten_supported: false,
-    live_bars_supported: true,
-    stations: [],
-    supported_action_ids: ['start', 'stop', 'deploy'],
+    action_id: actionId,
+    label: actionId === 'start' ? 'Start' : 'Stop',
+    explanation: `${actionId} this bot.`,
+    enabled: true,
+    blockers: [],
+    confirmation: null,
+    revision: 1,
+    concurrency_token: `${actionId}-token`,
   };
 }
 
@@ -76,14 +83,11 @@ async function renderPage(
   overrides: {
     account?: BrokerAccountSnapshot;
     clerk?: ClerkStatus;
-    profile?: PanelProfile;
-    getCatalog?: () => Promise<BotCatalogView[]>;
-    getPanelProfile?: () => Promise<PanelProfile>;
+    getCatalog?: (broker: string, accountId: string) => Promise<BotCatalogView[]>;
   } = {},
 ) {
   const account = overrides.account ?? fakeAccount();
   const clerk = overrides.clerk ?? fakeClerkStatus();
-  const profile = overrides.profile ?? fakeProfile();
 
   const mockBrokersService = {
     getAccount: () => Promise.resolve(account),
@@ -92,12 +96,19 @@ async function renderPage(
 
   const mockPanelService = {
     getCatalog: overrides.getCatalog ?? (() => Promise.resolve(bots)),
-    getPanelProfile:
-      overrides.getPanelProfile ?? (() => Promise.resolve(profile)),
-    runBotAction: () => Promise.resolve({ action_id: 'start', applied: true, revision: 1, message: 'ok' }),
+    getPanel: vi.fn(() => Promise.reject(new Error('full-panel preflight is forbidden'))),
+    runBotAction: vi.fn(() =>
+      Promise.resolve({
+        action_id: 'start',
+        applied: true,
+        revision: 1,
+        concurrency_token: 'next-token',
+        message: 'ok',
+      }),
+    ),
   };
 
-  return render(BotsListPageComponent, {
+  const view = await render(BotsListPageComponent, {
     providers: [
       provideRouter([]),
       { provide: BrokersService, useValue: mockBrokersService },
@@ -105,6 +116,7 @@ async function renderPage(
     ],
     componentInputs: { broker: 'alpaca', accountId: 'PA9' },
   });
+  return { ...view, mockPanelService };
 }
 
 describe('BotsListPageComponent', () => {
@@ -117,7 +129,8 @@ describe('BotsListPageComponent', () => {
   it('renders PAPER badge for paper accounts', async () => {
     await renderPage([], { account: fakeAccount({ account_id: 'PA9' }) });
 
-    expect(await screen.findByText('PAPER')).toBeTruthy();
+    const accountPosture = await screen.findByLabelText('Alpaca account posture');
+    expect(within(accountPosture).getByText('Paper')).toBeTruthy();
   });
 
   it('renders "Working" status label for an ON_DUTY bot', async () => {
@@ -134,13 +147,18 @@ describe('BotsListPageComponent', () => {
     const bot = fakeBot({ needs_attention: true });
     await renderPage([bot]);
 
-    const attentionEl = await screen.findByLabelText('Needs attention');
+    const attentionEl = await screen.findByLabelText('Working, needs attention');
     expect(attentionEl).toBeTruthy();
   });
 
   it('renders Start button for OFF_DUTY bot when start is supported', async () => {
-    const bot = fakeBot({ phase: 'OFF_DUTY', running: false, status_label: 'Off duty' });
-    await renderPage([bot], { profile: fakeProfile() });
+    const bot = fakeBot({
+      phase: 'OFF_DUTY',
+      running: false,
+      status_label: 'Off duty',
+      row_action: fakeRowAction('start'),
+    });
+    await renderPage([bot]);
 
     expect(await screen.findByRole('button', { name: /Start spy-momentum-01/i })).toBeTruthy();
   });
@@ -154,17 +172,60 @@ describe('BotsListPageComponent', () => {
   it('renders empty state message when no bots', async () => {
     await renderPage([]);
 
-    expect(await screen.findByText(/No bots match/i)).toBeTruthy();
+    expect(await screen.findByText(/No Alpaca bots yet/i)).toBeTruthy();
+  });
+
+  it('renders explicit refresh and snapshot freshness', async () => {
+    await renderPage([fakeBot()]);
+
+    expect(await screen.findByRole('button', { name: 'Refresh fleet' })).toBeTruthy();
+    expect((await screen.findAllByText(/Updated/i)).length).toBeGreaterThan(0);
   });
 
   it('renders the retry state when a transient catalog load fails', async () => {
     await renderPage([], {
       getCatalog: () => Promise.reject(new Error('data plane restarting')),
-      getPanelProfile: () => Promise.reject(new Error('data plane restarting')),
     });
 
-    expect((await screen.findByRole('alert')).textContent).toContain(
-      'Could not load bots. Retrying…',
-    );
+    expect((await screen.findByRole('alert')).textContent).toContain('Fleet unavailable');
+  });
+
+  it('never carries a last-good roster across an account route change', async () => {
+    let resolvePa10!: (bots: BotCatalogView[]) => void;
+    const pa10Catalog = new Promise<BotCatalogView[]>((resolve) => {
+      resolvePa10 = resolve;
+    });
+    const getCatalog = vi.fn((_broker: string, accountId: string) => {
+      if (accountId === 'PA10') return pa10Catalog;
+      return Promise.resolve([
+        fakeBot({
+          strategy_instance_id: 'pa9-bot',
+          account_id: accountId,
+        }),
+      ]);
+    });
+    const view = await renderPage([], { getCatalog });
+    expect(await screen.findByText('pa9-bot')).toBeTruthy();
+
+    view.fixture.componentRef.setInput('accountId', 'PA10');
+    view.fixture.detectChanges();
+
+    await vi.waitFor(() => expect(getCatalog).toHaveBeenCalledWith('alpaca', 'PA10'));
+    expect(screen.queryByText('pa9-bot')).toBeNull();
+
+    resolvePa10([
+      fakeBot({ strategy_instance_id: 'pa10-bot', account_id: 'PA10' }),
+    ]);
+    expect(await screen.findByText('pa10-bot')).toBeTruthy();
+  });
+
+  it('executes the catalog-presented action without a full-panel preflight', async () => {
+    const bot = fakeBot({ row_action: fakeRowAction('stop') });
+    const view = await renderPage([bot]);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop spy-momentum-01' }));
+
+    await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
+    expect(view.mockPanelService.getPanel).not.toHaveBeenCalled();
   });
 });

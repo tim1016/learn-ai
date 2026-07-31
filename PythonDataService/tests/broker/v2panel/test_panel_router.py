@@ -202,6 +202,8 @@ async def test_catalog_scoped_returns_roster(api) -> None:
     assert [r["strategy_instance_id"] for r in rows] == [SID]
     assert rows[0]["exposure"] == {"SPY": 100.0}
     assert rows[0]["desired_state"] in ("RUNNING", "STOPPED")
+    assert rows[0]["row_action"]["action_id"] == "stop"
+    assert rows[0]["row_action"]["enabled"] is True
 
 
 async def test_catalog_account_mismatch_is_404(api) -> None:

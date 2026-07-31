@@ -1,59 +1,105 @@
-<div class="account-strip" role="region" aria-label="Account summary">
+<section
+  class="account-posture"
+  aria-label="Alpaca account posture"
+  [attr.aria-busy]="loading() || refreshing()"
+>
+  @if (loading() && !account()) {
+    <div class="account-posture__skeleton" role="status">
+      <span>Resolving paper account</span>
+      <span class="skeleton-line" aria-hidden="true"></span>
+    </div>
+  } @else if (accountUnavailable() && !account()) {
+    <div class="account-posture__unavailable" role="alert">
+      <strong>Account posture unavailable</strong>
+      <span>The fleet remains hidden until Alpaca confirms the selected account.</span>
+    </div>
+  } @else if (account(); as snap) {
+    <div class="account-posture__identity">
+      <div>
+        <span class="account-posture__eyebrow">Account custody</span>
+        <strong class="account-posture__account">{{ snap.account_id }}</strong>
+      </div>
+      <span class="posture-badge posture-badge--paper">{{ snap.account_mode | receiptLabel }}</span>
+    </div>
 
-  @if (account.isLoading() && !account.hasValue()) {
-    <span class="strip-loading" aria-busy="true">Loading account</span>
-  } @else if (account.error()) {
-    <span class="strip-error" role="alert">Account unavailable</span>
-  } @else {
-    @let snap = account.value();
-    @if (snap) {
-      <div class="strip-row">
-        <span class="strip-stat">
-          <span class="strip-stat__label">Equity</span>
-          <span class="strip-stat__value">{{ fmtCurrency(snap.equity) }}</span>
-        </span>
-        <span class="strip-divider" aria-hidden="true">·</span>
-        <span class="strip-stat">
-          <span class="strip-stat__label">Cash</span>
-          <span class="strip-stat__value">{{ fmtCurrency(snap.cash) }}</span>
-        </span>
-        <span class="strip-divider" aria-hidden="true">·</span>
-        <span class="strip-stat">
-          <span class="strip-stat__label">Buying power</span>
-          <span class="strip-stat__value">{{ fmtCurrency(snap.buying_power) }}</span>
-        </span>
+    <div class="posture-grid">
+      <div class="posture-fact">
+        <span class="posture-fact__label">Broker</span>
+        <strong>{{ snap.account_status | receiptLabel }}</strong>
+        <span>{{ snap.trading_blocked || snap.account_blocked ? 'Trading blocked' : 'Trading available' }}</span>
+      </div>
 
-        @if (snap.account_mode === 'paper') {
-          <p-tag class="strip-badge" value="PAPER" severity="secondary" />
-        }
-
-        @if (reconciliationLabel) {
-          <p-tag
-            class="strip-badge"
-            [value]="reconciliationLabel | receiptLabel"
-            [severity]="reconciliationSeverity"
-            [attr.aria-label]="'Reconciliation: ' + reconciliationLabel"
-          />
-        }
-
-        @if (channels.length > 0) {
-          <span class="strip-channels" aria-label="Channel health">
-            @for (ch of channels; track ch.name) {
-              <app-channel-health-dot [state]="ch.state" [name]="ch.name" />
-            }
-          </span>
+      <div class="posture-fact">
+        <span class="posture-fact__label">Reconciliation</span>
+        @if (reconciliation(); as reconciliationState) {
+          <strong>{{ reconciliationState.verdict | receiptLabel }}</strong>
+          <app-timestamp-display [value]="reconciliationState.recorded_at_ms" mode="local" />
+        } @else {
+          <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Not observed' }}</strong>
+          <span>No current receipt</span>
         }
       </div>
 
-      @if (holdActive) {
-        <div class="strip-hold-banner" role="alert" aria-live="polite">
-          <span class="strip-hold-banner__icon" aria-hidden="true">!</span>
-          Hold active:
-          <strong>{{ holdReason | receiptLabel }}</strong>
-          — new submits blocked.
-        </div>
-      }
+      <div class="posture-fact">
+        <span class="posture-fact__label">Account service</span>
+        @if (clerkStatus(); as clerk) {
+          <strong>{{ freezeActive() ? 'Frozen' : holdActive() ? 'Hold active' : 'Clear' }}</strong>
+          <span>{{ freezeActive() || holdActive() ? 'New entries blocked' : 'No custody block' }}</span>
+          <app-timestamp-display [value]="clerk.observed_at_ms" mode="local" />
+        } @else {
+          <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Loading' }}</strong>
+          <span>Custody not observed</span>
+        }
+      </div>
+
+      <div class="posture-fact posture-fact--channels">
+        <span class="posture-fact__label">Channels</span>
+        @if (channels().length > 0) {
+          <div class="channel-list">
+            @for (channel of channels(); track channel.name) {
+              <span class="channel-state" [class.channel-state--unhealthy]="!channel.healthy">
+                <span class="channel-state__dot" aria-hidden="true"></span>
+                {{ channel.name | receiptLabel }} {{ channel.healthy ? 'healthy' : 'unhealthy' }}
+              </span>
+            }
+          </div>
+        } @else {
+          <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Not installed' }}</strong>
+        }
+      </div>
+    </div>
+
+    <div class="financial-line" aria-label="Account balances">
+      <span><small>Equity</small><strong>{{ fmtCurrency(snap.equity) }}</strong></span>
+      <span><small>Cash</small><strong>{{ fmtCurrency(snap.cash) }}</strong></span>
+      <span><small>Buying power</small><strong>{{ fmtCurrency(snap.buying_power) }}</strong></span>
+      <span class="financial-line__freshness">
+        {{ refreshing() ? 'Refreshing · account observed' : 'Account observed' }}
+        <app-timestamp-display [value]="snap.observed_at_ms" mode="local" />
+      </span>
+    </div>
+
+    @if (accountUnavailable()) {
+      <div class="posture-refresh-warning" role="status">
+        Account refresh failed. Showing the last broker observation.
+      </div>
+    }
+    @if (clerkUnavailable()) {
+      <div class="posture-refresh-warning" role="status">
+        Clerk refresh failed. Showing the last Clerk observation.
+      </div>
+    }
+
+    @if (freezeActive()) {
+      <div class="custody-alert" role="alert">
+        <strong>Account frozen</strong>
+        <span>{{ clerkStatus()?.freeze?.explanation || 'The account service cannot prove current custody.' }}</span>
+      </div>
+    } @else if (holdActive()) {
+      <div class="custody-alert" role="alert">
+        <strong>{{ clerkStatus()?.hold?.reason_code | receiptLabel }}</strong>
+        <span>{{ clerkStatus()?.hold?.reason || 'New order-producing activity is held.' }}</span>
+      </div>
     }
   }
-
-</div>
+</section>

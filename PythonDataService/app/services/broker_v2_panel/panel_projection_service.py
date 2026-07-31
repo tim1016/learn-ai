@@ -211,7 +211,8 @@ def _channel_views(clerk_status: ClerkStatus, now_ms: int) -> list[ChannelHealth
     return views
 
 
-def _build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
+def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
+    """Project the account Clerk state shared by panel and roster actions."""
     hold = clerk_status.hold
     reason_code = _hold_reason_code(hold.active, hold.reason_code)
     reason_copy = copy_for(reason_code)
@@ -248,7 +249,7 @@ def _build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
     )
 
 
-def _channel_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
+def channel_health_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
     """True iff every channel health was freshly observed (clear-hold gate, §7.3).
 
     An empty channel list is treated as not-fresh — the clear-hold action stays
@@ -299,7 +300,7 @@ def build_panel(
         now_ms=now_ms,
     )
 
-    clerk = _build_clerk_card(clerk_status, now_ms)
+    clerk = build_clerk_card(clerk_status, now_ms)
     health = _build_health_card(
         status,
         clerk=clerk,
@@ -322,7 +323,7 @@ def build_panel(
         clerk,
         revision=revision,
         flatten_supported=flatten_supported,
-        channel_fresh=_channel_fresh(clerk_status, now_ms),
+        channel_fresh=channel_health_fresh(clerk_status, now_ms),
         exposure=exposure,
     )
 

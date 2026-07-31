@@ -46,6 +46,23 @@ def _lifecycle_needs_attention(status: BotStatusView) -> bool:
     return outcome is not None and outcome.kind in ("CRASHED", "EXITED_UNVERIFIED")
 
 
+def status_explanation_for(status: BotStatusView, rollup: BotRollup) -> str:
+    """Author one concise trader-facing explanation for the roster row."""
+    if _lifecycle_needs_attention(status):
+        return "The previous run ended without verified custody."
+    if rollup.needs_attention:
+        return "The latest strategy decision is blocked."
+    if status.phase == "RETIRED":
+        return "Retired; no further runs can start."
+    if status.running:
+        if status.mode == "trade":
+            return "Running under Account Clerk custody."
+        return "Running in log-only mode; no order custody is active."
+    if rollup.exposure:
+        return "Off duty with Clerk-attributed exposure."
+    return "Off duty and flat."
+
+
 def bootstrap_rollup_cache(
     cache: BotRollupCache,
     sids: list[str],
@@ -76,13 +93,16 @@ def compose_catalog_view(
     desired_state = "RUNNING" if status.desired_state == "RUNNING" else "STOPPED"
     return BotCatalogView(
         strategy_instance_id=status.strategy_instance_id,
+        strategy_key=status.strategy_key,
         broker=status.broker,
         account_id=account_id,
         symbol=status.symbol,
+        mode=status.mode,
         phase=status.phase,
         desired_state=desired_state,
         running=status.running,
         status_label=status_label_for(status),
+        status_explanation=status_explanation_for(status, rollup),
         exposure=dict(rollup.exposure),
         fills_today=rollup.fills_today,
         realized_pnl_today=rollup.realized_pnl_today,

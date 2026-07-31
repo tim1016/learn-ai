@@ -1,44 +1,99 @@
-<div class="bots-page" role="main" aria-label="Bots list">
-
+<main class="bots-page" aria-labelledby="bots-page-title">
   <header class="bots-page__header">
     <div class="bots-page__title-row">
-      <h1 class="bots-page__title">Bots — {{ broker() }}</h1>
-      <button
-        pButton
-        type="button"
-        label="Deploy bot"
-        icon="pi pi-plus"
-        (click)="deployVisible.set(true)"
-        aria-label="Open deploy bot dialog"
-      ></button>
+      <div>
+        <span class="bots-page__eyebrow">{{ broker() | receiptLabel }} · paper fleet</span>
+        <h1 id="bots-page-title">Alpaca bots</h1>
+        <p>Supervise strategy custody, exposure, and the next safe action.</p>
+      </div>
+      <div class="bots-page__commands">
+        <button
+          type="button"
+          class="command-button command-button--quiet"
+          [disabled]="initialLoading()"
+          [attr.aria-busy]="refreshing()"
+          (click)="refreshFleet()"
+          aria-label="Refresh fleet"
+        >
+          <span aria-hidden="true">↻</span>
+          {{ refreshing() ? 'Refreshing' : 'Refresh' }}
+        </button>
+        <button
+          type="button"
+          class="command-button command-button--primary"
+          (click)="deployVisible.set(true)"
+        >
+          <span aria-hidden="true">＋</span>
+          Deploy strategy
+        </button>
+      </div>
     </div>
 
-    <app-account-strip [broker]="broker()" />
+    <app-account-strip
+      [account]="accountValue()"
+      [clerkStatus]="clerkValue()"
+      [loading]="postureLoading()"
+      [refreshing]="postureRefreshing()"
+      [accountUnavailable]="!!account.error()"
+      [clerkUnavailable]="!!clerkStatus.error()"
+    />
   </header>
 
-  @if (actionError()) {
-    <div class="bots-page__error" role="alert" aria-live="assertive">
-      {{ actionError() }}
+  @if (actionNotice(); as notice) {
+    <div
+      class="fleet-notice"
+      [class.fleet-notice--danger]="notice.tone === 'danger'"
+      [attr.role]="notice.tone === 'danger' ? 'alert' : 'status'"
+    >
+      {{ notice.message }}
     </div>
   }
 
-  <section class="bots-page__roster" aria-label="Bot roster">
-    @if (catalog.isLoading() && bots.length === 0) {
-      <div class="bots-page__loading" aria-busy="true">Loading bots…</div>
-    } @else if (catalog.error() && bots.length === 0) {
-      <div class="bots-page__error" role="alert">Could not load bots. Retrying…</div>
+  @if (stale()) {
+    <div class="fleet-notice fleet-notice--stale" role="status">
+      Live refresh failed. Showing the last successful fleet snapshot.
+    </div>
+  }
+
+  <section class="bots-page__roster" aria-label="Bot fleet">
+    <div class="roster-heading">
+      <div>
+        <span class="roster-heading__eyebrow">Fleet roster</span>
+        <strong>
+          {{ bots().length }} configured {{ bots().length === 1 ? 'bot' : 'bots' }}
+        </strong>
+      </div>
+      @if (catalogUpdatedAtMs(); as updatedAt) {
+        <span class="roster-heading__freshness">
+          {{ refreshing() ? 'Refreshing · last updated' : 'Updated' }}
+          <app-timestamp-display [value]="updatedAt" mode="local" />
+        </span>
+      }
+    </div>
+
+    @if (initialLoading()) {
+      <div class="roster-skeleton" role="status" aria-label="Loading bots">
+        @for (row of [1, 2, 3, 4, 5]; track row) {
+          <span aria-hidden="true"></span>
+        }
+      </div>
+    } @else if (unavailable()) {
+      <div class="fleet-unavailable" role="alert">
+        <strong>Fleet unavailable</strong>
+        <span>The bot catalog could not be loaded. Account posture remains visible.</span>
+        <button type="button" (click)="refreshFleet()">Try again</button>
+      </div>
     } @else {
       <app-bots-roster
-        [bots]="bots"
-        [profile]="panelProfile"
+        [bots]="bots()"
         [broker]="broker()"
         [accountId]="accountId()"
+        [pendingBotIds]="pendingBotIds()"
         (rowAction)="onRowAction($event)"
       />
     }
   </section>
-
-</div>
+</main>
 
 <app-deploy-dialog
   [broker]="broker()"
