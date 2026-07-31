@@ -76,9 +76,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     strategy_key: Literal["deployment_validation"]
     symbol: str = Field(min_length=1, max_length=12)
-    sizing: AlpacaPaperSizingSelection = Field(
-        default_factory=AlpacaPaperSizingSelection
-    )
+    sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
 
     @field_validator("strategy_instance_id")
@@ -105,12 +103,57 @@ class AlpacaPaperDeployEligibility(BaseModel):
 
 
 class AlpacaPaperDeployStrategy(BaseModel):
-    """One validated strategy in the phase-1 closed catalog."""
+    """One currently accepted strategy from the validation catalog."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     strategy_key: Literal["deployment_validation"]
     label: str
+    explanation: str
+    validation_case_symbol: str
+    validated_at_ms: int = Field(ge=0)
+    validated_by: str
+    validation_reason: str
+    behavioral_equivalence_verdict: Literal["accepted_for_deploy"]
+    behavioral_equivalence_detail: str
+    tolerance: str | None
+    qc_cloud_backtest_id: str
+    settings_file_ref: str
+    settings_file_sha256: str
+    audit_copy_ref: str
+    audit_copy_sha256: str
+    reconciliation_ref: str
+    trades_matched: int = Field(ge=0)
+    trades_validated: int = Field(ge=0)
+    pnl_max_abs_diff: str
+    divergence_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class AlpacaPaperDeployReadinessCheck(BaseModel):
+    """One production-backed predicate in the current Deploy admission decision."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    gate_id: str
+    label: str
+    ready: bool
+    scope: Literal["strategy", "account", "broker"]
+    authority: str
+    headline: str
+    explanation: str
+    evidence_summary: str
+    evidence: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    recovery: str | None
+
+
+class AlpacaPaperExecutionMode(BaseModel):
+    """Broker-authored execution capability for the shared Deploy page."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    mode: Literal["paper", "live"]
+    label: str
+    available: bool
     explanation: str
 
 
@@ -137,6 +180,8 @@ class AlpacaPaperDeployView(BaseModel):
     account_mode: Literal["paper"]
     account_label: str
     eligibility: AlpacaPaperDeployEligibility
+    readiness_checks: tuple[AlpacaPaperDeployReadinessCheck, ...]
+    execution_modes: tuple[AlpacaPaperExecutionMode, ...]
     strategies: tuple[AlpacaPaperDeployStrategy, ...]
     sizing_options: tuple[AlpacaPaperSizingOption, ...]
     action_plan_explanation: str
@@ -184,9 +229,16 @@ class AlpacaPaperDeployReceipt(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status: Literal["deployed"]
+    outcome: Literal["success"] = "success"
+    receipt_id: str
+    recorded_at_ms: int = Field(ge=0)
     message: str
     explanation: str
     next_action: str
     panel_path: str
+    account_id: str
+    execution_mode: Literal["paper"] = "paper"
+    sizing: AlpacaPaperSizingSelection
+    carryover_policy: Literal["FORBID", "ALLOW"]
     action_plan: ActionPlan
     bot: BotStatusView

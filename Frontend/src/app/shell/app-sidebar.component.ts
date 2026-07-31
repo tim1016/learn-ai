@@ -97,6 +97,7 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-link',
     items: [
       { label: 'Accounts', route: '/brokers/alpaca' },
+      { label: 'Deploy', route: '/brokers/alpaca/deploy' },
       { label: 'Bots', route: '/brokers/alpaca/bots' },
     ],
   },
@@ -244,6 +245,14 @@ export class AppSidebarComponent {
   /** Only the longest route match is active, so `/broker` does not shadow its children. */
   private activeRoute = computed<string | null>(() => {
     const url = this.navigationPath(this.currentUrl());
+    const accountScopedBrokerSurface = url.match(
+      /^\/brokers\/([^/]+)\/accounts\/[^/]+\/(deploy|bots)(?:\/|$)/,
+    );
+    if (accountScopedBrokerSurface) {
+      const [, broker, surface] = accountScopedBrokerSurface;
+      const navigationSlot = `/brokers/${broker}/${surface}`;
+      if (NAV_ROUTES.includes(navigationSlot)) return navigationSlot;
+    }
     return NAV_ROUTES.find((route) => url === route || url.startsWith(route + '/')) ?? null;
   });
 

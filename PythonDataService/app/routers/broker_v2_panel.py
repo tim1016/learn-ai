@@ -175,7 +175,18 @@ async def deploy_bot_scoped(
     try:
         return await ds.deploy_alpaca_paper_bot(broker, account_id, request)
     except ds.PanelDataError as error:
-        _raise_panel_error(error)
+        outcome = "conflict" if error.http_status == 409 else ("unknown" if error.http_status >= 500 else "blocked")
+        raise HTTPException(
+            status_code=error.http_status,
+            detail={
+                "outcome": outcome,
+                "receipt_id": None,
+                "recorded_at_ms": now_ms_utc(),
+                "message": str(error),
+                "why": error.detail,
+                "next_action": error.next_action,
+            },
+        ) from error
 
 
 # ── §7 Panel projection (account-scoped + unscoped alias) ────────────────────

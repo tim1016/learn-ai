@@ -218,6 +218,22 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    // One broker-aware Deploy page. IBKR keeps its established adapter while
+    // broker-v2 accounts can provide an account-scoped deployment contract.
+    path: "brokers/:broker/accounts/:accountId/deploy",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-deploy-page/broker-deploy-page.component"
+      ).then((m) => m.BrokerDeployPageComponent),
+  },
+  {
+    path: "brokers/:broker/deploy",
+    loadComponent: () =>
+      import(
+        "./components/broker/broker-deploy-page/broker-deploy-page.component"
+      ).then((m) => m.BrokerDeployPageComponent),
+  },
+  {
     // Broker System v2 read-only desk — separate from every v1 broker page.
     path: "brokers/alpaca",
     loadComponent: () =>
@@ -358,12 +374,12 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    // Deploy form — stage 1 of the deploy pipeline (ADR 0006, #417).
+    // Legacy IBKR URL retained as an alias of the single Broker Deploy page.
     path: "broker/deploy",
     loadComponent: () =>
       import(
-        "./components/broker/broker-deploy-form/broker-deploy-form.component"
-      ).then((m) => m.BrokerDeployFormComponent),
+        "./components/broker/broker-deploy-page/broker-deploy-page.component"
+      ).then((m) => m.BrokerDeployPageComponent),
   },
   {
     path: "edge",

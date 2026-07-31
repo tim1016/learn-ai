@@ -18,6 +18,8 @@ import type {
 export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
 export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt'];
 export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
+export type DeployBotStrategy = components['schemas']['AlpacaPaperDeployStrategy'];
+export type DeployReadinessCheck = components['schemas']['AlpacaPaperDeployReadinessCheck'];
 
 /**
  * HTTP client for the broker-v2 panel surface.

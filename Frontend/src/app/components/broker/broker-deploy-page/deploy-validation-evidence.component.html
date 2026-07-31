@@ -1,0 +1,35 @@
+<section class="evidence-card" aria-labelledby="validation-evidence-title">
+  <div class="evidence-card__head">
+    <div>
+      <span>Strategy provenance</span>
+      <h2 id="validation-evidence-title">Accepted validation evidence</h2>
+    </div>
+    @if (strategy()) {
+      <strong>Accepted for deploy</strong>
+    }
+  </div>
+
+  @if (strategy(); as selected) {
+    <p class="evidence-card__summary">{{ selected.behavioral_equivalence_detail }}</p>
+    <dl class="evidence-card__facts">
+      <div><dt>Validated</dt><dd><app-timestamp-display [value]="selected.validated_at_ms" mode="local" /></dd></div>
+      <div><dt>Validated by</dt><dd><code>{{ selected.validated_by }}</code></dd></div>
+      <div><dt>Case signal</dt><dd>{{ selected.validation_case_symbol }}</dd></div>
+      <div><dt>Behavioral verdict</dt><dd>{{ selected.behavioral_equivalence_verdict | receiptLabel }}</dd></div>
+      <div><dt>Matched trades</dt><dd>{{ selected.trades_matched }} / {{ selected.trades_validated }}</dd></div>
+      <div><dt>Max P&amp;L difference</dt><dd>{{ selected.pnl_max_abs_diff }}</dd></div>
+    </dl>
+    <blockquote>{{ selected.validation_reason }}</blockquote>
+    <details>
+      <summary>Audit provenance</summary>
+      <dl class="evidence-card__provenance">
+        <div><dt>QC backtest</dt><dd><code>{{ selected.qc_cloud_backtest_id }}</code></dd></div>
+        <div><dt>Strategy spec</dt><dd><code>{{ selected.settings_file_ref }}</code><small>{{ selected.settings_file_sha256 }}</small></dd></div>
+        <div><dt>LEAN audit copy</dt><dd><code>{{ selected.audit_copy_ref }}</code><small>{{ selected.audit_copy_sha256 }}</small></dd></div>
+        <div><dt>Reconciliation</dt><dd><code>{{ selected.reconciliation_ref }}</code></dd></div>
+      </dl>
+    </details>
+  } @else {
+    <p class="evidence-card__empty">Choose a currently accepted strategy to review its immutable validation receipt.</p>
+  }
+</section>

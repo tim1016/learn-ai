@@ -18,6 +18,7 @@ from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
+    ChannelHealth,
     ClerkStatus,
     HoldState,
 )
@@ -94,6 +95,10 @@ def deploy_app(tmp_path: Path, monkeypatch):
             hold=HoldState(active=False),
             outstanding_intents=0,
             observed_at_ms=_T0,
+            channel_healths=[
+                ChannelHealth(stream="market_data", healthy=True, observed_at_ms=_T0),
+                ChannelHealth(stream="execution", healthy=True, observed_at_ms=_T0),
+            ],
         )
 
     monkeypatch.setattr(panel_data_source, "_clerk_status", clerk_status)
@@ -121,23 +126,23 @@ _BODY = {
 async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
     fast_app, registry = deploy_app
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            f"/api/brokers/alpaca/accounts/{ACCT}/bots", json=_BODY
-        )
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        resp = await client.post(f"/api/brokers/alpaca/accounts/{ACCT}/bots", json=_BODY)
 
     assert resp.status_code == 201
     body = resp.json()
     assert body["status"] == "deployed"
+    assert body["outcome"] == "success"
+    assert body["receipt_id"].startswith("alpaca-paper-deploy:")
+    assert body["recorded_at_ms"] == _T0
+    assert body["account_id"] == ACCT
+    assert body["execution_mode"] == "paper"
+    assert body["sizing"] == {"preset": "custom", "quantity": 2}
     assert body["bot"]["strategy_instance_id"] == SID
     assert body["bot"]["mode"] == "trade"
     assert body["bot"]["quantity"] == 2
     assert body["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "SPY"
-    assert body["action_plan"]["on_exit"] == [
-        {"kind": "close_leg", "entry_leg_id": "primary"}
-    ]
+    assert body["action_plan"]["on_exit"] == [{"kind": "close_leg", "entry_leg_id": "primary"}]
     assert body["next_action"]
     assert body["panel_path"].endswith(f"/{SID}")
     assert len(registry.deploy_calls) == 1
@@ -152,15 +157,12 @@ async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
 async def test_deploy_scoped_account_mismatch_404(deploy_app) -> None:
     fast_app, registry = deploy_app
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/brokers/alpaca/accounts/WRONGACCT/bots", json=_BODY
-        )
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        resp = await client.post("/api/brokers/alpaca/accounts/WRONGACCT/bots", json=_BODY)
 
     assert resp.status_code == 404
     assert "is not the account for broker" in resp.json()["detail"]["message"]
+    assert resp.json()["detail"]["outcome"] == "blocked"
     assert registry.deploy_calls == []
 
 
@@ -168,19 +170,44 @@ async def test_deploy_scoped_account_mismatch_404(deploy_app) -> None:
 async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
     fast_app, _registry = deploy_app
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
-        resp = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy"
-        )
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        resp = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["account_mode"] == "paper"
     assert body["allowed_actions"] == ["deploy"]
-    assert [row["strategy_key"] for row in body["strategies"]] == [
-        "deployment_validation"
+    assert [row["strategy_key"] for row in body["strategies"]] == ["deployment_validation"]
+    strategy = body["strategies"][0]
+    assert strategy["behavioral_equivalence_verdict"] == "accepted_for_deploy"
+    assert strategy["validation_case_symbol"] == "SPY"
+    assert strategy["validated_at_ms"] > 0
+    assert strategy["qc_cloud_backtest_id"]
+    assert strategy["settings_file_sha256"]
+    assert strategy["audit_copy_sha256"]
+    assert strategy["trades_matched"] == strategy["trades_validated"]
+    assert {check["gate_id"] for check in body["readiness_checks"]} == {
+        "strategy.validation_accepted",
+        "broker.account_posture",
+        "clerk.custody_freeze",
+        "clerk.exposure_hold",
+        "clerk.intent_custody",
+        "clerk.channel_health",
+    }
+    assert all(check["ready"] for check in body["readiness_checks"])
+    assert body["execution_modes"] == [
+        {
+            "mode": "paper",
+            "label": "Paper",
+            "available": True,
+            "explanation": "Orders route only to the selected Alpaca paper account through the Clerk.",
+        },
+        {
+            "mode": "live",
+            "label": "Live",
+            "available": False,
+            "explanation": "Live Alpaca execution is not wired and is rejected at the server boundary.",
+        },
     ]
     assert [row["preset"] for row in body["sizing_options"]] == [
         "safe_canary",
@@ -191,6 +218,63 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
     assert body["carryover_available"] is False
     assert body["carryover_label"]
     assert body["carryover_explanation"]
+
+
+@pytest.mark.asyncio
+async def test_deploy_requires_current_accepted_validation_provenance(
+    deploy_app,
+    monkeypatch,
+) -> None:
+    fast_app, registry = deploy_app
+    monkeypatch.setattr(panel_data_source, "load_strategy_validation_entries", lambda _registry: [])
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        view_response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
+        deploy_response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json=_BODY,
+        )
+
+    view = view_response.json()
+    assert view["strategies"] == []
+    assert view["eligibility"]["reason_code"] == "STRATEGY_NOT_ACCEPTED_FOR_DEPLOY"
+    strategy_gate = next(
+        check for check in view["readiness_checks"] if check["gate_id"] == "strategy.validation_accepted"
+    )
+    assert strategy_gate["ready"] is False
+    assert strategy_gate["authority"] == "Strategy validation current-state projection"
+    assert deploy_response.status_code == 409
+    assert deploy_response.json()["detail"]["outcome"] == "conflict"
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
+async def test_deploy_blocks_when_clerk_channel_health_is_unproven(
+    deploy_app,
+    monkeypatch,
+) -> None:
+    fast_app, registry = deploy_app
+
+    async def no_channel_status() -> ClerkStatus:
+        return ClerkStatus(
+            broker="alpaca",
+            account_id=ACCT,
+            hold=HoldState(active=False),
+            outstanding_intents=0,
+            observed_at_ms=_T0,
+            channel_healths=None,
+        )
+
+    monkeypatch.setattr(panel_data_source, "_clerk_status", no_channel_status)
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
+
+    view = response.json()
+    assert view["eligibility"]["reason_code"] == "CLERK_CHANNEL_UNHEALTHY"
+    channel_gate = next(check for check in view["readiness_checks"] if check["gate_id"] == "clerk.channel_health")
+    assert channel_gate["ready"] is False
+    assert channel_gate["evidence"]["channel_count"] == 0
+    assert registry.deploy_calls == []
 
 
 @pytest.mark.asyncio
@@ -211,9 +295,7 @@ async def test_deploy_rejects_semantics_outside_closed_contract(
 ) -> None:
     fast_app, registry = deploy_app
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         resp = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json=body,
@@ -231,9 +313,7 @@ async def test_carryover_requires_account_policy_and_explicit_deploy_opt_in(
     fast_app, registry = deploy_app
     carryover_body = {**_BODY, "carryover_policy": "ALLOW"}
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         blocked = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json=carryover_body,
@@ -272,12 +352,8 @@ async def test_clerk_hold_authors_blocked_view_and_submission_remedy(
         )
 
     monkeypatch.setattr(panel_data_source, "_clerk_status", held_status)
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
-        view_response = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy"
-        )
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        view_response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
         deploy_response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json=_BODY,
@@ -317,12 +393,8 @@ async def test_account_freeze_category_and_remedy_reach_deploy_unchanged(
         )
 
     monkeypatch.setattr(panel_data_source, "_clerk_status", frozen_status)
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy"
-        )
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
 
     eligibility = response.json()["eligibility"]
     assert eligibility["reason_code"] == "ACCOUNT_STATE_UNPROVABLE"
@@ -339,12 +411,8 @@ async def test_account_trading_block_authors_ineligible_deploy_view(
     fast_app, registry = deploy_app
     monkeypatch.setattr(_FakeAccount, "trading_blocked", True)
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy"
-        )
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
 
     assert response.status_code == 200
     view = response.json()

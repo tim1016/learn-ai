@@ -8056,20 +8056,75 @@ export interface components {
             reason_code: string;
         };
         /**
+         * AlpacaPaperDeployReadinessCheck
+         * @description One production-backed predicate in the current Deploy admission decision.
+         */
+        AlpacaPaperDeployReadinessCheck: {
+            /** Authority */
+            authority: string;
+            /** Evidence */
+            evidence?: {
+                [key: string]: string | number | boolean | null;
+            };
+            /** Evidence Summary */
+            evidence_summary: string;
+            /** Explanation */
+            explanation: string;
+            /** Gate Id */
+            gate_id: string;
+            /** Headline */
+            headline: string;
+            /** Label */
+            label: string;
+            /** Ready */
+            ready: boolean;
+            /** Recovery */
+            recovery: string | null;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "strategy" | "account" | "broker";
+        };
+        /**
          * AlpacaPaperDeployReceipt
          * @description Backend-authored terminal receipt for one accepted deployment.
          */
         AlpacaPaperDeployReceipt: {
+            /** Account Id */
+            account_id: string;
             action_plan: components["schemas"]["ActionPlan-Output"];
             bot: components["schemas"]["BotStatusView"];
+            /**
+             * Carryover Policy
+             * @enum {string}
+             */
+            carryover_policy: "FORBID" | "ALLOW";
+            /**
+             * Execution Mode
+             * @default paper
+             * @constant
+             */
+            execution_mode?: "paper";
             /** Explanation */
             explanation: string;
             /** Message */
             message: string;
             /** Next Action */
             next_action: string;
+            /**
+             * Outcome
+             * @default success
+             * @constant
+             */
+            outcome?: "success";
             /** Panel Path */
             panel_path: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            sizing: components["schemas"]["AlpacaPaperSizingSelection"];
             /**
              * Status
              * @constant
@@ -8100,18 +8155,57 @@ export interface components {
         };
         /**
          * AlpacaPaperDeployStrategy
-         * @description One validated strategy in the phase-1 closed catalog.
+         * @description One currently accepted strategy from the validation catalog.
          */
         AlpacaPaperDeployStrategy: {
+            /** Audit Copy Ref */
+            audit_copy_ref: string;
+            /** Audit Copy Sha256 */
+            audit_copy_sha256: string;
+            /** Behavioral Equivalence Detail */
+            behavioral_equivalence_detail: string;
+            /**
+             * Behavioral Equivalence Verdict
+             * @constant
+             */
+            behavioral_equivalence_verdict: "accepted_for_deploy";
+            /** Divergence Counts */
+            divergence_counts?: {
+                [key: string]: number;
+            };
             /** Explanation */
             explanation: string;
             /** Label */
             label: string;
+            /** Pnl Max Abs Diff */
+            pnl_max_abs_diff: string;
+            /** Qc Cloud Backtest Id */
+            qc_cloud_backtest_id: string;
+            /** Reconciliation Ref */
+            reconciliation_ref: string;
+            /** Settings File Ref */
+            settings_file_ref: string;
+            /** Settings File Sha256 */
+            settings_file_sha256: string;
             /**
              * Strategy Key
              * @constant
              */
             strategy_key: "deployment_validation";
+            /** Tolerance */
+            tolerance: string | null;
+            /** Trades Matched */
+            trades_matched: number;
+            /** Trades Validated */
+            trades_validated: number;
+            /** Validated At Ms */
+            validated_at_ms: number;
+            /** Validated By */
+            validated_by: string;
+            /** Validation Case Symbol */
+            validation_case_symbol: string;
+            /** Validation Reason */
+            validation_reason: string;
         };
         /**
          * AlpacaPaperDeployView
@@ -8143,10 +8237,31 @@ export interface components {
             /** Carryover Label */
             carryover_label: string;
             eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
+            /** Execution Modes */
+            execution_modes: components["schemas"]["AlpacaPaperExecutionMode"][];
+            /** Readiness Checks */
+            readiness_checks: components["schemas"]["AlpacaPaperDeployReadinessCheck"][];
             /** Sizing Options */
             sizing_options: components["schemas"]["AlpacaPaperSizingOption"][];
             /** Strategies */
             strategies: components["schemas"]["AlpacaPaperDeployStrategy"][];
+        };
+        /**
+         * AlpacaPaperExecutionMode
+         * @description Broker-authored execution capability for the shared Deploy page.
+         */
+        AlpacaPaperExecutionMode: {
+            /** Available */
+            available: boolean;
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "paper" | "live";
         };
         /**
          * AlpacaPaperSizingOption
