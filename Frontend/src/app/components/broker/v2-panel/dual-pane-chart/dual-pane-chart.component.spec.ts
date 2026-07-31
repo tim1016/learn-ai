@@ -92,9 +92,7 @@ describe('DualPaneChartComponent', () => {
     const markersFactory = vi.mocked(createSeriesMarkers);
     const liveSetMarkers = vi.fn();
     markersFactory.mockReset();
-    markersFactory
-      .mockReturnValueOnce({ setMarkers: liveSetMarkers } as never)
-      .mockReturnValueOnce({ setMarkers: vi.fn() } as never);
+    markersFactory.mockReturnValue({ setMarkers: liveSetMarkers } as never);
 
     await render(DualPaneChartComponent, {
       inputs: {
