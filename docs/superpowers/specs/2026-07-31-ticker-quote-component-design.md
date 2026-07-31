@@ -66,7 +66,7 @@ Selector: `app-ticker-quote`.
 
 ```ts
 export interface TickerQuoteView {
-  symbol: string;
+  ticker: string;
   name?: string | null;
   exchange?: string | null;
   price: number;

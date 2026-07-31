@@ -2,13 +2,15 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  inject,
   input,
+  LOCALE_ID,
 } from '@angular/core';
-import { DecimalPipe } from '@angular/common';
+import { DecimalPipe, formatNumber } from '@angular/common';
 import { AssetIdentityComponent } from '../asset-identity';
 
 export interface TickerQuoteView {
-  symbol: string;
+  ticker: string;
   name?: string | null;
   exchange?: string | null;
   price: number;
@@ -32,6 +34,8 @@ export interface TickerQuoteView {
   },
 })
 export class TickerQuoteComponent {
+  private readonly locale = inject(LOCALE_ID);
+
   readonly quote = input.required<TickerQuoteView>();
   readonly mode = input<'inline' | 'card'>('inline');
   readonly size = input<'sm' | 'md' | 'lg'>('md');
@@ -82,13 +86,14 @@ export class TickerQuoteComponent {
   readonly hostTitle = computed(() => {
     const q = this.quote();
     const name = q.name?.trim() || null;
-    const symbol = q.symbol;
-    const currency = q.currencySymbol ?? '$';
-    const priceStr = `${currency}${q.price.toFixed(2)}`;
-    const pct = q.changePercent;
-    const sign = pct > 0 ? '+' : '';
-    const pctStr = `${sign}${pct.toFixed(2)}%`;
-    const identity = name ? `${name} (${symbol})` : symbol;
-    return `${identity} — ${priceStr}, ${pctStr}`;
+    const currency = this.currencySymbol();
+    const sign = this.signPrefix();
+    const priceStr = `${currency}${formatNumber(q.price, this.locale, '1.2-2')}`;
+    const changeStr = q.change === null || q.change === undefined
+      ? ''
+      : ` (${q.change < 0 ? '-' : sign}${currency}${formatNumber(Math.abs(q.change), this.locale, '1.2-2')})`;
+    const pctStr = `${sign}${formatNumber(q.changePercent, this.locale, '1.2-2')}%`;
+    const identity = name ? `${name} (${q.ticker})` : q.ticker;
+    return `${identity} — ${priceStr}${changeStr}, ${pctStr}`;
   });
 }

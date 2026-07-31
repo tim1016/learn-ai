@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
+import { SnapshotUnderlyingResult } from '../../graphql/types';
 import { TickerQuoteComponent, TickerQuoteView } from './ticker-quote.component';
 
 function requireElement<T extends Element>(node: T | null, selector: string): T {
@@ -8,7 +9,7 @@ function requireElement<T extends Element>(node: T | null, selector: string): T 
 }
 
 const BASE_QUOTE: TickerQuoteView = {
-  symbol: 'SPY',
+  ticker: 'SPY',
   name: 'SPDR S&P 500 ETF',
   exchange: 'ARCA',
   price: 542.44,
@@ -17,13 +18,13 @@ const BASE_QUOTE: TickerQuoteView = {
 };
 
 const NEGATIVE_QUOTE: TickerQuoteView = {
-  symbol: 'QQQ',
+  ticker: 'QQQ',
   price: 471.1,
   changePercent: -0.42,
 };
 
 const FLAT_QUOTE: TickerQuoteView = {
-  symbol: 'IWM',
+  ticker: 'IWM',
   price: 200.0,
   changePercent: 0,
 };
@@ -113,6 +114,21 @@ describe('TickerQuoteComponent', () => {
       );
       expect(price.textContent?.trim()).toContain('$');
       expect(price.textContent?.trim()).toContain('542.44');
+    });
+
+    it('accepts a market snapshot without an adapter', async () => {
+      const snapshot: SnapshotUnderlyingResult = {
+        ticker: 'DIA',
+        price: 4200.5,
+        change: 12.34,
+        changePercent: 0.29,
+      };
+      const quote: TickerQuoteView = snapshot;
+      const { container } = await render(TickerQuoteComponent, {
+        inputs: { quote },
+      });
+
+      expect(container.textContent).toContain('DIA');
     });
 
     it('uses a custom currencySymbol when provided', async () => {
@@ -225,6 +241,19 @@ describe('TickerQuoteComponent', () => {
         fixture.nativeElement.classList.contains('ticker-quote--card'),
       ).toBe(true);
     });
+
+    it('keeps the rich ticker tooltip when hovering the identity', async () => {
+      const { container, fixture } = await render(TickerQuoteComponent, {
+        inputs: { quote: { ...BASE_QUOTE, change: 4.16 }, mode: 'card' },
+      });
+
+      expect(fixture.nativeElement.getAttribute('title')).toBe(
+        'SPDR S&P 500 ETF (SPY) — $542.44 (+$4.16), +0.77%',
+      );
+      expect(
+        container.querySelector('app-asset-identity')?.getAttribute('title'),
+      ).toBeNull();
+    });
   });
 
   describe('logo input', () => {
@@ -292,6 +321,25 @@ describe('TickerQuoteComponent', () => {
         '.ticker-quote__change',
       );
       expect(change.getAttribute('aria-label')).toBe('unchanged');
+    });
+  });
+
+  describe('host title', () => {
+    it('includes the absolute change and grouped price when present', async () => {
+      const { fixture } = await render(TickerQuoteComponent, {
+        inputs: {
+          quote: {
+            ...BASE_QUOTE,
+            price: 1542.44,
+            change: -12.34,
+            changePercent: -0.8,
+          },
+        },
+      });
+
+      expect(fixture.nativeElement.getAttribute('title')).toBe(
+        'SPDR S&P 500 ETF (SPY) — $1,542.44 (-$12.34), -0.80%',
+      );
     });
   });
 });

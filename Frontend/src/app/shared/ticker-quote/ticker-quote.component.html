@@ -1,11 +1,12 @@
 <app-asset-identity
-  [symbol]="quote().symbol"
+  [symbol]="quote().ticker"
   [name]="identityName()"
   [exchange]="identityExchange()"
   [logoSlug]="quote().logoSlug ?? null"
   [size]="effectiveSize()"
   [tone]="tone()"
   [logo]="logo()"
+  [showTitle]="!isCard()"
 />
 
 <span class="ticker-quote__figures">

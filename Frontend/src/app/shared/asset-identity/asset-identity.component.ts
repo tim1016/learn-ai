@@ -89,7 +89,7 @@ function fallbackTextForSymbol(symbol: string): string {
     '[class.asset-identity--sm]': 'size() === "sm"',
     '[class.asset-identity--lg]': 'size() === "lg"',
     '[class.asset-identity--inverse]': 'tone() === "inverse"',
-    '[attr.title]': 'titleText()',
+    '[attr.title]': 'showTitle() ? titleText() : null',
   },
 })
 export class AssetIdentityComponent {
@@ -100,6 +100,7 @@ export class AssetIdentityComponent {
   readonly logo = input<boolean>(true);
   readonly size = input<AssetIdentitySize>('md');
   readonly tone = input<AssetIdentityTone>('default');
+  readonly showTitle = input<boolean>(true);
 
   private readonly failedLogoUrl = signal<string | null>(null);
 

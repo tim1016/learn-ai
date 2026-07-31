@@ -86,6 +86,14 @@ describe('AssetIdentityComponent', () => {
     expect(container.querySelector('.asset-identity__exchange')).toBeNull();
   });
 
+  it('can suppress its native title for a parent-owned tooltip', async () => {
+    const { fixture } = await render(AssetIdentityComponent, {
+      inputs: { symbol: 'SPY', showTitle: false },
+    });
+
+    expect(fixture.nativeElement.getAttribute('title')).toBeNull();
+  });
+
   it('hides a broken image and keeps the symbol visible', async () => {
     const { container, fixture } = await render(AssetIdentityComponent, {
       inputs: { symbol: 'MSFT', logoSlug: 'microsoft' },

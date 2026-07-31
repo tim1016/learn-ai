@@ -4,7 +4,7 @@
   --ticker-quote-price-color: var(--text-primary, #{$text-primary});
   --ticker-quote-change-positive: var(--bull, #{$bull});
   --ticker-quote-change-negative: var(--bear, #{$bear});
-  --ticker-quote-change-flat: var(--text-muted, #{$text-muted});
+  --ticker-quote-change-flat: var(--text-secondary, #{$text-secondary});
   --ticker-quote-bg: var(--bg-elevated, #{$bg-elevated});
   --ticker-quote-border: var(--border-light, #{$border-light});
   --ticker-quote-radius: var(--radius-md, #{$radius-md});
