@@ -3,9 +3,12 @@
 **Status:** in progress; premarket deploy, churn, fault injection, and restart
 recovery are complete. Market-hours fills and terminal wind-down remain pending.
 
-**Issue:** [#1324](https://github.com/tim1016/learn-ai/issues/1324)  
-**Account:** `PA3KWXU1C4C3` (`paper`)  
-**Branch:** `codex/issue-1324-paper-deploy`  
+**Issue:** [#1324](https://github.com/tim1016/learn-ai/issues/1324)
+
+**Account:** `PA3KWXU1C4C3` (`paper`)
+
+**Branch:** `codex/issue-1324-paper-deploy`
+
 **Base:** `979e3dca5e949e38bc2b8383bd2a0066d4a61605`
 
 ## Evidence rules
