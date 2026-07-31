@@ -164,6 +164,7 @@ describe('DualPaneChartComponent', () => {
       },
     ]);
     fixture.detectChanges();
+    await fixture.whenStable();
 
     expect(chartMocks.setData).toHaveBeenLastCalledWith([
       {
