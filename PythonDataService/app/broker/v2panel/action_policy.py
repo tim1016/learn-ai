@@ -72,7 +72,12 @@ def _guard_deploy(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]
 
 
 def _guard_start(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _no_blockers(not ctx.running and ctx.phase != "RETIRED")
+    return _no_blockers(
+        not ctx.running
+        and ctx.phase != "RETIRED"
+        and not ctx.has_exposure
+        and not ctx.hold_active
+    )
 
 
 def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
@@ -114,7 +119,12 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         supported_brokers=frozenset({"alpaca"}),
         list_page_only=False,
         guard=_guard_start,
-        revision_inputs=lambda ctx: (ctx.running, ctx.phase),
+        revision_inputs=lambda ctx: (
+            ctx.running,
+            ctx.phase,
+            ctx.has_exposure,
+            ctx.hold_active,
+        ),
     ),
     "stop": ActionPolicy(
         action_id="stop",

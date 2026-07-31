@@ -76,13 +76,20 @@ def _clerk_status(
     )
 
 
-def _panel(status: BotStatusView, clerk: ClerkStatus, entries: list, decision=None):
+def _panel(
+    status: BotStatusView,
+    clerk: ClerkStatus,
+    entries: list,
+    decision=None,
+    *,
+    exposure: dict[str, float] | None = None,
+):
     return build_panel(
         status,
         clerk,
         entries,
         account_id=ACCT,
-        exposure={"SPY": 100.0},
+        exposure={"SPY": 100.0} if exposure is None else exposure,
         fills_today=0,
         realized_pnl_today=0.0,
         open_pnl=None,
@@ -137,10 +144,38 @@ def test_panel_never_emits_paused_desired_state() -> None:
 
 def test_stop_enabled_only_when_running() -> None:
     running_panel = _panel(_status(running=True), _clerk_status(), [])
-    stopped_panel = _panel(_status(running=False), _clerk_status(), [])
+    stopped_panel = _panel(
+        _status(running=False), _clerk_status(), [], exposure={}
+    )
     assert _action(running_panel, "stop").enabled is True
     assert _action(stopped_panel, "stop").enabled is False
     assert _action(stopped_panel, "start").enabled is True
+
+
+def test_start_requires_flat_exposure_and_no_clerk_hold() -> None:
+    flat = _panel(_status(running=False), _clerk_status(), [], exposure={})
+    exposed = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={"SPY": 1.0},
+    )
+    held = _panel(
+        _status(running=False),
+        _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"),
+        [],
+        exposure={},
+    )
+
+    assert _action(flat, "start").enabled is True
+    assert _action(exposed, "start").enabled is False
+    assert _action(held, "start").enabled is False
+    assert _action(flat, "start").concurrency_token != _action(
+        exposed, "start"
+    ).concurrency_token
+    assert _action(flat, "start").concurrency_token != _action(
+        held, "start"
+    ).concurrency_token
 
 
 def test_clear_hold_gated_on_healthy_and_fresh() -> None:

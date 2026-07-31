@@ -480,12 +480,20 @@ def _action_performers(
 ) -> dict[str, ActionPerformer]:
     """Map each executable action id to the coroutine that performs it (§11, §12).
 
-    Only the actions whose backend exists in phase 1 are wired: ``stop``
-    (bot runner), ``reconcile_now`` and ``clear_hold`` (clerk). The remaining
-    closed-set actions raise ``ActionNotAvailableError`` from the executor
-    (their lifecycle backend lands in later slices) rather than presenting a
-    fake success.
+    Only actions with production custody are wired. The remaining closed-set
+    actions raise ``ActionNotAvailableError`` from the executor rather than
+    presenting a fake success.
     """
+
+    async def _start(operator: str) -> str:
+        registry = get_bot_task_registry()
+        if registry is None:
+            raise PanelUnavailableError("The bot runner is not available.")
+        await registry.resume_existing(broker, sid)
+        return (
+            "Bot started from its durable deployment configuration. "
+            "The Clerk remains the only owner of broker order effects."
+        )
 
     async def _stop(operator: str) -> str:
         registry = get_bot_task_registry()
@@ -543,6 +551,7 @@ def _action_performers(
         return "Exposure hold cleared."
 
     return {
+        "start": _start,
         "stop": _stop,
         "flatten_stop": _flatten_stop,
         "reconcile_now": _reconcile,

@@ -47,6 +47,7 @@ All temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -234,6 +235,50 @@ class BotTaskRegistry:
         quantity: int = 1,
     ) -> BotStatusView:
         """Deploy and start a bot; durable evidence before liveness."""
+        return await self._launch(
+            broker=broker,
+            strategy_instance_id=strategy_instance_id,
+            symbol=symbol,
+            use_rth=use_rth,
+            mode=mode,
+            quantity=quantity,
+            action_plan=alpaca_v1_action_plan(symbol),
+            reason="deploy",
+        )
+
+    async def resume_existing(self, broker: str, strategy_instance_id: str) -> BotStatusView:
+        """Start a new run from one stopped bot's durable deployment binding.
+
+        Resume never reconstructs strategy semantics in the panel. It reads the
+        backend-owned immutable configuration, preserves its ``ActionPlan``, and
+        launches a newly identified run through the same recovery and restart
+        gates as a first deployment.
+        """
+        binding = self.binding_for_control(broker, strategy_instance_id)
+        return await self._launch(
+            broker=binding.broker,
+            strategy_instance_id=binding.strategy_instance_id,
+            symbol=binding.symbol,
+            use_rth=binding.use_rth,
+            mode=binding.mode,
+            quantity=binding.quantity,
+            action_plan=binding.action_plan,
+            reason="resume",
+        )
+
+    async def _launch(
+        self,
+        *,
+        broker: str,
+        strategy_instance_id: str,
+        symbol: str,
+        use_rth: bool,
+        mode: Literal["log_only", "trade"],
+        quantity: int,
+        action_plan: ActionPlan,
+        reason: Literal["deploy", "resume"],
+    ) -> BotStatusView:
+        """Launch one run after the shared recovery, intensity, and feed gates."""
         instance_dir = self._confined_instance_dir(strategy_instance_id)
         managed = self._bots.get(strategy_instance_id)
         if managed is not None and not managed.task.done():
@@ -259,21 +304,21 @@ class BotTaskRegistry:
             use_rth=use_rth,
             mode=mode,
             quantity=quantity,
-            action_plan=alpaca_v1_action_plan(symbol),
+            action_plan=action_plan,
             run_id=run_id,
             created_at_ms=now,
         )
         instance_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write_json(instance_dir / _BINDING_FILENAME, binding.model_dump())
         self._desired_repo(strategy_instance_id).set(
-            DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason="deploy"
+            DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )
         self._lifecycle_repo(strategy_instance_id).set_phase(
             BotLifecyclePhase.ON_DUTY,
             now_ms=now,
             updated_by=_UPDATED_BY,
             active_run_id=run_id,
-            reason=f"deploy_{mode}_bot",
+            reason=f"{reason}_{mode}_bot",
         )
         task = asyncio.create_task(
             self._supervise(binding, feed), name=f"bot:{strategy_instance_id}"
@@ -286,9 +331,10 @@ class BotTaskRegistry:
         # bot ON_DUTY with no terminal outcome.
         await asyncio.sleep(0)
         logger.info(
-            "Bot deployed",
+            "Bot run launched",
             extra={
-                "action": "bot_deployed",
+                "action": "bot_run_launched",
+                "launch_reason": reason,
                 "strategy_instance_id": strategy_instance_id,
                 "broker": broker,
                 "symbol": symbol,
@@ -530,7 +576,7 @@ class BotTaskRegistry:
             if not binding_path.is_file():
                 continue
             try:
-                binding = BrokerBotBinding.model_validate_json(
+                binding = self._decode_binding(
                     binding_path.read_text(encoding="utf-8")
                 )
             except (OSError, ValidationError, ValueError) as exc:
@@ -697,7 +743,31 @@ class BotTaskRegistry:
         path = self._confined_instance_dir(strategy_instance_id) / _BINDING_FILENAME
         if not path.is_file():
             return None
-        return BrokerBotBinding.model_validate_json(path.read_text(encoding="utf-8"))
+        return self._decode_binding(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _decode_binding(raw: str) -> BrokerBotBinding:
+        """Read the current binding contract or lift the Alpaca v1 shape.
+
+        Version 1 predated durable ``ActionPlan`` configuration. Existing
+        Alpaca paper instances still carry enough immutable information to
+        reconstruct the only plan that v1 could execute: one long stock entry
+        and its matching close leg. The migration is read-only so historical
+        artifacts remain byte-for-byte audit evidence.
+        """
+        payload = json.loads(raw)
+        if (
+            payload.get("schema_version") == 1
+            and payload.get("broker") == "alpaca"
+            and isinstance(payload.get("symbol"), str)
+            and "action_plan" not in payload
+        ):
+            payload = {
+                **payload,
+                "schema_version": 2,
+                "action_plan": alpaca_v1_action_plan(payload["symbol"]).model_dump(),
+            }
+        return BrokerBotBinding.model_validate(payload)
 
     def _compose_status(self, binding: BrokerBotBinding) -> BotStatusView:
         sid = binding.strategy_instance_id

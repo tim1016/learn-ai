@@ -19,6 +19,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     StaleRevisionError,
     execute_action,
 )
+from app.services.broker_v2_panel.panel_data_source import _action_performers
 
 _SID = "bot-alpha"
 
@@ -196,6 +197,29 @@ async def test_unwired_action_is_typed_not_available() -> None:
             store=IdempotencyStore(),
         )
     assert exc.value.http_status == 409
+
+
+async def test_start_performer_resumes_durable_binding(monkeypatch) -> None:
+    resumed: list[tuple[str, str]] = []
+
+    class _Registry:
+        async def resume_existing(self, broker: str, sid: str) -> None:
+            resumed.append((broker, sid))
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
+        lambda: _Registry(),
+    )
+
+    message = await _action_performers(
+        "alpaca", _SID, idempotency_key="resume-1"
+    )["start"]("desk-operator")
+
+    assert resumed == [("alpaca", _SID)]
+    assert message == (
+        "Bot started from its durable deployment configuration. "
+        "The Clerk remains the only owner of broker order effects."
+    )
 
 
 async def _noop() -> str:

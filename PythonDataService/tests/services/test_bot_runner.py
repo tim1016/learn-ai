@@ -367,6 +367,33 @@ async def test_list_bots_filters_by_broker_tag(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_version_one_alpaca_binding_is_read_without_rewriting_audit_artifact(
+    tmp_path: Path,
+) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.stop("alpaca", _SID)
+
+    binding_path = tmp_path / "live_state" / _SID / "broker_binding.json"
+    legacy = _binding_json(tmp_path)
+    legacy["schema_version"] = 1
+    legacy.pop("action_plan")
+    original = json.dumps(legacy, separators=(",", ":"), sort_keys=True)
+    binding_path.write_text(original, encoding="utf-8")
+
+    restarted = _registry(tmp_path, feed)
+    listed = restarted.list_bots("alpaca")
+    migrated = restarted.binding_for_control("alpaca", _SID)
+
+    assert [view.strategy_instance_id for view in listed] == [_SID]
+    assert migrated.schema_version == 2
+    assert migrated.action_plan.on_enter[0].instrument.underlying == "SPY"
+    assert migrated.action_plan.on_exit[0].entry_leg_id == "primary"
+    assert binding_path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.asyncio
 async def test_status_for_wrong_broker_is_404(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
@@ -376,6 +403,33 @@ async def test_status_for_wrong_broker_is_404(tmp_path: Path) -> None:
             registry.status("ibkr", _SID)
     finally:
         await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_resume_existing_creates_new_run_and_preserves_action_plan(
+    tmp_path: Path,
+) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    deployed = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+        quantity=3,
+    )
+    original = registry.binding_for_control("alpaca", _SID)
+    await registry.stop("alpaca", _SID)
+
+    resumed = await registry.resume_existing("alpaca", _SID)
+    rebound = registry.binding_for_control("alpaca", _SID)
+
+    assert resumed.running is True
+    assert resumed.active_run_id != deployed.active_run_id
+    assert rebound.run_id == resumed.active_run_id
+    assert rebound.mode == "log_only"
+    assert rebound.quantity == 3
+    assert rebound.action_plan == original.action_plan
+    await registry.stop("alpaca", _SID)
 
 
 # ── shutdown ──────────────────────────────────────────────────────────
