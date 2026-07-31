@@ -506,6 +506,30 @@ async def test_effect_enter_derives_side_and_replay_never_duplicates_broker_work
     )
 
 
+async def test_stop_custody_cancels_only_a_clerk_owned_working_enter() -> None:
+    """STOP cancels an ENTER child without inventing an exposure claim."""
+    from app.broker.alpaca.clerk.models import EffectPurpose
+
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    await clerk.execute_for_instance(
+        strategy_instance_id=_SID_A,
+        run_id="run-1",
+        decision_id="bar-1700000030000-enter",
+        purpose=EffectPurpose.ENTER,
+        action_plan=_effect_plan(),
+        quantity=2,
+    )
+
+    cancelled = await clerk.cancel_working_entries_for_instance(_SID_A)
+
+    assert len(cancelled) == 1
+    assert cancelled[0].status == "acked"
+    assert broker.cancel_calls == [cancelled[0].order_id]
+    entries = await clerk.read_journal_entries()
+    assert ClerkEntryKind.CANCEL_ACKED in [entry.kind for entry in entries]
+
+
 async def test_effect_enter_rejection_is_a_backend_authored_terminal_receipt() -> None:
     from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 

@@ -75,6 +75,7 @@ const BASE_PANEL: BotPanelView = {
       blockers: [],
       confirmation: null,
       revision: 1,
+      concurrency_token: 'test-token',
     },
   ],
 };
@@ -182,6 +183,7 @@ describe('TraderLensComponent — primary verb button', () => {
           blockers: [],
           confirmation: null,
           revision: 1,
+          concurrency_token: 'test-token',
         },
       ],
     };

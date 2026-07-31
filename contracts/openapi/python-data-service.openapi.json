@@ -31773,6 +31773,10 @@
             "title": "Blockers",
             "type": "array"
           },
+          "concurrency_token": {
+            "title": "Concurrency Token",
+            "type": "string"
+          },
           "confirmation": {
             "anyOf": [
               {
@@ -31807,7 +31811,8 @@
           "enabled",
           "blockers",
           "confirmation",
-          "revision"
+          "revision",
+          "concurrency_token"
         ],
         "title": "PanelAction",
         "type": "object"
@@ -31828,6 +31833,12 @@
               "reconcile_now"
             ],
             "title": "Action Id",
+            "type": "string"
+          },
+          "concurrency_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Concurrency Token",
             "type": "string"
           },
           "idempotency_key": {
@@ -31857,6 +31868,7 @@
         "required": [
           "action_id",
           "revision",
+          "concurrency_token",
           "idempotency_key"
         ],
         "title": "PanelActionRequest",
@@ -31883,6 +31895,10 @@
             "title": "Applied",
             "type": "boolean"
           },
+          "concurrency_token": {
+            "title": "Concurrency Token",
+            "type": "string"
+          },
           "message": {
             "title": "Message",
             "type": "string"
@@ -31896,6 +31912,7 @@
           "action_id",
           "applied",
           "revision",
+          "concurrency_token",
           "message"
         ],
         "title": "PanelActionResult",

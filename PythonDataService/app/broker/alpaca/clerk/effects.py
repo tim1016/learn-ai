@@ -517,3 +517,48 @@ class ClerkEffectOperations:
             ):
                 latest[receipt.operation.decision_id] = receipt
         return tuple(latest.values())
+
+    async def cancel_working_entries_for_instance(
+        self, strategy_instance_id: str
+    ) -> tuple[OrderCancelResult, ...]:
+        """Cancel only Clerk-owned, still-working ENTER children for STOP.
+
+        STOP is never an implicit flatten and it must not cancel a reducing
+        EXIT that has already taken custody of attributed exposure.  The effect
+        receipt is the authority that classifies a child intent as ENTER.
+        """
+        account_id, journal = await self._ensure_journal()
+        async with self._intake_lock:
+            entries = journal.read_entries()
+            purposes = {
+                entry.effect_receipt.operation.decision_id: entry.effect_receipt.operation.purpose
+                for entry in entries
+                if entry.effect_receipt is not None
+                and entry.effect_receipt.operation.strategy_instance_id == strategy_instance_id
+            }
+            namespace = build_bot_order_namespace(strategy_instance_id)
+            symbols = {
+                entry.leg.symbol
+                for entry in entries
+                if entry.effect_operation_id is not None
+                and purposes.get(entry.effect_operation_id) is EffectPurpose.ENTER
+                and entry.leg is not None
+            }
+            working = [
+                entry
+                for symbol in symbols
+                for entry in self._working_entries(entries, namespace, symbol)
+            ]
+            targets = [
+                entry
+                for entry in working
+                if entry.effect_operation_id is not None
+                and purposes.get(entry.effect_operation_id) is EffectPurpose.ENTER
+                and entry.order is not None
+                and not self._cancel_was_acked(entries, entry.order.order_id)
+            ]
+            cancellations = [
+                await self._cancel_owned_entry(journal, account_id, entry)
+                for entry in targets
+            ]
+            return tuple(cancellations)

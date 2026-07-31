@@ -16,6 +16,8 @@ the same registry, never manually maintained in parallel.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -198,6 +200,16 @@ def build_actions_from_registry(
             continue
         enabled, blockers = policy.guard(ctx)
         copy = copy_for(action_id)
+        # Each action owns its own compare-and-set domain.  In particular STOP
+        # depends only on whether this instance is still running; Clerk journal
+        # activity and other panel changes cannot manufacture a Stop-409.
+        token_payload = {
+            "action_id": action_id,
+            "inputs": policy.revision_inputs(ctx),
+        }
+        concurrency_token = hashlib.sha256(
+            json.dumps(token_payload, separators=(",", ":"), default=str).encode()
+        ).hexdigest()[:32]
         actions.append(
             PanelAction(
                 action_id=action_id,  # type: ignore[arg-type]
@@ -207,6 +219,7 @@ def build_actions_from_registry(
                 blockers=blockers,
                 confirmation=None,
                 revision=revision,
+                concurrency_token=concurrency_token,
             )
         )
     return actions

@@ -146,6 +146,7 @@ export interface PanelAction {
   readonly blockers: readonly OperatorBlocker[];
   readonly confirmation: OperatorConfirmationCopy | null;
   readonly revision: number;
+  readonly concurrency_token: string;
 }
 
 export interface BotPanelView {
@@ -171,6 +172,7 @@ export interface BotPanelView {
 export interface PanelActionRequest {
   readonly action_id: ActionId;
   readonly revision: number;
+  readonly concurrency_token: string;
   readonly idempotency_key: string;
   readonly reason: string | null;
 }
@@ -179,6 +181,7 @@ export interface PanelActionResult {
   readonly action_id: ActionId;
   readonly applied: boolean;
   readonly revision: number;
+  readonly concurrency_token: string;
   readonly message: string;
 }
 

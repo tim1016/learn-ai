@@ -19,7 +19,12 @@ import time
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
-from app.broker.alpaca.clerk.models import ClerkStatus, OrderJournalEntry
+from app.broker.alpaca.clerk.models import (
+    ClerkStatus,
+    EffectOperationState,
+    EffectPurpose,
+    OrderJournalEntry,
+)
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
@@ -38,6 +43,7 @@ from app.services.bot_runner import BotRunnerError, get_bot_task_registry
 from app.services.broker_v2_panel.account_projection_owner import get_or_create_owner
 from app.services.broker_v2_panel.action_execution_service import (
     ActionPerformer,
+    durable_idempotency_store_for,
     execute_action,
 )
 from app.services.broker_v2_panel.chart_projection_service import (
@@ -338,7 +344,9 @@ async def get_history_chart(
     )
 
 
-def _action_performers(broker: str, sid: str) -> dict[str, ActionPerformer]:
+def _action_performers(
+    broker: str, sid: str, *, idempotency_key: str
+) -> dict[str, ActionPerformer]:
     """Map each executable action id to the coroutine that performs it (§11, §12).
 
     Only the actions whose backend exists in phase 1 are wired: ``stop``
@@ -353,7 +361,10 @@ def _action_performers(broker: str, sid: str) -> dict[str, ActionPerformer]:
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
         await registry.stop(broker, sid, reason=f"Panel stop by {operator}")
-        return "Bot stopped; working entry orders cancelled. Exposure left untouched."
+        return (
+            "Bot stopped. "
+            "The Clerk cancelled any working entry orders; attributed exposure was left untouched."
+        )
 
     async def _reconcile(operator: str) -> str:
         clerk = get_alpaca_clerk()
@@ -361,6 +372,37 @@ def _action_performers(broker: str, sid: str) -> dict[str, ActionPerformer]:
             raise PanelUnavailableError("Alpaca order management is not configured.")
         verdict = await clerk.reconcile_once()
         return f"Reconciliation sweep complete: {verdict}."
+
+    async def _flatten_stop(operator: str) -> str:
+        registry = get_bot_task_registry()
+        clerk = get_alpaca_clerk()
+        if registry is None:
+            raise PanelUnavailableError("The bot runner is not available.")
+        if clerk is None:
+            raise PanelUnavailableError("Alpaca order management is not configured.")
+        binding = registry.binding_for_control(broker, sid)
+        receipt = await clerk.execute_for_instance(
+            strategy_instance_id=sid,
+            run_id=binding.run_id,
+            decision_id=f"panel-flatten:{idempotency_key}",
+            purpose=EffectPurpose.EXIT,
+            action_plan=binding.action_plan,
+            quantity=binding.quantity,
+        )
+        if receipt.state is EffectOperationState.UNPROVABLE:
+            return (
+                "The bot is stopped, but the Clerk cannot prove that attributed exposure "
+                "is flat. Inspect the Clerk receipt before issuing another action."
+            )
+        status = registry.status(broker, sid)
+        if status.running:
+            await registry.stop(broker, sid, reason=f"Panel flatten-and-stop by {operator}")
+        if receipt.state is EffectOperationState.FLAT:
+            return "The Clerk proved attributed exposure is flat and the bot is stopped."
+        return (
+            "The bot is stopped and the Clerk submitted the reducing operation; "
+            "await its durable fill receipt before treating exposure as flat."
+        )
 
     async def _clear_hold(operator: str) -> str:
         clerk = get_alpaca_clerk()
@@ -371,6 +413,7 @@ def _action_performers(broker: str, sid: str) -> dict[str, ActionPerformer]:
 
     return {
         "stop": _stop,
+        "flatten_stop": _flatten_stop,
         "reconcile_now": _reconcile,
         "clear_hold": _clear_hold,
     }
@@ -391,10 +434,24 @@ async def run_action(
     configured ``operator_identity`` — never a request field.
     """
     panel = await get_panel(broker, account_id, sid)
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise PanelUnavailableError("The bot runner is not available.")
+    action = next(
+        (candidate for candidate in panel.actions if candidate.action_id == request.action_id),
+        None,
+    )
+    if action is None:
+        raise UnknownBotError(
+            f"Action '{request.action_id}' is not available for bot '{sid}'.",
+            detail="Refresh the panel before retrying the command.",
+        )
     return await execute_action(
         request,
         sid=sid,
         current_revision=panel.revision,
-        performers=_action_performers(broker, sid),
+        current_concurrency_token=action.concurrency_token,
+        performers=_action_performers(broker, sid, idempotency_key=request.idempotency_key),
         operator_identity=operator_identity,
+        store=durable_idempotency_store_for(registry.panel_action_receipt_path(sid)),
     )
