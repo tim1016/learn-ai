@@ -14,7 +14,12 @@
 }
 
 <span class="asset-identity__copy">
-  <span class="asset-identity__symbol">{{ displaySymbol() }}</span>
+  <span class="asset-identity__symbol-row">
+    <span class="asset-identity__symbol">{{ displaySymbol() }}</span>
+    @if (displayExchange(); as assetExchange) {
+      <span class="asset-identity__exchange">{{ assetExchange }}</span>
+    }
+  </span>
   @if (displayName(); as assetName) {
     <span class="asset-identity__name">{{ assetName }}</span>
   }
