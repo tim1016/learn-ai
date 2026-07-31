@@ -5,27 +5,12 @@
   @if (flattenStopAction()) {
     @let fsa = flattenStopAction()!;
     <div class="operator-lens__top-bar">
-      <button
-        type="button"
-        class="operator-lens__flatten-btn"
-        [disabled]="!fsa.enabled || actionPending()"
-        [attr.aria-disabled]="!fsa.enabled || actionPending()"
-        [attr.aria-label]="fsa.label"
-        [title]="fsa.explanation"
-        (click)="onFlattenStop()"
-      >
-        {{ fsa.label }}
-      </button>
-
-      @if (fsa.confirmation?.required) {
-        <p class="operator-lens__flatten-warning" role="note">
-          {{ fsa.confirmation!.prompt }}
-        </p>
-      }
-
-      @for (blocker of fsa.blockers; track blocker.code) {
-        <p class="operator-lens__flatten-blocker" role="alert">{{ blocker.label }}</p>
-      }
+      <app-panel-action-button
+        [action]="fsa"
+        [pending]="actionPending()"
+        tone="danger"
+        (triggered)="onActionRequested($event)"
+      />
     </div>
   }
 
@@ -65,6 +50,9 @@
 
   <!-- ── Journal tail (bottom, internal scroll) ─────────────────────────── -->
   <div class="operator-lens__journal">
+    @if (journalError()) {
+      <p role="alert">{{ journalError() }}</p>
+    }
     <app-journal-tail
       [evidencePage]="journalPage()"
       [loading]="journalLoading()"

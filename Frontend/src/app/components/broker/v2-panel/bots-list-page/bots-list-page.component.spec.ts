@@ -12,6 +12,7 @@ function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAcco
   return {
     broker: 'alpaca',
     account_id: 'PA9',
+    account_mode: 'paper',
     account_status: 'ACTIVE',
     currency: 'USD',
     cash: 10_000,
@@ -90,7 +91,7 @@ async function renderPage(
   const mockPanelService = {
     getCatalog: () => Promise.resolve(bots),
     getPanelProfile: () => Promise.resolve(profile),
-    runAction: () => Promise.resolve({ action_id: 'start', applied: true, revision: 1, message: 'ok' }),
+    runBotAction: () => Promise.resolve({ action_id: 'start', applied: true, revision: 1, message: 'ok' }),
   };
 
   return render(BotsListPageComponent, {

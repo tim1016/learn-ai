@@ -253,17 +253,17 @@ def test_boot_adopts_healthy_orphan_clerk_only_after_generation_handshake(
         staticmethod(verify_generation),
     )
 
-    manager.reconcile_account_clerks_on_boot()
+    manager._clerk_supervisor.reconcile_on_boot()
 
-    adopted = manager._clerks["DU123"]
+    adopted = manager._clerk_supervisor.clerks["DU123"]
     assert adopted.generation == 1
     assert adopted.ibkr_client_id == 80
     assert adopted.process.pid == 9123
     assert handshakes == [(manager.artifacts_root, "DU123")]
-    assert manager._account_clerk_start_blockers == {}
+    assert manager._clerk_supervisor.start_blockers == {}
 
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("must not respawn adopted Clerk"))
-    assert manager._ensure_account_clerk("DU123") is adopted
+    assert manager._clerk_supervisor.ensure("DU123") is adopted
 
 
 def test_daemon_restart_keeps_the_clerk_binding_capability_for_adoption(
@@ -295,15 +295,18 @@ def test_boot_refuses_to_adopt_legacy_live_clerk_lease_without_client_id(
     evidence = _orphan_clerk_process_evidence(manager)
     monkeypatch.setattr(host_daemon, "_inspect_account_clerk_process", lambda _pid: evidence)
 
-    manager.reconcile_account_clerks_on_boot()
+    manager._clerk_supervisor.reconcile_on_boot()
 
-    assert "DU123" not in manager._clerks
-    assert "omits its IBKR client ID" in manager._account_clerk_start_blockers["DU123"]
+    assert "DU123" not in manager._clerk_supervisor.clerks
+    assert (
+        "omits its IBKR client ID"
+        in manager._clerk_supervisor.start_blockers["DU123"]
+    )
     assert manager._active_ibkr_client_ids(exclude_key="") == {80, 81, 82}
     with pytest.raises(HostRunnerError, match="No IBKR client IDs are available"):
         manager._allocate_ibkr_client_id(exclude_key="")
     with pytest.raises(OSError, match="replacement blocked"):
-        manager._ensure_account_clerk("DU123")
+        manager._clerk_supervisor.ensure("DU123")
 
 
 def test_boot_refuses_to_adopt_clerk_when_lease_client_id_differs_from_process(
@@ -319,10 +322,13 @@ def test_boot_refuses_to_adopt_clerk_when_lease_client_id_differs_from_process(
     evidence = _orphan_clerk_process_evidence(manager, ibkr_client_id=80)
     monkeypatch.setattr(host_daemon, "_inspect_account_clerk_process", lambda _pid: evidence)
 
-    manager.reconcile_account_clerks_on_boot()
+    manager._clerk_supervisor.reconcile_on_boot()
 
-    assert "DU123" not in manager._clerks
-    assert "does not identify Clerk" in manager._account_clerk_start_blockers["DU123"]
+    assert "DU123" not in manager._clerk_supervisor.clerks
+    assert (
+        "does not identify Clerk"
+        in manager._clerk_supervisor.start_blockers["DU123"]
+    )
 
 
 def test_boot_adoption_restores_each_clerk_client_id_before_next_allocation(
@@ -359,11 +365,11 @@ def test_boot_adoption_restores_each_clerk_client_id_before_next_allocation(
     )
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
 
-    manager.reconcile_account_clerks_on_boot()
-    replacement = manager._ensure_account_clerk("DU113")
+    manager._clerk_supervisor.reconcile_on_boot()
+    replacement = manager._clerk_supervisor.ensure("DU113")
 
-    assert manager._clerks["DU111"].ibkr_client_id == 80
-    assert manager._clerks["DU112"].ibkr_client_id == 81
+    assert manager._clerk_supervisor.clerks["DU111"].ibkr_client_id == 80
+    assert manager._clerk_supervisor.clerks["DU112"].ibkr_client_id == 81
     assert replacement.ibkr_client_id == 82
     lease = read_account_clerk_lease(manager.artifacts_root, "DU113")
     assert lease is not None and lease.ibkr_client_id == 82
@@ -391,7 +397,7 @@ def test_stale_orphan_generation_is_terminated_before_replacement_and_socket_rem
     monkeypatch.setattr(host_daemon.os, "kill", signal_old_clerk)
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: replacement)
 
-    restarted = manager._ensure_account_clerk("DU123")
+    restarted = manager._clerk_supervisor.ensure("DU123")
 
     assert signals == [signal.SIGTERM]
     assert socket_path.exists() is False
@@ -441,7 +447,7 @@ def test_unresponsive_orphan_escalates_to_kill_and_waits_before_replacement(
     monkeypatch.setattr(host_daemon.os, "kill", signal_old_clerk)
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: replacement)
 
-    restarted = manager._ensure_account_clerk("DU123")
+    restarted = manager._clerk_supervisor.ensure("DU123")
 
     assert signals == [signal.SIGTERM, signal.SIGKILL]
     assert socket_path.exists() is False
@@ -466,13 +472,13 @@ def test_pid_reuse_or_mismatched_command_blocks_without_signalling_or_unlinking_
     monkeypatch.setattr(host_daemon, "_inspect_account_clerk_process", lambda _pid: unrelated)
     monkeypatch.setattr(host_daemon.os, "kill", lambda _pid, sig: signals.append(sig))
 
-    manager.reconcile_account_clerks_on_boot()
+    manager._clerk_supervisor.reconcile_on_boot()
 
     assert signals == []
     assert socket_path.exists() is True
-    assert "PID-reuse" in manager._account_clerk_start_blockers["DU123"]
+    assert "PID-reuse" in manager._clerk_supervisor.start_blockers["DU123"]
     with pytest.raises(OSError, match="replacement blocked"):
-        manager._ensure_account_clerk("DU123")
+        manager._clerk_supervisor.ensure("DU123")
 
 
 def test_preexisting_socket_without_lease_cannot_satisfy_readiness_or_be_unlinked(
@@ -488,12 +494,12 @@ def test_preexisting_socket_without_lease_cannot_satisfy_readiness_or_be_unlinke
     socket_path.parent.mkdir(parents=True, exist_ok=True)
     socket_path.touch()
 
-    manager.reconcile_account_clerks_on_boot()
+    manager._clerk_supervisor.reconcile_on_boot()
 
     assert socket_path.exists() is True
-    assert manager._release_account_clerk(account_id) is False
+    assert manager._clerk_supervisor.release(account_id) is False
     with pytest.raises(OSError, match="socket exists without a lease PID"):
-        manager._ensure_account_clerk(account_id)
+        manager._clerk_supervisor.ensure(account_id)
 
 
 def test_supervision_continues_when_replacing_one_exited_clerk_raises_value_error(
@@ -577,7 +583,10 @@ def daemon_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Run
         *,
         ibkr_host: str | None = None,
     ) -> None:
-        manager._ensure_account_clerk(binding.account_id, ibkr_host=ibkr_host)
+        manager._clerk_supervisor.ensure(
+            binding.account_id,
+            ibkr_host=ibkr_host,
+        )
         write_account_instance_binding(manager.artifacts_root, binding)
 
     monkeypatch.setattr(manager, "_record_account_binding_decision_via_clerk", record_binding_through_test_clerk)
@@ -617,7 +626,11 @@ def test_daemon_submits_binding_transition_to_clerk_rpc(
             write_account_instance_binding(manager.artifacts_root, binding)
             return binding
 
-    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(
+        manager._clerk_supervisor,
+        "ensure",
+        lambda _account_id, **_kwargs: SimpleNamespace(),
+    )
     monkeypatch.setattr(host_daemon, "AccountClerkHostRpcClient", _ClerkClient)
     monkeypatch.setattr(
         manager,
@@ -1092,7 +1105,7 @@ async def test_ensure_clerk_endpoint_runs_generation_handshake(
     def ensure(account_id: str, *, ibkr_host: str | None = None) -> None:
         ensured.append((account_id, ibkr_host))
 
-    monkeypatch.setattr(manager, "_ensure_account_clerk", ensure)
+    monkeypatch.setattr(manager._clerk_supervisor, "ensure", ensure)
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
@@ -1113,7 +1126,11 @@ async def test_operator_adjustment_endpoint_forwards_cure_to_host_clerk(
     from app.schemas.journal_cures import JournalCureReceipt
 
     manager, _ = daemon_context
-    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: None)
+    monkeypatch.setattr(
+        manager._clerk_supervisor,
+        "ensure",
+        lambda _account_id, **_kwargs: None,
+    )
 
     class FakeRpcClient:
         def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
@@ -1165,7 +1182,11 @@ async def test_operator_adjustment_endpoint_maps_clerk_rejection_to_409(
     )
 
     manager, _ = daemon_context
-    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: None)
+    monkeypatch.setattr(
+        manager._clerk_supervisor,
+        "ensure",
+        lambda _account_id, **_kwargs: None,
+    )
 
     class FakeRpcClient:
         def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
@@ -1212,7 +1233,11 @@ async def test_operator_recovery_flatten_endpoint_forwards_to_host_local_clerk(
     from app.engine.live.account_owner import AccountOwnerSubmitIntent
 
     manager, _ = daemon_context
-    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: None)
+    monkeypatch.setattr(
+        manager._clerk_supervisor,
+        "ensure",
+        lambda _account_id, **_kwargs: None,
+    )
     namespace = "learn-ai/retired-bot/v1"
     intent = AccountOwnerSubmitIntent(
         trace_id="trace-recovery",
@@ -1287,7 +1312,11 @@ async def test_operator_recovery_flatten_rejects_invalid_path_account_before_cle
     def clerk_must_not_start(_account_id: str, **_kwargs: object) -> None:
         raise AssertionError("invalid account path must not reach Clerk supervision")
 
-    monkeypatch.setattr(manager, "_ensure_account_clerk", clerk_must_not_start)
+    monkeypatch.setattr(
+        manager._clerk_supervisor,
+        "ensure",
+        clerk_must_not_start,
+    )
     intent = AccountOwnerSubmitIntent(
         trace_id="trace-recovery",
         account_id="DU123",
@@ -1326,7 +1355,7 @@ async def test_operator_recovery_flatten_maps_clerk_start_os_error_to_typed_503(
     def unavailable_clerk(_account_id: str, **_kwargs: object) -> None:
         raise OSError("Clerk host process unavailable")
 
-    monkeypatch.setattr(manager, "_ensure_account_clerk", unavailable_clerk)
+    monkeypatch.setattr(manager._clerk_supervisor, "ensure", unavailable_clerk)
     intent = AccountOwnerSubmitIntent(
         trace_id="trace-recovery",
         account_id="DU123",
@@ -1368,7 +1397,7 @@ async def test_operator_cancel_endpoints_map_clerk_start_os_error_to_typed_503(
     def unavailable_clerk(_account_id: str, **_kwargs: object) -> None:
         raise OSError("Clerk host process unavailable")
 
-    monkeypatch.setattr(manager, "_ensure_account_clerk", unavailable_clerk)
+    monkeypatch.setattr(manager._clerk_supervisor, "ensure", unavailable_clerk)
     intent = AccountOwnerSubmitIntent(
         trace_id="trace-cancel",
         account_id="DU123",
@@ -1402,7 +1431,11 @@ async def test_emergency_authorization_endpoint_forwards_to_host_local_clerk(
     from app.engine.live.account_clerk_journal_models import AccountClerkEmergencyAuthorization
 
     manager, _ = daemon_context
-    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: None)
+    monkeypatch.setattr(
+        manager._clerk_supervisor,
+        "ensure",
+        lambda _account_id, **_kwargs: None,
+    )
 
     class FakeRpcClient:
         def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
@@ -1451,7 +1484,7 @@ async def test_emergency_authorization_maps_clerk_start_os_error_to_typed_503(
     def unavailable_clerk(_account_id: str, **_kwargs: object) -> None:
         raise OSError("Clerk host process unavailable")
 
-    monkeypatch.setattr(manager, "_ensure_account_clerk", unavailable_clerk)
+    monkeypatch.setattr(manager._clerk_supervisor, "ensure", unavailable_clerk)
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
@@ -1553,7 +1586,7 @@ async def test_release_clerk_endpoint_detaches_account_service(
         released.append(account_id)
         return True
 
-    monkeypatch.setattr(manager, "_release_account_clerk", release)
+    monkeypatch.setattr(manager._clerk_supervisor, "release", release)
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
@@ -1618,8 +1651,8 @@ async def test_broker_sockets_endpoint_returns_gateway_socket_rows(
 
     monkeypatch.setattr(broker_socket_probe.LsofSocketEnumerator, "enumerate", fake_enumerate)
     monkeypatch.setattr(
-        manager,
-        "_clerk_health",
+        manager._clerk_supervisor,
+        "health",
         lambda: [
             AccountClerkHealth(
                 account_id="DU123",
@@ -1654,7 +1687,7 @@ def test_clerk_health_does_not_attest_a_lease_with_a_different_pid(
 
     manager, _ = daemon_context
     process = FakeProcess()
-    manager._clerk_supervisor._clerks["DU123"] = ManagedClerk(
+    manager._clerk_supervisor.clerks["DU123"] = ManagedClerk(
         account_id="DU123",
         generation=3,
         ibkr_client_id=80,
@@ -1676,7 +1709,7 @@ def test_clerk_health_does_not_attest_a_lease_with_a_different_pid(
         ),
     )
 
-    health = manager._clerk_health()
+    health = manager._clerk_supervisor.health()
 
     assert health[0].pid == process.pid
     assert health[0].status == "UNAVAILABLE"
@@ -2022,7 +2055,7 @@ def test_account_clerk_starts_before_first_bot_stays_ready_after_last_and_takeov
     replacement = FakeProcess()
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: replacement)
     manager.reap_exited_processes()
-    restarted = manager._clerks["DU111"]
+    restarted = manager._clerk_supervisor.clerks["DU111"]
     assert restarted.generation == 2
 
 
@@ -2052,7 +2085,7 @@ def test_start_keeps_account_clerk_alive_until_bot_registration(
     def fake_popen(command: list[str], **_kwargs: Any) -> FakeProcess:
         return clerk if "app.engine.live.account_clerk" in command else bot
 
-    original_ensure = manager._ensure_account_clerk
+    original_ensure = manager._clerk_supervisor.ensure
 
     def pause_after_clerk_ready(account_id: str, *, ibkr_host: str | None = None) -> Any:
         managed = original_ensure(account_id, ibkr_host=ibkr_host)
@@ -2061,7 +2094,11 @@ def test_start_keeps_account_clerk_alive_until_bot_registration(
         return managed
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(manager, "_ensure_account_clerk", pause_after_clerk_ready)
+    monkeypatch.setattr(
+        manager._clerk_supervisor,
+        "ensure",
+        pause_after_clerk_ready,
+    )
 
     def start_bot() -> None:
         try:
@@ -2117,12 +2154,12 @@ def test_reaper_replaces_exited_clerk_for_active_bot_with_new_generation(
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     manager.start(RUN_ID, request=HostRunnerStartRequest())
-    first_generation = manager._clerks["DU111"].generation
+    first_generation = manager._clerk_supervisor.clerks["DU111"].generation
 
     first_clerk.returncode = 1
     manager.reap_exited_processes()
 
-    replacement = manager._clerks["DU111"]
+    replacement = manager._clerk_supervisor.clerks["DU111"]
     assert replacement.process is replacement_clerk
     assert replacement.generation == first_generation + 1
     assert bot.poll() is None
@@ -2167,7 +2204,7 @@ def test_reaper_respawns_exited_account_service_after_last_bot_exits(
     clerk.returncode = 1
     manager.reap_exited_processes()
 
-    assert manager._clerks["DU111"].process is replacement
+    assert manager._clerk_supervisor.clerks["DU111"].process is replacement
     assert sum("app.engine.live.account_clerk" in command for command in spawned) == 2
 
 
@@ -2206,22 +2243,22 @@ def test_hung_clerk_reap_escalates_and_quarantines_client_id_until_confirmed_exi
         lambda command, **_kwargs: clerk if "app.engine.live.account_clerk" in command else bot,
     )
     manager.start(RUN_ID, request=HostRunnerStartRequest())
-    clerk_client_id = manager._clerks["DU111"].ibkr_client_id
+    clerk_client_id = manager._clerk_supervisor.clerks["DU111"].ibkr_client_id
 
     bot.returncode = 0
-    assert manager._release_account_clerk("DU111") is False
+    assert manager._clerk_supervisor.release("DU111") is False
 
     assert clerk.signals == [signal.SIGTERM]
     assert clerk.killed is True
-    assert clerk_client_id in manager._quarantined_account_clerk_client_ids
+    assert clerk_client_id in manager._clerk_supervisor.quarantined_client_ids
     assert clerk_client_id in manager._active_ibkr_client_ids(exclude_key="")
-    assert manager._clerks["DU111"].process is clerk
+    assert manager._clerk_supervisor.clerks["DU111"].process is clerk
 
     clerk.returncode = -9
-    assert manager._release_account_clerk("DU111") is True
+    assert manager._clerk_supervisor.release("DU111") is True
 
-    assert clerk_client_id not in manager._quarantined_account_clerk_client_ids
-    assert "DU111" not in manager._clerks
+    assert clerk_client_id not in manager._clerk_supervisor.quarantined_client_ids
+    assert "DU111" not in manager._clerk_supervisor.clerks
 
 
 def test_clerk_alone_receives_write_capability_and_bot_environment_is_forced_readonly(

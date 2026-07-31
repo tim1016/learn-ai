@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
+from app.broker.alpaca.clerk import derive
 from app.broker.alpaca.clerk.journal import OrderJournal
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.contract.models import BrokerActivity
+from app.utils.timestamps import Clock
 
-type Clock = Callable[[], int]
 type EnsureJournal = Callable[[], Awaitable[tuple[str, OrderJournal]]]
 
 
@@ -54,16 +55,13 @@ class AlpacaActivityRecovery:
                 for entry in entries
             ):
                 return False
-            owner = self._owner_for_order_id(activity.native_order_id, entries)
+            owner = derive.order_owner(entries, activity.native_order_id)
             await journal.append_async(
-                OrderJournalEntry(
+                OrderJournalEntry.attributed_from(
+                    owner,
                     kind=ClerkEntryKind.ACTIVITY_RECOVERY,
                     account_id=account_id,
-                    operator=owner.operator if owner is not None else "",
-                    intent_id=owner.intent_id if owner is not None else "",
-                    order_ref=owner.order_ref if owner is not None else "",
                     client_order_id=owner.client_order_id if owner is not None else "",
-                    leg=owner.leg if owner is not None else None,
                     broker_order_id=activity.native_order_id,
                     owned=owner is not None,
                     recorded_at_ms=self._clock(),
@@ -73,18 +71,3 @@ class AlpacaActivityRecovery:
                 )
             )
             return True
-
-    @staticmethod
-    def _owner_for_order_id(
-        broker_order_id: str | None, entries: list[OrderJournalEntry]
-    ) -> OrderJournalEntry | None:
-        if not broker_order_id:
-            return None
-        for entry in reversed(entries):
-            if (
-                entry.order is not None
-                and entry.order.order_id == broker_order_id
-                and entry.order_ref
-            ):
-                return entry
-        return None

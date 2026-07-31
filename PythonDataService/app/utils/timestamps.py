@@ -11,8 +11,11 @@ and ten copy-pasted ``_now_ms()`` helpers across ``app/broker/ibkr/``).
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from datetime import datetime
 from numbers import Real
+
+type Clock = Callable[[], int]
 
 
 def now_ms_utc() -> int:

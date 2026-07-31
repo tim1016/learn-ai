@@ -28,6 +28,7 @@ from app.engine.live.deploy import (
     UnknownLiveConfigKeyError,
     UnsupportedBarSourceDescriptorError,
     deploy_run,
+    validate_and_normalize_deploy_config,
 )
 
 requires_git = pytest.mark.skipif(
@@ -792,6 +793,21 @@ def test_deploy_run_allows_policy_sizing_for_policy_surface_strategy(
 
 
 # ────────────────── Phase 1 / VCR-0001 — sizing required at deploy ───
+
+
+def test_validate_and_normalize_deploy_config_owns_canonical_transforms() -> None:
+    submitted = {
+        "sizing": {"kind": "SetHoldings", "fraction": "1.00"},
+        "allowed_sessions": ["overnight", "rth"],
+    }
+
+    normalized = validate_and_normalize_deploy_config(submitted)
+
+    assert normalized == {
+        "sizing": {"kind": "SetHoldings", "fraction": "1.00"},
+        "allowed_sessions": ["RTH", "OVERNIGHT"],
+    }
+    assert submitted["allowed_sessions"] == ["overnight", "rth"]
 
 
 @requires_git

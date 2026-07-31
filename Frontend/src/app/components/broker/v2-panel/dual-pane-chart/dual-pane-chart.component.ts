@@ -16,8 +16,12 @@ import {
   CandlestickSeries,
   type IChartApi,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
   createChart,
+  createSeriesMarkers,
 } from 'lightweight-charts';
 import type { ChartBar, ChartFillMarker, ChartHistoryPreset, ChartSource } from '../lib/broker-v2-panel.types';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
@@ -37,6 +41,38 @@ function toCandle(bar: ChartBar): {
     low: parseFloat(bar.low),
     close: parseFloat(bar.close),
   };
+}
+
+function markerTime(
+  marker: ChartFillMarker,
+  bars: readonly ChartBar[],
+): UTCTimestamp {
+  let precedingBar: ChartBar | undefined;
+  for (const bar of bars) {
+    if (bar.start_ms > marker.filled_at_ms) break;
+    precedingBar = bar;
+    if (marker.filled_at_ms < bar.end_ms) break;
+  }
+  const bar = precedingBar ?? bars[0];
+  return Math.floor((bar?.start_ms ?? marker.filled_at_ms) / 1000) as UTCTimestamp;
+}
+
+function toSeriesMarkers(
+  markers: readonly ChartFillMarker[],
+  bars: readonly ChartBar[],
+): SeriesMarker<UTCTimestamp>[] {
+  return markers
+    .map((marker) => {
+      const isBuy = marker.side === 'buy';
+      return {
+        time: markerTime(marker, bars),
+        position: isBuy ? 'belowBar' : 'aboveBar',
+        color: isBuy ? '#60a5fa' : '#f97316',
+        shape: isBuy ? 'arrowUp' : 'arrowDown',
+        text: `${marker.side.toUpperCase()} ${marker.quantity}`,
+      } satisfies SeriesMarker<UTCTimestamp>;
+    })
+    .sort((a, b) => a.time - b.time);
 }
 
 function sourceColors(source: ChartSource): {
@@ -140,23 +176,16 @@ export class DualPaneChartComponent implements AfterViewInit {
   private histChart: IChartApi | null = null;
   private liveSeries: ISeriesApi<'Candlestick'> | null = null;
   private histSeries: ISeriesApi<'Candlestick'> | null = null;
+  private liveMarkers: ISeriesMarkersPluginApi<Time> | null = null;
+  private histMarkers: ISeriesMarkersPluginApi<Time> | null = null;
 
   private readonly destroyRef = inject(DestroyRef);
 
   // ── Constructor ───────────────────────────────────────────────────────────
 
   constructor() {
-    // Re-render live pane whenever live bars or fill markers change.
-    // Guard inside renderLive() is a no-op before ngAfterViewInit.
-    effect(() => {
-      this.liveFillMarkers(); // track for future marker rendering
-      this.renderLive();
-    });
-    // Re-render history pane whenever history bars or fill markers change.
-    effect(() => {
-      this.histFillMarkers(); // track for future marker rendering
-      this.renderHistory();
-    });
+    effect(() => this.renderLive());
+    effect(() => this.renderHistory());
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -167,12 +196,14 @@ export class DualPaneChartComponent implements AfterViewInit {
       this.chartOptions(),
     );
     this.liveSeries = this.liveChart.addSeries(CandlestickSeries, {});
+    this.liveMarkers = createSeriesMarkers(this.liveSeries, []);
 
     this.histChart = createChart(
       this.histContainer().nativeElement,
       this.chartOptions(),
     );
     this.histSeries = this.histChart.addSeries(CandlestickSeries, {});
+    this.histMarkers = createSeriesMarkers(this.histSeries, []);
 
     this.renderLive();
     this.renderHistory();
@@ -215,6 +246,7 @@ export class DualPaneChartComponent implements AfterViewInit {
   private renderLive(): void {
     if (!this.liveSeries) return;
     const bars = this.liveBars();
+    this.liveMarkers?.setMarkers(toSeriesMarkers(this.liveFillMarkers(), bars));
     if (!bars.length) {
       this.liveSeries.setData([]);
       return;
@@ -228,6 +260,7 @@ export class DualPaneChartComponent implements AfterViewInit {
   private renderHistory(): void {
     if (!this.histSeries) return;
     const bars = this.histBars();
+    this.histMarkers?.setMarkers(toSeriesMarkers(this.histFillMarkers(), bars));
     if (!bars.length) {
       this.histSeries.setData([]);
       return;
@@ -245,5 +278,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.histChart = null;
     this.liveSeries = null;
     this.histSeries = null;
+    this.liveMarkers = null;
+    this.histMarkers = null;
   }
 }

@@ -42,6 +42,7 @@ def _snapshot(**overrides: Any) -> BrokerAccountSnapshot:
     base: dict[str, Any] = dict(
         broker="alpaca",
         account_id="PA1",
+        account_mode="paper",
         account_status="ACTIVE",
         currency="USD",
         cash=100.0,

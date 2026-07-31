@@ -25,6 +25,7 @@ def _account() -> BrokerAccountSnapshot:
     return BrokerAccountSnapshot(
         broker="alpaca",
         account_id="PA-SWEEP",
+        account_mode="paper",
         account_status="ACTIVE",
         currency="USD",
         cash=1000.0,

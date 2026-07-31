@@ -305,7 +305,7 @@ def _enforce_sizing_policy_present(live_config: dict) -> dict:
     round-trip.
 
     Returns the ``live_config`` with ``sizing`` re-serialized through the
-    discriminated union's canonical form (mirrors the schema validator); the
+    discriminated union's canonical form (shared with the request boundary); the
     canonical form keeps ``run_id`` stable regardless of how the operator
     stringified ``Decimal`` on the wire.
 
@@ -352,6 +352,32 @@ def _enforce_sizing_policy_present(live_config: dict) -> dict:
         raise SizingPolicyMissingError(str(exc)) from exc
     canonical = dict(live_config)
     canonical["sizing"] = policy_to_ledger_dict(policy)
+    return canonical
+
+
+def validate_and_normalize_deploy_config(live_config: dict) -> dict:
+    """Validate and canonicalize the operator-authored live configuration.
+
+    This is the deploy-domain boundary for value transformations. Pydantic
+    request models delegate here so schema validators remain shape-only.
+    """
+    from app.engine.live.config import normalize_allowed_sessions
+    from app.schemas.action_plan import ActionPlan
+    from app.schemas.broker_activity import ReconciliationTimingPolicy
+
+    canonical = _enforce_sizing_policy_present(live_config)
+    if "action" in canonical:
+        canonical["action"] = ActionPlan.model_validate(canonical["action"]).model_dump()
+    if "allowed_sessions" in canonical:
+        canonical["allowed_sessions"] = list(
+            normalize_allowed_sessions(canonical["allowed_sessions"])
+        )
+    if "reconciliation_timing_policy" in canonical:
+        canonical["reconciliation_timing_policy"] = (
+            ReconciliationTimingPolicy.model_validate(
+                canonical["reconciliation_timing_policy"]
+            ).model_dump()
+        )
     return canonical
 
 

@@ -168,6 +168,30 @@ async def test_evidence_returns_bot_entries_newest_first(app_and_tmp) -> None:
 
 
 @pytest.mark.asyncio
+async def test_evidence_never_treats_matching_operator_as_namespace_ownership(
+    app_and_tmp,
+) -> None:
+    fast_app, tmp_path = app_and_tmp
+    manual = intent_entry(sid=SID, intent="manual-1", ts_ms=_T0).model_copy(
+        update={
+            "order_ref": f"manual/{SID}/v1:manual-1",
+            "client_order_id": f"manual/{SID}/v1:manual-1",
+        }
+    )
+    _write_journal(tmp_path, [manual])
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app), base_url="http://test"
+    ) as client:
+        resp = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/evidence"
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["entries"] == []
+
+
+@pytest.mark.asyncio
 async def test_evidence_audit_entry_written(app_and_tmp) -> None:
     fast_app, tmp_path = app_and_tmp
     _write_journal(tmp_path, [intent_entry(sid=SID, intent="i1", ts_ms=_T0)])

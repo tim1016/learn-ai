@@ -3,20 +3,13 @@ import {
   Component,
   DestroyRef,
   computed,
-  effect,
   inject,
   input,
+  resource,
   signal,
 } from '@angular/core';
 
-import type {
-  BotPanelView,
-  ChartHistoryPreset,
-  ChartHistoryResponse,
-  ChartLiveResponse,
-  PanelAction,
-  PanelProfile,
-} from '../lib/broker-v2-panel.types';
+import type { ChartHistoryPreset, PanelAction } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
@@ -65,52 +58,57 @@ export class BotPanelShellComponent {
 
   // ── Internal state ────────────────────────────────────────────────────────
 
-  protected readonly panel = signal<BotPanelView | null>(null);
-  protected readonly profile = signal<PanelProfile | null>(null);
-  protected readonly liveChart = signal<ChartLiveResponse | null>(null);
-  protected readonly histChart = signal<ChartHistoryResponse | null>(null);
   protected readonly selectedPreset = signal<ChartHistoryPreset>('1D');
   protected readonly actionPending = signal(false);
-  protected readonly loadError = signal<string | null>(null);
+  private readonly actionError = signal<string | null>(null);
+
+  protected readonly panel = resource({
+    params: () => this.routeParams(),
+    loader: ({ params }) =>
+      this.panelSvc.getPanel(params.broker, params.accountId, params.sid),
+  });
+
+  protected readonly profile = resource({
+    params: () => this.broker(),
+    loader: ({ params }) => this.panelSvc.getPanelProfile(params),
+  });
+
+  protected readonly liveChart = resource({
+    params: () => this.routeParams(),
+    loader: ({ params }) =>
+      this.panelSvc.getLiveChart(params.broker, params.accountId, params.sid),
+  });
+
+  protected readonly histChart = resource({
+    params: () => ({ ...this.routeParams(), preset: this.selectedPreset() }),
+    loader: ({ params }) =>
+      this.panelSvc.getHistoryChart(
+        params.broker,
+        params.accountId,
+        params.sid,
+        params.preset,
+      ),
+  });
 
   protected readonly isLoaded = computed(
-    () => this.panel() !== null && this.profile() !== null,
+    () => this.panel.hasValue() && this.profile.hasValue(),
   );
 
-  private panelInFlight = false;
-  private liveChartInFlight = false;
-
-  // ── Polling timers ────────────────────────────────────────────────────────
-
-  private readonly POLL_MS = 5_000;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private liveChartTimer: ReturnType<typeof setInterval> | null = null;
+  protected readonly loadError = computed(() => {
+    if (this.actionError()) return this.actionError();
+    const error = this.panel.error() ?? this.profile.error();
+    if (error === undefined) return null;
+    return error instanceof Error ? error.message : 'Failed to load panel data.';
+  });
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   constructor() {
-    this.destroyRef.onDestroy(() => this.teardown());
-
-    // Defer initial load until route inputs (broker, accountId, sid) are bound.
-    // input.required() signals throw NG0950 if accessed before the host element
-    // has received its values. An effect() runs after the first change-detection
-    // cycle, guaranteeing inputs are available.
-    //
-    // Teardown before reload guards against same-component re-navigation
-    // (SPA back/forward with different route params): stops any running poll
-    // timers before starting fresh ones, preventing timer accumulation.
-    effect(() => {
-      const broker = this.broker();
-      const accountId = this.accountId();
-      const sid = this.sid();
-
-      if (!broker || !accountId || !sid) return;
-
-      this.teardown();
-      this.panel.set(null);
-      this.profile.set(null);
-      void this.initialLoad();
-    });
+    const pollTimer = setInterval(() => {
+      this.panel.reload();
+      this.liveChart.reload();
+    }, 5_000);
+    this.destroyRef.onDestroy(() => clearInterval(pollTimer));
   }
 
   // ── Shell helpers for S4 extension ───────────────────────────────────────
@@ -120,131 +118,40 @@ export class BotPanelShellComponent {
     this.activeLens.set(lens);
   }
 
-  // ── Data loading ──────────────────────────────────────────────────────────
-
-  private async initialLoad(): Promise<void> {
-    await Promise.all([
-      this.loadProfile(),
-      this.loadPanel(),
-      this.loadLiveChart(),
-      this.loadHistoryChart(this.selectedPreset()),
-    ]);
-    this.startPolling();
-  }
-
-  private startPolling(): void {
-    // Panel + live chart share the 5s poll.
-    this.pollTimer = setInterval(() => {
-      void this.loadPanel();
-    }, this.POLL_MS);
-
-    this.liveChartTimer = setInterval(() => {
-      void this.loadLiveChart();
-    }, this.POLL_MS);
-  }
-
-  private async loadProfile(): Promise<void> {
-    try {
-      const p = await this.panelSvc.getPanelProfile(this.broker());
-      this.profile.set(p);
-    } catch {
-      // Profile failure is non-fatal; the panel can still render.
-    }
-  }
-
-  // In-flight guards: the panel/live-chart endpoints can take longer than
-  // POLL_MS; without the guard each tick stacks another concurrent request
-  // and the pile-up degrades the backend for every panel consumer.
-
-  private async loadPanel(): Promise<void> {
-    if (this.panelInFlight) return;
-    this.panelInFlight = true;
-    try {
-      const p = await this.panelSvc.getPanel(
-        this.broker(),
-        this.accountId(),
-        this.sid(),
-      );
-      this.panel.set(p);
-      this.loadError.set(null);
-    } catch (err) {
-      this.loadError.set(
-        err instanceof Error ? err.message : 'Failed to load panel data.',
-      );
-    } finally {
-      this.panelInFlight = false;
-    }
-  }
-
-  private async loadLiveChart(): Promise<void> {
-    if (this.liveChartInFlight) return;
-    this.liveChartInFlight = true;
-    try {
-      const c = await this.panelSvc.getLiveChart(
-        this.broker(),
-        this.accountId(),
-        this.sid(),
-      );
-      this.liveChart.set(c);
-    } catch {
-      // Non-fatal: chart stays at last known state.
-    } finally {
-      this.liveChartInFlight = false;
-    }
-  }
-
-  private async loadHistoryChart(preset: ChartHistoryPreset): Promise<void> {
-    try {
-      const c = await this.panelSvc.getHistoryChart(
-        this.broker(),
-        this.accountId(),
-        this.sid(),
-        preset,
-      );
-      this.histChart.set(c);
-    } catch {
-      // Non-fatal.
-    }
-  }
-
-  private teardown(): void {
-    if (this.pollTimer !== null) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-    if (this.liveChartTimer !== null) {
-      clearInterval(this.liveChartTimer);
-      this.liveChartTimer = null;
-    }
+  private routeParams(): {
+    broker: string;
+    accountId: string;
+    sid: string;
+  } {
+    return {
+      broker: this.broker(),
+      accountId: this.accountId(),
+      sid: this.sid(),
+    };
   }
 
   // ── Template handlers ─────────────────────────────────────────────────────
 
-  protected async onPresetChange(preset: ChartHistoryPreset): Promise<void> {
+  protected onPresetChange(preset: ChartHistoryPreset): void {
     this.selectedPreset.set(preset);
-    await this.loadHistoryChart(preset);
   }
 
   protected async onActionRequested(action: PanelAction): Promise<void> {
     if (this.actionPending()) return;
     this.actionPending.set(true);
+    this.actionError.set(null);
     try {
-      await this.panelSvc.runAction(
+      await this.panelSvc.runBotAction(
         this.broker(),
         this.accountId(),
         this.sid(),
-        {
-          action_id: action.action_id,
-          revision: action.revision,
-          concurrency_token: action.concurrency_token,
-          idempotency_key: crypto.randomUUID(),
-          reason: null,
-        },
+        action,
       );
-      // Re-poll panel immediately after action.
-      await this.loadPanel();
-    } catch {
-      // Errors bubble to loadError via loadPanel — no silent swallow.
+      this.panel.reload();
+    } catch (error) {
+      this.actionError.set(
+        error instanceof Error ? error.message : `Action "${action.label}" failed.`,
+      );
     } finally {
       this.actionPending.set(false);
     }

@@ -4,7 +4,7 @@
     type="search"
     placeholder="Filter by bot ID or symbol…"
     [value]="searchTerm()"
-    (input)="searchTerm.set($any($event.target).value)"
+    (input)="onSearch($event)"
     aria-label="Filter bots"
     class="roster-search"
   />

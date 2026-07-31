@@ -3,28 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from app.routers.alpaca_bot_control_examples import _load_fixtures
+from app.schemas.alpaca_bot_control_example import ScenarioId
 
-_EXPECTED_SCENARIOS = {
-    "running_ready_flat",
-    "running_attributed_long",
-    "entry_partial_pending",
-    "exit_cancelling_entry",
-    "exit_closing",
-    "exit_complete",
-    "stopped_flat",
-    "stop_requires_flatten",
-    "stopped_carryover_intact",
-    "stopped_carryover_mismatch",
-    "instance_submit_uncertain",
-    "market_data_stale",
-    "account_unattributable",
-    "account_unprovable",
-    "known_manual_exposure",
-}
+_EXPECTED_SCENARIOS = set(get_args(ScenarioId))
 
 
 def test_all_committed_diagnostic_fixtures_validate_against_python_contract() -> None:

@@ -14,11 +14,6 @@ import { MarkdownDrawerService } from '../../../../shared/markdown-drawer/markdo
  * This service is a thin pass-through with `docId = 'broker-v2-manual'`
  * hardcoded.
  *
- * S4 wiring note: S4 operator-lens cards will call `open(anchor)` with an
- * anchor derived from `BROKER_V2_CARD_ANCHOR_MAP[cardName]`.  The anchor map
- * and `BrokerV2CardName` type live in `broker-v2-card-anchor-map.ts`.  The
- * typed `BrokerV2CardHelpButtonComponent` (Fix 4) already enforces this —
- * S4 only needs to wire the `cardName` input.
  */
 @Injectable({ providedIn: 'root' })
 export class BrokerV2HelpDrawerService {

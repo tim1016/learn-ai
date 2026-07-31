@@ -37,6 +37,7 @@ from app.engine.live.desired_state import DesiredState
 from app.engine.live.fleet_reset_baseline import baseline_path
 from app.engine.live.live_engine import (
     BrokerRecoveryReconcileBlockedError,
+    DurableControlWriteError,
     LiveEngine,
     ReconnectAccountMismatchHaltError,
 )
@@ -431,6 +432,48 @@ async def test_reconcile_adoption_with_active_exposure_stays_paused(
 
 
 @pytest.mark.asyncio
+async def test_reconcile_pause_write_failure_does_not_mutate_paused_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _writer(_state: DesiredState, _reason: str) -> None:
+        raise OSError("read-only filesystem")
+
+    harness = _harness(tmp_path)
+    engine = harness.engine
+    engine._desired_state_writer = _writer
+    shutdown_event = asyncio.Event()
+    orphan = OwnedOrphan(
+        order_ref="learn-ai/spy_ema_paper/v1:iid-1",
+        intent_id="iid-1",
+        perm_id=7,
+        order_id=42,
+        active=True,
+        source="broker_open_order",
+    )
+
+    async def _result(_kwargs: dict) -> ReconciliationResult:
+        return ReconciliationResult(
+            verdict=Adopt(
+                orphans=(orphan,),
+                pause=True,
+                pause_reason="active_exposure",
+            ),
+            receipt=_make_receipt(outcome="adopted"),
+        )
+
+    harness.stub_reconcile(monkeypatch, _result)
+
+    engine._dispatch_command(
+        Command(seq=1, verb=CommandVerb.RECONCILE),
+        shutdown_event,
+    )
+    await _await_task(engine)
+
+    assert engine._paused is False
+    assert engine._inhibit_submits is True
+
+
+@pytest.mark.asyncio
 async def test_broker_recovery_reconcile_adoption_pause_raises_and_stays_blocked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -477,6 +520,24 @@ async def test_broker_recovery_reconcile_adoption_pause_raises_and_stays_blocked
         (DesiredState.PAUSED, "broker_recovery_reconcile:ambiguous_exposure"),
     ]
     assert not shutdown_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_broker_recovery_pause_write_failure_precedes_runtime_mutation(
+    tmp_path: Path,
+) -> None:
+    def _writer(_state: DesiredState, _reason: str) -> None:
+        raise OSError("read-only filesystem")
+
+    harness = _harness(tmp_path)
+    engine = harness.engine
+    engine._desired_state_writer = _writer
+
+    with pytest.raises(DurableControlWriteError, match="read-only filesystem"):
+        await engine.run_broker_recovery_reconcile(asyncio.Event())
+
+    assert engine._paused is False
+    assert engine._inhibit_submits is False
 
 
 @pytest.mark.asyncio

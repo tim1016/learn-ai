@@ -60,7 +60,9 @@ from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
 from app.broker.capture.journal import CaptureEndpoint, CaptureJournal, get_capture_journal
+from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
 from app.broker.contract.ports import BrokerReadPort
+from app.utils.timestamps import Clock, now_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +73,6 @@ logger = logging.getLogger(__name__)
 type FrameSource = Callable[[], AsyncIterator[bytes | str]]
 
 # The two conversion/observation boundaries injected for deterministic tests.
-type Clock = Callable[[], int]
 type Backoff = Callable[[int], Awaitable[None]]
 
 _STREAM_TRADE_UPDATES = "trade_updates"
@@ -94,9 +95,7 @@ _GAP_RECONCILE_LIMIT = 500
 _ACTIVITY_RECOVERY_LIMIT = 100
 
 
-def _now_ms() -> int:
-    """Current instant as ``int64`` ms UTC (default observation clock)."""
-    return int(datetime.now(UTC).timestamp() * 1000)
+_now_ms = now_ms_utc
 
 
 async def _default_backoff(attempt: int) -> None:
@@ -146,10 +145,34 @@ class _SeenEvent:
     terminal: bool
 
 
+def _broker_order_fingerprint_fields(broker_order: BrokerOrder) -> dict[str, object]:
+    """Return the one canonical broker-order shape used by fingerprints."""
+    return {
+        "order_id": broker_order.order_id,
+        "client_order_id": broker_order.client_order_id,
+        "symbol": broker_order.symbol,
+        "side": broker_order.side,
+        "order_type": broker_order.order_type,
+        "time_in_force": broker_order.time_in_force,
+        "quantity": broker_order.quantity,
+        "filled_quantity": broker_order.filled_quantity,
+        "limit_price": broker_order.limit_price,
+        "stop_price": broker_order.stop_price,
+        "filled_avg_price": broker_order.filled_avg_price,
+        "status": broker_order.status,
+        "submitted_at_ms": broker_order.submitted_at_ms,
+        "created_at_ms": broker_order.created_at_ms,
+        "updated_at_ms": broker_order.updated_at_ms,
+        "filled_at_ms": broker_order.filled_at_ms,
+        "canceled_at_ms": broker_order.canceled_at_ms,
+        "expired_at_ms": broker_order.expired_at_ms,
+    }
+
+
 def _event_fingerprint(
-    event: Any,
+    event: BrokerOrderEvent,
     order: dict[str, Any],
-    broker_order: Any | None,
+    broker_order: BrokerOrder | None,
 ) -> str:
     """Return a canonical fingerprint for exact-redelivery verification.
 
@@ -167,26 +190,7 @@ def _event_fingerprint(
         "quantity": event.quantity,
         "client_order_id": order.get("client_order_id"),
         "order": (
-            {
-                "order_id": broker_order.order_id,
-                "client_order_id": broker_order.client_order_id,
-                "symbol": broker_order.symbol,
-                "side": broker_order.side,
-                "order_type": broker_order.order_type,
-                "time_in_force": broker_order.time_in_force,
-                "quantity": broker_order.quantity,
-                "filled_quantity": broker_order.filled_quantity,
-                "limit_price": broker_order.limit_price,
-                "stop_price": broker_order.stop_price,
-                "filled_avg_price": broker_order.filled_avg_price,
-                "status": broker_order.status,
-                "submitted_at_ms": broker_order.submitted_at_ms,
-                "created_at_ms": broker_order.created_at_ms,
-                "updated_at_ms": broker_order.updated_at_ms,
-                "filled_at_ms": broker_order.filled_at_ms,
-                "canceled_at_ms": broker_order.canceled_at_ms,
-                "expired_at_ms": broker_order.expired_at_ms,
-            }
+            _broker_order_fingerprint_fields(broker_order)
             if broker_order is not None
             else None
         ),
@@ -194,7 +198,9 @@ def _event_fingerprint(
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
-def _terminal_state_fingerprint(event: Any, broker_order: Any | None) -> str | None:
+def _terminal_state_fingerprint(
+    event: BrokerOrderEvent, broker_order: BrokerOrder | None
+) -> str | None:
     """Identify the canonical terminal state shared by stream and REST views.
 
     A websocket fill describes the final execution slice while the REST order
@@ -206,24 +212,17 @@ def _terminal_state_fingerprint(event: Any, broker_order: Any | None) -> str | N
     """
     if broker_order is None:
         return None
+    order_fields = _broker_order_fingerprint_fields(broker_order)
+    for observation_field in (
+        "submitted_at_ms",
+        "created_at_ms",
+        "updated_at_ms",
+    ):
+        order_fields.pop(observation_field)
     payload = {
         "event": event.event_type,
         "occurred_at_ms": event.occurred_at_ms,
-        "order_id": broker_order.order_id,
-        "client_order_id": broker_order.client_order_id,
-        "symbol": broker_order.symbol,
-        "side": broker_order.side,
-        "order_type": broker_order.order_type,
-        "time_in_force": broker_order.time_in_force,
-        "quantity": broker_order.quantity,
-        "filled_quantity": broker_order.filled_quantity,
-        "limit_price": broker_order.limit_price,
-        "stop_price": broker_order.stop_price,
-        "filled_avg_price": broker_order.filled_avg_price,
-        "status": broker_order.status,
-        "filled_at_ms": broker_order.filled_at_ms,
-        "canceled_at_ms": broker_order.canceled_at_ms,
-        "expired_at_ms": broker_order.expired_at_ms,
+        **order_fields,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
@@ -676,7 +675,7 @@ class TradeUpdatesConsumer:
         )
 
 
-def _order_to_event_payload(broker_order: Any) -> dict[str, Any] | None:
+def _order_to_event_payload(broker_order: BrokerOrder) -> dict[str, Any] | None:
     """Shape a ``BrokerOrder`` back into a ``trade_updates`` ``data`` payload.
 
     The gap-reconcile reads orders (not events), so it reconstructs the minimal

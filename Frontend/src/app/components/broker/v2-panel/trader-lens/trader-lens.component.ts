@@ -16,6 +16,7 @@ import type {
 import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.component';
 import { TradesTodayListComponent } from './trades-today-list.component';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
+import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 
 /**
  * Trader lens (spec §6).
@@ -36,6 +37,7 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
     DualPaneChartComponent,
     TradesTodayListComponent,
     TimestampDisplayComponent,
+    PanelActionButtonComponent,
   ],
   templateUrl: './trader-lens.component.html',
   styleUrl: './trader-lens.component.scss',
@@ -106,21 +108,4 @@ export class TraderLensComponent {
     this.presetChange.emit(preset);
   }
 
-  protected onPrimaryAction(): void {
-    const action = this.primaryAction();
-    if (action && action.enabled) {
-      this.actionRequested.emit(action);
-    }
-  }
-
-  protected primaryButtonLabel = computed(() => {
-    const action = this.primaryAction();
-    if (!action) return null;
-    return action.label;
-  });
-
-  protected primaryButtonEnabled = computed(() => {
-    const action = this.primaryAction();
-    return action?.enabled ?? false;
-  });
 }

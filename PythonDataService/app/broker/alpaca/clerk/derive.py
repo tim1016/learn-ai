@@ -124,6 +124,46 @@ def unexplained_order_ids(entries: list[OrderJournalEntry]) -> set[str]:
     }
 
 
+def order_owner(
+    entries: list[OrderJournalEntry],
+    broker_order_id: str | None,
+    *,
+    kind: ClerkEntryKind | None = None,
+) -> OrderJournalEntry | None:
+    """Return the latest journal owner of a broker order id.
+
+    ``kind`` narrows callers that require a particular ownership receipt, such
+    as callback attribution's ``SUBMIT_ACKED`` binding. Recovery callers omit
+    it because any later order snapshot preserves the same minted owner.
+    """
+    if not broker_order_id:
+        return None
+    for entry in reversed(entries):
+        if (
+            (kind is None or entry.kind is kind)
+            and entry.order is not None
+            and entry.order.order_id == broker_order_id
+            and entry.order_ref
+        ):
+            return entry
+    return None
+
+
+def order_owner_by_ref(
+    entries: list[OrderJournalEntry],
+    order_ref: str,
+) -> OrderJournalEntry | None:
+    """Return the latest submit-side owner for a minted order reference."""
+    for entry in reversed(entries):
+        if (
+            entry.kind
+            in (ClerkEntryKind.SUBMIT_ACKED, ClerkEntryKind.INTENT_RECORDED)
+            and entry.order_ref == order_ref
+        ):
+            return entry
+    return None
+
+
 def reconstruct_terminal(entry: OrderJournalEntry) -> OrderLegResult:
     """Rebuild the result represented by one terminal submit-side ledger line."""
     if entry.kind is ClerkEntryKind.SUBMIT_ACKED:

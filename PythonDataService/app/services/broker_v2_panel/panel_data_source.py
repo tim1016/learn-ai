@@ -29,7 +29,7 @@ from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
 from app.data_lake.polygon_fetcher import fetch_aggregate_bars
-from app.schemas.broker_bots import BotStatusView
+from app.schemas.broker_bots import BotStatusView, DeployBotRequest
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
     BotPanelView,
@@ -91,6 +91,20 @@ class UnknownBotError(PanelDataError):
     http_status = 404
 
 
+class PanelRunnerError(PanelDataError):
+    """The bot runner rejected a panel operation with a typed status."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        detail: str | None,
+        http_status: int,
+    ) -> None:
+        super().__init__(message, detail=detail)
+        self.http_status = http_status
+
+
 # Only Alpaca has a panel-backing clerk in phase 1.
 _PANEL_BROKER = "alpaca"
 
@@ -150,12 +164,7 @@ async def validate_account_scope(broker: str, account_id: str, sid: str) -> None
     does not match the broker's real account, and ``UnknownBotError`` (→ 404)
     when the bot has no durable binding to the broker.
     """
-    real_account_id = await resolve_account_id(broker)
-    if account_id != real_account_id:
-        raise AccountMismatchError(
-            f"Account '{account_id}' does not match broker '{broker}'.",
-            detail="Stale deep link — the account id in the URL does not match.",
-        )
+    await _validate_account(broker, account_id)
     _bot_status(broker, sid)
 
 
@@ -223,6 +232,36 @@ async def _validate_account(broker: str, account_id: str) -> str:
             detail=f"The broker's account is '{real_account_id}'.",
         )
     return real_account_id
+
+
+async def deploy_bot(
+    broker: str,
+    account_id: str,
+    request: DeployBotRequest,
+) -> BotStatusView:
+    """Validate account scope and deploy through the panel's runner facade."""
+    await _validate_account(broker, account_id)
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+        )
+    try:
+        return await registry.deploy(
+            broker=broker,
+            strategy_instance_id=request.strategy_instance_id,
+            symbol=request.symbol,
+            use_rth=request.use_rth,
+            mode=request.mode,
+            quantity=request.quantity,
+        )
+    except BotRunnerError as exc:
+        raise PanelRunnerError(
+            str(exc),
+            detail=exc.detail,
+            http_status=exc.http_status,
+        ) from exc
 
 
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:

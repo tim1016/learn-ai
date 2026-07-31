@@ -5,6 +5,8 @@ import {
   input,
 } from '@angular/core';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { fmtCurrency, fmtSignedCurrency } from '../../format';
 import type { ChartFillMarker } from '../lib/broker-v2-panel.types';
 
 /**
@@ -17,7 +19,7 @@ import type { ChartFillMarker } from '../lib/broker-v2-panel.types';
 @Component({
   selector: 'app-trades-today-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TimestampDisplayComponent],
+  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
   templateUrl: './trades-today-list.component.html',
   styleUrl: './trades-today-list.component.scss',
 })
@@ -38,11 +40,8 @@ export class TradesTodayListComponent {
     this.feeFidelity() === 'none' ? 'Fees not reported' : null,
   );
 
-  protected formatPnl(pnl: number | null): string {
-    if (pnl === null) return '—';
-    const sign = pnl >= 0 ? '+' : '';
-    return `${sign}$${Math.abs(pnl).toFixed(2)}`;
-  }
+  protected readonly fmtCurrency = fmtCurrency;
+  protected readonly fmtSignedCurrency = fmtSignedCurrency;
 
   protected pnlClass(pnl: number | null): string {
     if (pnl === null) return '';

@@ -11,9 +11,10 @@
   <section class="scenario-picker" aria-label="Scenario selection">
     <label id="scenario-picker-title" for="diagnostic-scenario">Review scenario</label>
     <select
+      #scenarioSelect
       id="diagnostic-scenario"
       [value]="selectedScenarioId()"
-      (change)="selectScenario($event)"
+      (change)="selectScenario(scenarioSelect.value)"
     >
       @for (fixture of fixtures; track fixture.scenario_id) {
         <option [value]="fixture.scenario_id">{{ fixture.scenario_label }}</option>

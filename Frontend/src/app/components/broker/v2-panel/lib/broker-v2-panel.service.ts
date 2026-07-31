@@ -9,6 +9,7 @@ import type {
   ChartHistoryResponse,
   ChartLiveResponse,
   EvidencePage,
+  PanelAction,
   PanelActionRequest,
   PanelActionResult,
   PanelProfile,
@@ -41,13 +42,13 @@ export class BrokerV2PanelService {
     broker: string,
     accountId: string,
     body: DeployBotBody,
-  ): Promise<unknown> {
+  ): Promise<void> {
     return firstValueFrom(
       this.http.post<unknown>(
         `${this.base(broker, accountId)}/bots`,
         body,
       ),
-    );
+    ).then(() => undefined);
   }
 
   getCatalog(broker: string, accountId: string): Promise<BotCatalogView[]> {
@@ -86,6 +87,22 @@ export class BrokerV2PanelService {
         request,
       ),
     );
+  }
+
+  runBotAction(
+    broker: string,
+    accountId: string,
+    sid: string,
+    action: PanelAction,
+  ): Promise<PanelActionResult> {
+    const request: PanelActionRequest = {
+      action_id: action.action_id,
+      revision: action.revision,
+      concurrency_token: action.concurrency_token,
+      idempotency_key: crypto.randomUUID(),
+      reason: null,
+    };
+    return this.runAction(broker, accountId, sid, request);
   }
 
   getLiveChart(

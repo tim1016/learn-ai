@@ -1,24 +1,13 @@
 <!-- Account/clerk card (spec §7.3) -->
-<!-- card-help anchor: holds — wired to S5 drawer in end-phase integration -->
-<!-- card-help anchor: reconciliation — wired to S5 drawer in end-phase integration -->
 <section class="clerk-card" aria-label="Account and clerk status">
   <header class="clerk-card__header">
     <h3 class="clerk-card__title">Account / Clerk</h3>
     <div class="clerk-card__help-group">
-      <button
-        type="button"
-        class="clerk-card__help"
-        aria-label="Help: holds"
-        disabled
-        title="Help drawer wired in S5"
-      >?</button>
-      <button
-        type="button"
-        class="clerk-card__help"
-        aria-label="Help: reconciliation"
-        disabled
-        title="Help drawer wired in S5"
-      >?</button>
+      <app-broker-v2-card-help-btn cardName="holds" label="Help: holds" />
+      <app-broker-v2-card-help-btn
+        cardName="reconciliation"
+        label="Help: reconciliation"
+      />
     </div>
   </header>
 
@@ -62,11 +51,7 @@
         @for (ch of clerk().channels; track trackChannel($index, ch)) {
           <li class="clerk-card__channel" [class]="'clerk-card__channel--' + ch.state">
             <span class="clerk-card__channel-icon" aria-hidden="true">
-              @switch (ch.state) {
-                @case ('healthy') { ● }
-                @case ('unhealthy') { ✕ }
-                @default { ? }
-              }
+              {{ channelIcon[ch.state] }}
             </span>
             <span class="clerk-card__channel-label">{{ ch.label }}</span>
             <span class="clerk-card__channel-state">{{ ch.explanation }}</span>
@@ -82,46 +67,21 @@
   <div class="clerk-card__actions">
     @if (reconcileAction()) {
       @let ra = reconcileAction()!;
-      <button
-        type="button"
-        class="clerk-card__action-btn"
-        [disabled]="!reconcileEnabled() || actionPending()"
-        [attr.aria-disabled]="!reconcileEnabled() || actionPending()"
-        [attr.aria-label]="ra.label"
-        [title]="ra.explanation"
-        (click)="onReconcile()"
-      >
-        {{ ra.label }}
-      </button>
-      @for (blocker of reconcileBlockers(); track blocker.code) {
-        <p class="clerk-card__blocker" role="alert">{{ blocker.label }}</p>
-      }
+      <app-panel-action-button
+        [action]="ra"
+        [pending]="actionPending()"
+        (triggered)="actionRequested.emit($event)"
+      />
     }
 
     @if (clearHoldAction()) {
       @let ca = clearHoldAction()!;
-      <button
-        type="button"
-        class="clerk-card__action-btn clerk-card__action-btn--warn"
-        [disabled]="!clearHoldEnabled() || actionPending()"
-        [attr.aria-disabled]="!clearHoldEnabled() || actionPending()"
-        [attr.aria-label]="ca.label"
-        [title]="ca.explanation"
-        (click)="onClearHold()"
-      >
-        {{ ca.label }}
-      </button>
-
-      @if (clearHoldConfirmation()?.required) {
-        @let conf = clearHoldConfirmation()!;
-        <p class="clerk-card__blast-radius" role="note">
-          {{ conf.prompt }}
-        </p>
-      }
-
-      @for (blocker of clearHoldBlockers(); track blocker.code) {
-        <p class="clerk-card__blocker" role="alert">{{ blocker.label }}</p>
-      }
+      <app-panel-action-button
+        [action]="ca"
+        [pending]="actionPending()"
+        tone="warning"
+        (triggered)="actionRequested.emit($event)"
+      />
     }
   </div>
 </section>

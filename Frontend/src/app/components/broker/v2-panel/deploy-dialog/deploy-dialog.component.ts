@@ -18,7 +18,10 @@ import { InputTextModule } from 'primeng/inputtext';
 import { MessageModule } from 'primeng/message';
 import { SelectModule } from 'primeng/select';
 
-import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import {
+  BrokerV2PanelService,
+  type DeployBotBody,
+} from '../lib/broker-v2-panel.service';
 
 /**
  * Deploy-bot dialog. Collects strategy_instance_id, symbol, rth_only, mode,
@@ -105,14 +108,18 @@ export class DeployDialogComponent {
     this.submitting.set(true);
     this.submitError.set(null);
     const { strategy_instance_id, symbol, use_rth, mode, quantity } = this.form.getRawValue();
+    const body = {
+      strategy_instance_id,
+      symbol: symbol.toUpperCase(),
+      use_rth,
+      mode,
+      quantity,
+    } satisfies Pick<
+      DeployBotBody,
+      'strategy_instance_id' | 'symbol' | 'use_rth' | 'mode' | 'quantity'
+    >;
     try {
-      await this.panelService.deployBot(this.broker(), this.accountId(), {
-        strategy_instance_id,
-        symbol: symbol.toUpperCase(),
-        use_rth,
-        mode,
-        quantity,
-      });
+      await this.panelService.deployBot(this.broker(), this.accountId(), body);
       this.deployed.emit();
       this.close();
     } catch {

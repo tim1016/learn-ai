@@ -23,6 +23,7 @@ def test_from_alpaca_account_maps_every_field(
 
     assert snapshot.broker == "alpaca"
     assert snapshot.account_id == "PA0SANITIZED00001"
+    assert snapshot.account_mode == "paper"
     assert snapshot.account_status == "ACTIVE"
     assert snapshot.currency == "USD"
     assert snapshot.cash == 100000.0

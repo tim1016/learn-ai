@@ -10,6 +10,12 @@
 // ── Channel health state (closed vocabulary) ─────────────────────────────────
 
 export type ChannelState = 'healthy' | 'unhealthy' | 'unknown';
+export type StationState =
+  | 'satisfied'
+  | 'waiting'
+  | 'blocked'
+  | 'unknown_stale'
+  | 'not_applicable';
 
 // ── Action ids (closed vocabulary, spec §11) ─────────────────────────────────
 
@@ -102,7 +108,7 @@ export interface BotHealthCard {
 
 export interface ChannelHealthView {
   readonly stream: 'market_data' | 'execution';
-  readonly state: string;
+  readonly state: ChannelState;
   readonly label: string;
   readonly explanation: string;
   readonly reason: string;
@@ -126,7 +132,7 @@ export interface ClerkCard {
 export interface StationView {
   readonly station_id: string;
   readonly label: string;
-  readonly state: string;
+  readonly state: StationState;
   readonly state_label: string;
   readonly receipt: string;
   readonly evidence_at_ms: number | null;

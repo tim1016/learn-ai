@@ -101,6 +101,10 @@ export class BotsRosterComponent {
     });
   });
 
+  protected onSearch(event: Event): void {
+    this.searchTerm.set((event.target as HTMLInputElement).value);
+  }
+
   protected exposureText(bot: BotCatalogView): string {
     const entries = Object.entries(bot.exposure);
     if (entries.length === 0) return '—';

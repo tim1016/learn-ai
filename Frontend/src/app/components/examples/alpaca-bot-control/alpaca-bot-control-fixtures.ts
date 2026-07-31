@@ -1,4 +1,5 @@
 import type { components } from '../../../api/broker.types';
+import type { JsonImported } from '../../../api/json-imported';
 import accountUnattributable from '@repo-contracts/fixtures/alpaca-bot-control/v1/account_unattributable.json';
 import accountUnprovable from '@repo-contracts/fixtures/alpaca-bot-control/v1/account_unprovable.json';
 import entryPartialPending from '@repo-contracts/fixtures/alpaca-bot-control/v1/entry_partial_pending.json';
@@ -14,18 +15,6 @@ import stopRequiresFlatten from '@repo-contracts/fixtures/alpaca-bot-control/v1/
 import stoppedCarryoverIntact from '@repo-contracts/fixtures/alpaca-bot-control/v1/stopped_carryover_intact.json';
 import stoppedCarryoverMismatch from '@repo-contracts/fixtures/alpaca-bot-control/v1/stopped_carryover_mismatch.json';
 import stoppedFlat from '@repo-contracts/fixtures/alpaca-bot-control/v1/stopped_flat.json';
-
-type JsonImported<T> = T extends string
-  ? string
-  : T extends number
-    ? number
-    : T extends boolean
-      ? boolean
-      : T extends readonly (infer Item)[]
-        ? JsonImported<Item>[]
-        : T extends object
-          ? { [Key in keyof T]: JsonImported<T[Key]> }
-          : T;
 
 /** Mechanically derived from the Python Pydantic model through OpenAPI. */
 export type AlpacaBotControlFixture = JsonImported<

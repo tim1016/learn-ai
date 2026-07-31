@@ -150,6 +150,15 @@ class PnLResult:
     open_lots: list[OpenLot] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class OpenPnLResult:
+    """Open-lot valuation shared by batch FIFO and the incremental cache."""
+
+    value: float | None
+    marks_complete: bool
+    open_lots: tuple[OpenLot, ...]
+
+
 # ── FIFO engine ───────────────────────────────────────────────────────────────
 
 
@@ -233,6 +242,89 @@ def apply_fill_to_lots(
                 )
 
 
+def compute_open_pnl(
+    lots: dict[str, deque[_Lot]],
+    mark_prices: dict[str, float],
+) -> OpenPnLResult:
+    """Value current FIFO lots without ever returning a partial portfolio sum.
+
+    Formula: open_pnl = Σ (mark - cost) × signed remaining lot quantity.
+    Reference: Kieso, Weygandt & Warfield, *Intermediate Accounting* (17e),
+      Chapter 8; same FIFO inventory model as this module.
+    Canonical implementation: this file.
+    Validated against:
+      PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py;
+      PythonDataService/tests/broker/alpaca/clerk/test_rollup_cache.py.
+
+    ``value`` is ``None`` until every symbol with an open lot has a mark.
+    Flat state is complete and has a value of ``0.0``.
+    """
+    open_lots: list[OpenLot] = []
+    symbols_with_open_lots: set[str] = set()
+    total_open_pnl = 0.0
+
+    for symbol, queue in lots.items():
+        mark = mark_prices.get(symbol)
+        for lot in queue:
+            if lot.qty <= _ZERO_ABS_TOL:
+                continue
+            symbols_with_open_lots.add(symbol)
+            open_lots.append(
+                OpenLot(
+                    symbol=symbol,
+                    qty=lot.qty,
+                    cost=lot.cost,
+                    opened_at_ms=lot.opened_at_ms,
+                    side=lot.side,
+                )
+            )
+            if mark is not None:
+                signed_delta = (
+                    mark - lot.cost
+                    if lot.side is OrderSide.BUY
+                    else lot.cost - mark
+                )
+                total_open_pnl += signed_delta * lot.qty
+
+    if not open_lots:
+        return OpenPnLResult(value=0.0, marks_complete=True, open_lots=())
+    if mark_prices.keys() >= symbols_with_open_lots:
+        return OpenPnLResult(
+            value=total_open_pnl,
+            marks_complete=True,
+            open_lots=tuple(open_lots),
+        )
+    return OpenPnLResult(
+        value=None,
+        marks_complete=False,
+        open_lots=tuple(open_lots),
+    )
+
+
+def realized_pnl_for_window(
+    closed_lots: Iterable[ClosedLot],
+    *,
+    session_open_ms: int,
+    session_close_ms: int,
+) -> float:
+    """Sum canonical closed-lot P&L inside a half-open session window.
+
+    Formula: realized_window = Σ lot.realized_pnl where
+      session_open_ms <= lot.closed_at_ms < session_close_ms.
+    Reference: same FIFO inventory method as this module; session boundaries
+      are supplied by the canonical NYSE calendar.
+    Canonical implementation: this file.
+    Validated against:
+      PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py;
+      PythonDataService/tests/broker/alpaca/clerk/test_rollup_cache.py.
+    """
+    return sum(
+        lot.realized_pnl
+        for lot in closed_lots
+        if session_open_ms <= lot.closed_at_ms < session_close_ms
+    )
+
+
 def compute_fifo_pnl(
     fills: Iterable[FillRecord],
     *,
@@ -291,44 +383,10 @@ def compute_fifo_pnl(
     if any_fee_missing:
         result.fee_total = None
 
-    # Build open lots + compute open P&L
-    # Track which symbols have open lots and which have mark coverage.
-    symbols_with_open_lots: set[str] = set()
-    total_open_pnl: float = 0.0
-    marks = mark_prices or {}
-
-    for sym, queue in lots.items():
-        mark = marks.get(sym)
-        for lot in queue:
-            if lot.qty <= _ZERO_ABS_TOL:
-                continue
-            symbols_with_open_lots.add(sym)
-            result.open_lots.append(
-                OpenLot(
-                    symbol=sym,
-                    qty=lot.qty,
-                    cost=lot.cost,
-                    opened_at_ms=lot.opened_at_ms,
-                    side=lot.side,
-                )
-            )
-            if mark is not None:
-                if lot.side is OrderSide.BUY:
-                    pnl_lot = (mark - lot.cost) * lot.qty
-                else:
-                    pnl_lot = (lot.cost - mark) * lot.qty
-                total_open_pnl += pnl_lot
-
-    if not result.open_lots:
-        # Flat — open_pnl is definitively $0; marks_complete is True.
-        result.open_pnl = 0.0
-        result.marks_complete = True
-    elif marks.keys() >= symbols_with_open_lots:
-        # All open-lot symbols have marks — sum is complete.
-        result.open_pnl = total_open_pnl
-        result.marks_complete = True
-    # else: open lots exist but at least one symbol lacks a mark.
-    # open_pnl stays None, marks_complete stays False — never return a partial sum.
+    open_result = compute_open_pnl(lots, mark_prices or {})
+    result.open_lots = list(open_result.open_lots)
+    result.open_pnl = open_result.value
+    result.marks_complete = open_result.marks_complete
 
     return result
 
@@ -364,8 +422,8 @@ def realized_pnl_today(
     ``trading_calendar.session_window_for_date``.
     """
     result = compute_fifo_pnl(fills)  # run over complete history
-    return sum(
-        lot.realized_pnl
-        for lot in result.closed_lots
-        if session_open_ms <= lot.closed_at_ms < session_close_ms
+    return realized_pnl_for_window(
+        result.closed_lots,
+        session_open_ms=session_open_ms,
+        session_close_ms=session_close_ms,
     )

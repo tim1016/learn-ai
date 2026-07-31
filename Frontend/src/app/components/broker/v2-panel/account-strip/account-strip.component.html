@@ -23,7 +23,7 @@
           <span class="strip-stat__value">{{ fmtCurrency(snap.buying_power) }}</span>
         </span>
 
-        @if (isPaper(snap)) {
+        @if (snap.account_mode === 'paper') {
           <p-tag class="strip-badge" value="PAPER" severity="secondary" />
         }
 

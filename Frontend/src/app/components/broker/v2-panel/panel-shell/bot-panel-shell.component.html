@@ -11,8 +11,8 @@
 }
 
 @if (isLoaded()) {
-  @let panelData = panel()!;
-  @let profileData = profile()!;
+  @let panelData = panel.value()!;
+  @let profileData = profile.value()!;
 
   <!-- Lens tab bar (spec §6 — Trader default, Operator unlocked in S4) -->
   <div class="lens-toggle" role="tablist" aria-label="Panel lens">
@@ -37,8 +37,8 @@
       <app-trader-lens
         [panel]="panelData"
         [profile]="profileData"
-        [liveChart]="liveChart()"
-        [histChart]="histChart()"
+        [liveChart]="liveChart.value() ?? null"
+        [histChart]="histChart.value() ?? null"
         [selectedPreset]="selectedPreset()"
         [actionPending]="actionPending()"
         (presetChange)="onPresetChange($event)"
@@ -50,7 +50,7 @@
         [panel]="panelData"
         [profile]="profileData"
         [actionPending]="actionPending()"
-        [actionRequested]="onActionRequested.bind(this)"
+        (actionRequested)="onActionRequested($event)"
         [broker]="broker()"
         [accountId]="accountId()"
         [sid]="sid()"

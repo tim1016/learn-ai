@@ -14,16 +14,11 @@
   <ol class="rail__stations" aria-label="Pipeline stations">
     @for (station of stations(); track trackStation($index, station)) {
       <li
-        class="station"
-        [class.station--satisfied]="station.state === 'satisfied'"
-        [class.station--waiting]="station.state === 'waiting'"
-        [class.station--blocked]="station.state === 'blocked'"
-        [class.station--unknown_stale]="station.state === 'unknown_stale'"
-        [class.station--not_applicable]="station.state === 'not_applicable'"
+        [class]="'station station--' + station.state"
         [attr.aria-label]="stationAriaLabel(station)"
       >
         <!-- Icon + label — two channels: icon is decorative, label carries meaning (AXE) -->
-        <span class="station__icon" aria-hidden="true">{{ stationIcon(station.state) }}</span>
+        <span class="station__icon" aria-hidden="true">{{ stationIcon[station.state] }}</span>
         <span class="station__label">{{ station.label }}</span>
         <span class="station__state-label">{{ station.state_label }}</span>
 

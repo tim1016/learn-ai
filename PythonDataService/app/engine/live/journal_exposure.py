@@ -27,6 +27,57 @@ JournalExposureGroup = Literal["namespace", "strategy_instance"]
 
 
 @dataclass(frozen=True)
+class ExecutionExposureEffect:
+    """One normalized broker execution effect for the canonical fill fold."""
+
+    account_id: str
+    group_id: str
+    symbol: str
+    execution_id: str
+    signed_quantity: float
+
+
+def fold_execution_exposure(
+    effects: Iterable[ExecutionExposureEffect],
+) -> dict[tuple[str, str, str], float]:
+    """Fold normalized execution effects into account/group/symbol quantities.
+
+    Formula: exposure[account, group, symbol] =
+      Σ signed_quantity once per (account, non-empty execution_id);
+      exact zero balances are omitted.
+    Reference: learn-ai issue #1038 locked decision 30 and issue #1261
+      Alpaca Clerk ownership invariants.
+    Canonical implementation: this file.
+    Validated against:
+      tests/engine/live/test_journal_exposure.py::
+        test_fold_execution_exposure_normalizes_and_deduplicates;
+      tests/broker/alpaca/clerk/test_instance_orders.py::
+        test_alpaca_projection_uses_canonical_execution_fold.
+
+    Vendor adapters own only normalization into this shape. Deduplication,
+    finite-number validation, symbol normalization, signing, and zero pruning
+    live here so IBKR and Alpaca cannot silently evolve different arithmetic.
+    """
+    quantities: dict[tuple[str, str, str], float] = defaultdict(float)
+    seen_execution_effects: set[tuple[str, str]] = set()
+    for effect in effects:
+        if not effect.execution_id or not math.isfinite(effect.signed_quantity):
+            continue
+        execution_key = (effect.account_id, effect.execution_id)
+        if execution_key in seen_execution_effects:
+            continue
+        seen_execution_effects.add(execution_key)
+        quantities[
+            (effect.account_id, effect.group_id, effect.symbol.upper())
+        ] += effect.signed_quantity
+    return {
+        key: quantity
+        for key, quantity in sorted(quantities.items())
+        if quantity != 0.0
+    }
+
+
+@dataclass(frozen=True)
 class JournalExposure:
     """One non-zero signed exposure bucket from Clerk journal fill effects."""
 
@@ -91,7 +142,7 @@ def project_journal_exposure(
 
     entries = tuple(entries)
     quantities: dict[tuple[str, str, str], float] = defaultdict(float)
-    seen_execution_effects: set[tuple[str, str]] = set()
+    execution_effects: list[ExecutionExposureEffect] = []
     for entry in entries:
         if entry.entry_kind == "operator_adjustment" and entry.operator_adjustment is not None:
             adjustment = entry.operator_adjustment
@@ -121,20 +172,24 @@ def project_journal_exposure(
             continue
         if event.symbol is None or event.side is None or event.fill_quantity is None:
             continue
-        quantity = float(event.fill_quantity)
-        if not math.isfinite(quantity):
-            continue
-        execution_key = (entry.intent.account_id, event.exec_id)
-        if execution_key in seen_execution_effects:
-            continue
-        seen_execution_effects.add(execution_key)
         group_id = (
             entry.intent.bot_order_namespace
             if group_by == "namespace"
             else entry.intent.strategy_instance_id
         )
-        signed_quantity = quantity if event.side == "BUY" else -quantity
-        quantities[(entry.intent.account_id, group_id, event.symbol.upper())] += signed_quantity
+        quantity = float(event.fill_quantity)
+        execution_effects.append(
+            ExecutionExposureEffect(
+                account_id=entry.intent.account_id,
+                group_id=group_id,
+                symbol=event.symbol,
+                execution_id=event.exec_id,
+                signed_quantity=quantity if event.side == "BUY" else -quantity,
+            )
+        )
+
+    for key, quantity in fold_execution_exposure(execution_effects).items():
+        quantities[key] += quantity
 
     return tuple(
         JournalExposure(
@@ -182,7 +237,7 @@ def project_journal_account_exposure(
     """
 
     quantities: dict[tuple[str, str], float] = defaultdict(float)
-    seen_execution_effects: set[tuple[str, str]] = set()
+    execution_effects: list[ExecutionExposureEffect] = []
     for entry in entries:
         baseline = entry.broker_evidence_baseline
         if entry.entry_kind == "broker_evidence_baseline" and baseline is not None:
@@ -201,14 +256,20 @@ def project_journal_account_exposure(
         if event_account_id is None or (account_id is not None and event_account_id != account_id):
             continue
         quantity = float(event.fill_quantity)
-        if not math.isfinite(quantity):
-            continue
-        execution_key = (event_account_id, event.exec_id)
-        if execution_key in seen_execution_effects:
-            continue
-        seen_execution_effects.add(execution_key)
-        signed_quantity = quantity if event.side == "BUY" else -quantity
-        quantities[(event_account_id, event.symbol.upper())] += signed_quantity
+        execution_effects.append(
+            ExecutionExposureEffect(
+                account_id=event_account_id,
+                group_id="account",
+                symbol=event.symbol,
+                execution_id=event.exec_id,
+                signed_quantity=quantity if event.side == "BUY" else -quantity,
+            )
+        )
+
+    for (projected_account_id, _group_id, symbol), quantity in (
+        fold_execution_exposure(execution_effects).items()
+    ):
+        quantities[(projected_account_id, symbol)] += quantity
 
     return tuple(
         AccountJournalExposure(account_id=projected_account_id, symbol=symbol, quantity=quantity)
@@ -219,8 +280,10 @@ def project_journal_account_exposure(
 
 __all__ = [
     "AccountJournalExposure",
+    "ExecutionExposureEffect",
     "JournalExposure",
     "JournalExposureGroup",
+    "fold_execution_exposure",
     "normalize_broker_event",
     "normalize_journal_broker_event",
     "project_journal_account_exposure",

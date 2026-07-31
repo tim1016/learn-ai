@@ -22,20 +22,21 @@ journal — there is deliberately NO per-run sidecar ledger.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.contract.models import OrderSide
+from app.engine.live.journal_exposure import (
+    ExecutionExposureEffect,
+    fold_execution_exposure,
+)
 from app.engine.live.order_identity import (
     NAMESPACE_ROOT,
     build_bot_order_namespace,
     order_ref_namespace_matches,
     parse_order_ref,
 )
-
-_ZERO_ABS_TOL = 1e-9
 
 
 class FlattenRefusedError(Exception):
@@ -89,8 +90,7 @@ def project_instance_exposure(
 
     ``namespace`` filters to one ownership scope by exact equality.
     """
-    totals: dict[tuple[str, str, str], float] = {}
-    seen_execution_effects: set[tuple[str, str]] = set()
+    effects: list[ExecutionExposureEffect] = []
     for entry in entries:
         if entry.kind is not ClerkEntryKind.ORDER_EVENT or entry.owned is not True:
             continue
@@ -109,23 +109,26 @@ def project_instance_exposure(
         leg = entry.leg
         if leg is None or not entry.order_ref:
             continue
-        dedup_key = (entry.account_id, entry.event_key)
-        if dedup_key in seen_execution_effects:
-            continue
-        seen_execution_effects.add(dedup_key)
         try:
             entry_namespace, _intent_id = parse_order_ref(entry.order_ref)
         except ValueError:
             continue
         signed = event.quantity if leg.side is OrderSide.BUY else -event.quantity
-        bucket = (entry.account_id, entry_namespace, leg.symbol)
-        totals[bucket] = totals.get(bucket, 0.0) + signed
+        effects.append(
+            ExecutionExposureEffect(
+                account_id=entry.account_id,
+                group_id=entry_namespace,
+                symbol=leg.symbol,
+                execution_id=entry.event_key,
+                signed_quantity=signed,
+            )
+        )
 
     out: list[InstanceExposure] = []
-    for (account_id, entry_namespace, symbol), quantity in sorted(totals.items()):
+    for (account_id, entry_namespace, symbol), quantity in (
+        fold_execution_exposure(effects).items()
+    ):
         if namespace is not None and entry_namespace != namespace:
-            continue
-        if math.isclose(quantity, 0.0, rel_tol=0.0, abs_tol=_ZERO_ABS_TOL):
             continue
         out.append(
             InstanceExposure(
