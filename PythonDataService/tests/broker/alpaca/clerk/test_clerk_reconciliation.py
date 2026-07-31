@@ -23,8 +23,10 @@ from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk import derive
 from app.broker.alpaca.clerk import journal as journal_module
-from app.broker.alpaca.clerk.clerk import AlpacaClerk
+from app.broker.alpaca.clerk.clerk import AlpacaClerk, InventoryBaselineRefusedError
+from app.broker.alpaca.clerk.exposure import project_instance_exposure
 from app.broker.alpaca.clerk.models import (
     UNEXPLAINED_ORDER_HOLD_CODE,
     ClerkEntryKind,
@@ -38,7 +40,9 @@ from app.broker.contract.models import (
     BrokerOrderLeg,
     BrokerOrderRequest,
     BrokerPosition,
+    OrderSide,
 )
+from app.engine.live.order_identity import build_bot_order_namespace
 
 _FIXED_MS = 1_700_000_000_000
 
@@ -330,6 +334,96 @@ async def test_reconcile_missing_intent_is_observational() -> None:
     assert [e.verdict for e in recon] == ["missing_intent"]
     # Observational: no hold set.
     assert clerk.is_on_hold() is False
+
+
+async def test_operator_inventory_baseline_recovers_missing_intent_without_rewriting_history() -> None:
+    broker = _FakeBroker(positions=[_position()])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    assert await clerk.reconcile_once() == "missing_intent"
+    entries_before = await clerk.read_journal_entries()
+
+    baseline = await clerk.record_inventory_baseline(
+        operator="panel-operator",
+        reason="Verified current Alpaca paper inventory from the Operator tab.",
+    )
+
+    entries_after = await clerk.read_journal_entries()
+    assert entries_after[: len(entries_before)] == entries_before
+    assert baseline.account_id == "PA-TEST"
+    assert [(row.symbol, row.signed_quantity) for row in baseline.positions] == [
+        ("SPY", 1.0)
+    ]
+    baseline_rows = [
+        row
+        for row in entries_after
+        if row.kind is ClerkEntryKind.BROKER_EVIDENCE_BASELINE
+    ]
+    assert len(baseline_rows) == 1
+    assert baseline_rows[0].operator == "panel-operator"
+    assert baseline_rows[0].reason == (
+        "Verified current Alpaca paper inventory from the Operator tab."
+    )
+    assert derive.latest_reconciliation(entries_after).verdict == "clean"
+
+
+async def test_operator_inventory_baseline_refuses_working_orders() -> None:
+    broker = _FakeBroker(positions=[_position()])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    assert await clerk.reconcile_once() == "missing_intent"
+    broker._orders = [_order(client_order_id="manual/desk/v1:working")]
+
+    with pytest.raises(InventoryBaselineRefusedError, match="working orders"):
+        await clerk.record_inventory_baseline(operator="ops", reason="reviewed")
+
+    assert ClerkEntryKind.BROKER_EVIDENCE_BASELINE not in _kinds(clerk)
+
+
+async def test_operator_inventory_baseline_retires_stale_bot_attribution_on_flat_account() -> None:
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    assert await clerk.reconcile_once() == "clean"
+    account_id, journal = await clerk._ensure_journal()
+    sid = "stale-bot"
+    order_ref = f"{build_bot_order_namespace(sid)}:old"
+    await journal.append_async(
+        OrderJournalEntry(
+            kind=ClerkEntryKind.ORDER_EVENT,
+            account_id=account_id,
+            operator=sid,
+            intent_id="old",
+            order_ref=order_ref,
+            client_order_id=order_ref,
+            owned=True,
+            recorded_at_ms=_FIXED_MS,
+            leg=BrokerOrderLeg(
+                symbol="SPY", side=OrderSide.BUY, quantity=1.0
+            ),
+            event=BrokerOrderEvent(
+                event_type="fill",
+                occurred_at_ms=_FIXED_MS,
+                price=100.0,
+                quantity=1.0,
+            ),
+            event_key="exec:stale-bot-old",
+        )
+    )
+    assert await clerk.reconcile_once() == "clean"
+    assert project_instance_exposure(
+        await clerk.read_journal_entries(), namespace=build_bot_order_namespace(sid)
+    )
+
+    await clerk.record_inventory_baseline(
+        operator="panel-operator",
+        reason="Retire stale bot attribution on a verified flat account.",
+        strategy_instance_id=sid,
+    )
+
+    entries = await clerk.read_journal_entries()
+    assert any(entry.event_key == "exec:stale-bot-old" for entry in entries)
+    assert project_instance_exposure(
+        entries, namespace=build_bot_order_namespace(sid)
+    ) == ()
+    assert derive.latest_reconciliation(entries).verdict == "clean"
 
 
 async def test_reconcile_stale_when_broker_read_fails() -> None:

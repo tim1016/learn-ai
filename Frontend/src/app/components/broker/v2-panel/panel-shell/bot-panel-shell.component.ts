@@ -15,6 +15,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 
 import type {
   ChartHistoryPreset,
+  ChartLiveResolution,
   PanelAction,
   PanelActionResult,
 } from '../lib/broker-v2-panel.types';
@@ -86,6 +87,7 @@ export class BotPanelShellComponent {
   // ── Internal state ────────────────────────────────────────────────────────
 
   protected readonly selectedPreset = signal<ChartHistoryPreset>('1D');
+  protected readonly liveResolution = signal<ChartLiveResolution>('5s');
   protected readonly selectedTransactionRef = signal<string | null>(null);
   protected readonly actionPending = signal(false);
   protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
@@ -114,9 +116,16 @@ export class BotPanelShellComponent {
 
   protected readonly liveChart = resource({
     params: () =>
-      this.activeLens() === 'trader' ? this.routeParams() : undefined,
+      this.activeLens() === 'trader'
+        ? { ...this.routeParams(), resolution: this.liveResolution() }
+        : undefined,
     loader: ({ params }) =>
-      this.panelSvc.getLiveChart(params.broker, params.accountId, params.sid),
+      this.panelSvc.getLiveChart(
+        params.broker,
+        params.accountId,
+        params.sid,
+        params.resolution,
+      ),
   });
 
   protected readonly histChart = resource({
@@ -147,8 +156,10 @@ export class BotPanelShellComponent {
 
   constructor() {
     const pollTimer = setInterval(() => {
-      this.panel.reload();
-      if (this.activeLens() === 'trader') {
+      if (!this.panel.isLoading()) {
+        this.panel.reload();
+      }
+      if (this.activeLens() === 'trader' && !this.liveChart.isLoading()) {
         this.liveChart.reload();
       }
     }, 5_000);
@@ -203,6 +214,10 @@ export class BotPanelShellComponent {
 
   protected onPresetChange(preset: ChartHistoryPreset): void {
     this.selectedPreset.set(preset);
+  }
+
+  protected onLiveResolutionChange(resolution: ChartLiveResolution): void {
+    this.liveResolution.set(resolution);
   }
 
   protected onTransactionSelected(transactionRef: string): void {

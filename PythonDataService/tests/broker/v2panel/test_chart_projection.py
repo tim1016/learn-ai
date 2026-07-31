@@ -204,11 +204,72 @@ async def test_live_chart_before_session_open_is_empty(
     monkeypatch.setattr(panel_data_source, "live_window", lambda now_ms: (open_ms, close_ms))
     monkeypatch.setattr(panel_data_source, "resolve_chart_window", unexpected_resolver)
 
-    result = await panel_data_source.get_live_chart("alpaca", "paper-account", SID)
+    result = await panel_data_source.get_live_chart(
+        "alpaca", "paper-account", SID, resolution="5s"
+    )
 
     assert result.trading_date_open_ms == open_ms
     assert result.trading_date_close_ms == close_ms
-    assert result.resolution == "1m"
+    assert result.resolution == "5s"
     assert result.bars == []
     assert result.fill_markers == []
     assert result.overlay_notices == []
+
+
+async def test_live_chart_forwards_selected_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+
+    open_ms = _NOW - 60_000
+    close_ms = _NOW + 60_000
+    captured_request: list[tuple[str, bool]] = []
+
+    async def validate_account(broker: str, account_id: str) -> str:
+        return account_id
+
+    async def resolver(**kwargs) -> ChartWindowResult:
+        captured_request.append(
+            (kwargs["timeframe"], kwargs["polygon_overlay_enabled"])
+        )
+        return ChartWindowResult(
+            bars=[], timeframe="5s", resolution="5s", is_streaming=True
+        )
+
+    subscribed: list[str] = []
+
+    async def subscribe(symbol: str) -> None:
+        subscribed.append(symbol)
+
+    monkeypatch.setattr(panel_data_source, "_validate_account", validate_account)
+    monkeypatch.setattr(
+        panel_data_source,
+        "_bot_status",
+        lambda broker, sid: BotStatusView(
+            strategy_instance_id=sid,
+            broker=broker,
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+            running=True,
+            phase="ON_DUTY",
+            desired_state="RUNNING",
+            active_run_id="run-1",
+            duty_outcome=None,
+            binding_created_at_ms=_NOW - 60_000,
+            last_transition_at_ms=_NOW - 60_000,
+        ),
+    )
+    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda account_id: [])
+    monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(panel_data_source, "live_window", lambda now_ms: (open_ms, close_ms))
+    monkeypatch.setattr(panel_data_source, "resolve_chart_window", resolver)
+    monkeypatch.setattr(LIVE_BAR_AGGREGATOR, "ensure_subscribed_5s", subscribe)
+
+    result = await panel_data_source.get_live_chart(
+        "alpaca", "paper-account", SID, resolution="5s"
+    )
+
+    assert captured_request == [("5s", False)]
+    assert subscribed == ["SPY"]
+    assert result.resolution == "5s"

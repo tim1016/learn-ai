@@ -14,8 +14,10 @@ a stale deep link never reads another account's evidence.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.clerk import InventoryBaselineRefusedError
 from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.models import (
@@ -462,7 +464,13 @@ async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: 
     )
 
 
-async def get_live_chart(broker: str, account_id: str, sid: str) -> ChartLiveResponse:
+async def get_live_chart(
+    broker: str,
+    account_id: str,
+    sid: str,
+    *,
+    resolution: Literal["5s", "1m"] = "1m",
+) -> ChartLiveResponse:
     """Build the LIVE chart pane for one bot (§8).
 
     Reuses the existing ``live_chart_window`` resolver — today's session window
@@ -482,15 +490,19 @@ async def get_live_chart(broker: str, account_id: str, sid: str) -> ChartLiveRes
     if now_ms <= open_ms:
         chart_window = ChartWindowResult(
             bars=[],
-            timeframe="1m",
-            resolution="1m",
+            timeframe=resolution,
+            resolution=resolution,
             is_streaming=False,
         )
     else:
         try:
+            if resolution == "5s":
+                await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(symbol)
+            else:
+                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
             chart_window = await resolve_chart_window(
                 symbol=symbol,
-                timeframe=coerce_chart_timeframe("1m"),
+                timeframe=coerce_chart_timeframe(resolution),
                 from_ms=open_ms,
                 # The resolver rejects a to_ms in the future; an open session's close
                 # is later than now, so clamp the fetch bound. The response window
@@ -499,6 +511,7 @@ async def get_live_chart(broker: str, account_id: str, sid: str) -> ChartLiveRes
                 now_ms=now_ms,
                 polygon_api_key=settings.POLYGON_API_KEY,
                 live_aggregator=LIVE_BAR_AGGREGATOR,
+                polygon_overlay_enabled=False,
             )
         except ChartWindowError as exc:
             raise PanelDataError("The live chart window is invalid.", detail=str(exc)) from exc
@@ -617,12 +630,39 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         await clerk.clear_hold(operator=operator, reason="Panel clear-hold")
         return "Exposure hold cleared."
 
+    async def _record_inventory_baseline(operator: str) -> str:
+        clerk = get_alpaca_clerk()
+        if clerk is None:
+            raise PanelUnavailableError("Alpaca order management is not configured.")
+        try:
+            baseline = await clerk.record_inventory_baseline(
+                operator=operator,
+                reason="Operator confirmed current Alpaca inventory from the bot panel.",
+                strategy_instance_id=sid,
+            )
+        except InventoryBaselineRefusedError as exc:
+            raise ActionNotAvailableError(str(exc), detail=exc.detail) from exc
+        except BrokerError as exc:
+            raise ActionNotAvailableError(
+                "Alpaca inventory could not be read for recovery.",
+                detail=exc.detail or str(exc),
+            ) from exc
+        positions = ", ".join(
+            f"{position.symbol} {position.signed_quantity:g}"
+            for position in baseline.positions
+        )
+        return (
+            "Inventory baseline recorded and reconciliation is clean. "
+            f"Broker positions at the cutover: {positions or 'flat'}."
+        )
+
     return {
         "start": _start,
         "stop": _stop,
         "flatten_stop": _flatten_stop,
         "reconcile_now": _reconcile,
         "clear_hold": _clear_hold,
+        "record_inventory_baseline": _record_inventory_baseline,
     }
 
 

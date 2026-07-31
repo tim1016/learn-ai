@@ -120,8 +120,15 @@ async def resolve_chart_window(
     now_ms: int,
     polygon_api_key: str,
     live_aggregator: LiveChartAggregator,
+    polygon_overlay_enabled: bool = True,
 ) -> ChartWindowResult:
-    """Resolve chart bars for an explicit UTC millisecond window."""
+    """Resolve recorded IBKR bars with an optional Polygon gap overlay.
+
+    Canonical implementation: this module.
+    Reference: IBKR real-time bars and Polygon aggregate bars are external
+    vendor data, not independently validated mathematical outputs.
+    Validated against: ``tests/services/test_live_chart_window.py``.
+    """
     validate_chart_window(from_ms=from_ms, to_ms=to_ms, now_ms=now_ms)
     resolution: Literal["5s", "1m"] = "5s" if timeframe == "5s" else "1m"
     if symbol is None:
@@ -140,7 +147,7 @@ async def resolve_chart_window(
         live_aggregator=live_aggregator,
     )
     notices: list[ChartOverlayNotice] = []
-    if resolution == "1m":
+    if resolution == "1m" and polygon_overlay_enabled:
         overlay, notices = await _polygon_overlay_bars(
             symbol=symbol,
             recorded_bars=recorded,

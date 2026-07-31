@@ -1,85 +1,167 @@
-<div
-  class="dual-pane-chart"
-  [class.fullscreen-live]="liveFullscreen()"
-  [class.fullscreen-history]="histFullscreen()"
+<article
+  class="market-tape"
+  [class.market-tape--fullscreen]="fullscreen()"
+  [class.market-tape--polygon]="activePane() === 'polygon'"
+  [attr.aria-label]="'Market tape for ' + symbol()"
 >
-  <!-- ── LIVE pane ──────────────────────────────────────────────────────── -->
-  <div
-    class="chart-pane chart-pane--live"
-    role="region"
-    [attr.aria-label]="'Live chart for ' + symbol()"
-  >
-    <div class="pane-header">
-      <span class="pane-title">LIVE (today, NY)</span>
-      @if (liveSource()) {
-        <span
-          class="source-chip"
-          [class.source-chip--polygon]="liveSource() === 'polygon'"
-          [attr.aria-label]="'Data source: ' + (liveSource() ?? '' | receiptLabel)"
-        >
-          {{ liveSource() ?? '' | receiptLabel }}
-        </span>
-      }
-      <button
-        type="button"
-        class="expand-btn"
-        [attr.aria-label]="
-          liveFullscreen()
-            ? 'Exit fullscreen live chart'
-            : 'Expand live chart to fullscreen'
-        "
-        [attr.aria-pressed]="liveFullscreen()"
-        (click)="toggleLiveFullscreen()"
-      >
-        {{ liveFullscreen() ? '⊠' : '⛶' }}
-      </button>
-    </div>
-
-    @for (notice of liveNotices(); track notice.code) {
-      <div class="overlay-notice" role="status" aria-live="polite">
-        {{ notice.message }}
-      </div>
-    }
-
-    <div #liveContainer class="chart-container" aria-hidden="true"></div>
-  </div>
-
-  <!-- ── HISTORY pane ──────────────────────────────────────────────────── -->
-  <div
-    class="chart-pane chart-pane--history"
-    role="region"
-    [attr.aria-label]="'History chart for ' + symbol()"
-  >
-    <div class="pane-header">
-      <span class="pane-title">HISTORY</span>
-      <div class="preset-bar" role="group" aria-label="History time range">
-        @for (p of presets; track p) {
-          <button
-            type="button"
-            class="preset-btn"
-            [class.preset-btn--active]="selectedPreset() === p"
-            [attr.aria-pressed]="selectedPreset() === p"
-            (click)="selectPreset(p)"
-          >
-            {{ p }}
-          </button>
+  <header class="tape-header">
+    <div class="instrument-lockup">
+      <span class="instrument-kicker">Bot market tape</span>
+      <div class="instrument-line">
+        <h2>{{ symbol() }}</h2>
+        @if (lastPrice(); as price) {
+          <span class="last-price">{{ formatPrice(price) }}</span>
+        } @else {
+          <span class="last-price last-price--empty">—</span>
         }
       </div>
-      <button
-        type="button"
-        class="expand-btn"
-        [attr.aria-label]="
-          histFullscreen()
-            ? 'Exit fullscreen history chart'
-            : 'Expand history chart to fullscreen'
-        "
-        [attr.aria-pressed]="histFullscreen()"
-        (click)="toggleHistFullscreen()"
-      >
-        {{ histFullscreen() ? '⊠' : '⛶' }}
-      </button>
     </div>
 
-    <div #histContainer class="chart-container" aria-hidden="true"></div>
+    <div class="tape-readout" aria-live="polite">
+      <span>{{ activeBars().length }} candle{{ activeBars().length === 1 ? '' : 's' }}</span>
+      @if (visibleFillCount() === activeMarkers().length) {
+        <span>{{ activeMarkers().length }} fill{{ activeMarkers().length === 1 ? '' : 's' }}</span>
+      } @else {
+        <span>{{ visibleFillCount() }} plotted / {{ activeMarkers().length }} fills</span>
+      }
+      @if (activePane() === 'live' && liveSource()) {
+        <span>{{ liveSource() ?? '' | receiptLabel }}</span>
+      } @else if (activePane() === 'live') {
+        <span>IBKR</span>
+      } @else {
+        <span>Polygon</span>
+      }
+    </div>
+
+    <button
+      type="button"
+      class="fullscreen-button"
+      [attr.aria-label]="fullscreen() ? 'Exit expanded market chart' : 'Expand market chart'"
+      [attr.aria-pressed]="fullscreen()"
+      (click)="toggleFullscreen()"
+    >
+      <span aria-hidden="true">{{ fullscreen() ? '⊠' : '⛶' }}</span>
+    </button>
+  </header>
+
+  <div class="tape-workspace">
+    <nav class="source-rail" role="tablist" aria-label="Market data source">
+      <button
+        id="live-tape-tab"
+        type="button"
+        role="tab"
+        data-chart-pane="live"
+        class="source-tab source-tab--live"
+        [class.source-tab--active]="activePane() === 'live'"
+        [attr.aria-selected]="activePane() === 'live'"
+        [attr.tabindex]="activePane() === 'live' ? 0 : -1"
+        aria-controls="market-tape-panel"
+        (click)="selectPane('live')"
+        (keydown)="onTabKeydown($event)"
+      >
+        <span class="source-tab__signal" aria-hidden="true"></span>
+        <span class="source-tab__copy">
+          <strong>IBKR live</strong>
+          <small>Direct market pulse</small>
+        </span>
+      </button>
+
+      <button
+        id="polygon-tape-tab"
+        type="button"
+        role="tab"
+        data-chart-pane="polygon"
+        class="source-tab source-tab--polygon"
+        [class.source-tab--active]="activePane() === 'polygon'"
+        [attr.aria-selected]="activePane() === 'polygon'"
+        [attr.tabindex]="activePane() === 'polygon' ? 0 : -1"
+        aria-controls="market-tape-panel"
+        (click)="selectPane('polygon')"
+        (keydown)="onTabKeydown($event)"
+      >
+        <span class="source-tab__glyph" aria-hidden="true">P</span>
+        <span class="source-tab__copy">
+          <strong>Polygon</strong>
+          <small>15 min delayed</small>
+        </span>
+      </button>
+    </nav>
+
+    <section
+      id="market-tape-panel"
+      class="chart-deck"
+      role="tabpanel"
+      [attr.aria-labelledby]="activePane() === 'live' ? 'live-tape-tab' : 'polygon-tape-tab'"
+    >
+      <div class="deck-toolbar">
+        @if (activePane() === 'live') {
+          <div class="interval-group" role="group" aria-label="Live chart interval">
+            <span class="toolbar-label">Interval</span>
+            @for (resolution of liveResolutions; track resolution) {
+              <button
+                type="button"
+                class="interval-button"
+                [class.interval-button--active]="liveResolution() === resolution"
+                [attr.aria-pressed]="liveResolution() === resolution"
+                (click)="selectLiveResolution(resolution)"
+              >{{ resolution }}</button>
+            }
+          </div>
+          <div class="feed-clock">
+            <span class="feed-clock__dot" aria-hidden="true"></span>
+            Refreshes every 5s
+          </div>
+        } @else {
+          <div class="interval-group" role="group" aria-label="Polygon chart range">
+            <span class="toolbar-label">Range</span>
+            @for (preset of presets; track preset) {
+              <button
+                type="button"
+                class="interval-button"
+                [class.interval-button--active]="selectedPreset() === preset"
+                [attr.aria-pressed]="selectedPreset() === preset"
+                (click)="selectPreset(preset)"
+              >{{ preset }}</button>
+            }
+          </div>
+          <div class="delay-badge">15 min delay</div>
+        }
+      </div>
+
+      @if (activePane() === 'live') {
+        @for (notice of liveNotices(); track notice.code) {
+          <div class="overlay-notice" role="status" aria-live="polite">
+            {{ notice.message }}
+          </div>
+        }
+      }
+
+      <div class="chart-stage">
+        <div #chartContainer class="chart-container" aria-hidden="true"></div>
+        @if (activeLoading() && activeBars().length === 0) {
+          <div class="chart-state" role="status" aria-live="polite">
+            <span class="chart-state__pulse" aria-hidden="true"></span>
+            Loading {{ activePane() === 'live' ? liveResolution() + ' IBKR candles' : 'Polygon candles' }}…
+          </div>
+        } @else if (activeBars().length === 0) {
+          <div class="chart-state" role="status">
+            <strong>No candles in this window</strong>
+            <span>{{ activePane() === 'live' ? 'The live tape will draw when IBKR publishes the next bar.' : 'Try a wider Polygon range.' }}</span>
+          </div>
+        }
+      </div>
+
+      <footer class="tape-legend">
+        <span><i class="legend-swatch legend-swatch--up"></i> Up candle</span>
+        <span><i class="legend-swatch legend-swatch--down"></i> Down candle</span>
+        @if (activePane() === 'live') {
+          <span><i class="legend-arrow legend-arrow--buy">↑</i> Buy fill</span>
+          <span><i class="legend-arrow legend-arrow--sell">↓</i> Sell fill</span>
+          <span class="legend-note">Fills plot only on their exact containing candle.</span>
+        } @else {
+          <span class="legend-note">Consolidated Polygon aggregates · delayed feed</span>
+        }
+      </footer>
+    </section>
   </div>
-</div>
+</article>

@@ -7,8 +7,19 @@ directly with hand-built ledgers — no clerk, no journal, no I/O.
 from __future__ import annotations
 
 from app.broker.alpaca.clerk import derive
+from app.broker.alpaca.clerk.exposure import project_instance_exposure
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
-from app.broker.contract.models import BrokerOrder, BrokerPosition
+from app.broker.contract.models import (
+    BrokerOrder,
+    BrokerOrderEvent,
+    BrokerOrderLeg,
+    BrokerPosition,
+    OrderSide,
+)
+from app.engine.live.account_clerk_journal_models import (
+    AccountClerkBrokerEvidenceBaseline,
+    AccountClerkPositionEvidence,
+)
 
 _MS = 1_700_000_000_000
 
@@ -230,6 +241,27 @@ def _entry_with_order(order_ref: str, order: BrokerOrder) -> OrderJournalEntry:
     )
 
 
+def _baseline(quantity: float, ms: int = _MS + 10) -> OrderJournalEntry:
+    return OrderJournalEntry(
+        kind=ClerkEntryKind.BROKER_EVIDENCE_BASELINE,
+        account_id="A",
+        operator="ops",
+        reason="Verified current Alpaca paper inventory.",
+        recorded_at_ms=ms,
+        broker_evidence_baseline=AccountClerkBrokerEvidenceBaseline(
+            account_id="A",
+            observed_at_ms=ms,
+            positions=(
+                AccountClerkPositionEvidence(
+                    symbol="SPY",
+                    signed_quantity=quantity,
+                    evidence_observed_at_ms=ms,
+                ),
+            ),
+        ),
+    )
+
+
 def _position_for(symbol: str, quantity: float = 1.0) -> BrokerPosition:
     return _position().model_copy(update={"symbol": symbol, "quantity": quantity})
 
@@ -289,3 +321,61 @@ def test_has_missing_intent_foreign_position_not_masked_by_suppression() -> None
     flagged = derive.has_missing_intent(entries, [], positions)
 
     assert flagged is True
+
+
+def test_inventory_baseline_preserves_history_without_phantom_exposure() -> None:
+    old_ref = "manual/desk/v1:old"
+    old_sell = _order_snapshot(
+        symbol="SPY", side="sell", status="filled", filled_quantity=1.0
+    )
+    entries = [
+        _intent(old_ref),
+        _entry_with_order(old_ref, old_sell),
+        _baseline(1.0),
+    ]
+
+    assert derive.has_missing_intent(entries, [], [_position_for("SPY")]) is False
+
+
+def test_inventory_baseline_retires_prior_instance_exposure() -> None:
+    ref = "learn-ai/stale-bot/v1:old"
+    fill = OrderJournalEntry(
+        kind=ClerkEntryKind.ORDER_EVENT,
+        account_id="A",
+        operator="stale-bot",
+        intent_id="old",
+        order_ref=ref,
+        client_order_id=ref,
+        owned=True,
+        recorded_at_ms=_MS,
+        leg=BrokerOrderLeg(symbol="SPY", side=OrderSide.BUY, quantity=1.0),
+        event=BrokerOrderEvent(
+            event_type="fill",
+            occurred_at_ms=_MS,
+            price=100.0,
+            quantity=1.0,
+        ),
+        event_key="exec:old",
+    )
+
+    assert project_instance_exposure([fill, _baseline(1.0)]) == ()
+
+
+def test_orders_after_inventory_baseline_advance_expected_exposure() -> None:
+    new_ref = "manual/desk/v1:new"
+    new_sell = _order_snapshot(
+        symbol="SPY", side="sell", status="filled", filled_quantity=1.0
+    )
+    entries = [
+        _baseline(1.0),
+        _intent(new_ref).model_copy(update={"recorded_at_ms": _MS + 20}),
+        _entry_with_order(new_ref, new_sell).model_copy(
+            update={"recorded_at_ms": _MS + 21}
+        ),
+    ]
+
+    assert derive.has_missing_intent(entries, [], []) is False
+
+
+def test_has_missing_intent_detects_expected_position_when_broker_is_flat() -> None:
+    assert derive.has_missing_intent([_baseline(1.0)], [], []) is True

@@ -72,6 +72,8 @@ def _clerk_status(
     hold_code: str | None = None,
     healthy: bool = True,
     freeze: AccountFreezeState | None = None,
+    reconciliation_verdict: str = "clean",
+    outstanding_intents: int = 0,
 ) -> ClerkStatus:
     return ClerkStatus(
         broker="alpaca",
@@ -83,8 +85,11 @@ def _clerk_status(
             since_ms=_NOW - 100 if hold else None,
         ),
         freeze=freeze or AccountFreezeState(),
-        latest_reconciliation=ReconciliationSummary(verdict="clean", recorded_at_ms=_NOW - 200),
-        outstanding_intents=0,
+        latest_reconciliation=ReconciliationSummary(
+            verdict=reconciliation_verdict,  # type: ignore[arg-type]
+            recorded_at_ms=_NOW - 200,
+        ),
+        outstanding_intents=outstanding_intents,
         observed_at_ms=_NOW,
         channel_healths=[
             ChannelHealth(stream="market_data", healthy=healthy, reason="", observed_at_ms=_NOW - 10),
@@ -144,6 +149,7 @@ def test_panel_composes_cards_rail_and_actions() -> None:
         "stop",
         "flatten_stop",
         "clear_hold",
+        "record_inventory_baseline",
         "reconcile_now",
     }
     assert panel.mission_verdict.state == "working"
@@ -165,6 +171,47 @@ def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -
     assert "SPY 2" in confirmation.body
     assert (
         _action(panel, "flatten_stop").concurrency_token != _action(changed_exposure, "flatten_stop").concurrency_token
+    )
+
+
+def test_missing_intent_presents_confirmed_inventory_baseline_recovery() -> None:
+    panel = _panel(
+        _status(running=False),
+        _clerk_status(
+            reconciliation_verdict="missing_intent",
+            freeze=AccountFreezeState(
+                active=True,
+                category="ACCOUNT_STATE_UNATTRIBUTABLE",
+                explanation="Broker inventory does not match the journal.",
+                next_step="Recover the verified inventory baseline.",
+                observed_at_ms=_NOW - 200,
+            ),
+        ),
+        [],
+        exposure={},
+    )
+
+    action = _action(panel, "record_inventory_baseline")
+    assert action.enabled is True
+    assert action.confirmation is not None
+    assert action.confirmation.required_token == "BASELINE"
+    assert "Earlier trades remain in history" in action.confirmation.consequence
+
+
+def test_clean_flat_account_presents_stale_bot_attribution_recovery() -> None:
+    panel = _panel(
+        _status(running=False),
+        _clerk_status(reconciliation_verdict="clean"),
+        [],
+        exposure={"SPY": 1.0},
+    )
+
+    action = _action(panel, "record_inventory_baseline")
+    assert action.enabled is True
+    assert action.confirmation is not None
+    assert action.confirmation.required_token == "BASELINE"
+    assert "All pre-cutover bot attribution is retired" in (
+        action.confirmation.consequence
     )
 
 

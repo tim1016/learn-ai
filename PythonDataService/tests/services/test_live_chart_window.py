@@ -155,6 +155,31 @@ async def test_polygon_overlay_excludes_the_in_progress_minute(tmp_path: Path) -
     assert route.call_count == 1
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_polygon_overlay_can_be_disabled_for_ibkr_only_window(
+    tmp_path: Path,
+) -> None:
+    session = session_window_for_date(date(2026, 7, 7))
+    store = BarPersistence(root=tmp_path)
+    store.append("SPY", "1m", _bar("SPY", session.open_ms_utc, "100.00"))
+
+    result = await resolve_chart_window(
+        symbol="SPY",
+        timeframe="1m",
+        from_ms=session.open_ms_utc,
+        to_ms=session.open_ms_utc + 3 * 60_000,
+        now_ms=session.close_ms_utc,
+        polygon_api_key="key",
+        live_aggregator=_FakeAggregator(store),
+        polygon_overlay_enabled=False,
+    )
+
+    assert [bar.source for bar in result.bars] == ["ibkr"]
+    assert result.overlay_notices == []
+    assert len(respx.calls) == 0
+
+
 def test_validate_chart_window_rejects_more_than_seven_days() -> None:
     now_ms = 1_783_531_200_000
     with pytest.raises(ChartWindowError, match="7 days"):

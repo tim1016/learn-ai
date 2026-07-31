@@ -5,9 +5,11 @@ import {
   input,
   output,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import type {
   BotPanelView,
   ChartHistoryPreset,
+  ChartLiveResolution,
   ChartLiveResponse,
   ChartHistoryResponse,
   PanelAction,
@@ -42,6 +44,7 @@ import { TraderMetricsComponent } from './trader-metrics.component';
     PanelActionButtonComponent,
     ReceiptLabelPipe,
     TraderMetricsComponent,
+    RouterLink,
   ],
   templateUrl: './trader-lens.component.html',
   styleUrl: './trader-lens.component.scss',
@@ -53,6 +56,9 @@ export class TraderLensComponent {
   readonly profile = input.required<PanelProfile>();
   readonly liveChart = input<ChartLiveResponse | null>(null);
   readonly histChart = input<ChartHistoryResponse | null>(null);
+  readonly liveChartLoading = input(false);
+  readonly histChartLoading = input(false);
+  readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly selectedPreset = input<ChartHistoryPreset>('1D');
   readonly actionPending = input(false);
 
@@ -60,6 +66,7 @@ export class TraderLensComponent {
 
   /** User selected a history preset. */
   readonly presetChange = output<ChartHistoryPreset>();
+  readonly liveResolutionChange = output<ChartLiveResolution>();
   /** User clicked the primary verb button (Start/Stop). */
   readonly actionRequested = output<PanelAction>();
 

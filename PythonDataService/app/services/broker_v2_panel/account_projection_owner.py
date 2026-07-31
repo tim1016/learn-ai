@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
 from app.broker.alpaca.clerk.fills import project_instance_fills
-from app.broker.alpaca.clerk.models import OrderJournalEntry
+from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.alpaca.clerk.rollup_cache import BotRollup, BotRollupCache
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView
@@ -65,6 +65,16 @@ class AccountProjectionOwner:
             self._cache = BotRollupCache()
             self._watermark = 0
 
+        if any(
+            entry.kind is ClerkEntryKind.BROKER_EVIDENCE_BASELINE
+            for entry in entries[self._watermark :]
+        ):
+            # Inventory recovery is intentionally rare and account-wide. A
+            # one-time rebuild applies its cutover to every current exposure
+            # bucket while retaining historical fills/P&L in each rollup.
+            self._cache = BotRollupCache()
+            self._watermark = 0
+
         new_entries = entries[self._watermark :]
         known_before = set(self._cache.known_sids())
 
@@ -72,9 +82,7 @@ class AccountProjectionOwner:
         # watermark, so the tail alone would miss them).
         for sid in sids:
             if sid not in known_before:
-                self._cache.bootstrap_from_fills(
-                    sid, list(project_instance_fills(sid, entries))
-                )
+                self._cache.bootstrap_from_journal(sid, entries)
 
         # Pre-existing bots: fold only the new tail. New bots already consumed
         # the tail during bootstrap above.

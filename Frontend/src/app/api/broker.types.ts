@@ -1596,7 +1596,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** LIVE chart pane: today's merged bars + fill markers (§8) */
+        /** LIVE chart pane: today's IBKR bars + fill markers (§8) */
         get: operations["get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get"];
         put?: never;
         post?: never;
@@ -20272,7 +20272,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
+            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -20299,7 +20299,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
+            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -20322,7 +20322,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
+            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -20365,7 +20365,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now")[];
+            supported_action_ids: ("deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now")[];
         };
         /**
          * ParameterStabilityResponse
@@ -21067,7 +21067,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
+            operation: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
             /** Ready */
             ready: boolean;
             /**
@@ -28535,7 +28535,9 @@ export interface operations {
     };
     get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get: {
         parameters: {
-            query?: never;
+            query?: {
+                resolution?: "5s" | "1m";
+            };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
             };
@@ -28896,7 +28898,9 @@ export interface operations {
     };
     get_live_chart_unscoped_api_brokers__broker__bots__sid__chart_live_get: {
         parameters: {
-            query?: never;
+            query?: {
+                resolution?: "5s" | "1m";
+            };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
             };

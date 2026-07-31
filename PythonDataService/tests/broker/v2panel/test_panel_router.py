@@ -365,7 +365,64 @@ async def test_action_identity_is_not_a_request_field(api) -> None:
     assert response.status_code == 422
 
 
-# ── §8 chart history preset validation ───────────────────────────────────────
+# ── §8 chart interval and history preset validation ─────────────────────────
+
+
+async def test_live_chart_accepts_five_second_resolution(
+    api: tuple[FastAPI, _FakeClerk, BotTaskRegistry],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _clerk, registry = api
+    await _deploy_bot(registry)
+    observed: list[str] = []
+
+    async def live_chart(
+        broker: str,
+        account_id: str,
+        sid: str,
+        *,
+        resolution: str,
+    ) -> dict[str, object]:
+        observed.append(resolution)
+        return {
+            "strategy_instance_id": sid,
+            "symbol": "SPY",
+            "trading_date_open_ms": _T0,
+            "trading_date_close_ms": _T0 + 60_000,
+            "resolution": resolution,
+            "bars": [],
+            "fill_markers": [],
+            "overlay_notices": [],
+            "as_of_ms": _T0,
+        }
+
+    monkeypatch.setattr(
+        "app.routers.broker_v2_panel.ds.get_live_chart",
+        live_chart,
+    )
+    async with _client(app) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/chart/live",
+            params={"resolution": "5s"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["resolution"] == "5s"
+    assert observed == ["5s"]
+
+
+async def test_live_chart_rejects_unknown_resolution(
+    api: tuple[FastAPI, _FakeClerk, BotTaskRegistry],
+) -> None:
+    app, _clerk, registry = api
+    await _deploy_bot(registry)
+    async with _client(app) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/chart/live",
+            params={"resolution": "15s"},
+        )
+
+    assert response.status_code == 422
 
 
 async def test_history_unknown_preset_is_422(api) -> None:

@@ -10,6 +10,11 @@ testable and share one place with the ``clerk.py`` intent/terminal scanners.
 
 from __future__ import annotations
 
+from app.broker.alpaca.clerk.exposure import (
+    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
+    project_expected_account_exposure,
+    signed_broker_position_quantity,
+)
 from app.broker.alpaca.clerk.models import (
     UNEXPLAINED_ORDER_HOLD_CODE,
     AccountFreezeState,
@@ -27,9 +32,7 @@ from app.broker.contract.models import BrokerOrder, BrokerPosition
 # Terminal order statuses: settled exposure is represented by the broker
 # positions snapshot, not by further order-state changes. ``reconcile``
 # re-exports this for the sweep's working-order filter.
-RECONCILIATION_TERMINAL_ORDER_STATUSES = frozenset(
-    {"filled", "canceled", "expired", "rejected", "replaced"}
-)
+RECONCILIATION_TERMINAL_ORDER_STATUSES = ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
 
 
 def build_status(
@@ -306,11 +309,6 @@ def has_missing_intent(
         coid = order.client_order_id
         if coid and coid not in recorded_refs:
             return True
-    latest_order_by_ref: dict[str, BrokerOrder] = {}
-    for entry in entries:
-        if entry.order_ref and entry.order is not None:
-            latest_order_by_ref[entry.order_ref] = entry.order
-
     # Only settled (terminal) snapshots contribute to the expected tally: a
     # working snapshot's filled_quantity goes stale the instant the broker
     # fills it, and the authoritative fill ORDER_EVENT may not have been
@@ -319,26 +317,28 @@ def has_missing_intent(
     # order is skipped for this pass — the next sweep, after the fill event
     # lands, decides. A position with no journal presence still flags
     # (foreign exposure must not be masked by this suppression).
-    expected_quantity_by_symbol: dict[str, float] = {}
+    expected_quantity_by_symbol = project_expected_account_exposure(entries)
     symbols_with_inflight_order: set[str] = set()
-    for order in latest_order_by_ref.values():
-        if order.status.lower() not in RECONCILIATION_TERMINAL_ORDER_STATUSES:
-            symbols_with_inflight_order.add(order.symbol)
+    for entry in entries:
+        order = entry.order
+        if order is not None and order.status.lower() not in RECONCILIATION_TERMINAL_ORDER_STATUSES:
+            symbols_with_inflight_order.add(order.symbol.upper())
+
+    actual_quantity_by_symbol: dict[str, float] = {}
+    for position in positions:
+        symbol = position.symbol.upper()
+        if symbol in symbols_with_inflight_order:
             continue
-        signed_quantity = order.filled_quantity
-        if order.side.lower() == "sell":
-            signed_quantity = -signed_quantity
-        expected_quantity_by_symbol[order.symbol] = (
-            expected_quantity_by_symbol.get(order.symbol, 0.0) + signed_quantity
+        actual_quantity = signed_broker_position_quantity(position)
+        actual_quantity_by_symbol[symbol] = (
+            actual_quantity_by_symbol.get(symbol, 0.0) + actual_quantity
         )
 
-    for position in positions:
-        if position.symbol in symbols_with_inflight_order:
+    for symbol in set(expected_quantity_by_symbol) | set(actual_quantity_by_symbol):
+        if symbol in symbols_with_inflight_order:
             continue
-        actual_quantity = position.quantity
-        if position.side.lower() == "short":
-            actual_quantity = -actual_quantity
-        expected_quantity = expected_quantity_by_symbol.get(position.symbol, 0.0)
+        expected_quantity = expected_quantity_by_symbol.get(symbol, 0.0)
+        actual_quantity = actual_quantity_by_symbol.get(symbol, 0.0)
         if abs(actual_quantity - expected_quantity) > 1e-9:
             return True
     return False

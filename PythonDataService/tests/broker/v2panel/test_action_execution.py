@@ -366,6 +366,38 @@ async def test_flatten_stop_stops_strategy_before_unprovable_exit(monkeypatch) -
     assert "cannot prove" in message
 
 
+async def test_inventory_baseline_performer_uses_channel_identity(monkeypatch) -> None:
+    calls: list[dict[str, str]] = []
+
+    class _Clerk:
+        async def record_inventory_baseline(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(
+                positions=(
+                    SimpleNamespace(symbol="SPY", signed_quantity=1.0),
+                )
+            )
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
+        lambda: _Clerk(),
+    )
+
+    message = await _action_performers(
+        "alpaca", _SID, idempotency_key="baseline-1"
+    )["record_inventory_baseline"]("desk-operator")
+
+    assert calls == [
+        {
+            "operator": "desk-operator",
+            "reason": "Operator confirmed current Alpaca inventory from the bot panel.",
+            "strategy_instance_id": _SID,
+        }
+    ]
+    assert "SPY 1" in message
+    assert "reconciliation is clean" in message
+
+
 async def _noop() -> str:
     return "noop"
 

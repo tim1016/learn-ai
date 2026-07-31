@@ -48,4 +48,12 @@
       (triggered)="actionRequested.emit($event)"
     />
   }
+  @if (inventoryBaselineAction(); as action) {
+    <app-panel-action-button
+      [action]="action"
+      [pending]="actionPending()"
+      tone="warning"
+      (triggered)="actionRequested.emit($event)"
+    />
+  }
 </div>

@@ -11,8 +11,9 @@ backend capability that performs the action:
 3. **Identity from the channel.** The operator identity is the configured
    ``PANEL_OPERATOR_IDENTITY`` (§14), never a request field.
 
-The dispatch wires the actions the backend can perform today: ``stop``,
-``reconcile_now``, ``clear_hold``. Actions whose lifecycle backend lands in a
+The dispatch wires the actions the backend can perform today, including
+``stop``, ``reconcile_now``, ``clear_hold``, and the guarded account inventory
+baseline recovery. Actions whose lifecycle backend lands in a
 later slice (``start``, ``retire``, ``flatten_stop``, ``deploy``,
 ``cancel_order`` — the last needs an order id chosen from the working-orders
 list) raise ``ActionNotAvailableError`` rather than presenting a fake success,

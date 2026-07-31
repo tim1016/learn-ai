@@ -7,6 +7,7 @@ import type {
   BotPanelView,
   ChartHistoryPreset,
   ChartHistoryResponse,
+  ChartLiveResolution,
   ChartLiveResponse,
   EvidencePage,
   PanelAction,
@@ -124,10 +125,13 @@ export class BrokerV2PanelService {
     broker: string,
     accountId: string,
     sid: string,
+    resolution: ChartLiveResolution,
   ): Promise<ChartLiveResponse> {
+    const params = new HttpParams().set('resolution', resolution);
     return firstValueFrom(
       this.http.get<ChartLiveResponse>(
         `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/chart/live`,
+        { params },
       ),
     );
   }

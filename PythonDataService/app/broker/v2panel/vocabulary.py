@@ -91,6 +91,7 @@ ActionId = Literal[
     "retire",
     "cancel_order",
     "clear_hold",
+    "record_inventory_baseline",
     "reconcile_now",
 ]
 ACTION_IDS: Final[tuple[ActionId, ...]] = (
@@ -101,6 +102,7 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "retire",
     "cancel_order",
     "clear_hold",
+    "record_inventory_baseline",
     "reconcile_now",
 )
 
@@ -175,7 +177,8 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     "missing_intent": OperatorCopy(
         "Missing intent",
-        "The last sweep found a recorded intent with no matching broker order.",
+        "The last sweep found broker inventory or an owned order that does not "
+        "match the durable journal exposure.",
     ),
     "stale": OperatorCopy(
         "Stale",
@@ -244,6 +247,12 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
         "Clear hold",
         "Lift the account exposure hold once its root condition is healthy and "
         "freshly observed.",
+    ),
+    "record_inventory_baseline": OperatorCopy(
+        "Recover inventory baseline",
+        "Record the freshly observed broker positions as the account accounting cutover, "
+        "retiring prior bot attribution without deleting history or assigning current "
+        "positions to a bot.",
     ),
     "reconcile_now": OperatorCopy(
         "Reconcile now", "Run a reconciliation sweep against the broker immediately."

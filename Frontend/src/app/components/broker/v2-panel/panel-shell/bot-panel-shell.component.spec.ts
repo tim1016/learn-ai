@@ -176,7 +176,40 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     // Symbol from the loaded panel should appear
-    expect(screen.getByRole('heading', { name: 'QQQ' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'QQQ', level: 1 })).toBeTruthy();
+    expect(mockService.getLiveChart).toHaveBeenCalledWith(
+      'alpaca',
+      'DUM284968',
+      'sid-001',
+      '5s',
+    );
+  });
+
+  it('does not restart a panel request that is still loading', async () => {
+    vi.useFakeTimers();
+    const pendingPanel = new Promise<BotPanelView>(() => undefined);
+    const slowService = {
+      ...mockService,
+      getPanel: vi.fn().mockReturnValue(pendingPanel),
+    };
+
+    try {
+      const { fixture } = await render(BotPanelShellComponent, {
+        inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          { provide: BrokerV2PanelService, useValue: slowService },
+        ],
+      });
+      fixture.detectChanges();
+
+      expect(slowService.getPanel).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(slowService.getPanel).toHaveBeenCalledTimes(1);
+      fixture.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows log-only degradation panel after data loads', async () => {
