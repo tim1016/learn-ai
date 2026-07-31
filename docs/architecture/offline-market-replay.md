@@ -136,6 +136,10 @@ feed/broker boundaries without forking `LiveEngine`.
 
 ## Verification
 
+- Field-captured SPY/TSLA session replayed with the service clock inside a later
+  NYSE session:
+  `PythonDataService/tests/integration/test_offline_replay_market_capture.py`
+  using `PythonDataService/tests/fixtures/offline_replay/spy-tsla-2026-07-31/`
 - Virtual clock behavior:
   `PythonDataService/tests/services/test_offline_replay_clock.py`
 - Strict data/alignment/fingerprint behavior:
