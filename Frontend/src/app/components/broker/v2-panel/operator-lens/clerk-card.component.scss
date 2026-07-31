@@ -1,6 +1,6 @@
 .clerk-card {
-  background: var(--color-surface, #fff);
-  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
   border-radius: 6px;
   padding: 1rem;
   display: flex;
@@ -18,7 +18,7 @@
   font-size: 0.875rem;
   font-weight: 600;
   margin: 0;
-  color: var(--color-text, #111827);
+  color: var(--text-primary);
 }
 
 .clerk-card__help-group {
@@ -34,13 +34,13 @@
   margin: 0;
 
   dt {
-    color: var(--color-text-secondary, #6b7280);
+    color: var(--text-secondary);
     font-weight: 500;
   }
 
   dd {
     margin: 0;
-    color: var(--color-text, #111827);
+    color: var(--text-primary);
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
@@ -54,7 +54,7 @@
 
 .clerk-card__sub {
   font-size: 0.75rem;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .clerk-card__badge {
@@ -66,14 +66,14 @@
   letter-spacing: 0.04em;
 
   &--warn {
-    background: #fef2f2;
+    background: var(--bear-soft);
     color: #dc2626;
-    border: 1px solid #fecaca;
+    border: 1px solid rgba(239, 83, 80, 0.4);
   }
 }
 
 .clerk-card__none {
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
   font-style: italic;
 }
 
@@ -103,7 +103,7 @@
 
 .clerk-card__channel-state {
   font-size: 0.7rem;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .clerk-card__actions {

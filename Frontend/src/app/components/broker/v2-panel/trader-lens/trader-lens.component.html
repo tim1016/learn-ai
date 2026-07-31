@@ -1,21 +1,10 @@
-<!-- ── Top bar: headline + primary verb ─────────────────────────────────── -->
-<div class="trader-top-bar" role="banner">
-  <div class="bot-identity">
-    <span class="bot-symbol" aria-label="Symbol">{{ symbol() }}</span>
-    <span
-      class="bot-phase"
-      [attr.aria-label]="'Phase: ' + panel().health.phase_label"
-    >
-      {{ panel().health.phase_label }}
-    </span>
+<section class="trader-command" aria-labelledby="trader-status-title">
+  <div>
+    <span class="eyebrow">Trader status</span>
+    <h2 id="trader-status-title">{{ headline() }}</h2>
+    <p>{{ panel().execution_policy }}</p>
   </div>
-
-  <p class="headline" role="status" aria-live="polite" aria-label="Bot status headline">
-    {{ headline() }}
-  </p>
-
-  @if (primaryAction()) {
-    @let action = primaryAction()!;
+  @if (primaryAction(); as action) {
     <app-panel-action-button
       [action]="action"
       [pending]="actionPending()"
@@ -23,10 +12,63 @@
       (triggered)="actionRequested.emit($event)"
     />
   }
-</div>
+</section>
 
-<!-- ── Dual-pane chart ───────────────────────────────────────────────────── -->
-<div class="chart-section">
+<section class="trader-metrics" aria-label="Bot attributed trading summary">
+  <article>
+    <span>Attributed exposure</span>
+    @if (exposure().length === 0) {
+      <strong>Flat</strong><small>Zero Clerk-attributed quantity</small>
+    } @else {
+      @for (position of exposure(); track position[0]) {
+        <strong>{{ position[0] }} {{ position[1] }}</strong>
+      }
+    }
+  </article>
+  <article>
+    <span>Realized today</span>
+    <strong [class.positive]="panel().realized_pnl_today > 0" [class.negative]="panel().realized_pnl_today < 0">
+      {{ panel().realized_pnl_today | currency:'USD':'symbol':'1.2-2' }}
+    </strong>
+    <small>{{ panel().fills_today }} fills today</small>
+  </article>
+  <article>
+    <span>Open P&amp;L</span>
+    @if (panel().open_pnl === null) {
+      <strong>Not available</strong><small>No complete mark coverage</small>
+    } @else {
+      <strong [class.positive]="panel().open_pnl! > 0" [class.negative]="panel().open_pnl! < 0">
+        {{ panel().open_pnl | currency:'USD':'symbol':'1.2-2' }}
+      </strong>
+      <small>Backend FIFO attribution</small>
+    }
+  </article>
+  <article>
+    <span>Order custody</span>
+    <strong>{{ panel().working_orders.length }} working</strong>
+    <small>{{ panel().clerk.outstanding_intents }} unresolved intents</small>
+  </article>
+  <article>
+    <span>Latest decision</span>
+    @if (panel().health.last_decision_at_ms) {
+      <strong><app-timestamp-display [value]="panel().health.last_decision_at_ms" mode="local" /></strong>
+      <small>{{ panel().health.decision_stale ? 'Stale decision evidence' : 'Decision evidence current' }}</small>
+    } @else {
+      <strong>None yet</strong><small>No bar decision recorded</small>
+    }
+  </article>
+  <article>
+    <span>Last evaluated bar</span>
+    @if (panel().health.last_bar_at_ms) {
+      <strong><app-timestamp-display [value]="panel().health.last_bar_at_ms" mode="local" /></strong>
+    } @else {
+      <strong>None yet</strong>
+    }
+    <small>{{ panel().health.resume_label }}</small>
+  </article>
+</section>
+
+<section class="chart-section" aria-label="Market and fill charts">
   <app-dual-pane-chart
     [symbol]="symbol()"
     [liveBars]="liveBars()"
@@ -37,31 +79,51 @@
     [selectedPreset]="selectedPreset()"
     (presetChange)="onPresetChange($event)"
   />
-</div>
+</section>
 
-<!-- ── Trades / log-only region ─────────────────────────────────────────── -->
-@if (isLogOnly()) {
-  <!-- Log-only degradation: honest observation-only panel (spec §6). -->
-  <section class="log-only-panel" aria-label="Log-only bot notice" role="status">
-    <p class="log-only-message">
-      This bot observes and decides but does not place orders (log-only).
-      Decisions appear below.
-    </p>
-    @if (panel().health.last_decision_at_ms) {
-      <div class="last-decision">
-        <span class="last-decision-label">Last decision</span>
-        <app-timestamp-display
-          [value]="panel().health.last_decision_at_ms"
-          mode="local"
-        />
-        @if (panel().health.decision_stale) {
-          <span class="stale-badge" aria-label="Decision data is stale">stale</span>
+<div class="trader-activity">
+  <section class="activity-card" aria-labelledby="recent-decisions-title">
+    <div class="activity-card__heading">
+      <span class="eyebrow">Strategy evidence</span>
+      <h2 id="recent-decisions-title">Recent decisions</h2>
+    </div>
+    @if (panel().recent_decisions.length === 0) {
+      <p class="empty-copy">No decisions recorded yet.</p>
+    } @else {
+      <ul>
+        @for (decision of panel().recent_decisions; track decision.seq) {
+          <li>
+            <div><strong>{{ decision.outcome | receiptLabel }}</strong><span>{{ decision.reason_code | receiptLabel }}</span></div>
+            <app-timestamp-display [value]="decision.recorded_at_ms" mode="local" />
+          </li>
         }
-      </div>
+      </ul>
     }
   </section>
-} @else {
-  <!-- Order-producing bots: trades list + backend P&L (spec §6, §10). -->
+
+  <section class="activity-card" aria-labelledby="recent-fills-title">
+    <div class="activity-card__heading">
+      <span class="eyebrow">Clerk evidence</span>
+      <h2 id="recent-fills-title">Recent fills</h2>
+    </div>
+    @if (isLogOnly()) {
+      <p class="empty-copy">Observation-only mode does not place orders.</p>
+    } @else if (panel().recent_fills.length === 0) {
+      <p class="empty-copy">No attributed fills recorded yet.</p>
+    } @else {
+      <ul>
+        @for (fill of panel().recent_fills; track fill.order_ref + fill.filled_at_ms) {
+          <li>
+            <div><strong>{{ fill.side | receiptLabel }} {{ fill.symbol }}</strong><span>{{ fill.quantity ?? 'Quantity not reported' }} @ {{ fill.price ?? 'Price pending' }}</span></div>
+            <app-timestamp-display [value]="fill.filled_at_ms" mode="local" />
+          </li>
+        }
+      </ul>
+    }
+  </section>
+</div>
+
+@if (!isLogOnly()) {
   <app-trades-today-list
     [fills]="liveFillMarkers()"
     [feeFidelity]="profile().fee_fidelity"

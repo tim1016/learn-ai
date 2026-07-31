@@ -1,12 +1,10 @@
 @if (loadError()) {
-  <div class="load-error" role="alert" aria-live="assertive">
-    <p>{{ loadError() }}</p>
-  </div>
+  <div class="load-error" role="alert" aria-live="assertive">{{ loadError() }}</div>
 }
 
 @if (!isLoaded()) {
   <div class="loading-state" role="status" aria-live="polite" aria-label="Loading bot panel">
-    <span class="loading-text">Loading…</span>
+    <span class="loading-text">Loading bot control…</span>
   </div>
 }
 
@@ -14,47 +12,118 @@
   @let panelData = panel.value()!;
   @let profileData = profile.value()!;
 
-  <!-- Lens tab bar (spec §6 — Trader default, Operator unlocked in S4) -->
-  <div class="lens-toggle" role="tablist" aria-label="Panel lens">
+  <header class="control-header">
+    <div class="control-header__crumbs">
+      <a [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'bots']">
+        {{ panelData.broker | receiptLabel }} bots
+      </a>
+      <span aria-hidden="true">/</span>
+      <span>{{ panelData.symbol }}</span>
+    </div>
+
+    <div class="control-header__identity">
+      <div>
+        <span class="eyebrow">{{ panelData.strategy_label }}</span>
+        <h1>{{ panelData.symbol }}</h1>
+        <code>{{ panelData.strategy_instance_id }}</code>
+      </div>
+      <div class="identity-chips" aria-label="Bot identity">
+        <span>{{ panelData.broker | receiptLabel }} · {{ panelData.account_id }}</span>
+        <span class="paper-chip">Paper</span>
+        <span>{{ panelData.health.phase_label }}</span>
+        <span>{{ panelData.health.running ? 'Runtime active' : 'Runtime idle' }}</span>
+      </div>
+    </div>
+
+    <div
+      class="mission-verdict"
+      [attr.data-state]="panelData.mission_verdict.state"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="mission-verdict__label">{{ panelData.mission_verdict.label }}</span>
+      <span>{{ panelData.mission_verdict.explanation }}</span>
+      @if (panelData.mission_verdict.next_action) {
+        <strong>Next: {{ panelData.mission_verdict.next_action }}</strong>
+      }
+    </div>
+
+    <div class="control-header__updated">
+      Updated <app-timestamp-display [value]="panelData.updated_at_ms" mode="local" />
+    </div>
+  </header>
+
+  <div class="lens-toggle" role="tablist" aria-label="Bot control perspective">
     <button
+      id="trader-tab"
+      data-lens="trader"
       role="tab"
       class="lens-toggle__tab"
       [class.lens-toggle__tab--active]="activeLens() === 'trader'"
       [attr.aria-selected]="activeLens() === 'trader'"
+      [attr.tabindex]="activeLens() === 'trader' ? 0 : -1"
+      aria-controls="trader-panel"
       (click)="selectLens('trader')"
+      (keydown)="onLensKeydown($event)"
     >Trader</button>
     <button
+      id="operator-tab"
+      data-lens="operator"
       role="tab"
       class="lens-toggle__tab"
       [class.lens-toggle__tab--active]="activeLens() === 'operator'"
       [attr.aria-selected]="activeLens() === 'operator'"
+      [attr.tabindex]="activeLens() === 'operator' ? 0 : -1"
+      aria-controls="operator-panel"
       (click)="selectLens('operator')"
+      (keydown)="onLensKeydown($event)"
     >Operator</button>
   </div>
 
+  @if (actionReceipt(); as receipt) {
+    <aside
+      class="action-receipt"
+      [attr.data-outcome]="receipt.outcome"
+      [attr.role]="receipt.outcome === 'success' ? 'status' : 'alert'"
+    >
+      <div>
+        <strong>{{ receipt.outcome | receiptLabel }}</strong>
+        <span>{{ receipt.message }}</span>
+        <app-timestamp-display [value]="receipt.recordedAtMs" mode="local" />
+        @if (receipt.receiptId) { <code>{{ receipt.receiptId }}</code> }
+      </div>
+      <button type="button" aria-label="Dismiss action receipt" (click)="dismissActionReceipt()">×</button>
+    </aside>
+  }
+
   @switch (activeLens()) {
     @case ('trader') {
-      <app-trader-lens
-        [panel]="panelData"
-        [profile]="profileData"
-        [liveChart]="liveChart.value() ?? null"
-        [histChart]="histChart.value() ?? null"
-        [selectedPreset]="selectedPreset()"
-        [actionPending]="actionPending()"
-        (presetChange)="onPresetChange($event)"
-        (actionRequested)="onActionRequested($event)"
-      />
+      <div id="trader-panel" role="tabpanel" aria-labelledby="trader-tab">
+        <app-trader-lens
+          [panel]="panelData"
+          [profile]="profileData"
+          [liveChart]="liveChart.value() ?? null"
+          [histChart]="histChart.value() ?? null"
+          [selectedPreset]="selectedPreset()"
+          [actionPending]="actionPending()"
+          (presetChange)="onPresetChange($event)"
+          (actionRequested)="onActionRequested($event)"
+        />
+      </div>
     }
     @case ('operator') {
-      <app-operator-lens
-        [panel]="panelData"
-        [profile]="profileData"
-        [actionPending]="actionPending()"
-        (actionRequested)="onActionRequested($event)"
-        [broker]="broker()"
-        [accountId]="accountId()"
-        [sid]="sid()"
-      />
+      <div id="operator-panel" role="tabpanel" aria-labelledby="operator-tab">
+        <app-operator-lens
+          [panel]="panelData"
+          [profile]="profileData"
+          [actionPending]="actionPending()"
+          [broker]="broker()"
+          [accountId]="accountId()"
+          [sid]="sid()"
+          (transactionSelected)="onTransactionSelected($event)"
+          (actionRequested)="onActionRequested($event)"
+        />
+      </div>
     }
   }
 }

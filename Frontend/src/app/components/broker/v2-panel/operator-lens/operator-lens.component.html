@@ -1,69 +1,127 @@
-<!-- Operator lens (spec §7). Four regions. -->
 <div class="operator-lens">
+  <section class="operator-summary" aria-labelledby="current-readiness-title">
+    <div class="section-heading">
+      <span>Enforcement posture</span>
+      <h2 id="current-readiness-title">Current readiness</h2>
+      <p>These checks gate commands now. They are not historical transaction stages.</p>
+    </div>
 
-  <!-- ── Top bar: Flatten & stop ─────────────────────────────────────────── -->
-  @if (flattenStopAction()) {
-    @let fsa = flattenStopAction()!;
-    <div class="operator-lens__top-bar">
+    <div class="readiness-grid">
+      @for (check of panel().readiness_checks; track check.operation) {
+        <article class="readiness-check" [class.readiness-check--blocked]="!check.ready">
+          <div>
+            <span class="readiness-check__state">{{ check.ready ? 'Ready' : 'Blocked' }}</span>
+            <strong>{{ check.label }}</strong>
+          </div>
+          <p>{{ check.explanation }}</p>
+          <dl>
+            <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
+            <div><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
+          </dl>
+          @if (check.cure) { <p class="readiness-check__cure">Next: {{ check.cure }}</p> }
+        </article>
+      }
+    </div>
+  </section>
+
+  <div class="operator-actions" aria-label="Operator commands">
+    @if (flattenStopAction(); as action) {
       <app-panel-action-button
-        [action]="fsa"
+        [action]="action"
         [pending]="actionPending()"
         tone="danger"
         (triggered)="onActionRequested($event)"
       />
-    </div>
-  }
+    }
+    @if (reconcileAction(); as action) {
+      <app-panel-action-button
+        [action]="action"
+        [pending]="actionPending()"
+        tone="neutral"
+        (triggered)="onActionRequested($event)"
+      />
+    }
+    @if (clearHoldAction(); as action) {
+      <app-panel-action-button
+        [action]="action"
+        [pending]="actionPending()"
+        tone="warning"
+        (triggered)="onActionRequested($event)"
+      />
+    }
+  </div>
 
-  <!-- ── Main layout: rail + cards ──────────────────────────────────────── -->
   <div class="operator-lens__main">
-
-    <!-- Rail (center) -->
-    <div class="operator-lens__rail-col">
+    <section class="operator-lens__trace" aria-labelledby="transaction-trace-title">
+      <div class="section-heading">
+        <span>Historical evidence</span>
+        <h2 id="transaction-trace-title">Transaction trace</h2>
+        <p>The selected order's recorded path. Selecting a journal row reloads this projection from the server.</p>
+      </div>
       <app-transaction-rail
-        [rail]="displayRail()"
+        [rail]="rail()"
         [profile]="profile()"
         (evidenceRequested)="onEvidenceRequested($event)"
       />
-    </div>
+    </section>
 
-    <!-- Side cards (beside the rail, not inside it — spec §7) -->
     <aside class="operator-lens__cards">
-      <!-- Bot health card (§7.2) -->
       <app-health-card
         [health]="health()"
-        [retireAction]="retireAction()"
+        [retireAction]="null"
         [actionPending]="actionPending()"
         (actionRequested)="onActionRequested($event)"
       />
-
-      <!-- Account/clerk card (§7.3) -->
       <app-clerk-card
         [clerk]="clerk()"
-        [reconcileAction]="reconcileAction()"
-        [clearHoldAction]="clearHoldAction()"
+        [reconcileAction]="null"
+        [clearHoldAction]="null"
         [actionPending]="actionPending()"
         (actionRequested)="onActionRequested($event)"
       />
     </aside>
-
   </div>
 
-  <!-- ── Journal tail (bottom, internal scroll) ─────────────────────────── -->
-  <div class="operator-lens__journal">
-    @if (journalError()) {
-      <p role="alert">{{ journalError() }}</p>
+  <section class="working-orders" aria-labelledby="working-orders-title">
+    <div class="section-heading">
+      <span>Clerk custody</span>
+      <h2 id="working-orders-title">Working orders · {{ panel().working_orders.length }}</h2>
+    </div>
+    @if (panel().working_orders.length === 0) {
+      <p class="empty-copy">No Clerk-attributed working orders.</p>
+    } @else {
+      <div class="working-orders__table-wrap">
+        <table>
+          <thead><tr><th>Symbol</th><th>Side</th><th>Quantity</th><th>Filled</th><th>Status</th><th>Order ref</th></tr></thead>
+          <tbody>
+            @for (order of panel().working_orders; track order.order_ref) {
+              <tr>
+                <td>{{ order.symbol }}</td>
+                <td>{{ order.side | receiptLabel }}</td>
+                <td>{{ order.quantity ?? 'Not reported' }}</td>
+                <td>{{ order.filled_quantity }}</td>
+                <td>{{ order.status | receiptLabel }}</td>
+                <td><code>{{ order.order_ref }}</code></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
     }
+  </section>
+
+  <section class="operator-lens__journal" aria-labelledby="journal-title">
+    <div class="section-heading"><span>Audit tail</span><h2 id="journal-title">Journal</h2></div>
+    @if (journalPage.error()) { <p role="alert">Could not load journal evidence.</p> }
     <app-journal-tail
-      [evidencePage]="journalPage()"
-      [loading]="journalLoading()"
+      [evidencePage]="journalPage.value() ?? null"
+      [loading]="journalPage.isLoading()"
       (transactionSelected)="onTransactionSelected($event)"
       (evidenceDrawerRequested)="onEvidenceRequested($event)"
     />
-  </div>
-
+  </section>
 </div>
 
-<!-- ── Evidence drawer (portal-style overlay) ────────────────────────────── -->
 <app-evidence-drawer
   [broker]="broker()"
   [accountId]="accountId()"

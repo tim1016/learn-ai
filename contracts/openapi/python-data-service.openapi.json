@@ -8331,6 +8331,17 @@
           "clerk": {
             "$ref": "#/components/schemas/ClerkCard"
           },
+          "execution_policy": {
+            "title": "Execution Policy",
+            "type": "string"
+          },
+          "exposure": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Exposure",
+            "type": "object"
+          },
           "fills_today": {
             "title": "Fills Today",
             "type": "integer"
@@ -8352,6 +8363,9 @@
               }
             ],
             "title": "Journal Tail Seq"
+          },
+          "mission_verdict": {
+            "$ref": "#/components/schemas/MissionVerdictView"
           },
           "mode": {
             "enum": [
@@ -8375,9 +8389,30 @@
           "rail": {
             "$ref": "#/components/schemas/TransactionRail"
           },
+          "readiness_checks": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessCheckView"
+            },
+            "title": "Readiness Checks",
+            "type": "array"
+          },
           "realized_pnl_today": {
             "title": "Realized Pnl Today",
             "type": "number"
+          },
+          "recent_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/RecentDecisionView"
+            },
+            "title": "Recent Decisions",
+            "type": "array"
+          },
+          "recent_fills": {
+            "items": {
+              "$ref": "#/components/schemas/RecentFillView"
+            },
+            "title": "Recent Fills",
+            "type": "array"
           },
           "revision": {
             "title": "Revision",
@@ -8387,24 +8422,53 @@
             "title": "Strategy Instance Id",
             "type": "string"
           },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "strategy_label": {
+            "title": "Strategy Label",
+            "type": "string"
+          },
           "symbol": {
             "title": "Symbol",
             "type": "string"
+          },
+          "updated_at_ms": {
+            "title": "Updated At Ms",
+            "type": "integer"
+          },
+          "working_orders": {
+            "items": {
+              "$ref": "#/components/schemas/WorkingOrderView"
+            },
+            "title": "Working Orders",
+            "type": "array"
           }
         },
         "required": [
           "strategy_instance_id",
+          "strategy_key",
+          "strategy_label",
           "broker",
           "account_id",
           "symbol",
           "mode",
+          "updated_at_ms",
           "revision",
+          "mission_verdict",
+          "execution_policy",
           "health",
           "clerk",
           "rail",
           "journal_tail_ref",
           "journal_tail_seq",
           "actions",
+          "readiness_checks",
+          "exposure",
+          "working_orders",
+          "recent_decisions",
+          "recent_fills",
           "fills_today",
           "realized_pnl_today",
           "open_pnl"
@@ -27509,6 +27573,54 @@
         "title": "MinuteBar",
         "type": "object"
       },
+      "MissionVerdictView": {
+        "description": "Backend-authored answer to whether this bot can perform its mission now.",
+        "properties": {
+          "evaluated_at_ms": {
+            "title": "Evaluated At Ms",
+            "type": "integer"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "next_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Action"
+          },
+          "state": {
+            "enum": [
+              "ready",
+              "working",
+              "blocked",
+              "off_duty",
+              "retired"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "label",
+          "explanation",
+          "next_action",
+          "evaluated_at_ms"
+        ],
+        "title": "MissionVerdictView",
+        "type": "object"
+      },
       "MonteCarloConfig": {
         "additionalProperties": false,
         "description": "Persistable record of the *inputs* that produced an MC result.\n\n``parent_run_id`` is required \u2014 Monte Carlo always operates on\na parent run's trade list (we don't simulate from thin air). The\nparent's ledger is the authoritative source of the trades; MC\npersists only its own derivation.",
@@ -32436,6 +32548,19 @@
             "title": "Message",
             "type": "string"
           },
+          "outcome": {
+            "const": "success",
+            "default": "success",
+            "title": "Outcome"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
           "revision": {
             "title": "Revision",
             "type": "integer"
@@ -32443,6 +32568,8 @@
         },
         "required": [
           "action_id",
+          "receipt_id",
+          "recorded_at_ms",
           "applied",
           "revision",
           "concurrency_token",
@@ -34064,6 +34191,101 @@
         "title": "QuantileBinResponse",
         "type": "object"
       },
+      "ReadinessCheckView": {
+        "description": "Current enforcement check for one operation, separate from transaction history.",
+        "properties": {
+          "authority": {
+            "title": "Authority",
+            "type": "string"
+          },
+          "cure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cure"
+          },
+          "evaluated_at_ms": {
+            "title": "Evaluated At Ms",
+            "type": "integer"
+          },
+          "evidence": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Evidence",
+            "type": "object"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "deploy",
+              "start",
+              "stop",
+              "flatten_stop",
+              "retire",
+              "cancel_order",
+              "clear_hold",
+              "reconcile_now"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "scope": {
+            "enum": [
+              "bot",
+              "account",
+              "broker"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation",
+          "label",
+          "ready",
+          "scope",
+          "authority",
+          "explanation",
+          "evidence",
+          "evaluated_at_ms",
+          "cure"
+        ],
+        "title": "ReadinessCheckView",
+        "type": "object"
+      },
       "ReadinessGate": {
         "description": "One named input to the \"can this strategy act on the next bar?\" verdict\n(ADR 0005). ``status`` is pass|fail|unknown; ``severity`` is hard|soft.",
         "properties": {
@@ -34503,6 +34725,111 @@
         ],
         "title": "ReasonCode",
         "type": "string"
+      },
+      "RecentDecisionView": {
+        "description": "Bounded backend-authored decision receipt for the Trader lens.",
+        "properties": {
+          "bar_ref": {
+            "title": "Bar Ref",
+            "type": "string"
+          },
+          "order_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
+          },
+          "outcome": {
+            "enum": [
+              "entered",
+              "exited",
+              "no_action",
+              "blocked"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "recorded_at_ms",
+          "outcome",
+          "reason_code",
+          "bar_ref",
+          "order_ref"
+        ],
+        "title": "RecentDecisionView",
+        "type": "object"
+      },
+      "RecentFillView": {
+        "description": "Bounded Clerk-attributed fill receipt for the Trader lens.",
+        "properties": {
+          "filled_at_ms": {
+            "title": "Filled At Ms",
+            "type": "integer"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_ref",
+          "symbol",
+          "side",
+          "quantity",
+          "price",
+          "filled_at_ms"
+        ],
+        "title": "RecentFillView",
+        "type": "object"
       },
       "ReconcileAckResponse": {
         "additionalProperties": false,
@@ -43596,6 +43923,62 @@
           "requested_end_date"
         ],
         "title": "WindowSummary",
+        "type": "object"
+      },
+      "WorkingOrderView": {
+        "description": "Latest Clerk-owned non-terminal order state attributed to this bot.",
+        "properties": {
+          "broker_order_id": {
+            "title": "Broker Order Id",
+            "type": "string"
+          },
+          "filled_quantity": {
+            "title": "Filled Quantity",
+            "type": "number"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_ref",
+          "broker_order_id",
+          "symbol",
+          "side",
+          "quantity",
+          "filled_quantity",
+          "status",
+          "observed_at_ms"
+        ],
+        "title": "WorkingOrderView",
         "type": "object"
       },
       "_BarsSpecModel": {

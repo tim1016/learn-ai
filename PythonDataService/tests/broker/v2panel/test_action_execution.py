@@ -7,6 +7,7 @@ Pins the three execution invariants: revision guard (stale → 409), idempotency
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,12 +17,13 @@ from app.broker.alpaca.clerk.models import EffectOperationState
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
+    ActionOutcomeUnknownError,
     DurableIdempotencyStore,
     IdempotencyStore,
     StaleRevisionError,
     execute_action,
 )
-from app.services.broker_v2_panel.panel_data_source import _action_performers
+from app.services.broker_v2_panel.panel_data_source import _action_performers, run_action
 
 _SID = "bot-alpha"
 
@@ -56,6 +58,9 @@ async def test_action_applies_and_records_identity() -> None:
     )
 
     assert result.applied is True
+    assert result.outcome == "success"
+    assert result.receipt_id == "k1"
+    assert result.recorded_at_ms > 0
     assert result.action_id == "stop"
     assert result.message == "stopped"
     # Identity came from the channel, not the request.
@@ -109,11 +114,65 @@ async def test_idempotent_repost_is_a_noop() -> None:
 
     assert first.applied is True
     assert second.applied is False
+    assert second.receipt_id == first.receipt_id
+    assert second.recorded_at_ms == first.recorded_at_ms
     assert calls == 1
+
+
+async def test_performer_failure_returns_unknown_and_burns_receipt_key() -> None:
+    async def _perform(_operator: str) -> str:
+        raise RuntimeError("connection dropped after dispatch")
+
+    store = IdempotencyStore()
+    with pytest.raises(ActionOutcomeUnknownError) as exc:
+        await execute_action(
+            _request(key="unknown"),
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"stop": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    assert "Inspect Clerk evidence" in (exc.value.detail or "")
+    assert store._records[(_SID, "stop", "unknown")].state == "failed"
+
+
+async def test_disabled_presented_action_cannot_bypass_guard_via_post(
+    monkeypatch,
+) -> None:
+    async def _panel(*_args, **_kwargs):
+        return SimpleNamespace(
+            revision=7,
+            actions=[
+                SimpleNamespace(
+                    action_id="stop",
+                    label="Stop",
+                    enabled=False,
+                    blockers=[SimpleNamespace(detail="Start the bot before Stop.")],
+                    concurrency_token="token",
+                )
+            ],
+        )
+
+    monkeypatch.setattr("app.services.broker_v2_panel.panel_data_source.get_panel", _panel)
+
+    with pytest.raises(ActionNotAvailableError) as exc:
+        await run_action(
+            "alpaca",
+            "account-1",
+            _SID,
+            _request(revision=7),
+            operator_identity="operator",
+        )
+
+    assert exc.value.detail == "Start the bot before Stop."
 
 
 async def test_idempotent_repost_survives_revision_advance() -> None:
     """A retry of an applied action stays a no-op even after the panel advances."""
+
     async def _perform(operator: str) -> str:
         return "stopped"
 
@@ -187,6 +246,45 @@ async def test_durable_receipt_prevents_reexecution_after_store_restart(tmp_path
     assert calls == 1
 
 
+async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "panel_action_receipts.json"
+    compound = "\u001f".join((_SID, "stop", "legacy"))
+    path.write_text(
+        json.dumps(
+            {
+                compound: {
+                    "state": "succeeded",
+                    "result": {
+                        "action_id": "stop",
+                        "applied": True,
+                        "revision": 42,
+                        "concurrency_token": "token",
+                        "message": "stopped",
+                    },
+                    "error_detail": None,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = await execute_action(
+        _request(key="legacy"),
+        sid=_SID,
+        current_revision=99,
+        current_concurrency_token="token",
+        performers={"stop": lambda _operator: _noop()},
+        operator_identity="op",
+        store=DurableIdempotencyStore(path),
+    )
+
+    assert result.applied is False
+    assert result.receipt_id == "legacy"
+    assert result.recorded_at_ms == 0
+
+
 async def test_unwired_action_is_typed_not_available() -> None:
     with pytest.raises(ActionNotAvailableError) as exc:
         await execute_action(
@@ -213,9 +311,7 @@ async def test_start_performer_resumes_durable_binding(monkeypatch) -> None:
         lambda: _Registry(),
     )
 
-    message = await _action_performers(
-        "alpaca", _SID, idempotency_key="resume-1"
-    )["start"]("desk-operator")
+    message = await _action_performers("alpaca", _SID, idempotency_key="resume-1")["start"]("desk-operator")
 
     assert resumed == [("alpaca", _SID)]
     assert message == (
@@ -256,9 +352,7 @@ async def test_flatten_stop_stops_strategy_before_unprovable_exit(monkeypatch) -
         lambda: _Clerk(),
     )
 
-    message = await _action_performers(
-        "alpaca", _SID, idempotency_key="flatten-1"
-    )["flatten_stop"]("desk-operator")
+    message = await _action_performers("alpaca", _SID, idempotency_key="flatten-1")["flatten_stop"]("desk-operator")
 
     assert events == ["stop", "execute"]
     assert "cannot prove" in message

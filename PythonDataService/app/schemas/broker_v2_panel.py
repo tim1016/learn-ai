@@ -207,10 +207,13 @@ class ClerkCard(BaseModel):
     hold_reason_explanation: str
     hold_since_ms: int | None
     freeze_active: bool
-    freeze_category: Literal[
-        "ACCOUNT_STATE_UNATTRIBUTABLE",
-        "ACCOUNT_STATE_UNPROVABLE",
-    ] | None
+    freeze_category: (
+        Literal[
+            "ACCOUNT_STATE_UNATTRIBUTABLE",
+            "ACCOUNT_STATE_UNPROVABLE",
+        ]
+        | None
+    )
     freeze_label: str
     freeze_explanation: str
     freeze_next_step: str | None
@@ -252,6 +255,75 @@ class TransactionRail(BaseModel):
     stations: list[StationView]
 
 
+class MissionVerdictView(BaseModel):
+    """Backend-authored answer to whether this bot can perform its mission now."""
+
+    model_config = ConfigDict(frozen=True)
+
+    state: Literal["ready", "working", "blocked", "off_duty", "retired"]
+    label: str
+    explanation: str
+    next_action: str | None
+    evaluated_at_ms: int
+
+
+class ReadinessCheckView(BaseModel):
+    """Current enforcement check for one operation, separate from transaction history."""
+
+    model_config = ConfigDict(frozen=True)
+
+    operation: ActionId
+    label: str
+    ready: bool
+    scope: Literal["bot", "account", "broker"]
+    authority: str
+    explanation: str
+    evidence: dict[str, str | int | float | bool | None]
+    evaluated_at_ms: int
+    cure: str | None
+
+
+class WorkingOrderView(BaseModel):
+    """Latest Clerk-owned non-terminal order state attributed to this bot."""
+
+    model_config = ConfigDict(frozen=True)
+
+    order_ref: str
+    broker_order_id: str
+    symbol: str
+    side: str
+    quantity: float | None
+    filled_quantity: float
+    status: str
+    observed_at_ms: int
+
+
+class RecentDecisionView(BaseModel):
+    """Bounded backend-authored decision receipt for the Trader lens."""
+
+    model_config = ConfigDict(frozen=True)
+
+    seq: int
+    recorded_at_ms: int
+    outcome: Literal["entered", "exited", "no_action", "blocked"]
+    reason_code: str
+    bar_ref: str
+    order_ref: str | None
+
+
+class RecentFillView(BaseModel):
+    """Bounded Clerk-attributed fill receipt for the Trader lens."""
+
+    model_config = ConfigDict(frozen=True)
+
+    order_ref: str
+    symbol: str
+    side: str
+    quantity: float | None
+    price: float | None
+    filled_at_ms: int
+
+
 class BotPanelView(BaseModel):
     """The full 5s-poll panel projection for one bot (§7).
 
@@ -263,11 +335,16 @@ class BotPanelView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     strategy_instance_id: str
+    strategy_key: str
+    strategy_label: str
     broker: str
     account_id: str
     symbol: str
     mode: Literal["log_only", "trade"]
+    updated_at_ms: int
     revision: int
+    mission_verdict: MissionVerdictView
+    execution_policy: str
     health: BotHealthCard
     clerk: ClerkCard
     rail: TransactionRail
@@ -276,6 +353,11 @@ class BotPanelView(BaseModel):
     journal_tail_ref: str
     journal_tail_seq: int | None
     actions: list[PanelAction]
+    readiness_checks: list[ReadinessCheckView]
+    exposure: dict[str, float]
+    working_orders: list[WorkingOrderView]
+    recent_decisions: list[RecentDecisionView]
+    recent_fills: list[RecentFillView]
     # S0 rollup summary — backend-computed FIFO P&L (§10).  Frontend renders,
     # never recomputes.  "Fees not reported" renders when fee_fidelity="none".
     fills_today: int
@@ -313,6 +395,9 @@ class PanelActionResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     action_id: ActionId
+    outcome: Literal["success"] = "success"
+    receipt_id: str
+    recorded_at_ms: int
     applied: bool
     revision: int
     concurrency_token: str

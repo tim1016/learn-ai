@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PanelAction } from '../lib/broker-v2-panel.types';
@@ -27,7 +27,7 @@ describe('PanelActionButtonComponent', () => {
       on: { triggered },
     });
 
-    screen.getByRole('button', { name: 'Stop' }).click();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
 
     expect(triggered).toHaveBeenCalledWith(presented);
   });
@@ -39,7 +39,7 @@ describe('PanelActionButtonComponent', () => {
       on: { triggered },
     });
 
-    screen.getByRole('button', { name: 'Stop' }).click();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
 
     expect(triggered).not.toHaveBeenCalled();
   });
@@ -76,9 +76,40 @@ describe('PanelActionButtonComponent', () => {
       },
     });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     expect(screen.getByText('This stops the bot.')).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain(
       'An order is still open.',
     );
+  });
+
+  it('does not emit a destructive action until the backend token is confirmed', async () => {
+    const triggered = vi.fn();
+    await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({
+          action_id: 'flatten_stop',
+          label: 'Flatten & stop',
+          confirmation: {
+            title: 'Flatten attributed exposure?',
+            body: 'SPY 2; one working order.',
+            consequence: 'The runtime stops before reducing orders are submitted.',
+            confirm_label: 'Flatten & stop',
+            required_token: 'FLATTEN',
+          },
+        }),
+      },
+      on: { triggered },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Flatten & stop' }));
+    expect(triggered).not.toHaveBeenCalled();
+    const submit = screen.getByTestId('typed-halt-confirm-submit') as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.input(screen.getByTestId('typed-halt-confirm-input'), {
+      target: { value: 'FLATTEN' },
+    });
+    fireEvent.click(submit);
+    expect(triggered).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,54 +1,82 @@
-.operator-lens {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  height: 100%;
-  overflow: hidden;
+:host { display: block; min-width: 0; }
+
+.operator-lens { display: grid; gap: var(--space-4); }
+
+.operator-summary,
+.operator-lens__trace,
+.working-orders,
+.operator-lens__journal {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
 }
 
-// ── Top bar (Flatten & stop) ─────────────────────────────────────────────────
+.section-heading {
+  margin-bottom: var(--space-3);
 
-.operator-lens__top-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid var(--color-border, #e5e7eb);
-  flex-shrink: 0;
+  span { color: var(--accent-text); font-size: var(--fs-xxs); font-weight: var(--fw-bold); letter-spacing: var(--ls-caps); text-transform: uppercase; }
+  h2 { margin: 0.1rem 0; font-size: var(--fs-lg); }
+  p { margin: 0; color: var(--text-secondary); font-size: var(--fs-sm); }
 }
 
-// ── Main layout: rail + side cards ───────────────────────────────────────────
+.readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: var(--space-2);
+}
+
+.readiness-check {
+  padding: var(--space-3);
+  border: 1px solid rgba(38, 166, 154, 0.35);
+  border-left: 3px solid var(--bull);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+
+  &--blocked { border-color: rgba(239, 83, 80, 0.35); border-left-color: var(--bear); }
+  > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+  p { margin: var(--space-2) 0; font-size: var(--fs-xs); }
+  dl { display: grid; gap: 0.15rem; }
+  dl div { display: flex; justify-content: space-between; gap: var(--space-2); font-size: var(--fs-xxs); }
+  dt { color: var(--text-subtle); }
+  dd { color: var(--text-secondary); text-align: right; }
+}
+
+.readiness-check__state { color: var(--bull); font-size: var(--fs-xxs); font-weight: var(--fw-bold); text-transform: uppercase; }
+.readiness-check--blocked .readiness-check__state { color: var(--bear); }
+.readiness-check__cure { color: var(--text-primary) !important; }
+
+.operator-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
 .operator-lens__main {
   display: grid;
-  grid-template-columns: 1fr 18rem;
-  gap: 1rem;
-  flex-shrink: 0;
-
-  // Below 1024px collapse side cards below the rail.
-  @media (max-width: 1023px) {
-    grid-template-columns: 1fr;
-  }
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 19rem);
+  gap: var(--space-4);
+  align-items: start;
 }
 
-.operator-lens__rail-col {
-  overflow-x: auto;
+.operator-lens__cards { display: grid; gap: var(--space-3); min-width: 0; }
+
+.working-orders__table-wrap { max-width: 100%; }
+table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+th, td { padding: var(--space-2); border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+th { color: var(--text-subtle); font-size: var(--fs-xxs); letter-spacing: var(--ls-caps); text-transform: uppercase; }
+.empty-copy { margin: 0; font-size: var(--fs-sm); }
+
+@media (max-width: 1023px) {
+  .operator-lens__main { grid-template-columns: 1fr; }
+  .operator-lens__cards { grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
 }
 
-.operator-lens__cards {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  overflow-y: auto;
-}
-
-// ── Journal tail (bottom, internal scroll) ───────────────────────────────────
-
-.operator-lens__journal {
-  flex: 1;
-  overflow: hidden;
-  border-top: 1px solid var(--color-border, #e5e7eb);
-  padding-top: 0.5rem;
-  min-height: 0;
+@media (max-width: 600px) {
+  .operator-summary,
+  .operator-lens__trace,
+  .working-orders,
+  .operator-lens__journal { padding: var(--space-3); }
+  table, tbody, tr, td { display: block; width: 100%; }
+  thead { display: none; }
+  tr { padding: var(--space-2) 0; border-bottom: 1px solid var(--border); }
+  td { padding: 0.2rem 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
 }

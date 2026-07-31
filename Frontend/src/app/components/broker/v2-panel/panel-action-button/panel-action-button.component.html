@@ -12,13 +12,23 @@
     {{ action().label }}
   </button>
 
-  @if (action().confirmation; as confirmation) {
-    <p class="panel-action__confirmation" role="note">
-      {{ confirmation.body }}
-    </p>
-  }
-
   @for (blocker of action().blockers; track blocker.condition.id) {
-    <p class="panel-action__blocker" role="alert">{{ blocker.headline }}</p>
+    <div class="panel-action__blocker" role="alert">
+      <strong>{{ blocker.headline }}</strong>
+      @if (blocker.detail) { <span>{{ blocker.detail }}</span> }
+    </div>
   }
 </div>
+
+@if (action().confirmation; as confirmation) {
+  <app-typed-halt-confirm
+    [open]="confirmationOpen()"
+    [heading]="confirmation.title"
+    [message]="confirmation.body"
+    [consequence]="confirmation.consequence"
+    [requiredToken]="confirmation.required_token ?? ''"
+    [confirmLabel]="confirmation.confirm_label"
+    (confirmed)="confirm()"
+    (cancelled)="confirmationOpen.set(false)"
+  />
+}

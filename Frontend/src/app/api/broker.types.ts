@@ -9443,6 +9443,12 @@ export interface components {
             /** Broker */
             broker: string;
             clerk: components["schemas"]["ClerkCard"];
+            /** Execution Policy */
+            execution_policy: string;
+            /** Exposure */
+            exposure: {
+                [key: string]: number;
+            };
             /** Fills Today */
             fills_today: number;
             health: components["schemas"]["BotHealthCard"];
@@ -9450,6 +9456,7 @@ export interface components {
             journal_tail_ref: string;
             /** Journal Tail Seq */
             journal_tail_seq: number | null;
+            mission_verdict: components["schemas"]["MissionVerdictView"];
             /**
              * Mode
              * @enum {string}
@@ -9458,14 +9465,28 @@ export interface components {
             /** Open Pnl */
             open_pnl: number | null;
             rail: components["schemas"]["TransactionRail"];
+            /** Readiness Checks */
+            readiness_checks: components["schemas"]["ReadinessCheckView"][];
             /** Realized Pnl Today */
             realized_pnl_today: number;
+            /** Recent Decisions */
+            recent_decisions: components["schemas"]["RecentDecisionView"][];
+            /** Recent Fills */
+            recent_fills: components["schemas"]["RecentFillView"][];
             /** Revision */
             revision: number;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Strategy Label */
+            strategy_label: string;
             /** Symbol */
             symbol: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+            /** Working Orders */
+            working_orders: components["schemas"]["WorkingOrderView"][];
         };
         /**
          * BotRetireReplaceRequest
@@ -18008,6 +18029,25 @@ export interface components {
             vwap?: number | null;
         };
         /**
+         * MissionVerdictView
+         * @description Backend-authored answer to whether this bot can perform its mission now.
+         */
+        MissionVerdictView: {
+            /** Evaluated At Ms */
+            evaluated_at_ms: number;
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /** Next Action */
+            next_action: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ready" | "working" | "blocked" | "off_duty" | "retired";
+        };
+        /**
          * MonteCarloConfig
          * @description Persistable record of the *inputs* that produced an MC result.
          *
@@ -20174,6 +20214,16 @@ export interface components {
             concurrency_token: string;
             /** Message */
             message: string;
+            /**
+             * Outcome
+             * @default success
+             * @constant
+             */
+            outcome?: "success";
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
             /** Revision */
             revision: number;
         };
@@ -20880,6 +20930,38 @@ export interface components {
             upper_bound: number;
         };
         /**
+         * ReadinessCheckView
+         * @description Current enforcement check for one operation, separate from transaction history.
+         */
+        ReadinessCheckView: {
+            /** Authority */
+            authority: string;
+            /** Cure */
+            cure: string | null;
+            /** Evaluated At Ms */
+            evaluated_at_ms: number;
+            /** Evidence */
+            evidence: {
+                [key: string]: string | number | boolean | null;
+            };
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
+            /** Ready */
+            ready: boolean;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "bot" | "account" | "broker";
+        };
+        /**
          * ReadinessGate
          * @description One named input to the "can this strategy act on the next bar?" verdict
          *     (ADR 0005). ``status`` is pass|fail|unknown; ``severity`` is hard|soft.
@@ -21017,6 +21099,45 @@ export interface components {
          * @enum {string}
          */
         ReasonCode: "normal_fill" | "pending_acknowledgement" | "partial_fill" | "timing_caveat" | "reconnect_recovery" | "missing_commission" | "price_divergence" | "quantity_divergence" | "unmatched_execution" | "duplicate_execution" | "cancellation" | "rejection";
+        /**
+         * RecentDecisionView
+         * @description Bounded backend-authored decision receipt for the Trader lens.
+         */
+        RecentDecisionView: {
+            /** Bar Ref */
+            bar_ref: string;
+            /** Order Ref */
+            order_ref: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "entered" | "exited" | "no_action" | "blocked";
+            /** Reason Code */
+            reason_code: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Seq */
+            seq: number;
+        };
+        /**
+         * RecentFillView
+         * @description Bounded Clerk-attributed fill receipt for the Trader lens.
+         */
+        RecentFillView: {
+            /** Filled At Ms */
+            filled_at_ms: number;
+            /** Order Ref */
+            order_ref: string;
+            /** Price */
+            price: number | null;
+            /** Quantity */
+            quantity: number | null;
+            /** Side */
+            side: string;
+            /** Symbol */
+            symbol: string;
+        };
         /**
          * ReconcileAckResponse
          * @description Acknowledgement envelope for runtime ``POST .../reconcile``.
@@ -25322,6 +25443,28 @@ export interface components {
             sessions_excluded?: components["schemas"]["ExcludedDay"][];
             /** Sessions Included */
             sessions_included?: string[];
+        };
+        /**
+         * WorkingOrderView
+         * @description Latest Clerk-owned non-terminal order state attributed to this bot.
+         */
+        WorkingOrderView: {
+            /** Broker Order Id */
+            broker_order_id: string;
+            /** Filled Quantity */
+            filled_quantity: number;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Order Ref */
+            order_ref: string;
+            /** Quantity */
+            quantity: number | null;
+            /** Side */
+            side: string;
+            /** Status */
+            status: string;
+            /** Symbol */
+            symbol: string;
         };
         /**
          * _BarsSpecModel

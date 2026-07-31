@@ -67,6 +67,8 @@ def build_actions(
     flatten_supported: bool,
     channel_fresh: bool,
     exposure: dict[str, float],
+    account_id: str,
+    working_order_count: int,
 ) -> list[PanelAction]:
     """Build the closed presented-action set for one bot (§11, §12).
 
@@ -77,9 +79,7 @@ def build_actions(
     a position.
     """
     has_exposure = any(abs(qty) > 0 for qty in exposure.values())
-    carryover_resume_ready = has_exposure and resume_eligible(
-        status, clerk, exposure
-    )
+    carryover_resume_ready = has_exposure and resume_eligible(status, clerk, exposure)
     ctx = ActionGuardContext(
         running=status.running,
         phase=status.phase,
@@ -90,6 +90,10 @@ def build_actions(
         has_exposure=has_exposure,
         carryover_resume_ready=carryover_resume_ready,
         flatten_supported=flatten_supported,
+        account_id=account_id,
+        strategy_instance_id=status.strategy_instance_id,
+        exposure=exposure,
+        working_order_count=working_order_count,
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")
 

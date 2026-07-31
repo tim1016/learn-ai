@@ -6,7 +6,7 @@ support, fee fidelity, live-bar availability, supported action ids.
 
 from __future__ import annotations
 
-from app.broker.v2panel.vocabulary import ACTION_IDS, STATION_IDS
+from app.broker.v2panel.vocabulary import STATION_IDS
 from app.services.broker_v2_panel.panel_profile_service import (
     alpaca_panel_profile,
     panel_profile_for,
@@ -34,9 +34,18 @@ def test_alpaca_profile_covers_all_six_stations() -> None:
     assert all(s.label and s.explanation for s in profile.stations)
 
 
-def test_alpaca_profile_supported_actions_are_the_closed_set() -> None:
+def test_alpaca_profile_advertises_only_actions_with_production_performers() -> None:
     profile = alpaca_panel_profile()
-    assert profile.supported_action_ids == list(ACTION_IDS)
+    assert profile.supported_action_ids == [
+        "deploy",
+        "start",
+        "stop",
+        "flatten_stop",
+        "clear_hold",
+        "reconcile_now",
+    ]
+    assert "retire" not in profile.supported_action_ids
+    assert "cancel_order" not in profile.supported_action_ids
 
 
 def test_unknown_broker_has_no_profile() -> None:

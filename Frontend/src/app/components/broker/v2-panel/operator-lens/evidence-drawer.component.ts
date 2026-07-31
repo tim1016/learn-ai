@@ -1,7 +1,6 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  DestroyRef,
   computed,
   effect,
   inject,
@@ -39,7 +38,6 @@ export class EvidenceDrawerComponent {
   readonly closed = output();
 
   private readonly panelSvc = inject(BrokerV2PanelService);
-  private readonly destroyRef = inject(DestroyRef);
 
   protected readonly page = signal<EvidencePage | null>(null);
   protected readonly loading = signal(false);
@@ -53,10 +51,6 @@ export class EvidenceDrawerComponent {
   protected readonly readAt = computed(() => this.page()?.read_at_ms ?? null);
 
   constructor() {
-    this.destroyRef.onDestroy(() => {
-      // No subscriptions to clean up — all fetches are one-shot promises.
-    });
-
     // Reload when the drawer opens or the transactionRef changes.
     effect(() => {
       const isOpen = this.open();

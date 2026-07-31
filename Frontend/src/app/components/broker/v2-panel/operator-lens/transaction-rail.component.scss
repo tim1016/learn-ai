@@ -5,7 +5,7 @@
 }
 
 .rail__empty {
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
   font-style: italic;
 }
 
@@ -14,73 +14,73 @@
   align-items: center;
   gap: 0.5rem;
   font-size: 0.75rem;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .rail__ref-value {
   font-family: monospace;
   font-size: 0.7rem;
-  background: var(--color-surface-secondary, #f3f4f6);
+  background: var(--bg-elevated);
   padding: 0.1rem 0.3rem;
   border-radius: 3px;
+  overflow-wrap: anywhere;
 }
 
 .rail__stations {
-  display: flex;
-  flex-direction: row;
-  gap: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 1px;
   list-style: none;
   margin: 0;
   padding: 0;
-  overflow-x: auto;
+  background: var(--border);
 }
 
 // ── Station states (icon + text + color — never color alone per AXE §7) ─────
 
 .station {
-  flex: 1 1 0;
-  min-width: 8rem;
+  min-width: 0;
   padding: 0.75rem 0.5rem;
   border-left: 3px solid transparent;
-  background: var(--color-surface, #fff);
+  background: var(--bg-surface);
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
 
   &:not(:first-child) {
-    border-left-color: var(--color-border, #e5e7eb);
+    border-left-color: var(--border-light);
   }
 
   &--satisfied {
-    border-left-color: #22c55e;
-    background: #f0fdf4;
+    border-left-color: var(--bull);
+    background: var(--bull-soft);
 
-    .station__icon { color: #16a34a; }
-    .station__state-label { color: #16a34a; }
+    .station__icon { color: var(--bull); }
+    .station__state-label { color: var(--bull); }
   }
 
   &--waiting {
-    border-left-color: #3b82f6;
-    background: #eff6ff;
+    border-left-color: var(--accent);
+    background: var(--accent-soft);
 
-    .station__icon { color: #2563eb; }
-    .station__state-label { color: #2563eb; }
+    .station__icon { color: var(--accent-text); }
+    .station__state-label { color: var(--accent-text); }
   }
 
   &--blocked {
-    border-left-color: #ef4444;
-    background: #fef2f2;
+    border-left-color: var(--bear);
+    background: var(--bear-soft);
 
-    .station__icon { color: #dc2626; }
-    .station__state-label { color: #dc2626; }
+    .station__icon { color: var(--bear); }
+    .station__state-label { color: var(--bear); }
   }
 
   &--unknown_stale {
-    border-left-color: #f59e0b;
-    background: #fffbeb;
+    border-left-color: var(--warn);
+    background: var(--warn-soft);
 
-    .station__icon { color: #d97706; }
-    .station__state-label { color: #d97706; }
+    .station__icon { color: var(--warn); }
+    .station__state-label { color: var(--warn); }
   }
 
   &--not_applicable {
@@ -99,7 +99,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .station__state-label {
@@ -109,40 +109,40 @@
 
 .station__receipt {
   font-size: 0.75rem;
-  color: var(--color-text, #111827);
+  color: var(--text-primary);
   margin: 0.25rem 0 0;
   line-height: 1.4;
 }
 
 .station__evidence-ts {
   font-size: 0.7rem;
-  color: var(--color-text-secondary, #6b7280);
+  color: var(--text-secondary);
 }
 
 .station__blocker {
   margin-top: 0.5rem;
   padding: 0.5rem;
-  background: #fef2f2;
+  background: var(--bear-soft);
   border-radius: 4px;
-  border: 1px solid #fecaca;
+  border: 1px solid rgba(239, 83, 80, 0.4);
 }
 
 .station__blocker-headline {
   font-size: 0.75rem;
-  color: #dc2626;
+  color: var(--bear);
   display: block;
 }
 
 .station__blocker-detail {
   font-size: 0.7rem;
-  color: #6b7280;
+  color: var(--text-secondary);
   margin: 0.25rem 0 0;
 }
 
 .station__evidence-link {
   margin-top: 0.25rem;
   font-size: 0.7rem;
-  color: var(--color-link, #2563eb);
+  color: var(--accent-text);
   background: none;
   border: none;
   padding: 0;
@@ -150,7 +150,7 @@
   text-decoration: underline;
 
   &:focus-visible {
-    outline: 2px solid var(--color-focus, #2563eb);
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
     border-radius: 2px;
   }

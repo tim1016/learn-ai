@@ -33,6 +33,7 @@ from typing import Literal
 
 from app.broker.v2panel.vocabulary import ActionId
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
+from app.utils.timestamps import now_ms_utc
 
 
 class ActionExecutionError(Exception):
@@ -61,6 +62,12 @@ class UnknownActionError(ActionExecutionError):
     """The action id is outside the closed set (422). Should not occur post-validation."""
 
     http_status = 422
+
+
+class ActionOutcomeUnknownError(ActionExecutionError):
+    """A performer began but did not return a terminal command receipt (500)."""
+
+    http_status = 500
 
 
 # A performer runs one action and returns a human-readable outcome message.
@@ -94,9 +101,7 @@ class IdempotencyStore:
         self._lock = asyncio.Lock()
         self._records: dict[tuple[str, str, str], IdempotencyRecord] = {}
 
-    async def reserve_or_get(
-        self, sid: str, action_id: str, key: str
-    ) -> IdempotencyRecord | None:
+    async def reserve_or_get(self, sid: str, action_id: str, key: str) -> IdempotencyRecord | None:
         """Reserve key for new execution, returning None; or return existing record.
 
         If None: key is new, caller should execute and then call complete() or fail().
@@ -123,9 +128,7 @@ class IdempotencyStore:
         async with self._lock:
             return self._records.get(compound)
 
-    async def complete(
-        self, sid: str, action_id: str, key: str, result: PanelActionResult
-    ) -> None:
+    async def complete(self, sid: str, action_id: str, key: str, result: PanelActionResult) -> None:
         compound = (sid, action_id, key)
         async with self._lock:
             record = self._records.get(compound)
@@ -184,10 +187,14 @@ class DurableIdempotencyStore(IdempotencyStore):
             sid, action_id, key = compound.split("\u001f", 2)
             state = payload["state"]
             if state == "succeeded":
-                result = PanelActionResult.model_validate(payload["result"])
-                self._records[(sid, action_id, key)] = IdempotencyRecord(
-                    state="succeeded", result=result
-                )
+                result_payload = dict(payload["result"])
+                # Receipt files written before the outcome contract carried
+                # only the action result. Preserve them as successful legacy
+                # receipts instead of making an upgrade re-fire a command.
+                result_payload.setdefault("receipt_id", key)
+                result_payload.setdefault("recorded_at_ms", 0)
+                result = PanelActionResult.model_validate(result_payload)
+                self._records[(sid, action_id, key)] = IdempotencyRecord(state="succeeded", result=result)
             else:
                 self._records[(sid, action_id, key)] = IdempotencyRecord(
                     state="failed",
@@ -208,9 +215,7 @@ class DurableIdempotencyStore(IdempotencyStore):
                 "result": record.result.model_dump() if record.result is not None else None,
                 "error_detail": record.error_detail,
             }
-        descriptor, temporary = tempfile.mkstemp(
-            prefix=f".{self._path.name}.", dir=self._path.parent, text=True
-        )
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{self._path.name}.", dir=self._path.parent, text=True)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
@@ -221,18 +226,14 @@ class DurableIdempotencyStore(IdempotencyStore):
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    async def reserve_or_get(
-        self, sid: str, action_id: str, key: str
-    ) -> IdempotencyRecord | None:
+    async def reserve_or_get(self, sid: str, action_id: str, key: str) -> IdempotencyRecord | None:
         self._load()
         record = await super().reserve_or_get(sid, action_id, key)
         if record is None:
             self._persist()
         return record
 
-    async def complete(
-        self, sid: str, action_id: str, key: str, result: PanelActionResult
-    ) -> None:
+    async def complete(self, sid: str, action_id: str, key: str, result: PanelActionResult) -> None:
         await super().complete(sid, action_id, key, result)
         self._persist()
 
@@ -292,6 +293,8 @@ async def execute_action(
         if record.state == "succeeded" and record.result is not None:
             return PanelActionResult(
                 action_id=request.action_id,
+                receipt_id=record.result.receipt_id,
+                recorded_at_ms=record.result.recorded_at_ms,
                 applied=False,
                 revision=current_revision,
                 concurrency_token=current_concurrency_token,
@@ -313,10 +316,7 @@ async def execute_action(
         if request.concurrency_token != current_concurrency_token:
             raise StaleRevisionError(
                 "This action changed since it was presented.",
-                detail=(
-                    "The action's current concurrency token no longer matches. "
-                    "Refresh and retry."
-                ),
+                detail=("The action's current concurrency token no longer matches. Refresh and retry."),
             )
 
         performer = performers.get(request.action_id)
@@ -340,10 +340,15 @@ async def execute_action(
         # re-fire an action that may have partially applied.
         if reserved_fresh:
             await ledger.fail(sid, request.action_id, request.idempotency_key, str(err))
-        raise
+        raise ActionOutcomeUnknownError(
+            "The command did not return a terminal receipt.",
+            detail=("Its outcome is unknown. Inspect Clerk evidence before issuing another lifecycle command."),
+        ) from err
 
     result = PanelActionResult(
         action_id=request.action_id,
+        receipt_id=request.idempotency_key,
+        recorded_at_ms=now_ms_utc(),
         applied=True,
         revision=current_revision,
         concurrency_token=current_concurrency_token,
