@@ -79,6 +79,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     sizing: AlpacaPaperSizingSelection = Field(
         default_factory=AlpacaPaperSizingSelection
     )
+    carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
 
     @field_validator("strategy_instance_id")
     @classmethod
@@ -139,6 +140,9 @@ class AlpacaPaperDeployView(BaseModel):
     strategies: tuple[AlpacaPaperDeployStrategy, ...]
     sizing_options: tuple[AlpacaPaperSizingOption, ...]
     action_plan_explanation: str
+    carryover_available: bool
+    carryover_label: str
+    carryover_explanation: str
     allowed_actions: tuple[Literal["deploy"], ...]
 
 
@@ -160,6 +164,10 @@ class BotStatusView(BaseModel):
     symbol: str
     mode: Literal["log_only", "trade"]
     quantity: int
+    carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
+    carryover_account_policy_enabled: bool = False
+    carryover_checkpoint_exposure: dict[str, float] = Field(default_factory=dict)
+    carryover_checkpoint_config_matches: bool = False
     running: bool
     phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
     desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]

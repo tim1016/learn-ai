@@ -6413,6 +6413,25 @@ export interface components {
             headline: string;
         };
         /**
+         * AccountFreezeState
+         * @description The only two durable account-freeze outcomes allowed by ADR 0030.
+         */
+        AccountFreezeState: {
+            /**
+             * Active
+             * @default false
+             */
+            active?: boolean;
+            /** Category */
+            category?: ("ACCOUNT_STATE_UNATTRIBUTABLE" | "ACCOUNT_STATE_UNPROVABLE") | null;
+            /** Explanation */
+            explanation?: string | null;
+            /** Next Step */
+            next_step?: string | null;
+            /** Observed At Ms */
+            observed_at_ms?: number | null;
+        };
+        /**
          * AccountObservationHistoryEvent
          * @description One durable account-observation transition, never a heartbeat.
          */
@@ -8062,6 +8081,12 @@ export interface components {
          * @description Closed account-scoped command for the production Alpaca deploy page.
          */
         AlpacaPaperDeployRequest: {
+            /**
+             * Carryover Policy
+             * @default FORBID
+             * @enum {string}
+             */
+            carryover_policy?: "FORBID" | "ALLOW";
             sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
             /** Strategy Instance Id */
             strategy_instance_id: string;
@@ -8111,6 +8136,12 @@ export interface components {
              * @constant
              */
             broker: "alpaca";
+            /** Carryover Available */
+            carryover_available: boolean;
+            /** Carryover Explanation */
+            carryover_explanation: string;
+            /** Carryover Label */
+            carryover_label: string;
             eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
             /** Sizing Options */
             sizing_options: components["schemas"]["AlpacaPaperSizingOption"][];
@@ -9245,6 +9276,10 @@ export interface components {
          *     emits ``PAUSED`` (decision #10; pinned by a contract test).
          */
         BotHealthCard: {
+            /** Carryover Checkpoint Exposure */
+            carryover_checkpoint_exposure: {
+                [key: string]: number;
+            };
             /** Decision Stale */
             decision_stale: boolean;
             /**
@@ -9266,6 +9301,12 @@ export interface components {
             phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
             /** Phase Label */
             phase_label: string;
+            /** Resume Eligible */
+            resume_eligible: boolean;
+            /** Resume Explanation */
+            resume_explanation: string;
+            /** Resume Label */
+            resume_label: string;
             /** Running */
             running: boolean;
             /** Strategy Instance Id */
@@ -9522,6 +9563,26 @@ export interface components {
             binding_created_at_ms: number;
             /** Broker */
             broker: string;
+            /**
+             * Carryover Account Policy Enabled
+             * @default false
+             */
+            carryover_account_policy_enabled?: boolean;
+            /**
+             * Carryover Checkpoint Config Matches
+             * @default false
+             */
+            carryover_checkpoint_config_matches?: boolean;
+            /** Carryover Checkpoint Exposure */
+            carryover_checkpoint_exposure?: {
+                [key: string]: number;
+            };
+            /**
+             * Carryover Policy
+             * @default FORBID
+             * @enum {string}
+             */
+            carryover_policy?: "FORBID" | "ALLOW";
             /**
              * Desired State
              * @enum {string}
@@ -10919,6 +10980,18 @@ export interface components {
             account_id: string;
             /** Channels */
             channels: components["schemas"]["ChannelHealthView"][];
+            /** Freeze Active */
+            freeze_active: boolean;
+            /** Freeze Category */
+            freeze_category: ("ACCOUNT_STATE_UNATTRIBUTABLE" | "ACCOUNT_STATE_UNPROVABLE") | null;
+            /** Freeze Explanation */
+            freeze_explanation: string;
+            /** Freeze Label */
+            freeze_label: string;
+            /** Freeze Next Step */
+            freeze_next_step: string | null;
+            /** Freeze Observed At Ms */
+            freeze_observed_at_ms: number | null;
             /** Hold Active */
             hold_active: boolean;
             /**
@@ -11048,6 +11121,7 @@ export interface components {
             broker: string;
             /** Channel Healths */
             channel_healths?: components["schemas"]["ChannelHealth"][] | null;
+            freeze?: components["schemas"]["AccountFreezeState"];
             hold: components["schemas"]["HoldState"];
             latest_reconciliation?: components["schemas"]["ReconciliationSummary"] | null;
             /** Observed At Ms */

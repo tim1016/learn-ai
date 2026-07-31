@@ -49,6 +49,9 @@ const DEPLOY_VIEW: DeployBotView = {
     },
   ],
   action_plan_explanation: 'One long stock ENTER and one matching close-leg EXIT.',
+  carryover_available: false,
+  carryover_label: 'Allow Clerk-proven exposure carryover on STOP',
+  carryover_explanation: 'Account policy currently forbids carried exposure.',
   allowed_actions: ['deploy'],
 };
 
@@ -75,6 +78,9 @@ const RECEIPT: DeployBotReceipt = {
     symbol: 'SPY',
     mode: 'trade',
     quantity: 1,
+    carryover_policy: 'FORBID',
+    carryover_checkpoint_exposure: {},
+    carryover_checkpoint_config_matches: false,
     running: true,
     phase: 'ON_DUTY',
     desired_state: 'RUNNING',
@@ -87,9 +93,10 @@ const RECEIPT: DeployBotReceipt = {
 
 function makeMockPanelService(
   deployResult: DeployBotReceipt | HttpErrorResponse = RECEIPT,
+  deployView: DeployBotView = DEPLOY_VIEW,
 ) {
   return {
-    getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW),
+    getDeployView: vi.fn().mockResolvedValue(deployView),
     deployBot: deployResult instanceof HttpErrorResponse
       ? vi.fn().mockRejectedValue(deployResult)
       : vi.fn().mockResolvedValue(deployResult),
@@ -138,6 +145,7 @@ describe('DeployDialogComponent', () => {
       strategy_key: 'deployment_validation',
       symbol: 'SPY',
       sizing: { preset: 'safe_canary', quantity: 1 },
+      carryover_policy: 'FORBID',
     });
     expect(body).not.toHaveProperty('mode');
   });
@@ -155,6 +163,24 @@ describe('DeployDialogComponent', () => {
 
     const body = mockPanelService.deployBot.mock.calls[0][2] as DeployBotBody;
     expect(body.sizing).toEqual({ preset: 'custom', quantity: 7 });
+  });
+
+  it('submits carryover only after the backend exposes the account option', async () => {
+    const mockPanelService = makeMockPanelService(RECEIPT, {
+      ...DEPLOY_VIEW,
+      carryover_available: true,
+      carryover_explanation: 'The account permits an explicit deployment opt-in.',
+    });
+    const { fixture } = await renderDialog(mockPanelService);
+    const component = fixture.componentInstance as DeployDialogComponent;
+
+    component['form'].controls.strategy_instance_id.setValue('spy-test-03');
+    component['form'].controls.symbol.setValue('SPY');
+    component['form'].controls.allow_carryover.setValue(true);
+    await component['submit']();
+
+    const body = mockPanelService.deployBot.mock.calls[0][2] as DeployBotBody;
+    expect(body.carryover_policy).toBe('ALLOW');
   });
 
   it('renders the backend-authored error explanation and next action', async () => {

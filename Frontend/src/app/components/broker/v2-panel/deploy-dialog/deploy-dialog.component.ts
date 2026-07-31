@@ -14,6 +14,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
+import { CheckboxModule } from 'primeng/checkbox';
 import { DialogModule } from 'primeng/dialog';
 import { InputNumberModule } from 'primeng/inputnumber';
 import { InputTextModule } from 'primeng/inputtext';
@@ -49,6 +50,7 @@ interface DeployError {
     InputNumberModule,
     SelectModule,
     ButtonModule,
+    CheckboxModule,
     MessageModule,
   ],
   templateUrl: './deploy-dialog.component.html',
@@ -101,6 +103,7 @@ export class DeployDialogComponent {
       nonNullable: true,
       validators: [Validators.required, Validators.min(1), Validators.max(100)],
     }),
+    allow_carryover: new FormControl(false, { nonNullable: true }),
   });
 
   private readonly sizingPreset = toSignal(
@@ -119,6 +122,12 @@ export class DeployDialogComponent {
       this.form.controls.account_id.setValue(view.account_id);
       const strategy = view.strategies[0];
       if (strategy) this.form.controls.strategy_key.setValue(strategy.strategy_key);
+      if (view.carryover_available) {
+        this.form.controls.allow_carryover.enable({ emitEvent: false });
+      } else {
+        this.form.controls.allow_carryover.setValue(false);
+        this.form.controls.allow_carryover.disable({ emitEvent: false });
+      }
     });
   }
 
@@ -130,6 +139,7 @@ export class DeployDialogComponent {
       symbol: '',
       sizing_preset: 'safe_canary',
       quantity: 1,
+      allow_carryover: false,
     });
     this.submitError.set(null);
     this.receipt.set(null);
@@ -164,6 +174,7 @@ export class DeployDialogComponent {
         preset: value.sizing_preset,
         quantity: value.sizing_preset === 'safe_canary' ? 1 : value.quantity,
       },
+      carryover_policy: value.allow_carryover ? 'ALLOW' : 'FORBID',
     } satisfies DeployBotBody;
     try {
       const receipt = await this.panelService.deployBot(

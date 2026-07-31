@@ -13,14 +13,12 @@
   </button>
 
   @if (action().confirmation; as confirmation) {
-    @if (confirmation.required) {
-      <p class="panel-action__confirmation" role="note">
-        {{ confirmation.prompt }}
-      </p>
-    }
+    <p class="panel-action__confirmation" role="note">
+      {{ confirmation.body }}
+    </p>
   }
 
-  @for (blocker of action().blockers; track blocker.code) {
-    <p class="panel-action__blocker" role="alert">{{ blocker.label }}</p>
+  @for (blocker of action().blockers; track blocker.condition.id) {
+    <p class="panel-action__blocker" role="alert">{{ blocker.headline }}</p>
   }
 </div>

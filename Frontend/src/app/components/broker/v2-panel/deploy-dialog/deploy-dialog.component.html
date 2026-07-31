@@ -137,6 +137,20 @@
           </div>
         }
 
+        <div class="field">
+          <div>
+            <p-checkbox
+              inputId="allow-carryover"
+              formControlName="allow_carryover"
+              [binary]="true"
+            />
+            <label for="allow-carryover" class="field__label">
+              {{ view.carryover_label }}
+            </label>
+          </div>
+          <span class="field__hint">{{ view.carryover_explanation }}</span>
+        </div>
+
         @if (submitError(); as error) {
           <section class="deploy-error" role="alert" aria-live="assertive">
             <strong>{{ error.message }}</strong>

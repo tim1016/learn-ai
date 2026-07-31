@@ -34,10 +34,12 @@ from app.broker.alpaca.clerk.exposure import (
 from app.broker.alpaca.clerk.journal import get_clerk_settings
 from app.broker.alpaca.clerk.models import (
     STREAM_HEALTH_HOLD_CODE,
+    AccountFreezeState,
     ChannelHealth,
     ClerkEntryKind,
     ClerkStatus,
     HoldState,
+    InstanceCustodyProof,
     OrderCancelResult,
     OrderJournalEntry,
     OrderLegError,
@@ -61,12 +63,14 @@ from app.broker.alpaca.clerk.sweep import (
 
 __all__ = [
     "STREAM_HEALTH_HOLD_CODE",
+    "AccountFreezeState",
     "AlpacaClerk",
     "ChannelHealth",
     "ClerkEntryKind",
     "ClerkStatus",
     "FlattenRefusedError",
     "HoldState",
+    "InstanceCustodyProof",
     "InstanceExposure",
     "OrderCancelResult",
     "OrderJournalEntry",

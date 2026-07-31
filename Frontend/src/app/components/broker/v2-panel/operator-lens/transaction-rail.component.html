@@ -37,8 +37,10 @@
 
           @if (station.blocker) {
             <div class="station__blocker" role="alert" aria-label="Station blocker">
-              <strong class="station__blocker-headline">{{ station.blocker.label }}</strong>
-              <p class="station__blocker-detail">{{ station.blocker.explanation }}</p>
+              <strong class="station__blocker-headline">{{ station.blocker.headline }}</strong>
+              @if (station.blocker.detail) {
+                <p class="station__blocker-detail">{{ station.blocker.detail }}</p>
+              }
             </div>
           }
 

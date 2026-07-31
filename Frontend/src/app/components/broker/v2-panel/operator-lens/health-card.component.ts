@@ -4,6 +4,7 @@ import {
   input,
   output,
 } from '@angular/core';
+import { KeyValuePipe } from '@angular/common';
 import type { BotHealthCard, PanelAction } from '../lib/broker-v2-panel.types';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokerV2CardHelpButtonComponent } from '../help-drawer/broker-v2-card-help-button.component';
@@ -21,6 +22,7 @@ import { PanelActionButtonComponent } from '../panel-action-button/panel-action-
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     BrokerV2CardHelpButtonComponent,
+    KeyValuePipe,
     PanelActionButtonComponent,
     TimestampDisplayComponent,
   ],

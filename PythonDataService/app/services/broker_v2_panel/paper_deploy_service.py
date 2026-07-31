@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.models import ClerkStatus
 from app.broker.contract.models import BrokerAccountSnapshot
+from app.config import settings
 from app.schemas.broker_bots import (
     AlpacaPaperDeployEligibility,
     AlpacaPaperDeployReceipt,
@@ -35,6 +36,16 @@ def _eligibility(
                 f"account_blocked={account.account_blocked}."
             ),
             next_action="Restore the paper account to ACTIVE and unblocked, then refresh.",
+        )
+    if clerk_status.freeze.active:
+        return AlpacaPaperDeployEligibility(
+            eligible=False,
+            reason_code=clerk_status.freeze.category or "ACCOUNT_STATE_UNPROVABLE",
+            headline="Deployment is blocked by a durable Alpaca account freeze.",
+            explanation=clerk_status.freeze.explanation
+            or "The Clerk cannot prove current account custody.",
+            next_action=clerk_status.freeze.next_step
+            or "Run Clerk recovery and reconciliation before deploying.",
         )
     if clerk_status.hold.active:
         return AlpacaPaperDeployEligibility(
@@ -125,6 +136,18 @@ def build_alpaca_paper_deploy_view(
         action_plan_explanation=(
             "The backend will author exactly one long stock ENTER leg and one "
             "matching close-leg EXIT for the selected symbol."
+        ),
+        carryover_available=settings.ALPACA_PAPER_CARRYOVER_ENABLED,
+        carryover_label="Allow Clerk-proven exposure carryover on STOP",
+        carryover_explanation=(
+            "Default off. When enabled, STOP may preserve exactly attributed "
+            "exposure only after a durable Clerk checkpoint; Resume still "
+            "requires a fresh exact proof."
+            if settings.ALPACA_PAPER_CARRYOVER_ENABLED
+            else (
+                "Account policy currently forbids carried exposure. STOP with "
+                "exposure requires a Clerk flatten before Resume."
+            )
         ),
         allowed_actions=("deploy",) if eligibility.eligible else (),
     )

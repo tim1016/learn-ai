@@ -158,6 +158,24 @@ def test_latest_reconciliation_none_when_never_swept() -> None:
     assert derive.latest_reconciliation([_hold_set()]) is None
 
 
+def test_account_freeze_has_exactly_two_durable_categories() -> None:
+    unattributable = derive.account_freeze_state(
+        [_reconciliation("missing_intent", 1)]
+    )
+    unprovable = derive.account_freeze_state([_reconciliation("stale", 2)])
+    recovered = derive.account_freeze_state(
+        [_reconciliation("stale", 2), _reconciliation("clean", 3)]
+    )
+    instance_hold_only = derive.account_freeze_state([_hold_set(4)])
+
+    assert unattributable.active is True
+    assert unattributable.category == "ACCOUNT_STATE_UNATTRIBUTABLE"
+    assert unprovable.active is True
+    assert unprovable.category == "ACCOUNT_STATE_UNPROVABLE"
+    assert recovered.active is False
+    assert instance_hold_only.active is False
+
+
 def test_has_missing_intent_true_for_owned_order_without_intent() -> None:
     # An order with a client_order_id we never recorded an intent for.
     assert derive.has_missing_intent([], [_order("manual/op/v1:x")], []) is True

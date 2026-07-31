@@ -326,6 +326,13 @@ async def deploy_alpaca_paper_bot(
             next_action=view.eligibility.next_action,
             http_status=409,
         )
+    if request.carryover_policy == "ALLOW" and not view.carryover_available:
+        raise PanelRunnerError(
+            "Exposure carryover is not enabled for this Alpaca paper account.",
+            detail=view.carryover_explanation,
+            next_action="Deploy with carryover disabled or enable the account policy first.",
+            http_status=409,
+        )
     registry = get_bot_task_registry()
     if registry is None:  # guarded by the view; retained for type narrowing
         raise PanelUnavailableError(
@@ -340,6 +347,7 @@ async def deploy_alpaca_paper_bot(
             use_rth=True,
             mode="trade",
             quantity=request.sizing.quantity,
+            carryover_policy=request.carryover_policy,
         )
     except BotRunnerError as exc:
         raise PanelRunnerError(
