@@ -32,9 +32,12 @@ class ActionGuardContext:
 
     running: bool
     phase: str
+    desired_state: str
     hold_active: bool
+    freeze_active: bool
     channel_fresh: bool
     has_exposure: bool
+    carryover_resume_ready: bool
     flatten_supported: bool
 
 
@@ -72,7 +75,15 @@ def _guard_deploy(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]
 
 
 def _guard_start(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _no_blockers(not ctx.running and ctx.phase != "RETIRED")
+    enabled = (
+        not ctx.running
+        and ctx.phase != "RETIRED"
+        and ctx.desired_state == "STOPPED"
+        and not ctx.hold_active
+        and not ctx.freeze_active
+        and (not ctx.has_exposure or ctx.carryover_resume_ready)
+    )
+    return _no_blockers(enabled)
 
 
 def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
@@ -80,7 +91,11 @@ def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
 
 
 def _guard_flatten_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    return _no_blockers(ctx.flatten_supported and (ctx.running or ctx.has_exposure))
+    return _no_blockers(
+        ctx.flatten_supported
+        and not ctx.freeze_active
+        and (ctx.running or ctx.has_exposure)
+    )
 
 
 def _guard_retire(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
@@ -114,7 +129,15 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         supported_brokers=frozenset({"alpaca"}),
         list_page_only=False,
         guard=_guard_start,
-        revision_inputs=lambda ctx: (ctx.running, ctx.phase),
+        revision_inputs=lambda ctx: (
+            ctx.running,
+            ctx.phase,
+            ctx.desired_state,
+            ctx.has_exposure,
+            ctx.carryover_resume_ready,
+            ctx.hold_active,
+            ctx.freeze_active,
+        ),
     ),
     "stop": ActionPolicy(
         action_id="stop",
@@ -128,7 +151,12 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         supported_brokers=frozenset({"alpaca"}),
         list_page_only=False,
         guard=_guard_flatten_stop,
-        revision_inputs=lambda ctx: (ctx.running, ctx.has_exposure, ctx.flatten_supported),
+        revision_inputs=lambda ctx: (
+            ctx.running,
+            ctx.has_exposure,
+            ctx.flatten_supported,
+            ctx.freeze_active,
+        ),
     ),
     "retire": ActionPolicy(
         action_id="retire",

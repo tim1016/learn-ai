@@ -10,7 +10,7 @@ import {
 import { ButtonModule } from 'primeng/button';
 
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import type { BotCatalogView } from '../lib/broker-v2-panel.types';
+import type { BotCatalogView, PanelProfile } from '../lib/broker-v2-panel.types';
 import { AccountStripComponent } from '../account-strip/account-strip.component';
 import { BotsRosterComponent, type RowActionEvent } from '../bots-roster/bots-roster.component';
 import { DeployDialogComponent } from '../deploy-dialog/deploy-dialog.component';
@@ -102,6 +102,10 @@ export class BotsListPageComponent {
   }
 
   protected get bots(): BotCatalogView[] {
-    return this.catalog.value() ?? [];
+    return this.catalog.hasValue() ? this.catalog.value() : [];
+  }
+
+  protected get panelProfile(): PanelProfile | null {
+    return this.profile.hasValue() ? this.profile.value() : null;
   }
 }

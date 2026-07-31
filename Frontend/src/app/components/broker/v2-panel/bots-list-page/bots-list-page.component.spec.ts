@@ -77,6 +77,8 @@ async function renderPage(
     account?: BrokerAccountSnapshot;
     clerk?: ClerkStatus;
     profile?: PanelProfile;
+    getCatalog?: () => Promise<BotCatalogView[]>;
+    getPanelProfile?: () => Promise<PanelProfile>;
   } = {},
 ) {
   const account = overrides.account ?? fakeAccount();
@@ -89,8 +91,9 @@ async function renderPage(
   };
 
   const mockPanelService = {
-    getCatalog: () => Promise.resolve(bots),
-    getPanelProfile: () => Promise.resolve(profile),
+    getCatalog: overrides.getCatalog ?? (() => Promise.resolve(bots)),
+    getPanelProfile:
+      overrides.getPanelProfile ?? (() => Promise.resolve(profile)),
     runBotAction: () => Promise.resolve({ action_id: 'start', applied: true, revision: 1, message: 'ok' }),
   };
 
@@ -152,5 +155,16 @@ describe('BotsListPageComponent', () => {
     await renderPage([]);
 
     expect(await screen.findByText(/No bots match/i)).toBeTruthy();
+  });
+
+  it('renders the retry state when a transient catalog load fails', async () => {
+    await renderPage([], {
+      getCatalog: () => Promise.reject(new Error('data plane restarting')),
+      getPanelProfile: () => Promise.reject(new Error('data plane restarting')),
+    });
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'Could not load bots. Retrying…',
+    );
   });
 });

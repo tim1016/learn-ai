@@ -48,6 +48,10 @@ const BASE_PANEL: BotPanelView = {
     last_decision_at_ms: 1_753_800_000_000,
     decision_stale: false,
     last_bar_at_ms: 1_753_800_000_000,
+    resume_eligible: false,
+    resume_label: 'Resume not applicable',
+    resume_explanation: 'This strategy instance already has a live run.',
+    carryover_checkpoint_exposure: {},
   },
   clerk: {
     account_id: 'DUM284968',
@@ -56,6 +60,12 @@ const BASE_PANEL: BotPanelView = {
     hold_reason_label: 'No hold',
     hold_reason_explanation: 'No exposure hold is active.',
     hold_since_ms: null,
+    freeze_active: false,
+    freeze_category: null,
+    freeze_label: 'No account freeze',
+    freeze_explanation: 'Account truth is current.',
+    freeze_next_step: null,
+    freeze_observed_at_ms: null,
     reconciliation_verdict: null,
     reconciliation_verdict_label: null,
     last_sweep_at_ms: null,
@@ -89,7 +99,7 @@ describe('TraderLensComponent — headline', () => {
       health: {
         ...BASE_PANEL.health,
         duty_outcome: {
-          kind: 'STOPPED_OUTCOME',
+          kind: 'STOPPED' as const,
           reason_code: 'STOPPED_OUTCOME',
           label: 'Stopped cleanly',
           explanation: 'Watching 1-minute bars. Last decision 10:42 — no entry.',

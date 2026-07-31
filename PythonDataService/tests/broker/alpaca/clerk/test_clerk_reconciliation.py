@@ -227,6 +227,26 @@ async def test_reconcile_clean_when_owned_exposure_matches() -> None:
     assert clerk.is_on_hold() is False
 
 
+async def test_instance_custody_proof_includes_fresh_working_refs() -> None:
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    submit = await clerk.submit_for_instance(
+        strategy_instance_id="bot-proof",
+        legs=[BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)],
+    )
+    order_ref = submit.results[0].order_ref
+    broker._orders = [_order(client_order_id=order_ref)]
+
+    proof = await clerk.prove_instance_custody("bot-proof")
+
+    assert proof.reconciliation_verdict == "clean"
+    assert proof.freeze.active is False
+    assert proof.exposure == {}
+    assert proof.working_order_refs == (order_ref,)
+    assert proof.unresolved_intent_refs == ()
+    assert proof.observed_at_ms == _FIXED_MS
+
+
 async def test_reconcile_unexplained_order_journals_and_sets_hold() -> None:
     # An order at Alpaca whose client_order_id is foreign → unexplained + hold.
     broker = _FakeBroker(orders=[_order(client_order_id="someone-elses-order")])
@@ -325,6 +345,19 @@ async def test_reconcile_stale_when_broker_read_fails() -> None:
     recon = [e for e in entries if e.kind is ClerkEntryKind.RECONCILIATION]
     assert [e.verdict for e in recon] == ["stale"]
     assert clerk.is_on_hold() is False
+
+
+async def test_stale_instance_proof_is_account_state_unprovable() -> None:
+    broker = _FakeBroker(
+        list_error=BrokerUnavailable("down", broker="alpaca", detail="5xx")
+    )
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+
+    proof = await clerk.prove_instance_custody("bot-proof")
+
+    assert proof.reconciliation_verdict == "stale"
+    assert proof.freeze.active is True
+    assert proof.freeze.category == "ACCOUNT_STATE_UNPROVABLE"
 
 
 # ── Hold gating: submit refused, cancel allowed ──────────────────────────────

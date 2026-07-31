@@ -1,11 +1,12 @@
 /**
- * Frontend TypeScript types mirroring the S1 Python schema contracts.
+ * Frontend aliases over mechanically generated Python OpenAPI contracts.
  *
  * All temporal fields are `int64 ms UTC` numbers per temporal-rigor.md.
- * These types are the single Frontend source of truth for the broker-v2
- * panel surface; nothing invents display strings here — that is the
- * backend's job (backend-authored copy authority, spec §13).
+ * Python owns the semantic contract; this file adds only convenient local
+ * names plus closed rendering-only unions for template exhaustiveness.
  */
+
+import type { components } from '../../../../api/broker.types';
 
 // ── Channel health state (closed vocabulary) ─────────────────────────────────
 
@@ -31,165 +32,35 @@ export type ActionId =
 
 // ── Operator-blocker reuse (OperatorBlocker contract) ────────────────────────
 
-export interface OperatorBlocker {
-  readonly code: string;
-  readonly label: string;
-  readonly explanation: string;
-  readonly disposition: 'fix_here' | 'fix_elsewhere' | 'wait' | 'terminal';
-  readonly action_hint: string | null;
-}
-
-export interface OperatorConfirmationCopy {
-  readonly required: boolean;
-  readonly prompt: string;
-  readonly ack_phrase: string | null;
-}
+export type OperatorBlocker = components['schemas']['OperatorBlocker'];
+export type OperatorConfirmationCopy =
+  components['schemas']['OperatorConfirmationCopy'];
 
 // ── §4 Panel profile ─────────────────────────────────────────────────────────
 
-export interface StationApplicability {
-  readonly station_id: string;
-  readonly applicable: boolean;
-  readonly label: string;
-  readonly explanation: string;
-}
-
-export interface PanelProfile {
-  readonly broker: string;
-  readonly fee_fidelity: 'per_fill' | 'aggregate' | 'none';
-  readonly flatten_supported: boolean;
-  readonly live_bars_supported: boolean;
-  readonly stations: readonly StationApplicability[];
-  readonly supported_action_ids: readonly ActionId[];
-}
+export type StationApplicability =
+  components['schemas']['StationApplicability'];
+export type PanelProfile = components['schemas']['PanelProfile'];
 
 // ── §5 Catalog view ──────────────────────────────────────────────────────────
 
-export interface BotCatalogView {
-  readonly strategy_instance_id: string;
-  readonly broker: string;
-  readonly account_id: string;
-  readonly symbol: string;
-  readonly phase: string;
-  readonly desired_state: string;
-  readonly running: boolean;
-  readonly status_label: string;
-  readonly exposure: Record<string, number>;
-  readonly fills_today: number;
-  readonly realized_pnl_today: number;
-  readonly open_pnl: number | null;
-  readonly last_activity_at_ms: number | null;
-  readonly needs_attention: boolean;
-}
+export type BotCatalogView = components['schemas']['BotCatalogView'];
 
 // ── §7 Panel view ────────────────────────────────────────────────────────────
 
-export interface DutyOutcomeView {
-  readonly kind: string;
-  readonly reason_code: string;
-  readonly label: string;
-  readonly explanation: string;
-  readonly recorded_at_ms: number | null;
-  readonly run_id: string | null;
-}
-
-export interface BotHealthCard {
-  readonly strategy_instance_id: string;
-  readonly phase: string;
-  readonly phase_label: string;
-  readonly desired_state: 'RUNNING' | 'STOPPED';
-  readonly desired_state_label: string;
-  readonly running: boolean;
-  readonly duty_outcome: DutyOutcomeView | null;
-  readonly last_decision_at_ms: number | null;
-  readonly decision_stale: boolean;
-  readonly last_bar_at_ms: number | null;
-}
-
-export interface ChannelHealthView {
-  readonly stream: 'market_data' | 'execution';
-  readonly state: ChannelState;
-  readonly label: string;
-  readonly explanation: string;
-  readonly reason: string;
-  readonly observed_at_ms: number;
-}
-
-export interface ClerkCard {
-  readonly account_id: string;
-  readonly hold_active: boolean;
-  readonly hold_reason: string;
-  readonly hold_reason_label: string;
-  readonly hold_reason_explanation: string;
-  readonly hold_since_ms: number | null;
-  readonly reconciliation_verdict: string | null;
-  readonly reconciliation_verdict_label: string | null;
-  readonly last_sweep_at_ms: number | null;
-  readonly outstanding_intents: number;
-  readonly channels: readonly ChannelHealthView[];
-}
-
-export interface StationView {
-  readonly station_id: string;
-  readonly label: string;
-  readonly state: StationState;
-  readonly state_label: string;
-  readonly receipt: string;
-  readonly evidence_at_ms: number | null;
-  readonly blocker: OperatorBlocker | null;
-}
-
-export interface TransactionRail {
-  readonly transaction_ref: string | null;
-  readonly stations: readonly StationView[];
-}
-
-export interface PanelAction {
-  readonly action_id: ActionId;
-  readonly label: string;
-  readonly explanation: string;
-  readonly enabled: boolean;
-  readonly blockers: readonly OperatorBlocker[];
-  readonly confirmation: OperatorConfirmationCopy | null;
-  readonly revision: number;
-  readonly concurrency_token: string;
-}
-
-export interface BotPanelView {
-  readonly strategy_instance_id: string;
-  readonly broker: string;
-  readonly account_id: string;
-  readonly symbol: string;
-  readonly mode: 'log_only';
-  readonly revision: number;
-  readonly health: BotHealthCard;
-  readonly clerk: ClerkCard;
-  readonly rail: TransactionRail;
-  readonly journal_tail_ref: string;
-  readonly journal_tail_seq: number | null;
-  readonly actions: readonly PanelAction[];
-  readonly fills_today: number;
-  readonly realized_pnl_today: number;
-  readonly open_pnl: number | null;
-}
+export type DutyOutcomeView = components['schemas']['DutyOutcomeView'];
+export type BotHealthCard = components['schemas']['BotHealthCard'];
+export type ChannelHealthView = components['schemas']['ChannelHealthView'];
+export type ClerkCard = components['schemas']['ClerkCard'];
+export type StationView = components['schemas']['StationView'];
+export type TransactionRail = components['schemas']['TransactionRail'];
+export type PanelAction = components['schemas']['PanelAction'];
+export type BotPanelView = components['schemas']['BotPanelView'];
 
 // ── §11 Action execution ─────────────────────────────────────────────────────
 
-export interface PanelActionRequest {
-  readonly action_id: ActionId;
-  readonly revision: number;
-  readonly concurrency_token: string;
-  readonly idempotency_key: string;
-  readonly reason: string | null;
-}
-
-export interface PanelActionResult {
-  readonly action_id: ActionId;
-  readonly applied: boolean;
-  readonly revision: number;
-  readonly concurrency_token: string;
-  readonly message: string;
-}
+export type PanelActionRequest = components['schemas']['PanelActionRequest'];
+export type PanelActionResult = components['schemas']['PanelActionResult'];
 
 // ── §8 Chart types ───────────────────────────────────────────────────────────
 

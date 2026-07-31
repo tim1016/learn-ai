@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # THIS configured identity to journaled actions. Operator identity is never
     # a request field — no free-text identity input anywhere in the UI.
     PANEL_OPERATOR_IDENTITY: str = "operator"
+    # Account-level half of the two-key carryover permission. A deployment
+    # must also opt in explicitly; the default remains flat-only Resume.
+    ALPACA_PAPER_CARRYOVER_ENABLED: bool = False
     TRUSTED_HOSTS: str = (
         "localhost,127.0.0.1,test,testserver,python-service,backend,"
         "host.containers.internal,host.docker.internal"

@@ -30,7 +30,7 @@
     } @else {
       <app-bots-roster
         [bots]="bots"
-        [profile]="profile.value() ?? null"
+        [profile]="panelProfile"
         [broker]="broker()"
         [accountId]="accountId()"
         (rowAction)="onRowAction($event)"

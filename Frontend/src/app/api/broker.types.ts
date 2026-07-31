@@ -1513,7 +1513,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Deploy and start a bot for this account (scoped alias) (§5) */
+        /** Deploy one Clerk-governed Alpaca paper bot (§5) */
         post: operations["deploy_bot_scoped_api_brokers__broker__accounts__account_id__bots_post"];
         delete?: never;
         options?: never;
@@ -1530,6 +1530,23 @@ export interface paths {
         };
         /** Bots-list roster: status + slice-0 rollups (§5) */
         get: operations["get_catalog_scoped_api_brokers__broker__accounts__account_id__bots_catalog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Backend-authored Alpaca paper deployment contract */
+        get: operations["get_alpaca_paper_deploy_view_api_brokers__broker__accounts__account_id__bots_deploy_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6396,6 +6413,25 @@ export interface components {
             headline: string;
         };
         /**
+         * AccountFreezeState
+         * @description The only two durable account-freeze outcomes allowed by ADR 0030.
+         */
+        AccountFreezeState: {
+            /**
+             * Active
+             * @default false
+             */
+            active?: boolean;
+            /** Category */
+            category?: ("ACCOUNT_STATE_UNATTRIBUTABLE" | "ACCOUNT_STATE_UNPROVABLE") | null;
+            /** Explanation */
+            explanation?: string | null;
+            /** Next Step */
+            next_step?: string | null;
+            /** Observed At Ms */
+            observed_at_ms?: number | null;
+        };
+        /**
          * AccountObservationHistoryEvent
          * @description One durable account-observation transition, never a heartbeat.
          */
@@ -7562,7 +7598,23 @@ export interface components {
          *     Parity *warnings* (asymmetric structures, etc.) are computed
          *     separately by ``parity_diagnostics`` in Slice 1D (#597).
          */
-        ActionPlan: {
+        "ActionPlan-Input": {
+            /** On Enter */
+            on_enter?: (components["schemas"]["StockEntryLeg"] | components["schemas"]["OptionEntryLeg"])[];
+            /** On Exit */
+            on_exit?: components["schemas"]["CloseLegExit"][];
+        };
+        /**
+         * ActionPlan
+         * @description Operator-declared instrument plan, hashed into ``run_id``.
+         *
+         *     Slice 1A shipped the empty-plan envelope; Slice 1B added stock entry
+         *     legs + ``close_leg`` exits; Slice 1C adds option entry legs and the
+         *     strike / expiry selector unions. Hard schema rejections live here.
+         *     Parity *warnings* (asymmetric structures, etc.) are computed
+         *     separately by ``parity_diagnostics`` in Slice 1D (#597).
+         */
+        "ActionPlan-Output": {
             /** On Enter */
             on_enter?: (components["schemas"]["StockEntryLeg"] | components["schemas"]["OptionEntryLeg"])[];
             /** On Exit */
@@ -7986,6 +8038,153 @@ export interface components {
              */
             schema_version: "1.0";
             trader: components["schemas"]["TraderDiagnosticView"];
+        };
+        /**
+         * AlpacaPaperDeployEligibility
+         * @description Backend-authored launch verdict rendered verbatim by Angular.
+         */
+        AlpacaPaperDeployEligibility: {
+            /** Eligible */
+            eligible: boolean;
+            /** Explanation */
+            explanation: string;
+            /** Headline */
+            headline: string;
+            /** Next Action */
+            next_action: string;
+            /** Reason Code */
+            reason_code: string;
+        };
+        /**
+         * AlpacaPaperDeployReceipt
+         * @description Backend-authored terminal receipt for one accepted deployment.
+         */
+        AlpacaPaperDeployReceipt: {
+            action_plan: components["schemas"]["ActionPlan-Output"];
+            bot: components["schemas"]["BotStatusView"];
+            /** Explanation */
+            explanation: string;
+            /** Message */
+            message: string;
+            /** Next Action */
+            next_action: string;
+            /** Panel Path */
+            panel_path: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "deployed";
+        };
+        /**
+         * AlpacaPaperDeployRequest
+         * @description Closed account-scoped command for the production Alpaca deploy page.
+         */
+        AlpacaPaperDeployRequest: {
+            /**
+             * Carryover Policy
+             * @default FORBID
+             * @enum {string}
+             */
+            carryover_policy?: "FORBID" | "ALLOW";
+            sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /**
+             * Strategy Key
+             * @constant
+             */
+            strategy_key: "deployment_validation";
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * AlpacaPaperDeployStrategy
+         * @description One validated strategy in the phase-1 closed catalog.
+         */
+        AlpacaPaperDeployStrategy: {
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /**
+             * Strategy Key
+             * @constant
+             */
+            strategy_key: "deployment_validation";
+        };
+        /**
+         * AlpacaPaperDeployView
+         * @description All semantics needed to render the Alpaca paper deploy workflow.
+         */
+        AlpacaPaperDeployView: {
+            /** Account Id */
+            account_id: string;
+            /** Account Label */
+            account_label: string;
+            /**
+             * Account Mode
+             * @constant
+             */
+            account_mode: "paper";
+            /** Action Plan Explanation */
+            action_plan_explanation: string;
+            /** Allowed Actions */
+            allowed_actions: "deploy"[];
+            /**
+             * Broker
+             * @constant
+             */
+            broker: "alpaca";
+            /** Carryover Available */
+            carryover_available: boolean;
+            /** Carryover Explanation */
+            carryover_explanation: string;
+            /** Carryover Label */
+            carryover_label: string;
+            eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
+            /** Sizing Options */
+            sizing_options: components["schemas"]["AlpacaPaperSizingOption"][];
+            /** Strategies */
+            strategies: components["schemas"]["AlpacaPaperDeployStrategy"][];
+        };
+        /**
+         * AlpacaPaperSizingOption
+         * @description Backend-authored sizing choice and its bounded quantity contract.
+         */
+        AlpacaPaperSizingOption: {
+            /** Default Quantity */
+            default_quantity: number;
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
+            /** Max Quantity */
+            max_quantity: number;
+            /** Min Quantity */
+            min_quantity: number;
+            /**
+             * Preset
+             * @enum {string}
+             */
+            preset: "safe_canary" | "custom";
+        };
+        /**
+         * AlpacaPaperSizingSelection
+         * @description One closed sizing choice for the Alpaca paper canary workflow.
+         */
+        AlpacaPaperSizingSelection: {
+            /**
+             * Preset
+             * @default safe_canary
+             * @enum {string}
+             */
+            preset?: "safe_canary" | "custom";
+            /**
+             * Quantity
+             * @default 1
+             */
+            quantity?: number;
         };
         /**
          * AlphaDecayStatsResponse
@@ -9077,6 +9276,10 @@ export interface components {
          *     emits ``PAUSED`` (decision #10; pinned by a contract test).
          */
         BotHealthCard: {
+            /** Carryover Checkpoint Exposure */
+            carryover_checkpoint_exposure: {
+                [key: string]: number;
+            };
             /** Decision Stale */
             decision_stale: boolean;
             /**
@@ -9098,6 +9301,12 @@ export interface components {
             phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
             /** Phase Label */
             phase_label: string;
+            /** Resume Eligible */
+            resume_eligible: boolean;
+            /** Resume Explanation */
+            resume_explanation: string;
+            /** Resume Label */
+            resume_label: string;
             /** Running */
             running: boolean;
             /** Strategy Instance Id */
@@ -9354,6 +9563,26 @@ export interface components {
             binding_created_at_ms: number;
             /** Broker */
             broker: string;
+            /**
+             * Carryover Account Policy Enabled
+             * @default false
+             */
+            carryover_account_policy_enabled?: boolean;
+            /**
+             * Carryover Checkpoint Config Matches
+             * @default false
+             */
+            carryover_checkpoint_config_matches?: boolean;
+            /** Carryover Checkpoint Exposure */
+            carryover_checkpoint_exposure?: {
+                [key: string]: number;
+            };
+            /**
+             * Carryover Policy
+             * @default FORBID
+             * @enum {string}
+             */
+            carryover_policy?: "FORBID" | "ALLOW";
             /**
              * Desired State
              * @enum {string}
@@ -10751,6 +10980,18 @@ export interface components {
             account_id: string;
             /** Channels */
             channels: components["schemas"]["ChannelHealthView"][];
+            /** Freeze Active */
+            freeze_active: boolean;
+            /** Freeze Category */
+            freeze_category: ("ACCOUNT_STATE_UNATTRIBUTABLE" | "ACCOUNT_STATE_UNPROVABLE") | null;
+            /** Freeze Explanation */
+            freeze_explanation: string;
+            /** Freeze Label */
+            freeze_label: string;
+            /** Freeze Next Step */
+            freeze_next_step: string | null;
+            /** Freeze Observed At Ms */
+            freeze_observed_at_ms: number | null;
             /** Hold Active */
             hold_active: boolean;
             /**
@@ -10880,6 +11121,7 @@ export interface components {
             broker: string;
             /** Channel Healths */
             channel_healths?: components["schemas"]["ChannelHealth"][] | null;
+            freeze?: components["schemas"]["AccountFreezeState"];
             hold: components["schemas"]["HoldState"];
             latest_reconciliation?: components["schemas"]["ReconciliationSummary"] | null;
             /** Observed At Ms */
@@ -27850,7 +28092,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["DeployBotRequest"];
+                "application/json": components["schemas"]["AlpacaPaperDeployRequest"];
             };
         };
         responses: {
@@ -27860,7 +28102,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BotStatusView"];
+                    "application/json": components["schemas"]["AlpacaPaperDeployReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -27895,6 +28137,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotCatalogView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_alpaca_paper_deploy_view_api_brokers__broker__accounts__account_id__bots_deploy_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlpacaPaperDeployView"];
                 };
             };
             /** @description Validation Error */
@@ -30910,7 +31186,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ActionPlan"];
+                "application/json": components["schemas"]["ActionPlan-Input"];
             };
         };
         responses: {

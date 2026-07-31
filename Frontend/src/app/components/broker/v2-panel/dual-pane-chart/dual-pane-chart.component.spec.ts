@@ -1,13 +1,18 @@
 import { render, screen } from '@testing-library/angular';
-import { describe, it, expect, vi } from 'vitest';
-import { createSeriesMarkers } from 'lightweight-charts';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { DualPaneChartComponent } from './dual-pane-chart.component';
+
+const chartMocks = vi.hoisted(() => ({
+  setMarkers: vi.fn(),
+}));
 
 // Mock lightweight-charts — the actual DOM chart is not exercised in unit tests.
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
   const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn() });
-  const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
+  const createSeriesMarkers = vi.fn().mockReturnValue({
+    setMarkers: chartMocks.setMarkers,
+  });
   const createMockChart = () => ({
     addSeries: vi.fn().mockReturnValue(createMockSeries()),
     removeSeries: vi.fn(),
@@ -24,6 +29,10 @@ vi.mock('lightweight-charts', () => {
 
 
 describe('DualPaneChartComponent', () => {
+  beforeEach(() => {
+    chartMocks.setMarkers.mockClear();
+  });
+
   it('renders LIVE and HISTORY pane regions', async () => {
     await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
@@ -89,11 +98,6 @@ describe('DualPaneChartComponent', () => {
   });
 
   it('renders live fill markers on the candle series', async () => {
-    const markersFactory = vi.mocked(createSeriesMarkers);
-    const liveSetMarkers = vi.fn();
-    markersFactory.mockReset();
-    markersFactory.mockReturnValue({ setMarkers: liveSetMarkers } as never);
-
     await render(DualPaneChartComponent, {
       inputs: {
         symbol: 'SPY',
@@ -122,7 +126,7 @@ describe('DualPaneChartComponent', () => {
       },
     });
 
-    expect(liveSetMarkers).toHaveBeenCalledWith([
+    expect(chartMocks.setMarkers).toHaveBeenCalledWith([
       expect.objectContaining({
         position: 'belowBar',
         shape: 'arrowUp',

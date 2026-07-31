@@ -362,6 +362,37 @@ operation sharing the emergency namespace or creates a replacement order
 during boot recovery. Missing broker proof also freezes rather than treating
 the account as flat.
 
+## Alpaca Clerk carryover and Resume amendment (2026-07-31, #1323/#1324)
+
+The earlier Clerk S2 `carryover_policy=FORBID` decision remains the default and
+continues to govern the IBKR daily-exit path. Alpaca paper bot control now
+permits a deliberately narrower two-key exception:
+
+- the account must enable `ALPACA_PAPER_CARRYOVER_ENABLED`;
+- the individual deployment must opt into `carryover_policy=ALLOW`.
+
+STOP first persists desired `STOPPED`, ends strategy evaluation, cancels only
+working ENTER children through the Alpaca Clerk, and obtains a fresh broker
+reconciliation. A non-zero exposure can become approved carryover only when
+the reconciliation is clean, no instance order is working or unresolved, and
+the exact Clerk-attributed symbol/quantity map is durable. The checkpoint also
+records the stopped `run_id`, account id, and a hash of immutable deployment
+configuration including the ActionPlan. Without both keys, the same state is
+`STOP_REQUIRES_FLATTEN`; STOP never silently reduces exposure.
+
+Resume creates a new `run_id`. Flat Resume still requires a fresh clean Clerk
+proof. Carryover Resume additionally compares account id, stopped run,
+configuration hash, every signed quantity, working-order state, and unresolved
+intent state against the checkpoint. Any mismatch refuses Resume; it never
+resizes, adopts, or flattens as a side effect.
+
+Alpaca account freezes are projected durably from Clerk reconciliation into
+exactly two categories: `ACCOUNT_STATE_UNATTRIBUTABLE` when observed broker
+state cannot be mapped to exact custody, and `ACCOUNT_STATE_UNPROVABLE` when a
+fresh order/exposure observation cannot be established. Instance uncertainty,
+stream health, and ordinary entry holds remain scoped blocks rather than
+account freezes. A later clean Clerk reconciliation clears either projection.
+
 ## Issue #1044 callback-stream hardening traceability
 
 ## Transaction-history projection amendment (2026-07-25, #1219)

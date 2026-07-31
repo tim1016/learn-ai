@@ -31,7 +31,7 @@ from app.schemas.broker_v2_panel import (
     DutyOutcomeView,
     TransactionRail,
 )
-from app.services.broker_v2_panel.presented_actions import build_actions
+from app.services.broker_v2_panel.presented_actions import build_actions, resume_eligible
 from app.services.broker_v2_panel.station_derivation import (
     STALE_THRESHOLD_MS,
     derive_stations,
@@ -41,6 +41,26 @@ from app.services.broker_v2_panel.station_derivation import (
 # A channel-health observation older than this is not "fresh" for the clear-hold
 # gate (§7.3). Reuse the station staleness threshold — one trading day.
 CHANNEL_FRESH_THRESHOLD_MS = STALE_THRESHOLD_MS
+
+_STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
+    "STOPPED_FLAT": (
+        "Stopped flat",
+        "The runtime is stopped and the Clerk proved zero attributed exposure.",
+    ),
+    "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE": (
+        "Stopped with approved carryover",
+        "The runtime is stopped and exact attributed exposure is preserved by a durable checkpoint.",
+    ),
+    "STOP_REQUIRES_FLATTEN": (
+        "Stopped; flatten required",
+        "The runtime is stopped, but carried exposure was not approved. Use the Clerk flatten action before Resume.",
+    ),
+    "STOPPED_CUSTODY_UNPROVABLE": (
+        "Stopped; custody unprovable",
+        "The runtime is stopped, but the Clerk could not prove a terminal flat or carryover outcome.",
+    ),
+}
+
 
 def _hold_reason_code(hold_active: bool, raw_reason_code: str | None) -> str:
     """Map the clerk's raw hold code to the closed HoldReason vocabulary.
@@ -96,11 +116,15 @@ def _duty_outcome_view(status: BotStatusView) -> DutyOutcomeView | None:
     if outcome is None:
         return None
     copy = copy_for(duty_outcome_copy_key(outcome.kind))
+    label, explanation = _STOP_OUTCOME_COPY.get(
+        outcome.reason_code,
+        (copy.label, copy.explanation),
+    )
     return DutyOutcomeView(
         kind=outcome.kind,  # type: ignore[arg-type]
         reason_code=outcome.reason_code,
-        label=copy.label,
-        explanation=copy.explanation,
+        label=label,
+        explanation=explanation,
         recorded_at_ms=outcome.recorded_at_ms,
         run_id=outcome.run_id,
     )
@@ -109,6 +133,8 @@ def _duty_outcome_view(status: BotStatusView) -> DutyOutcomeView | None:
 def _build_health_card(
     status: BotStatusView,
     *,
+    clerk: ClerkCard,
+    exposure: dict[str, float],
     latest_decision: DecisionReceipt | None,
     last_bar_at_ms: int | None,
     now_ms: int,
@@ -119,6 +145,27 @@ def _build_health_card(
         last_decision_at_ms is not None
         and now_ms - last_decision_at_ms > STALE_THRESHOLD_MS
     )
+    can_resume = resume_eligible(status, clerk, exposure)
+    has_exposure = any(abs(quantity) > 0 for quantity in exposure.values())
+    if can_resume and has_exposure:
+        resume_label = "Resume custody proof ready"
+        resume_explanation = (
+            "The durable checkpoint, current Clerk attribution, and latest "
+            "clean reconciliation agree. Start will obtain one fresh broker proof."
+        )
+    elif can_resume:
+        resume_label = "Flat Resume ready"
+        resume_explanation = (
+            "The stopped instance is flat and may start a newly identified run."
+        )
+    elif status.running:
+        resume_label = "Resume not applicable"
+        resume_explanation = "This strategy instance already has a live run."
+    else:
+        resume_label = "Resume blocked"
+        resume_explanation = (
+            "The backend cannot prove flat state or an exact approved carryover checkpoint."
+        )
     return BotHealthCard(
         strategy_instance_id=status.strategy_instance_id,
         phase=status.phase,
@@ -130,6 +177,10 @@ def _build_health_card(
         last_decision_at_ms=last_decision_at_ms,
         decision_stale=decision_stale,
         last_bar_at_ms=last_bar_at_ms,
+        resume_eligible=can_resume,
+        resume_label=resume_label,
+        resume_explanation=resume_explanation,
+        carryover_checkpoint_exposure=status.carryover_checkpoint_exposure,
     )
 
 
@@ -166,6 +217,7 @@ def _build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
     reason_copy = copy_for(reason_code)
     reconciliation = clerk_status.latest_reconciliation
     verdict = reconciliation.verdict if reconciliation is not None else None
+    freeze = clerk_status.freeze
     return ClerkCard(
         account_id=clerk_status.account_id,
         hold_active=hold.active,
@@ -173,6 +225,21 @@ def _build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
         hold_reason_label=reason_copy.label,
         hold_reason_explanation=reason_copy.explanation,
         hold_since_ms=hold.since_ms,
+        freeze_active=freeze.active,
+        freeze_category=freeze.category,
+        freeze_label=(
+            "Account state unattributable"
+            if freeze.category == "ACCOUNT_STATE_UNATTRIBUTABLE"
+            else (
+                "Account state unprovable"
+                if freeze.category == "ACCOUNT_STATE_UNPROVABLE"
+                else "No account freeze"
+            )
+        ),
+        freeze_explanation=freeze.explanation
+        or "The Clerk has current, attributable account truth.",
+        freeze_next_step=freeze.next_step,
+        freeze_observed_at_ms=freeze.observed_at_ms,
         reconciliation_verdict=verdict,  # type: ignore[arg-type]
         reconciliation_verdict_label=(copy_for(verdict).label if verdict is not None else None),
         last_sweep_at_ms=(reconciliation.recorded_at_ms if reconciliation is not None else None),
@@ -232,13 +299,15 @@ def build_panel(
         now_ms=now_ms,
     )
 
+    clerk = _build_clerk_card(clerk_status, now_ms)
     health = _build_health_card(
         status,
+        clerk=clerk,
+        exposure=exposure,
         latest_decision=latest_decision,
         last_bar_at_ms=last_bar_at_ms,
         now_ms=now_ms,
     )
-    clerk = _build_clerk_card(clerk_status, now_ms)
 
     revision = compute_revision(
         journal_len=len(entries),

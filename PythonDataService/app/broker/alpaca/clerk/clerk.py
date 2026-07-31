@@ -26,7 +26,7 @@ import logging
 from app.broker.alpaca.clerk import derive, reconcile, recovery
 from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
 from app.broker.alpaca.clerk.effects import ClerkEffectOperations
-from app.broker.alpaca.clerk.exposure import verify_flatten
+from app.broker.alpaca.clerk.exposure import project_instance_exposure, verify_flatten
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.leg_identity import Clock, LegIdentity, default_clock, leg_error
 from app.broker.alpaca.clerk.models import (
@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.models import (
     ClerkStatus,
     EffectOperationReceipt,
     EffectPurpose,
+    InstanceCustodyProof,
     OrderCancelResult,
     OrderJournalEntry,
     OrderLegError,
@@ -694,6 +695,23 @@ class AlpacaClerk(ClerkEffectOperations):
         sweep, and reacquire only to derive and append the latest durable
         reconciliation result.
         """
+        verdict, _proof = await self._reconcile_with_proof()
+        return verdict
+
+    async def prove_instance_custody(
+        self, strategy_instance_id: str
+    ) -> InstanceCustodyProof:
+        """Read fresh broker truth and return an exact instance custody proof."""
+        _verdict, proof = await self._reconcile_with_proof(
+            strategy_instance_id=strategy_instance_id
+        )
+        assert proof is not None
+        return proof
+
+    async def _reconcile_with_proof(
+        self, *, strategy_instance_id: str | None = None
+    ) -> tuple[ReconciliationVerdict, InstanceCustodyProof | None]:
+        """Shared fresh reconciliation pass with an optional instance proof."""
         await self.recover()
 
         async with self._intake_lock:
@@ -717,10 +735,22 @@ class AlpacaClerk(ClerkEffectOperations):
             )
             async with self._intake_lock:
                 _, journal = await self._ensure_journal()
+                observed_at_ms = self._clock()
                 plan = reconcile.plan_stale(
-                    journal.read_entries(), account_id=account_id, now_ms=self._clock()
+                    journal.read_entries(),
+                    account_id=account_id,
+                    now_ms=observed_at_ms,
                 )
-                return await self._apply_reconcile_plan(journal, account_id, plan)
+                verdict = await self._apply_reconcile_plan(journal, account_id, plan)
+                proof = self._instance_custody_proof(
+                    strategy_instance_id,
+                    account_id=account_id,
+                    entries=journal.read_entries(),
+                    working_orders=[],
+                    verdict=verdict,
+                    observed_at_ms=observed_at_ms,
+                )
+                return verdict, proof
 
         working_orders = [
             order
@@ -732,13 +762,14 @@ class AlpacaClerk(ClerkEffectOperations):
             # The current ledger is authoritative because submits/cancels can
             # have completed while Alpaca was being read.
             current_entries = journal.read_entries()
+            observed_at_ms = self._clock()
             plan = reconcile.plan(
                 current_entries,
                 working_orders,
                 positions,
                 self._known_namespaces(journal),
                 account_id=account_id,
-                now_ms=self._clock(),
+                now_ms=observed_at_ms,
             )
             # A non-clean verdict is operationally notable (WARNING); clean is INFO.
             logger.log(
@@ -752,7 +783,57 @@ class AlpacaClerk(ClerkEffectOperations):
                     "new_unexplained": plan.new_unexplained_count,
                 },
             )
-            return await self._apply_reconcile_plan(journal, account_id, plan)
+            verdict = await self._apply_reconcile_plan(journal, account_id, plan)
+            proof = self._instance_custody_proof(
+                strategy_instance_id,
+                account_id=account_id,
+                entries=journal.read_entries(),
+                working_orders=working_orders,
+                verdict=verdict,
+                observed_at_ms=observed_at_ms,
+            )
+            return verdict, proof
+
+    def _instance_custody_proof(
+        self,
+        strategy_instance_id: str | None,
+        *,
+        account_id: str,
+        entries: list[OrderJournalEntry],
+        working_orders: list[BrokerOrder],
+        verdict: ReconciliationVerdict,
+        observed_at_ms: int,
+    ) -> InstanceCustodyProof | None:
+        if strategy_instance_id is None:
+            return None
+        namespace = build_bot_order_namespace(strategy_instance_id)
+        exposure = {
+            row.symbol: row.quantity
+            for row in project_instance_exposure(entries, namespace=namespace)
+        }
+        unresolved = tuple(
+            entry.order_ref
+            for entry in derive.unresolved_intents(entries)
+            if order_ref_namespace_matches(entry.order_ref, frozenset({namespace}))
+        )
+        working_refs = tuple(
+            order.client_order_id
+            for order in working_orders
+            if order.client_order_id
+            and order_ref_namespace_matches(
+                order.client_order_id, frozenset({namespace})
+            )
+        )
+        return InstanceCustodyProof(
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+            reconciliation_verdict=verdict,
+            freeze=derive.account_freeze_state(entries),
+            exposure=exposure,
+            working_order_refs=working_refs,
+            unresolved_intent_refs=unresolved,
+            observed_at_ms=observed_at_ms,
+        )
 
     async def _apply_reconcile_plan(
         self, journal: OrderJournal, account_id: str, plan: reconcile.ReconcilePlan

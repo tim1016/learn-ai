@@ -150,6 +150,10 @@ class ClerkEntryKind(StrEnum):
 ReconciliationVerdict: TypeAlias = Literal[  # noqa: UP040
     "clean", "unexplained_order", "missing_intent", "stale"
 ]
+AccountFreezeCategory: TypeAlias = Literal[  # noqa: UP040
+    "ACCOUNT_STATE_UNATTRIBUTABLE",
+    "ACCOUNT_STATE_UNPROVABLE",
+]
 
 # The reason code stamped on the exposure hold raised by an unexplained order.
 # Rendered code-like through the frontend ``receiptLabel`` pipe.
@@ -440,6 +444,32 @@ class ReconciliationSummary(BaseModel):
     recorded_at_ms: int
 
 
+class AccountFreezeState(BaseModel):
+    """The only two durable account-freeze outcomes allowed by ADR 0030."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool = False
+    category: AccountFreezeCategory | None = None
+    explanation: str | None = None
+    next_step: str | None = None
+    observed_at_ms: int | None = None
+
+    @model_validator(mode="after")
+    def _payload_matches_active_state(self) -> AccountFreezeState:
+        payload = (
+            self.category,
+            self.explanation,
+            self.next_step,
+            self.observed_at_ms,
+        )
+        if self.active and any(value is None for value in payload):
+            raise ValueError("active account freeze requires its full authored payload")
+        if not self.active and any(value is not None for value in payload):
+            raise ValueError("inactive account freeze cannot carry freeze payload")
+        return self
+
+
 class ClerkStatus(BaseModel):
     """The clerk's observable state for the operator status surface (S6).
 
@@ -453,6 +483,7 @@ class ClerkStatus(BaseModel):
     broker: str
     account_id: str
     hold: HoldState
+    freeze: AccountFreezeState = Field(default_factory=AccountFreezeState)
     latest_reconciliation: ReconciliationSummary | None = None
     outstanding_intents: int
     observed_at_ms: int
@@ -460,6 +491,21 @@ class ClerkStatus(BaseModel):
     # observation time. ``None`` = the stream-health gate is not installed
     # (distinct from "installed and healthy").
     channel_healths: list[ChannelHealth] | None = None
+
+
+class InstanceCustodyProof(BaseModel):
+    """Fresh Clerk proof used by STOP/Resume lifecycle custody."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: str
+    strategy_instance_id: str
+    reconciliation_verdict: ReconciliationVerdict
+    freeze: AccountFreezeState
+    exposure: dict[str, float]
+    working_order_refs: tuple[str, ...] = ()
+    unresolved_intent_refs: tuple[str, ...] = ()
+    observed_at_ms: int
 
 
 class OrderCancelResult(BaseModel):

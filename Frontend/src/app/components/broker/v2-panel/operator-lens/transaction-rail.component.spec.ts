@@ -23,11 +23,11 @@ function makeRail(stations: StationView[], transactionRef = 'tx-001'): Transacti
 describe('TransactionRailComponent', () => {
   it('renders all five station states with icon AND text (not color-only)', async () => {
     const stations: StationView[] = [
-      makeStation({ station_id: 's1', state: 'satisfied', label: 'Signal', state_label: 'Ready' }),
-      makeStation({ station_id: 's2', state: 'waiting', label: 'Lock', state_label: 'Pending' }),
-      makeStation({ station_id: 's3', state: 'blocked', label: 'Submit', state_label: 'Blocked' }),
-      makeStation({ station_id: 's4', state: 'unknown_stale', label: 'Fill', state_label: 'Unknown' }),
-      makeStation({ station_id: 's5', state: 'not_applicable', label: 'Fee', state_label: 'N/A' }),
+      makeStation({ station_id: 'SIGNAL', state: 'satisfied', label: 'Signal', state_label: 'Ready' }),
+      makeStation({ station_id: 'INTENT', state: 'waiting', label: 'Lock', state_label: 'Pending' }),
+      makeStation({ station_id: 'SUBMIT_GATE', state: 'blocked', label: 'Submit', state_label: 'Blocked' }),
+      makeStation({ station_id: 'BROKER_ACK', state: 'unknown_stale', label: 'Fill', state_label: 'Unknown' }),
+      makeStation({ station_id: 'FILL', state: 'not_applicable', label: 'Fee', state_label: 'N/A' }),
     ];
 
     await render(TransactionRailComponent, {
@@ -52,7 +52,7 @@ describe('TransactionRailComponent', () => {
 
   it('satisfied station has station--satisfied CSS class', async () => {
     const stations: StationView[] = [
-      makeStation({ station_id: 's1', state: 'satisfied', label: 'Signal', state_label: 'Ready' }),
+      makeStation({ station_id: 'SIGNAL', state: 'satisfied', label: 'Signal', state_label: 'Ready' }),
     ];
 
     const { container } = await render(TransactionRailComponent, {
@@ -65,7 +65,7 @@ describe('TransactionRailComponent', () => {
 
   it('blocked station has station--blocked CSS class', async () => {
     const stations: StationView[] = [
-      makeStation({ station_id: 's1', state: 'blocked', label: 'Submit', state_label: 'Blocked' }),
+      makeStation({ station_id: 'SUBMIT_GATE', state: 'blocked', label: 'Submit', state_label: 'Blocked' }),
     ];
 
     const { container } = await render(TransactionRailComponent, {
@@ -80,7 +80,7 @@ describe('TransactionRailComponent', () => {
     const onEvidence = vi.fn<(val: string) => void>();
 
     const station: StationView = makeStation({
-      station_id: 's3',
+      station_id: 'SUBMIT_GATE',
       state: 'satisfied',
       label: 'Submit',
       state_label: 'Done',
@@ -102,16 +102,25 @@ describe('TransactionRailComponent', () => {
   it('blocked station with OperatorBlocker shows headline text', async () => {
     const stations: StationView[] = [
       makeStation({
-        station_id: 's3',
+        station_id: 'SUBMIT_GATE',
         state: 'blocked',
         label: 'Submit',
         state_label: 'Blocked',
         blocker: {
-          code: 'NO_LIVE_BINDING',
-          label: 'No live binding',
-          explanation: 'The broker is not connected.',
-          disposition: 'fix_here',
-          action_hint: null,
+          condition: {
+            id: 'NO_LIVE_BINDING',
+            severity: 'blocking',
+            scope: 'bot',
+          },
+          host: 'bot_cockpit',
+          anchor: { kind: 'surface', subject_key: null },
+          audience: 'operator',
+          disposition: 'wait',
+          headline: 'No live binding',
+          detail: 'The broker is not connected.',
+          primary_move: null,
+          secondary_moves: [],
+          applies_to: 'run',
         },
       }),
     ];
@@ -125,7 +134,7 @@ describe('TransactionRailComponent', () => {
 
   it('not-applicable station uses — icon and N/A text', async () => {
     const stations: StationView[] = [
-      makeStation({ station_id: 's5', state: 'not_applicable', label: 'Fee', state_label: 'N/A' }),
+      makeStation({ station_id: 'FILL', state: 'not_applicable', label: 'Fee', state_label: 'N/A' }),
     ];
 
     await render(TransactionRailComponent, {
@@ -146,7 +155,7 @@ describe('TransactionRailComponent', () => {
 
   it('each station list item has an aria-label for WCAG AA', async () => {
     const stations: StationView[] = [
-      makeStation({ station_id: 's1', state: 'satisfied', label: 'Signal', state_label: 'Ready' }),
+      makeStation({ station_id: 'SIGNAL', state: 'satisfied', label: 'Signal', state_label: 'Ready' }),
     ];
 
     const { container } = await render(TransactionRailComponent, {

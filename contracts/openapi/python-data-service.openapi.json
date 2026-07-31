@@ -1238,6 +1238,67 @@
         "title": "AccountFreezeBanner",
         "type": "object"
       },
+      "AccountFreezeState": {
+        "additionalProperties": false,
+        "description": "The only two durable account-freeze outcomes allowed by ADR 0030.",
+        "properties": {
+          "active": {
+            "default": false,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ACCOUNT_STATE_UNATTRIBUTABLE",
+                  "ACCOUNT_STATE_UNPROVABLE"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "observed_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At Ms"
+          }
+        },
+        "title": "AccountFreezeState",
+        "type": "object"
+      },
       "AccountObservationHistoryEvent": {
         "additionalProperties": false,
         "description": "One durable account-observation transition, never a heartbeat.",
@@ -4334,7 +4395,36 @@
         "title": "ActionCapability",
         "type": "object"
       },
-      "ActionPlan": {
+      "ActionPlan-Input": {
+        "additionalProperties": false,
+        "description": "Operator-declared instrument plan, hashed into ``run_id``.\n\nSlice 1A shipped the empty-plan envelope; Slice 1B added stock entry\nlegs + ``close_leg`` exits; Slice 1C adds option entry legs and the\nstrike / expiry selector unions. Hard schema rejections live here.\nParity *warnings* (asymmetric structures, etc.) are computed\nseparately by ``parity_diagnostics`` in Slice 1D (#597).",
+        "properties": {
+          "on_enter": {
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/StockEntryLeg"
+                },
+                {
+                  "$ref": "#/components/schemas/OptionEntryLeg"
+                }
+              ]
+            },
+            "title": "On Enter",
+            "type": "array"
+          },
+          "on_exit": {
+            "items": {
+              "$ref": "#/components/schemas/CloseLegExit"
+            },
+            "title": "On Exit",
+            "type": "array"
+          }
+        },
+        "title": "ActionPlan",
+        "type": "object"
+      },
+      "ActionPlan-Output": {
         "additionalProperties": false,
         "description": "Operator-declared instrument plan, hashed into ``run_id``.\n\nSlice 1A shipped the empty-plan envelope; Slice 1B added stock entry\nlegs + ``close_leg`` exits; Slice 1C adds option entry legs and the\nstrike / expiry selector unions. Hard schema rejections live here.\nParity *warnings* (asymmetric structures, etc.) are computed\nseparately by ``parity_diagnostics`` in Slice 1D (#597).",
         "properties": {
@@ -5308,6 +5398,299 @@
           "operator"
         ],
         "title": "AlpacaBotControlFixtureEnvelope",
+        "type": "object"
+      },
+      "AlpacaPaperDeployEligibility": {
+        "additionalProperties": false,
+        "description": "Backend-authored launch verdict rendered verbatim by Angular.",
+        "properties": {
+          "eligible": {
+            "title": "Eligible",
+            "type": "boolean"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "eligible",
+          "reason_code",
+          "headline",
+          "explanation",
+          "next_action"
+        ],
+        "title": "AlpacaPaperDeployEligibility",
+        "type": "object"
+      },
+      "AlpacaPaperDeployReceipt": {
+        "additionalProperties": false,
+        "description": "Backend-authored terminal receipt for one accepted deployment.",
+        "properties": {
+          "action_plan": {
+            "$ref": "#/components/schemas/ActionPlan-Output"
+          },
+          "bot": {
+            "$ref": "#/components/schemas/BotStatusView"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "panel_path": {
+            "title": "Panel Path",
+            "type": "string"
+          },
+          "status": {
+            "const": "deployed",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "message",
+          "explanation",
+          "next_action",
+          "panel_path",
+          "action_plan",
+          "bot"
+        ],
+        "title": "AlpacaPaperDeployReceipt",
+        "type": "object"
+      },
+      "AlpacaPaperDeployRequest": {
+        "additionalProperties": false,
+        "description": "Closed account-scoped command for the production Alpaca deploy page.",
+        "properties": {
+          "carryover_policy": {
+            "default": "FORBID",
+            "enum": [
+              "FORBID",
+              "ALLOW"
+            ],
+            "title": "Carryover Policy",
+            "type": "string"
+          },
+          "sizing": {
+            "$ref": "#/components/schemas/AlpacaPaperSizingSelection"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "strategy_key": {
+            "const": "deployment_validation",
+            "title": "Strategy Key"
+          },
+          "symbol": {
+            "maxLength": 12,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "strategy_key",
+          "symbol"
+        ],
+        "title": "AlpacaPaperDeployRequest",
+        "type": "object"
+      },
+      "AlpacaPaperDeployStrategy": {
+        "additionalProperties": false,
+        "description": "One validated strategy in the phase-1 closed catalog.",
+        "properties": {
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "strategy_key": {
+            "const": "deployment_validation",
+            "title": "Strategy Key"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "label",
+          "explanation"
+        ],
+        "title": "AlpacaPaperDeployStrategy",
+        "type": "object"
+      },
+      "AlpacaPaperDeployView": {
+        "additionalProperties": false,
+        "description": "All semantics needed to render the Alpaca paper deploy workflow.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_label": {
+            "title": "Account Label",
+            "type": "string"
+          },
+          "account_mode": {
+            "const": "paper",
+            "title": "Account Mode"
+          },
+          "action_plan_explanation": {
+            "title": "Action Plan Explanation",
+            "type": "string"
+          },
+          "allowed_actions": {
+            "items": {
+              "const": "deploy"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "broker": {
+            "const": "alpaca",
+            "title": "Broker"
+          },
+          "carryover_available": {
+            "title": "Carryover Available",
+            "type": "boolean"
+          },
+          "carryover_explanation": {
+            "title": "Carryover Explanation",
+            "type": "string"
+          },
+          "carryover_label": {
+            "title": "Carryover Label",
+            "type": "string"
+          },
+          "eligibility": {
+            "$ref": "#/components/schemas/AlpacaPaperDeployEligibility"
+          },
+          "sizing_options": {
+            "items": {
+              "$ref": "#/components/schemas/AlpacaPaperSizingOption"
+            },
+            "title": "Sizing Options",
+            "type": "array"
+          },
+          "strategies": {
+            "items": {
+              "$ref": "#/components/schemas/AlpacaPaperDeployStrategy"
+            },
+            "title": "Strategies",
+            "type": "array"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "account_mode",
+          "account_label",
+          "eligibility",
+          "strategies",
+          "sizing_options",
+          "action_plan_explanation",
+          "carryover_available",
+          "carryover_label",
+          "carryover_explanation",
+          "allowed_actions"
+        ],
+        "title": "AlpacaPaperDeployView",
+        "type": "object"
+      },
+      "AlpacaPaperSizingOption": {
+        "additionalProperties": false,
+        "description": "Backend-authored sizing choice and its bounded quantity contract.",
+        "properties": {
+          "default_quantity": {
+            "minimum": 1.0,
+            "title": "Default Quantity",
+            "type": "integer"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "max_quantity": {
+            "minimum": 1.0,
+            "title": "Max Quantity",
+            "type": "integer"
+          },
+          "min_quantity": {
+            "minimum": 1.0,
+            "title": "Min Quantity",
+            "type": "integer"
+          },
+          "preset": {
+            "enum": [
+              "safe_canary",
+              "custom"
+            ],
+            "title": "Preset",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preset",
+          "label",
+          "explanation",
+          "min_quantity",
+          "max_quantity",
+          "default_quantity"
+        ],
+        "title": "AlpacaPaperSizingOption",
+        "type": "object"
+      },
+      "AlpacaPaperSizingSelection": {
+        "additionalProperties": false,
+        "description": "One closed sizing choice for the Alpaca paper canary workflow.",
+        "properties": {
+          "preset": {
+            "default": "safe_canary",
+            "enum": [
+              "safe_canary",
+              "custom"
+            ],
+            "title": "Preset",
+            "type": "string"
+          },
+          "quantity": {
+            "default": 1,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Quantity",
+            "type": "integer"
+          }
+        },
+        "title": "AlpacaPaperSizingSelection",
         "type": "object"
       },
       "AlphaDecayStatsResponse": {
@@ -7564,6 +7947,13 @@
       "BotHealthCard": {
         "description": "Bot-health card beside the rail (\u00a77.2).\n\n``desired_state`` is narrowed to ``RUNNING | STOPPED`` \u2014 the panel never\nemits ``PAUSED`` (decision #10; pinned by a contract test).",
         "properties": {
+          "carryover_checkpoint_exposure": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Carryover Checkpoint Exposure",
+            "type": "object"
+          },
           "decision_stale": {
             "title": "Decision Stale",
             "type": "boolean"
@@ -7625,6 +8015,18 @@
             "title": "Phase Label",
             "type": "string"
           },
+          "resume_eligible": {
+            "title": "Resume Eligible",
+            "type": "boolean"
+          },
+          "resume_explanation": {
+            "title": "Resume Explanation",
+            "type": "string"
+          },
+          "resume_label": {
+            "title": "Resume Label",
+            "type": "string"
+          },
           "running": {
             "title": "Running",
             "type": "boolean"
@@ -7644,7 +8046,11 @@
           "duty_outcome",
           "last_decision_at_ms",
           "decision_stale",
-          "last_bar_at_ms"
+          "last_bar_at_ms",
+          "resume_eligible",
+          "resume_label",
+          "resume_explanation",
+          "carryover_checkpoint_exposure"
         ],
         "title": "BotHealthCard",
         "type": "object"
@@ -8165,6 +8571,32 @@
           },
           "broker": {
             "title": "Broker",
+            "type": "string"
+          },
+          "carryover_account_policy_enabled": {
+            "default": false,
+            "title": "Carryover Account Policy Enabled",
+            "type": "boolean"
+          },
+          "carryover_checkpoint_config_matches": {
+            "default": false,
+            "title": "Carryover Checkpoint Config Matches",
+            "type": "boolean"
+          },
+          "carryover_checkpoint_exposure": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Carryover Checkpoint Exposure",
+            "type": "object"
+          },
+          "carryover_policy": {
+            "default": "FORBID",
+            "enum": [
+              "FORBID",
+              "ALLOW"
+            ],
+            "title": "Carryover Policy",
             "type": "string"
           },
           "desired_state": {
@@ -11562,6 +11994,55 @@
             "title": "Channels",
             "type": "array"
           },
+          "freeze_active": {
+            "title": "Freeze Active",
+            "type": "boolean"
+          },
+          "freeze_category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ACCOUNT_STATE_UNATTRIBUTABLE",
+                  "ACCOUNT_STATE_UNPROVABLE"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freeze Category"
+          },
+          "freeze_explanation": {
+            "title": "Freeze Explanation",
+            "type": "string"
+          },
+          "freeze_label": {
+            "title": "Freeze Label",
+            "type": "string"
+          },
+          "freeze_next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freeze Next Step"
+          },
+          "freeze_observed_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freeze Observed At Ms"
+          },
           "hold_active": {
             "title": "Hold Active",
             "type": "boolean"
@@ -11645,6 +12126,12 @@
           "hold_reason_label",
           "hold_reason_explanation",
           "hold_since_ms",
+          "freeze_active",
+          "freeze_category",
+          "freeze_label",
+          "freeze_explanation",
+          "freeze_next_step",
+          "freeze_observed_at_ms",
           "reconciliation_verdict",
           "reconciliation_verdict_label",
           "last_sweep_at_ms",
@@ -12061,6 +12548,9 @@
               }
             ],
             "title": "Channel Healths"
+          },
+          "freeze": {
+            "$ref": "#/components/schemas/AccountFreezeState"
           },
           "hold": {
             "$ref": "#/components/schemas/HoldState"
@@ -48576,7 +49066,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/DeployBotRequest"
+                "$ref": "#/components/schemas/AlpacaPaperDeployRequest"
               }
             }
           },
@@ -48587,7 +49077,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BotStatusView"
+                  "$ref": "#/components/schemas/AlpacaPaperDeployReceipt"
                 }
               }
             },
@@ -48604,7 +49094,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Deploy and start a bot for this account (scoped alias) (\u00a75)",
+        "summary": "Deploy one Clerk-governed Alpaca paper bot (\u00a75)",
         "tags": [
           "broker-v2-panel"
         ]
@@ -48676,6 +49166,73 @@
           }
         },
         "summary": "Bots-list roster: status + slice-0 rollups (\u00a75)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/deploy": {
+      "get": {
+        "operationId": "get_alpaca_paper_deploy_view_api_brokers__broker__accounts__account_id__bots_deploy_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlpacaPaperDeployView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Backend-authored Alpaca paper deployment contract",
         "tags": [
           "broker-v2-panel"
         ]
@@ -53765,7 +54322,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ActionPlan"
+                "$ref": "#/components/schemas/ActionPlan-Input"
               }
             }
           },

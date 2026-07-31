@@ -69,9 +69,9 @@ class BotLifecycleStateRecord(BaseModel):
     retired_at_ms: int | None = None
     retired_reason: str | None = None
     replacement_strategy_instance_id: str | None = None
-    # Reserved default-deny hook. S2 deliberately does not enable carryover
-    # trading; a future Clerk policy must opt in explicitly.
-    carryover_policy: Literal["FORBID"] = "FORBID"
+    # Default deny; ALLOW is valid only when both account policy and the
+    # deployment binding explicitly opted in.
+    carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     duty_outcome: BotDutyOutcome | None = None
     # The lifecycle evaluator stamps the durable disposition that produced
     # this record.  The append-only disposition log can be replayed after a
@@ -163,6 +163,7 @@ class BotLifecycleStateRepo:
         now_ms: int,
         updated_by: str,
         active_run_id: str | None = None,
+        carryover_policy: Literal["FORBID", "ALLOW"] | None = None,
         reason: str | None = None,
         disposition_id: str | None = None,
         disposition_action: str | None = None,
@@ -172,6 +173,7 @@ class BotLifecycleStateRepo:
             updated_by=updated_by,
             phase=phase,
             active_run_id=active_run_id,
+            carryover_policy=carryover_policy,
             reason=reason,
             clear_duty_outcome=phase is BotLifecyclePhase.ON_DUTY,
             disposition_id=disposition_id,
@@ -266,6 +268,7 @@ class BotLifecycleStateRepo:
         retired_reason: str | None = None,
         replacement_strategy_instance_id: str | None = None,
         duty_outcome: BotDutyOutcome | None = None,
+        carryover_policy: Literal["FORBID", "ALLOW"] | None = None,
         clear_retirement: bool = False,
         clear_duty_outcome: bool = False,
         expected_active_run_id: str | None = None,
@@ -303,6 +306,15 @@ class BotLifecycleStateRepo:
                 last_transition_at_ms=now_ms,
                 updated_by=updated_by,
                 reason=reason,
+                carryover_policy=(
+                    carryover_policy
+                    if carryover_policy is not None
+                    else (
+                        existing.carryover_policy
+                        if existing is not None
+                        else "FORBID"
+                    )
+                ),
                 retired_at_ms=(
                     None
                     if clear_retirement
@@ -330,7 +342,6 @@ class BotLifecycleStateRepo:
                         else (existing.replacement_strategy_instance_id if existing is not None else None)
                     )
                 ),
-                carryover_policy=existing.carryover_policy if existing is not None else "FORBID",
                 duty_outcome=(
                     None
                     if clear_duty_outcome

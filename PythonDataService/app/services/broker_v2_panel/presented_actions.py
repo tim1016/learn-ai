@@ -31,6 +31,34 @@ from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import ClerkCard, PanelAction
 
 
+def resume_eligible(
+    status: BotStatusView,
+    clerk: ClerkCard,
+    exposure: dict[str, float],
+) -> bool:
+    """Backend-owned flat/carryover Resume projection."""
+    has_exposure = any(abs(qty) > 0 for qty in exposure.values())
+    common = (
+        not status.running
+        and status.phase != "RETIRED"
+        and status.desired_state == "STOPPED"
+        and not clerk.hold_active
+        and not clerk.freeze_active
+    )
+    if not common:
+        return False
+    if not has_exposure:
+        return True
+    return (
+        status.carryover_policy == "ALLOW"
+        and status.carryover_account_policy_enabled
+        and status.carryover_checkpoint_config_matches
+        and status.carryover_checkpoint_exposure == exposure
+        and clerk.reconciliation_verdict == "clean"
+        and clerk.outstanding_intents == 0
+    )
+
+
 def build_actions(
     status: BotStatusView,
     clerk: ClerkCard,
@@ -48,12 +76,19 @@ def build_actions(
     rollup) — it gates ``flatten_stop`` when the bot is stopped but still holds
     a position.
     """
+    has_exposure = any(abs(qty) > 0 for qty in exposure.values())
+    carryover_resume_ready = has_exposure and resume_eligible(
+        status, clerk, exposure
+    )
     ctx = ActionGuardContext(
         running=status.running,
         phase=status.phase,
+        desired_state=status.desired_state,
         hold_active=clerk.hold_active,
+        freeze_active=clerk.freeze_active,
         channel_fresh=channel_fresh,
-        has_exposure=any(abs(qty) > 0 for qty in exposure.values()),
+        has_exposure=has_exposure,
+        carryover_resume_ready=carryover_resume_ready,
         flatten_supported=flatten_supported,
     )
     return build_actions_from_registry(ctx, revision=revision, broker="alpaca")

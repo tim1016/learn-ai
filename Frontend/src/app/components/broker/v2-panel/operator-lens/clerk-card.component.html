@@ -28,6 +28,29 @@
       }
     </dd>
 
+    <dt>Account freeze</dt>
+    <dd [class.clerk-card__hold--active]="clerk().freeze_active">
+      @if (clerk().freeze_active) {
+        {{ clerk().freeze_label }}
+        @if (clerk().freeze_observed_at_ms) {
+          <span class="clerk-card__sub">
+            observed
+            <app-timestamp-display
+              [value]="clerk().freeze_observed_at_ms"
+              mode="local"
+            />
+          </span>
+        }
+        <span class="clerk-card__sub">{{ clerk().freeze_explanation }}</span>
+        @if (clerk().freeze_next_step) {
+          <span class="clerk-card__sub">{{ clerk().freeze_next_step }}</span>
+        }
+        <span class="clerk-card__badge clerk-card__badge--warn">Frozen</span>
+      } @else {
+        <span class="clerk-card__none">{{ clerk().freeze_label }}</span>
+      }
+    </dd>
+
     <dt>Reconciliation</dt>
     <dd>
       @if (clerk().reconciliation_verdict_label) {

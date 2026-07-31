@@ -17,7 +17,7 @@ import { OperatorLensComponent } from './operator-lens.component';
 function makeHealth(): BotHealthCard {
   return {
     strategy_instance_id: 'sid-1',
-    phase: 'LIVE',
+    phase: 'ON_DUTY',
     phase_label: 'Live',
     desired_state: 'RUNNING',
     desired_state_label: 'Running',
@@ -26,6 +26,10 @@ function makeHealth(): BotHealthCard {
     last_decision_at_ms: 1_700_000_000_000,
     decision_stale: false,
     last_bar_at_ms: 1_700_000_001_000,
+    resume_eligible: false,
+    resume_label: 'Resume not applicable',
+    resume_explanation: 'This strategy instance already has a live run.',
+    carryover_checkpoint_exposure: {},
   };
 }
 
@@ -33,10 +37,16 @@ function makeClerk(): ClerkCard {
   return {
     account_id: 'acc-1',
     hold_active: false,
-    hold_reason: 'none',
+    hold_reason: 'NO_HOLD',
     hold_reason_label: 'No hold',
     hold_reason_explanation: '',
     hold_since_ms: null,
+    freeze_active: false,
+    freeze_category: null,
+    freeze_label: 'No account freeze',
+    freeze_explanation: 'Account truth is current.',
+    freeze_next_step: null,
+    freeze_observed_at_ms: null,
     reconciliation_verdict: null,
     reconciliation_verdict_label: null,
     last_sweep_at_ms: null,
@@ -50,7 +60,7 @@ function makeRail(): TransactionRail {
     transaction_ref: 'tx-001',
     stations: [
       {
-        station_id: 's1',
+        station_id: 'SIGNAL',
         label: 'Signal',
         state: 'satisfied',
         state_label: 'Ready',
@@ -147,6 +157,53 @@ describe('OperatorLensComponent', () => {
     });
 
     expect(screen.getByText('Live')).toBeTruthy();
+  });
+
+  it('renders backend-authored Resume and account-freeze copy unchanged', async () => {
+    const fakeSvc = makeFakePanelService();
+    const panel: BotPanelView = {
+      ...makePanel(),
+      health: {
+        ...makeHealth(),
+        running: false,
+        phase: 'OFF_DUTY',
+        desired_state: 'STOPPED',
+        resume_eligible: false,
+        resume_label: 'opaque resume label 01J9',
+        resume_explanation: 'Exact carryover comparison failed at the Clerk.',
+      },
+      clerk: {
+        ...makeClerk(),
+        freeze_active: true,
+        freeze_category: 'ACCOUNT_STATE_UNPROVABLE',
+        freeze_label: 'opaque freeze label 01J8',
+        freeze_explanation: 'Fresh broker truth could not be established.',
+        freeze_next_step: 'Restore observation and reconcile.',
+        freeze_observed_at_ms: 1_700_000_002_000,
+      },
+    };
+
+    await render(OperatorLensComponent, {
+      inputs: {
+        panel,
+        profile: makeProfile(),
+        actionPending: false,
+        broker: 'alpaca',
+        accountId: 'acc-1',
+        sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
+    });
+
+    expect(screen.getByText('opaque resume label 01J9')).toBeTruthy();
+    expect(
+      screen.getByText('Exact carryover comparison failed at the Clerk.'),
+    ).toBeTruthy();
+    expect(screen.getByText('opaque freeze label 01J8')).toBeTruthy();
+    expect(
+      screen.getByText('Fresh broker truth could not be established.'),
+    ).toBeTruthy();
+    expect(screen.getByText('Restore observation and reconcile.')).toBeTruthy();
   });
 
   it('renders the transaction rail with the station from the panel', async () => {
@@ -345,9 +402,10 @@ describe('OperatorLensComponent', () => {
           enabled: true,
           blockers: [],
           confirmation: {
-            required: true,
-            prompt: 'This will close all open positions.',
-            ack_phrase: null,
+            title: 'Flatten and stop',
+            body: 'This will close all open positions.',
+            consequence: 'Attributed exposure will be reduced to zero.',
+            confirm_label: 'Flatten and stop',
           },
           revision: 1,
           concurrency_token: 'test-token',

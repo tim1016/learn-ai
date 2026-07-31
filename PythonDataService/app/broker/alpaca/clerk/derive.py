@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.models import (
     UNEXPLAINED_ORDER_HOLD_CODE,
+    AccountFreezeState,
     ChannelHealth,
     ClerkEntryKind,
     ClerkStatus,
@@ -50,10 +51,51 @@ def build_status(
         broker=broker_id,
         account_id=account_id,
         hold=hold_state(entries),
+        freeze=account_freeze_state(entries),
         latest_reconciliation=latest_reconciliation(entries),
         outstanding_intents=outstanding_intents,
         observed_at_ms=observed_at_ms,
         channel_healths=channel_healths,
+    )
+
+
+def account_freeze_state(entries: list[OrderJournalEntry]) -> AccountFreezeState:
+    """Project the latest durable reconciliation into exactly two categories.
+
+    Broker state that cannot be mapped to exact Clerk custody is
+    ``ACCOUNT_STATE_UNATTRIBUTABLE``. A failed fresh broker observation is
+    ``ACCOUNT_STATE_UNPROVABLE``. A later clean sweep clears either projection;
+    instance uncertainty and channel health never enter this fold.
+    """
+    summary = latest_reconciliation(entries)
+    if summary is None or summary.verdict == "clean":
+        return AccountFreezeState()
+    if summary.verdict in {"unexplained_order", "missing_intent"}:
+        return AccountFreezeState(
+            active=True,
+            category="ACCOUNT_STATE_UNATTRIBUTABLE",
+            explanation=(
+                "Fresh broker state exists but cannot be mapped to exact "
+                "Clerk-authored custody."
+            ),
+            next_step=(
+                "Run Clerk recovery and reconcile until every broker slice has "
+                "an exact durable attribution."
+            ),
+            observed_at_ms=summary.recorded_at_ms,
+        )
+    return AccountFreezeState(
+        active=True,
+        category="ACCOUNT_STATE_UNPROVABLE",
+        explanation=(
+            "The Clerk could not establish current order and exposure truth "
+            "from a fresh broker observation."
+        ),
+        next_step=(
+            "Restore broker observability, then run reconciliation before "
+            "starting or resuming any bot."
+        ),
+        observed_at_ms=summary.recorded_at_ms,
     )
 
 

@@ -15,7 +15,9 @@ import type {
   PanelProfile,
 } from './broker-v2-panel.types';
 
-export type DeployBotBody = components['schemas']['DeployBotRequest'];
+export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
+export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt'];
+export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
 
 /**
  * HTTP client for the broker-v2 panel surface.
@@ -42,13 +44,24 @@ export class BrokerV2PanelService {
     broker: string,
     accountId: string,
     body: DeployBotBody,
-  ): Promise<void> {
+  ): Promise<DeployBotReceipt> {
     return firstValueFrom(
-      this.http.post<unknown>(
+      this.http.post<DeployBotReceipt>(
         `${this.base(broker, accountId)}/bots`,
         body,
       ),
-    ).then(() => undefined);
+    );
+  }
+
+  getDeployView(
+    broker: string,
+    accountId: string,
+  ): Promise<DeployBotView> {
+    return firstValueFrom(
+      this.http.get<DeployBotView>(
+        `${this.base(broker, accountId)}/bots/deploy`,
+      ),
+    );
   }
 
   getCatalog(broker: string, accountId: string): Promise<BotCatalogView[]> {

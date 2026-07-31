@@ -18,6 +18,21 @@
     <dt>Running</dt>
     <dd>{{ health().running ? 'Yes' : 'No' }}</dd>
 
+    <dt>Resume custody</dt>
+    <dd>
+      {{ health().resume_label }}
+      <span class="health-card__sub">{{ health().resume_explanation }}</span>
+      @if (health().carryover_checkpoint_exposure | keyvalue; as exposure) {
+        @if (exposure.length > 0) {
+          <span class="health-card__sub">
+            @for (row of exposure; track row.key) {
+              {{ row.key }} {{ row.value }}
+            }
+          </span>
+        }
+      }
+    </dd>
+
     @if (health().duty_outcome) {
       @let outcome = health().duty_outcome!;
       <dt>Duty outcome</dt>

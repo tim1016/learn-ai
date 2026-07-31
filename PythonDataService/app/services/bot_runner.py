@@ -37,9 +37,9 @@ parameters and the ``project_restart_intensity_gate`` comparison (refuse when
 journal is not written by this walking skeleton — durable cross-restart
 intensity arrives with the S3 account binding.
 
-The walking-skeleton bot is log-only: it consumes closed 1-minute bars from
-the S1 shared :class:`MarketDataFeed` and logs its strategy decision per bar.
-No order submission.
+The log-only mode consumes closed 1-minute bars and records decisions without
+order effects. Trade mode delegates typed ENTER/EXIT decisions to the Alpaca
+Clerk; the runner never authors broker sides or execution truth.
 
 All temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
 """
@@ -47,6 +47,7 @@ All temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -56,6 +57,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
@@ -77,16 +79,23 @@ from app.engine.live.run_status import _atomic_write_json
 from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
 from app.schemas.broker_bots import BotDutyOutcomeView, BotStatusView
+from app.services.bot_carryover import (
+    CarryoverResumeRefusedError,
+    checkpoint_status,
+    prove_stop_outcome,
+    require_resume_custody,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 _BINDING_FILENAME = "broker_binding.json"
+_CARRYOVER_CHECKPOINT_FILENAME = "carryover_checkpoint.json"
 _UPDATED_BY = "bot_runner"
 _STOP_TIMEOUT_S = 5.0
 
 
-def _default_alpaca_action_plan(symbol: str) -> ActionPlan:
+def alpaca_v1_action_plan(symbol: str) -> ActionPlan:
     """Build the v1 stock plan from the existing deploy controls.
 
     The plan becomes durable deployment configuration on the binding; strategy
@@ -143,6 +152,10 @@ class RecoveryUncertainError(BotRunnerError):
     http_status = 409
 
 
+class CarryoverPolicyRefusedError(BotRunnerError):
+    http_status = 409
+
+
 class BrokerBotBinding(BaseModel):
     """Durable broker-tagged run binding (P9)."""
 
@@ -155,6 +168,7 @@ class BrokerBotBinding(BaseModel):
     use_rth: bool = True
     mode: Literal["log_only", "trade"] = "log_only"
     quantity: int = 1
+    carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     action_plan: ActionPlan
     run_id: str
     created_at_ms: int
@@ -200,12 +214,14 @@ class BotTaskRegistry:
         now_ms: Callable[[], int] = now_ms_utc,
         boot_recovery_required: bool = True,
         supported_broker_ids: frozenset[str] | None = None,
+        carryover_allowed: bool | None = None,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
         self._restart_policy = restart_policy or RestartIntensityPolicy()
         self._now_ms = now_ms
         self._bots: dict[str, _ManagedBot] = {}
+        self._operation_locks: dict[str, asyncio.Lock] = {}
         self._start_history: dict[str, list[int]] = {}
         # S5 (#1263) fail-closed start gate: no bot starts until the boot
         # recovery sweep has run, and none while recovery left an uncertain
@@ -220,6 +236,11 @@ class BotTaskRegistry:
         # artifacts_root but are managed by the host daemon, not the
         # in-container runner).
         self._supported_broker_ids = supported_broker_ids
+        self._carryover_allowed = (
+            settings.ALPACA_PAPER_CARRYOVER_ENABLED
+            if carryover_allowed is None
+            else carryover_allowed
+        )
 
     # ── deploy / stop ─────────────────────────────────────────────────
 
@@ -232,8 +253,67 @@ class BotTaskRegistry:
         use_rth: bool = True,
         mode: Literal["log_only", "trade"] = "log_only",
         quantity: int = 1,
+        carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
     ) -> BotStatusView:
         """Deploy and start a bot; durable evidence before liveness."""
+        if carryover_policy == "ALLOW" and not self._carryover_allowed:
+            raise CarryoverPolicyRefusedError(
+                "Exposure carryover is disabled for this Alpaca paper account.",
+                detail=(
+                    "Both the account policy and this deployment must opt in; "
+                    "the account policy is currently disabled."
+                ),
+            )
+        async with self._operation_lock(strategy_instance_id):
+            return await self._launch(
+                broker=broker,
+                strategy_instance_id=strategy_instance_id,
+                symbol=symbol,
+                use_rth=use_rth,
+                mode=mode,
+                quantity=quantity,
+                carryover_policy=carryover_policy,
+                action_plan=alpaca_v1_action_plan(symbol),
+                reason="deploy",
+            )
+
+    async def resume_existing(self, broker: str, strategy_instance_id: str) -> BotStatusView:
+        """Start a new run from one stopped bot's durable deployment binding.
+
+        Resume never reconstructs strategy semantics in the panel. It reads the
+        backend-owned immutable configuration, preserves its ``ActionPlan``, and
+        launches a newly identified run through the same recovery and restart
+        gates as a first deployment.
+        """
+        async with self._operation_lock(strategy_instance_id):
+            binding = self.binding_for_control(broker, strategy_instance_id)
+            await self._require_resume_custody(binding)
+            return await self._launch(
+                broker=binding.broker,
+                strategy_instance_id=binding.strategy_instance_id,
+                symbol=binding.symbol,
+                use_rth=binding.use_rth,
+                mode=binding.mode,
+                quantity=binding.quantity,
+                carryover_policy=binding.carryover_policy,
+                action_plan=binding.action_plan,
+                reason="resume",
+            )
+
+    async def _launch(
+        self,
+        *,
+        broker: str,
+        strategy_instance_id: str,
+        symbol: str,
+        use_rth: bool,
+        mode: Literal["log_only", "trade"],
+        quantity: int,
+        carryover_policy: Literal["FORBID", "ALLOW"],
+        action_plan: ActionPlan,
+        reason: Literal["deploy", "resume"],
+    ) -> BotStatusView:
+        """Launch one run after the shared recovery, intensity, and feed gates."""
         instance_dir = self._confined_instance_dir(strategy_instance_id)
         managed = self._bots.get(strategy_instance_id)
         if managed is not None and not managed.task.done():
@@ -259,21 +339,23 @@ class BotTaskRegistry:
             use_rth=use_rth,
             mode=mode,
             quantity=quantity,
-            action_plan=_default_alpaca_action_plan(symbol),
+            carryover_policy=carryover_policy,
+            action_plan=action_plan,
             run_id=run_id,
             created_at_ms=now,
         )
         instance_dir.mkdir(parents=True, exist_ok=True)
         _atomic_write_json(instance_dir / _BINDING_FILENAME, binding.model_dump())
         self._desired_repo(strategy_instance_id).set(
-            DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason="deploy"
+            DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )
         self._lifecycle_repo(strategy_instance_id).set_phase(
             BotLifecyclePhase.ON_DUTY,
             now_ms=now,
             updated_by=_UPDATED_BY,
             active_run_id=run_id,
-            reason=f"deploy_{mode}_bot",
+            carryover_policy=carryover_policy,
+            reason=f"{reason}_{mode}_bot",
         )
         task = asyncio.create_task(
             self._supervise(binding, feed), name=f"bot:{strategy_instance_id}"
@@ -286,9 +368,10 @@ class BotTaskRegistry:
         # bot ON_DUTY with no terminal outcome.
         await asyncio.sleep(0)
         logger.info(
-            "Bot deployed",
+            "Bot run launched",
             extra={
-                "action": "bot_deployed",
+                "action": "bot_run_launched",
+                "launch_reason": reason,
                 "strategy_instance_id": strategy_instance_id,
                 "broker": broker,
                 "symbol": symbol,
@@ -306,6 +389,23 @@ class BotTaskRegistry:
         reason: str | None = None,
     ) -> BotStatusView:
         """Button-Rule exit: durable STOPPED intent first, then cancel + reap."""
+        async with self._operation_lock(strategy_instance_id):
+            return await self._stop_locked(
+                broker,
+                strategy_instance_id,
+                updated_by=updated_by,
+                reason=reason,
+            )
+
+    async def _stop_locked(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str,
+        reason: str | None,
+    ) -> BotStatusView:
+        """Serialized STOP implementation with terminal Clerk custody proof."""
         self._confined_instance_dir(strategy_instance_id)
         managed = self._bots.get(strategy_instance_id)
         if managed is None or managed.task.done():
@@ -318,16 +418,6 @@ class BotTaskRegistry:
                 f"Bot '{strategy_instance_id}' is not bound to broker '{broker}'.",
                 detail=f"The bot's binding carries broker '{managed.binding.broker}'.",
             )
-        # Clerk owns broker-facing STOP custody.  A bare task cancellation is
-        # insufficient: it can leave a bot-authored ENTER still working after
-        # desired state has become STOPPED.  No Clerk means no trade custody
-        # was installed (the log-only/test path), so there is nothing to cancel.
-        if broker == "alpaca":
-            from app.broker.alpaca.clerk import get_alpaca_clerk
-
-            clerk = get_alpaca_clerk()
-            if clerk is not None:
-                await clerk.cancel_working_entries_for_instance(strategy_instance_id)
         now = self._now_ms()
         # Durable intent BEFORE the in-process cancellation: if the container
         # dies between these two steps, the STOPPED intent survives.
@@ -337,14 +427,34 @@ class BotTaskRegistry:
             now_ms=now,
             reason=reason or "operator_stop",
         )
-        managed.stop_reason_code = "OPERATOR_STOP"
+        # Stop strategy evaluation before any network-bound custody work. The
+        # provisional terminal is replaced under this instance's operation lock
+        # once the Clerk returns a fresh proof.
+        managed.stop_reason_code = "STOPPED_PENDING_CUSTODY_PROOF"
         managed.task.cancel()
         await asyncio.wait({managed.task}, timeout=_STOP_TIMEOUT_S)
         # Backstop for a coroutine that never entered supervision (cancelled
         # pre-start): _finalize is idempotent, so this is a no-op whenever the
         # supervisor already recorded the outcome.
-        self._finalize(managed.binding, kind="STOPPED", reason_code="OPERATOR_STOP")
+        self._finalize(
+            managed.binding,
+            kind="STOPPED",
+            reason_code="STOPPED_PENDING_CUSTODY_PROOF",
+        )
         self._reap(strategy_instance_id, managed.binding.run_id)
+        outcome = "OPERATOR_STOP"
+        if broker == "alpaca" and managed.binding.mode == "trade":
+            outcome = await self._prove_stop_outcome(managed.binding)
+        self._lifecycle_repo(strategy_instance_id).record_terminal_outcome(
+            BotDutyOutcome(
+                kind="STOPPED",
+                reason_code=outcome,
+                recorded_at_ms=self._now_ms(),
+                run_id=managed.binding.run_id,
+            ),
+            updated_by=_UPDATED_BY,
+            reason=outcome,
+        )
         return self.status(broker, strategy_instance_id)
 
     async def stop_all(self) -> None:
@@ -400,10 +510,6 @@ class BotTaskRegistry:
                         extra={"action": "boot_sweep_corrupt_lifecycle", "path": str(exc.path)},
                     )
                     continue
-                if record is None or record.phase is not BotLifecyclePhase.ON_DUTY:
-                    continue
-                if sid in self._bots and not self._bots[sid].task.done():
-                    continue  # genuinely alive (non-boot rerun) — not interrupted
                 # Skip bots bound to a broker this runner does not manage.
                 # (IBKR bots share the same artifacts_root but are owned by
                 # the host daemon; marking them interrupted would corrupt their
@@ -415,6 +521,43 @@ class BotTaskRegistry:
                         binding = None
                     if binding is None or binding.broker not in self._supported_broker_ids:
                         continue
+                if record is None:
+                    continue
+                if (
+                    record.phase is BotLifecyclePhase.OFF_DUTY
+                    and record.duty_outcome is not None
+                    and self._desired_repo(sid).read_state() is DesiredState.RUNNING
+                ):
+                    self._desired_repo(sid).set(
+                        DesiredState.STOPPED,
+                        updated_by="bot_runner_boot_sweep",
+                        now_ms=self._now_ms(),
+                        reason="repair_terminal_running_intent",
+                    )
+                    logger.warning(
+                        "Boot sweep repaired terminal bot desired state",
+                        extra={
+                            "action": "boot_sweep_repaired_terminal_intent",
+                            "strategy_instance_id": sid,
+                            "run_id": record.duty_outcome.run_id,
+                            "reason_code": record.duty_outcome.reason_code,
+                        },
+                    )
+                    continue
+                if record.phase is not BotLifecyclePhase.ON_DUTY:
+                    continue
+                if sid in self._bots and not self._bots[sid].task.done():
+                    continue  # genuinely alive (non-boot rerun) — not interrupted
+                # A restart is an explicit fail-closed transition, not a pending
+                # request to auto-relaunch. Persist STOPPED before recording the
+                # terminal lifecycle outcome so the panel always has a legal,
+                # proof-gated Resume path after recovery.
+                self._desired_repo(sid).set(
+                    DesiredState.STOPPED,
+                    updated_by="bot_runner_boot_sweep",
+                    now_ms=self._now_ms(),
+                    reason="interrupted_by_restart",
+                )
                 repo.record_terminal_outcome(
                     BotDutyOutcome(
                         kind="EXITED_UNVERIFIED",
@@ -530,7 +673,7 @@ class BotTaskRegistry:
             if not binding_path.is_file():
                 continue
             try:
-                binding = BrokerBotBinding.model_validate_json(
+                binding = self._decode_binding(
                     binding_path.read_text(encoding="utf-8")
                 )
             except (OSError, ValidationError, ValueError) as exc:
@@ -636,10 +779,22 @@ class BotTaskRegistry:
             if managed.finalized:
                 return
             managed.finalized = True
+        now_ms = self._now_ms()
+        if kind in ("CRASHED", "EXITED_UNVERIFIED"):
+            # Unexpected terminal exits are fail-closed.  A RUNNING intent with
+            # no live task strands the bot because proof-gated Start is legal
+            # only from STOPPED; persist the legal recovery state before the
+            # lifecycle terminal so a crash between writes remains conservative.
+            self._desired_repo(binding.strategy_instance_id).set(
+                DesiredState.STOPPED,
+                updated_by=_UPDATED_BY,
+                now_ms=now_ms,
+                reason=f"terminal_outcome:{reason_code}",
+            )
         outcome = BotDutyOutcome(
             kind=kind,
             reason_code=reason_code,
-            recorded_at_ms=self._now_ms(),
+            recorded_at_ms=now_ms,
             run_id=binding.run_id,
         )
         self._lifecycle_repo(binding.strategy_instance_id).record_terminal_outcome(
@@ -655,6 +810,70 @@ class BotTaskRegistry:
             self._bots.pop(strategy_instance_id, None)
 
     # ── guards and composition ────────────────────────────────────────
+
+    def _operation_lock(self, strategy_instance_id: str) -> asyncio.Lock:
+        """One lifecycle mutation at a time for a strategy instance."""
+        return self._operation_locks.setdefault(strategy_instance_id, asyncio.Lock())
+
+    async def _prove_stop_outcome(self, binding: BrokerBotBinding) -> str:
+        """Cancel entries, obtain fresh custody, and persist the STOP checkpoint."""
+        from app.broker.alpaca.clerk import get_alpaca_clerk
+
+        clerk = get_alpaca_clerk()
+        if clerk is None:
+            logger.error(
+                "Trade bot stopped without an available Alpaca Clerk proof",
+                extra={
+                    "action": "stop_custody_unprovable",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                },
+            )
+            return "STOPPED_CUSTODY_UNPROVABLE"
+        return await prove_stop_outcome(
+            binding,
+            clerk=clerk,
+            checkpoint_path=self._carryover_checkpoint_path(
+                binding.strategy_instance_id
+            ),
+            now_ms=self._now_ms,
+        )
+
+    async def _require_resume_custody(self, binding: BrokerBotBinding) -> None:
+        """Admit Resume only after a fresh exact Clerk proof."""
+        if binding.carryover_policy == "ALLOW" and not self._carryover_allowed:
+            raise CarryoverPolicyRefusedError(
+                "Exposure carryover is disabled for this Alpaca paper account.",
+                detail=(
+                    "The deployment opted in, but the account policy is no "
+                    "longer enabled. Flatten the attributed exposure before Resume."
+                ),
+            )
+        status = self.status(binding.broker, binding.strategy_instance_id)
+        clerk = None
+        if binding.broker == "alpaca" and binding.mode == "trade":
+            from app.broker.alpaca.clerk import get_alpaca_clerk
+
+            clerk = get_alpaca_clerk()
+        try:
+            await require_resume_custody(
+                binding,
+                clerk=clerk,
+                checkpoint_path=self._carryover_checkpoint_path(
+                    binding.strategy_instance_id
+                ),
+                desired_state=status.desired_state,
+                phase=status.phase,
+            )
+        except CarryoverResumeRefusedError as exc:
+            raise RecoveryUncertainError(
+                str(exc), detail=exc.detail
+            ) from exc
+
+    def _carryover_checkpoint_path(self, strategy_instance_id: str) -> Path:
+        return (
+            self._confined_instance_dir(strategy_instance_id)
+            / _CARRYOVER_CHECKPOINT_FILENAME
+        )
 
     def _enforce_restart_intensity(self, strategy_instance_id: str, now_ms: int) -> None:
         """Per-bot projection mirror of ``project_restart_intensity_gate``:
@@ -697,7 +916,31 @@ class BotTaskRegistry:
         path = self._confined_instance_dir(strategy_instance_id) / _BINDING_FILENAME
         if not path.is_file():
             return None
-        return BrokerBotBinding.model_validate_json(path.read_text(encoding="utf-8"))
+        return self._decode_binding(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _decode_binding(raw: str) -> BrokerBotBinding:
+        """Read the current binding contract or lift the Alpaca v1 shape.
+
+        Version 1 predated durable ``ActionPlan`` configuration. Existing
+        Alpaca paper instances still carry enough immutable information to
+        reconstruct the only plan that v1 could execute: one long stock entry
+        and its matching close leg. The migration is read-only so historical
+        artifacts remain byte-for-byte audit evidence.
+        """
+        payload = json.loads(raw)
+        if (
+            payload.get("schema_version") == 1
+            and payload.get("broker") == "alpaca"
+            and isinstance(payload.get("symbol"), str)
+            and "action_plan" not in payload
+        ):
+            payload = {
+                **payload,
+                "schema_version": 2,
+                "action_plan": alpaca_v1_action_plan(payload["symbol"]).model_dump(),
+            }
+        return BrokerBotBinding.model_validate(payload)
 
     def _compose_status(self, binding: BrokerBotBinding) -> BotStatusView:
         sid = binding.strategy_instance_id
@@ -713,12 +956,20 @@ class BotTaskRegistry:
                 recorded_at_ms=lifecycle.duty_outcome.recorded_at_ms,
                 run_id=lifecycle.duty_outcome.run_id,
             )
+        checkpoint_exposure, checkpoint_matches = checkpoint_status(
+            binding,
+            self._carryover_checkpoint_path(sid),
+        )
         return BotStatusView(
             strategy_instance_id=sid,
             broker=binding.broker,
             symbol=binding.symbol,
             mode=binding.mode,
             quantity=binding.quantity,
+            carryover_policy=binding.carryover_policy,
+            carryover_account_policy_enabled=self._carryover_allowed,
+            carryover_checkpoint_exposure=checkpoint_exposure,
+            carryover_checkpoint_config_matches=checkpoint_matches,
             running=running,
             phase=(lifecycle.phase.value if lifecycle is not None else "OFF_DUTY"),
             desired_state=desired.value,

@@ -145,6 +145,10 @@ class BotHealthCard(BaseModel):
     decision_stale: bool
     # Last bar seen (§7.2): the most recent bar this bot evaluated.
     last_bar_at_ms: int | None
+    resume_eligible: bool
+    resume_label: str
+    resume_explanation: str
+    carryover_checkpoint_exposure: dict[str, float]
 
 
 class ChannelHealthView(BaseModel):
@@ -171,6 +175,15 @@ class ClerkCard(BaseModel):
     hold_reason_label: str
     hold_reason_explanation: str
     hold_since_ms: int | None
+    freeze_active: bool
+    freeze_category: Literal[
+        "ACCOUNT_STATE_UNATTRIBUTABLE",
+        "ACCOUNT_STATE_UNPROVABLE",
+    ] | None
+    freeze_label: str
+    freeze_explanation: str
+    freeze_next_step: str | None
+    freeze_observed_at_ms: int | None
     reconciliation_verdict: ReconciliationVerdict | None
     reconciliation_verdict_label: str | None
     last_sweep_at_ms: int | None
