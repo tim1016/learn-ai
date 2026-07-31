@@ -107,7 +107,7 @@ class _FakeBroker:
         self.cancel_calls: list[str] = []
         self.submit_error: Exception | None = None
         self.cancel_error: Exception | None = None
-        self.lookup_result: BrokerOrder | None | Exception = _accepted_order("unused")
+        self.lookup_result: BrokerOrder | Exception | None = _accepted_order("unused")
         # A pre-existing account-net position the hydration path must NEVER
         # adopt (AC4 / 07-27 wave-one defect).
         self.account_net_positions: list[dict[str, Any]] = [
