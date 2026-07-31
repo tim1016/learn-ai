@@ -99,7 +99,7 @@ async def test_resolve_account_id_misses_for_new_port(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_waiters_do_not_retain_failed_read(
+async def test_resolve_account_id_recovers_after_cancelled_waiters_and_failed_read(
     registry: BrokerRegistry,
 ) -> None:
     class _RecoveringPort(_CountingPort):
