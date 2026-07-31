@@ -58,6 +58,7 @@ def _account(account_id: str = "PA-TEST") -> BrokerAccountSnapshot:
     return BrokerAccountSnapshot(
         broker="alpaca",
         account_id=account_id,
+        account_mode="paper",
         account_status="ACTIVE",
         currency="USD",
         cash=1000.0,

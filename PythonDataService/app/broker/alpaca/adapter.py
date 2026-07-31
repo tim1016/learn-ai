@@ -155,6 +155,9 @@ def from_alpaca_account(
     return BrokerAccountSnapshot(
         broker=BROKER_ID,
         account_id=str(payload["account_number"]),
+        # AlpacaSettings rejects live mode during service startup. This posture
+        # is therefore backend configuration truth, never an account-id guess.
+        account_mode="paper",
         account_status=str(payload["status"]),
         currency=str(payload.get("currency") or "USD"),
         cash=to_float(payload["cash"]),

@@ -8,7 +8,6 @@ import {
 } from '@angular/core';
 import { TagModule } from 'primeng/tag';
 
-import type { BrokerAccountSnapshot } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { fmtCurrency } from '../../format';
@@ -68,11 +67,6 @@ export class AccountStripComponent {
     if (v === 'clean') return 'success';
     if (v === 'stale') return 'secondary';
     return 'danger';
-  }
-
-  protected isPaper(snap: BrokerAccountSnapshot): boolean {
-    // Alpaca paper accounts have IDs starting with "PA"
-    return snap.account_id.startsWith('PA');
   }
 
   protected get holdActive(): boolean {

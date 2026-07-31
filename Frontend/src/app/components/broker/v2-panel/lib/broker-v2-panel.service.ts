@@ -41,13 +41,13 @@ export class BrokerV2PanelService {
     broker: string,
     accountId: string,
     body: DeployBotBody,
-  ): Promise<unknown> {
+  ): Promise<void> {
     return firstValueFrom(
       this.http.post<unknown>(
         `${this.base(broker, accountId)}/bots`,
         body,
       ),
-    );
+    ).then(() => undefined);
   }
 
   getCatalog(broker: string, accountId: string): Promise<BotCatalogView[]> {

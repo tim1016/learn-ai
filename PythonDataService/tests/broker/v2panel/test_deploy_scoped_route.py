@@ -126,5 +126,5 @@ async def test_deploy_scoped_account_mismatch_404(deploy_app) -> None:
         )
 
     assert resp.status_code == 404
-    assert "not served by broker" in resp.json()["detail"]["message"]
+    assert "is not the account for broker" in resp.json()["detail"]["message"]
     assert registry.deploy_calls == []

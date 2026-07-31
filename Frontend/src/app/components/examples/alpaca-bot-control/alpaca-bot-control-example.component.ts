@@ -24,20 +24,23 @@ import { AlpacaBotControlTraderDiagnosticComponent } from './alpaca-bot-control-
 })
 export class AlpacaBotControlExampleComponent {
   protected readonly fixtures = STATIC_ALPACA_BOT_CONTROL_FIXTURES;
-  protected readonly selectedScenarioId = signal(this.fixtures[0].scenario_id);
+  private readonly fixtureById = new Map<string, AlpacaBotControlFixture>(
+    this.fixtures.map((fixture) => [fixture.scenario_id, fixture]),
+  );
+  protected readonly selectedFixture = signal<AlpacaBotControlFixture>(
+    this.fixtures[0],
+  );
+  protected readonly selectedScenarioId = computed(
+    () => this.selectedFixture().scenario_id,
+  );
   protected readonly activeLens = signal<'trader' | 'operator'>('trader');
 
-  protected readonly selectedFixture = computed<AlpacaBotControlFixture>(() => {
-    const selected = this.fixtures.find(
-      (fixture) => fixture.scenario_id === this.selectedScenarioId(),
-    );
-    return selected ?? this.fixtures[0];
-  });
-
-  protected selectScenario(event: Event): void {
-    if (event.target instanceof HTMLSelectElement) {
-      this.selectedScenarioId.set(event.target.value);
+  protected selectScenario(scenarioId: string): void {
+    const fixture = this.fixtureById.get(scenarioId);
+    if (fixture === undefined) {
+      throw new Error(`Unknown Alpaca diagnostic scenario: ${scenarioId}`);
     }
+    this.selectedFixture.set(fixture);
   }
 
   protected selectLens(lens: 'trader' | 'operator'): void {

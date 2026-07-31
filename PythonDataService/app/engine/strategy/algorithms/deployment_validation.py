@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
@@ -31,6 +32,14 @@ _DETECTION_START = time(9, 45)
 _STOP_AND_FLATTEN = time(15, 45)
 _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL = 3
 _NY = ZoneInfo("America/New_York")
+
+
+class DeploymentDecision(StrEnum):
+    """Broker-neutral semantic output of the validation strategy kernel."""
+
+    HOLD = "HOLD"
+    ENTER = "ENTER"
+    EXIT = "EXIT"
 
 
 @dataclass
@@ -72,7 +81,13 @@ class DeploymentValidationDecisionKernel:
         self._bars_since_enter = 0
         self._stopped_for_day = False
 
-    def on_closed_bar(self, *, end_ms: int, open_price: Decimal, close_price: Decimal) -> str:
+    def on_closed_bar(
+        self,
+        *,
+        end_ms: int,
+        open_price: Decimal,
+        close_price: Decimal,
+    ) -> DeploymentDecision:
         end_time = datetime.fromtimestamp(end_ms / 1000, tz=_NY)
         if self._current_date != end_time.date():
             self._current_date = end_time.date()
@@ -86,26 +101,26 @@ class DeploymentValidationDecisionKernel:
             if self._cycle_active:
                 self._cycle_active = False
                 self._bars_since_enter = 0
-                return "EXIT"
-            return "HOLD"
+                return DeploymentDecision.EXIT
+            return DeploymentDecision.HOLD
         if self._stopped_for_day or end_time.time() < _DETECTION_START:
             self._green_streak = 0
-            return "HOLD"
+            return DeploymentDecision.HOLD
         if self._cycle_active:
             self._bars_since_enter += 1
             if self._bars_since_enter >= _BARS_FROM_ENTRY_FILL_TO_EXIT_SIGNAL:
                 self._cycle_active = False
                 self._bars_since_enter = 0
                 self._green_streak = 0
-                return "EXIT"
-            return "HOLD"
+                return DeploymentDecision.EXIT
+            return DeploymentDecision.HOLD
         self._green_streak = self._green_streak + 1 if close_price > open_price else 0
         if self._green_streak >= 2:
             self._green_streak = 0
             self._cycle_active = True
             self._bars_since_enter = 0
-            return "ENTER"
-        return "HOLD"
+            return DeploymentDecision.ENTER
+        return DeploymentDecision.HOLD
 
 
 class DeploymentValidationConsecutiveGreen(Strategy):

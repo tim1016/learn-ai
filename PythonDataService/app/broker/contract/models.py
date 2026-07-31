@@ -135,6 +135,7 @@ class BrokerAccountSnapshot(_ContractModel):
 
     broker: str
     account_id: str
+    account_mode: Literal["paper", "live"]
     account_status: str
     currency: str
     cash: float

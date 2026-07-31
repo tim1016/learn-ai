@@ -9405,6 +9405,11 @@ export interface components {
             account_blocked: boolean;
             /** Account Id */
             account_id: string;
+            /**
+             * Account Mode
+             * @enum {string}
+             */
+            account_mode: "paper" | "live";
             /** Account Status */
             account_status: string;
             /** Broker */

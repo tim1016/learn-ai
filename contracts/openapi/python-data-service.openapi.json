@@ -8284,6 +8284,14 @@
             "title": "Account Id",
             "type": "string"
           },
+          "account_mode": {
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Account Mode",
+            "type": "string"
+          },
           "account_status": {
             "title": "Account Status",
             "type": "string"
@@ -8354,6 +8362,7 @@
         "required": [
           "broker",
           "account_id",
+          "account_mode",
           "account_status",
           "currency",
           "cash",

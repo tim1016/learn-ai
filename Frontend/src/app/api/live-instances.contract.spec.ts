@@ -16,23 +16,8 @@ import { describe, expect, it } from 'vitest';
 
 import steadyFixture from '../../testing/operator_surface_fixtures/steady.json';
 import stoppedFixture from '../../testing/operator_surface_fixtures/stopped.json';
+import type { JsonImported } from './json-imported';
 import type { OperatorSurface } from './live-instances.types';
-
-// TypeScript widens JSON string literals to `string`, so raw JSON cannot
-// satisfy closed string unions directly. The Python freshness test anchors
-// literal values to backend output; this helper keeps the structural and
-// nullability contract checked against the Frontend type.
-type JsonImported<T> = T extends string
-  ? string
-  : T extends number
-    ? number
-    : T extends boolean
-      ? boolean
-      : T extends readonly (infer Item)[]
-        ? JsonImported<Item>[]
-        : T extends object
-          ? { [Key in keyof T]: JsonImported<T[Key]> }
-          : T;
 
 const STEADY = steadyFixture satisfies JsonImported<OperatorSurface>;
 const STOPPED = stoppedFixture satisfies JsonImported<OperatorSurface>;

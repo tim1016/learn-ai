@@ -22,6 +22,7 @@ def _account(**overrides: object) -> BrokerAccountSnapshot:
     base = dict(
         broker="alpaca",
         account_id="PA123",
+        account_mode="paper",
         account_status="ACTIVE",
         currency="USD",
         cash=1000.0,
@@ -44,6 +45,7 @@ def test_account_snapshot_round_trips_snake_case() -> None:
     dumped = _account().model_dump()
 
     assert dumped["account_id"] == "PA123"
+    assert dumped["account_mode"] == "paper"
     assert dumped["buying_power"] == 3000.0
     assert dumped["observed_at_ms"] == 1_700_000_000_000
 

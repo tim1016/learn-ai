@@ -9,6 +9,7 @@ function fakeAccount(overrides: Partial<BrokerAccountSnapshot> = {}): BrokerAcco
   return {
     broker: 'alpaca',
     account_id: 'PA9',
+    account_mode: 'paper',
     account_status: 'ACTIVE',
     currency: 'USD',
     cash: 100,

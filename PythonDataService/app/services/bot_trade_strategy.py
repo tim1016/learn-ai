@@ -6,10 +6,18 @@ import logging
 
 from app.broker.alpaca.clerk.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.models import EffectPurpose
-from app.engine.strategy.algorithms.deployment_validation import DeploymentValidationDecisionKernel
+from app.engine.strategy.algorithms.deployment_validation import (
+    DeploymentDecision,
+    DeploymentValidationDecisionKernel,
+)
 from app.marketdata.feed import MarketDataFeed
 
 logger = logging.getLogger(__name__)
+
+_EFFECT_PURPOSE_BY_DECISION = {
+    DeploymentDecision.ENTER: EffectPurpose.ENTER,
+    DeploymentDecision.EXIT: EffectPurpose.EXIT,
+}
 
 
 async def run_trade_bot(binding, feed: MarketDataFeed) -> None:
@@ -34,13 +42,13 @@ async def run_trade_bot(binding, feed: MarketDataFeed) -> None:
                 "bar_end_ms": bar.end_ms,
             },
         )
-        if decision == "HOLD":
+        if decision is DeploymentDecision.HOLD:
             continue
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=sid,
             run_id=binding.run_id,
             decision_id=f"{bar.end_ms}:{decision}",
-            purpose=EffectPurpose(decision),
+            purpose=_EFFECT_PURPOSE_BY_DECISION[decision],
             action_plan=binding.action_plan,
             quantity=binding.quantity,
         )
