@@ -19,7 +19,7 @@ import { HealthCardComponent } from './health-card.component';
 import { ClerkCardComponent } from './clerk-card.component';
 import { JournalTailComponent } from './journal-tail.component';
 import { EvidenceDrawerComponent } from './evidence-drawer.component';
-import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+import { OperatorReadinessComponent } from './operator-readiness.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 
 /**
@@ -44,7 +44,7 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
     ClerkCardComponent,
     JournalTailComponent,
     EvidenceDrawerComponent,
-    PanelActionButtonComponent,
+    OperatorReadinessComponent,
     ReceiptLabelPipe,
   ],
   templateUrl: './operator-lens.component.html',
@@ -97,18 +97,6 @@ export class OperatorLensComponent {
   protected readonly health = computed(() => this.panel().health);
   protected readonly clerk = computed(() => this.panel().clerk);
   protected readonly rail = computed(() => this.panel().rail);
-
-  protected readonly reconcileAction = computed<PanelAction | null>(
-    () => this.panel().actions.find((a) => a.action_id === 'reconcile_now') ?? null,
-  );
-
-  protected readonly clearHoldAction = computed<PanelAction | null>(
-    () => this.panel().actions.find((a) => a.action_id === 'clear_hold') ?? null,
-  );
-
-  protected readonly flattenStopAction = computed<PanelAction | null>(
-    () => this.panel().actions.find((a) => a.action_id === 'flatten_stop') ?? null,
-  );
 
   // ── Template handlers ─────────────────────────────────────────────────────
 

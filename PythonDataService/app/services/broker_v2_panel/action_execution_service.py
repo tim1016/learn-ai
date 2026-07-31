@@ -73,7 +73,7 @@ class ActionOutcomeUnknownError(ActionExecutionError):
 # A performer runs one action and returns a human-readable outcome message.
 ActionPerformer = Callable[[str], Awaitable[str]]
 
-_IN_FLIGHT_WAIT_SECONDS = 5.0
+_DEFAULT_IN_FLIGHT_WAIT_SECONDS = 5.0
 
 
 @dataclass
@@ -97,9 +97,10 @@ class IdempotencyStore:
     safe (§11).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, wait_timeout_s: float = _DEFAULT_IN_FLIGHT_WAIT_SECONDS) -> None:
         self._lock = asyncio.Lock()
         self._records: dict[tuple[str, str, str], IdempotencyRecord] = {}
+        self._wait_timeout_s = wait_timeout_s
 
     async def reserve_or_get(self, sid: str, action_id: str, key: str) -> IdempotencyRecord | None:
         """Reserve key for new execution, returning None; or return existing record.
@@ -123,7 +124,7 @@ class IdempotencyStore:
 
         # Wait outside the lock so the first caller can complete/fail
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(event.wait(), timeout=_IN_FLIGHT_WAIT_SECONDS)
+            await asyncio.wait_for(event.wait(), timeout=self._wait_timeout_s)
 
         async with self._lock:
             return self._records.get(compound)
@@ -171,8 +172,13 @@ class DurableIdempotencyStore(IdempotencyStore):
     operator to inspect its Clerk evidence and issue a fresh command.
     """
 
-    def __init__(self, path: Path) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        path: Path,
+        *,
+        wait_timeout_s: float = _DEFAULT_IN_FLIGHT_WAIT_SECONDS,
+    ) -> None:
+        super().__init__(wait_timeout_s=wait_timeout_s)
         self._path = path
         self._loaded = False
 
@@ -305,9 +311,17 @@ async def execute_action(
                 "This action previously failed; the idempotency key cannot be reused.",
                 detail=record.error_detail,
             )
-        # state is still in_flight after timeout — treat as a new execution
-        # by falling through (the first caller may have crashed). We do not own
-        # this reservation, so we must not release/complete it below.
+        # A timed-out waiter cannot distinguish a slow command from a crashed
+        # process. Re-firing a lifecycle command is unsafe in both cases: keep
+        # the reservation and require the caller to inspect the eventual Clerk
+        # receipt before issuing a new key.
+        raise ActionOutcomeUnknownError(
+            "This command is still processing.",
+            detail=(
+                "No terminal receipt arrived before the idempotency wait expired. "
+                "Do not retry this key; inspect Clerk evidence for the final outcome."
+            ),
+        )
 
     try:
         # 1. Action-specific concurrency guard.  Display revisions intentionally

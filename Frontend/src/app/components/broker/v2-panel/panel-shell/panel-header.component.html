@@ -1,0 +1,40 @@
+<header class="control-header">
+  <div class="control-header__crumbs">
+    <a [routerLink]="['/brokers', panel().broker, 'accounts', panel().account_id, 'bots']">
+      {{ panel().broker | receiptLabel }} bots
+    </a>
+    <span aria-hidden="true">/</span>
+    <span>{{ panel().symbol }}</span>
+  </div>
+
+  <div class="control-header__identity">
+    <div>
+      <span class="eyebrow">{{ panel().strategy_label }}</span>
+      <h1>{{ panel().symbol }}</h1>
+      <code>{{ panel().strategy_instance_id }}</code>
+    </div>
+    <div class="identity-chips" aria-label="Bot identity">
+      <span>{{ panel().broker | receiptLabel }} · {{ panel().account_id }}</span>
+      <span class="paper-chip">Paper</span>
+      <span>{{ panel().health.phase_label }}</span>
+      <span>{{ panel().health.running ? 'Runtime active' : 'Runtime idle' }}</span>
+    </div>
+  </div>
+
+  <div
+    class="mission-verdict"
+    [attr.data-state]="panel().mission_verdict.state"
+    role="status"
+    aria-live="polite"
+  >
+    <span class="mission-verdict__label">{{ panel().mission_verdict.label }}</span>
+    <span>{{ panel().mission_verdict.explanation }}</span>
+    @if (panel().mission_verdict.next_action) {
+      <strong>Next: {{ panel().mission_verdict.next_action }}</strong>
+    }
+  </div>
+
+  <div class="control-header__updated">
+    Updated <app-timestamp-display [value]="panel().updated_at_ms" mode="local" />
+  </div>
+</header>

@@ -106,6 +106,7 @@ def build_roster_action(
     flatten_supported: bool,
     channel_fresh: bool,
     exposure: dict[str, float],
+    account_id: str,
 ) -> PanelAction | None:
     """Present only the routine Start/Stop command needed by a roster row.
 
@@ -128,6 +129,10 @@ def build_roster_action(
             has_exposure=False,
             carryover_resume_ready=False,
             flatten_supported=flatten_supported,
+            account_id=account_id,
+            strategy_instance_id=status.strategy_instance_id,
+            exposure=exposure,
+            working_order_count=0,
         )
         actions = build_actions_from_registry(
             ctx,
@@ -142,6 +147,8 @@ def build_roster_action(
             flatten_supported=flatten_supported,
             channel_fresh=channel_fresh,
             exposure=exposure,
+            account_id=account_id,
+            working_order_count=0,
         )
     action_id = "stop" if status.running else "start"
     return next(

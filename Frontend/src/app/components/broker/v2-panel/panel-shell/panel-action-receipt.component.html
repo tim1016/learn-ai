@@ -1,0 +1,13 @@
+<aside
+  class="action-receipt"
+  [attr.data-outcome]="receipt().outcome"
+  [attr.role]="receipt().outcome === 'success' ? 'status' : 'alert'"
+>
+  <div>
+    <strong>{{ receipt().outcome | receiptLabel }}</strong>
+    <span>{{ receipt().message }}</span>
+    <app-timestamp-display [value]="receipt().recordedAtMs" mode="local" />
+    @if (receipt().receiptId) { <code>{{ receipt().receiptId }}</code> }
+  </div>
+  <button type="button" aria-label="Dismiss action receipt" (click)="dismissed.emit()">×</button>
+</aside>

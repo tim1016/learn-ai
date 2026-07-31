@@ -454,8 +454,52 @@ async def test_duplicate_concurrent_posts_run_mutation_once() -> None:
     applied_count = sum(1 for r in results if r is not None and r.applied)
     noop_count = sum(1 for r in results if r is not None and not r.applied)
     assert calls == 1, f"mutation ran {calls} times, expected 1"
-    # One result is applied=True, one is applied=False (or both may be True if
-    # the second started before the first completed and fell through — but calls
-    # must still be 1 because the first call completed and set the record before
-    # the second performer could start).
+    # One result is applied=True and one is the safe idempotent replay.
     assert applied_count + noop_count == 2
+
+
+async def test_timed_out_duplicate_never_refires_in_flight_mutation() -> None:
+    """A slow first command remains the sole owner after a duplicate times out."""
+    calls = 0
+    performer_started = asyncio.Event()
+    release_performer = asyncio.Event()
+
+    async def _blocked_perform(operator: str) -> str:
+        nonlocal calls
+        calls += 1
+        performer_started.set()
+        await release_performer.wait()
+        return "stopped"
+
+    store = IdempotencyStore(wait_timeout_s=0.01)
+    first_post = asyncio.create_task(
+        execute_action(
+            _request(key="slow-race"),
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"stop": _blocked_perform},
+            operator_identity="op",
+            store=store,
+        )
+    )
+    await performer_started.wait()
+
+    with pytest.raises(ActionOutcomeUnknownError, match="still processing"):
+        await execute_action(
+            _request(key="slow-race"),
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"stop": _blocked_perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    assert calls == 1
+    assert store._records[(_SID, "stop", "slow-race")].state == "in_flight"
+
+    release_performer.set()
+    result = await first_post
+    assert result.applied is True
+    assert calls == 1

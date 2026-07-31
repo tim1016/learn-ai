@@ -1,0 +1,40 @@
+:host { display: block; }
+
+.trader-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+
+  article {
+    display: flex;
+    min-width: 0;
+    min-height: 7.2rem;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.2rem;
+    padding: var(--space-3);
+    border-right: 1px solid var(--border);
+  }
+
+  article:last-child { border-right: 0; }
+  article > span { color: var(--accent-text); font-size: var(--fs-xxs); font-weight: var(--fw-bold); letter-spacing: var(--ls-caps); text-transform: uppercase; }
+  strong { color: var(--text-primary); font-size: var(--fs-lg); font-variant-numeric: tabular-nums; }
+  small { color: var(--text-subtle); font-size: var(--fs-xxs); }
+}
+
+@media (max-width: 1180px) {
+  .trader-metrics { grid-template-columns: repeat(3, 1fr); }
+  .trader-metrics article:nth-child(3) { border-right: 0; }
+  .trader-metrics article:nth-child(-n + 3) { border-bottom: 1px solid var(--border); }
+}
+
+@media (max-width: 700px) {
+  .trader-metrics { grid-template-columns: repeat(2, 1fr); }
+  .trader-metrics article { border-bottom: 1px solid var(--border); }
+  .trader-metrics article:nth-child(2n) { border-right: 0; }
+  .trader-metrics article:nth-last-child(-n + 2) { border-bottom: 0; }
+}

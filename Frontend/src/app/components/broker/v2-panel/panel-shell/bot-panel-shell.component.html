@@ -12,46 +12,7 @@
   @let panelData = panel.value()!;
   @let profileData = profile.value()!;
 
-  <header class="control-header">
-    <div class="control-header__crumbs">
-      <a [routerLink]="['/brokers', broker(), 'accounts', accountId(), 'bots']">
-        {{ panelData.broker | receiptLabel }} bots
-      </a>
-      <span aria-hidden="true">/</span>
-      <span>{{ panelData.symbol }}</span>
-    </div>
-
-    <div class="control-header__identity">
-      <div>
-        <span class="eyebrow">{{ panelData.strategy_label }}</span>
-        <h1>{{ panelData.symbol }}</h1>
-        <code>{{ panelData.strategy_instance_id }}</code>
-      </div>
-      <div class="identity-chips" aria-label="Bot identity">
-        <span>{{ panelData.broker | receiptLabel }} · {{ panelData.account_id }}</span>
-        <span class="paper-chip">Paper</span>
-        <span>{{ panelData.health.phase_label }}</span>
-        <span>{{ panelData.health.running ? 'Runtime active' : 'Runtime idle' }}</span>
-      </div>
-    </div>
-
-    <div
-      class="mission-verdict"
-      [attr.data-state]="panelData.mission_verdict.state"
-      role="status"
-      aria-live="polite"
-    >
-      <span class="mission-verdict__label">{{ panelData.mission_verdict.label }}</span>
-      <span>{{ panelData.mission_verdict.explanation }}</span>
-      @if (panelData.mission_verdict.next_action) {
-        <strong>Next: {{ panelData.mission_verdict.next_action }}</strong>
-      }
-    </div>
-
-    <div class="control-header__updated">
-      Updated <app-timestamp-display [value]="panelData.updated_at_ms" mode="local" />
-    </div>
-  </header>
+  <app-panel-header [panel]="panelData" />
 
   <div class="lens-toggle" role="tablist" aria-label="Bot control perspective">
     <button
@@ -81,19 +42,10 @@
   </div>
 
   @if (actionReceipt(); as receipt) {
-    <aside
-      class="action-receipt"
-      [attr.data-outcome]="receipt.outcome"
-      [attr.role]="receipt.outcome === 'success' ? 'status' : 'alert'"
-    >
-      <div>
-        <strong>{{ receipt.outcome | receiptLabel }}</strong>
-        <span>{{ receipt.message }}</span>
-        <app-timestamp-display [value]="receipt.recordedAtMs" mode="local" />
-        @if (receipt.receiptId) { <code>{{ receipt.receiptId }}</code> }
-      </div>
-      <button type="button" aria-label="Dismiss action receipt" (click)="dismissActionReceipt()">×</button>
-    </aside>
+    <app-panel-action-receipt
+      [receipt]="receipt"
+      (dismissed)="dismissActionReceipt()"
+    />
   }
 
   @switch (activeLens()) {

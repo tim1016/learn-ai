@@ -11,7 +11,7 @@ import {
 } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 
 import type {
   ChartHistoryPreset,
@@ -21,18 +21,13 @@ import type {
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
-import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { PanelHeaderComponent } from './panel-header.component';
+import {
+  type ActionReceiptView,
+  PanelActionReceiptComponent,
+} from './panel-action-receipt.component';
 
 type PanelLens = 'trader' | 'operator';
-
-interface ActionReceiptView {
-  readonly actionId: string;
-  readonly outcome: 'success' | 'conflict' | 'failure' | 'unknown';
-  readonly receiptId: string | null;
-  readonly recordedAtMs: number;
-  readonly message: string;
-}
 
 /**
  * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
@@ -55,9 +50,8 @@ interface ActionReceiptView {
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    RouterLink,
-    TimestampDisplayComponent,
-    ReceiptLabelPipe,
+    PanelHeaderComponent,
+    PanelActionReceiptComponent,
     TraderLensComponent,
     OperatorLensComponent,
   ],

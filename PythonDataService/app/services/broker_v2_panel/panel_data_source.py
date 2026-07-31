@@ -397,6 +397,7 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
             flatten_supported=flatten_supported,
             channel_fresh=clerk_channel_fresh,
             exposure=dict(row.exposure),
+            account_id=resolved,
         )
         row_actions.append(row.model_copy(update={"row_action": action}))
     return row_actions

@@ -5,7 +5,6 @@ import {
   input,
   output,
 } from '@angular/core';
-import { CurrencyPipe } from '@angular/common';
 import type {
   BotPanelView,
   ChartHistoryPreset,
@@ -19,6 +18,7 @@ import { TradesTodayListComponent } from './trades-today-list.component';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { TraderMetricsComponent } from './trader-metrics.component';
 
 /**
  * Trader lens (spec §6).
@@ -41,7 +41,7 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
     TimestampDisplayComponent,
     PanelActionButtonComponent,
     ReceiptLabelPipe,
-    CurrencyPipe,
+    TraderMetricsComponent,
   ],
   templateUrl: './trader-lens.component.html',
   styleUrl: './trader-lens.component.scss',
@@ -85,8 +85,6 @@ export class TraderLensComponent {
     const actionId = this.panel().health.running ? 'stop' : 'start';
     return this.panel().actions.find((action) => action.action_id === actionId) ?? null;
   });
-
-  protected readonly exposure = computed(() => Object.entries(this.panel().exposure));
 
   protected readonly liveBars = computed(() => this.liveChart()?.bars ?? []);
   protected readonly liveFillMarkers = computed(
