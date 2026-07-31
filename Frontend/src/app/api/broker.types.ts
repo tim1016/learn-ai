@@ -1894,6 +1894,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/order-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Order Groups
+         * @description Return recent orders grouped by symbol with Python-owned quantity totals.
+         */
+        get: operations["list_order_groups_api_brokers__broker__order_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/orders": {
         parameters: {
             query?: never;
@@ -10189,6 +10209,29 @@ export interface components {
             price: number | null;
             /** Quantity */
             quantity: number | null;
+        };
+        /**
+         * BrokerOrderGroup
+         * @description Recent orders grouped by symbol with canonical gross quantity totals.
+         *
+         *     Quantities are absolute broker-reported shares across both buy and sell
+         *     orders. They are activity totals, not net position or directional exposure.
+         */
+        BrokerOrderGroup: {
+            /** Gross Filled Quantity */
+            gross_filled_quantity: number;
+            /** Gross Requested Quantity */
+            gross_requested_quantity: number;
+            /** Gross Working Quantity */
+            gross_working_quantity: number;
+            /** Order Count */
+            order_count: number;
+            /** Orders */
+            orders: components["schemas"]["BrokerOrder"][];
+            /** Symbol */
+            symbol: string;
+            /** Working Order Count */
+            working_order_count: number;
         };
         /**
          * BrokerOrderLeg
@@ -29169,6 +29212,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerClockEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_order_groups_api_brokers__broker__order_groups_get: {
+        parameters: {
+            query?: {
+                status?: ("open" | "closed" | "all") | null;
+                limit?: number | null;
+                after_ms?: number | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerOrderGroup"][];
                 };
             };
             /** @description Validation Error */

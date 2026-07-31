@@ -4,54 +4,100 @@
   <p class="m-0 py-3 text-sm text-red-500" role="alert">
     Couldn't reach Alpaca. Orders are unavailable right now.
   </p>
-} @else if (orders.value(); as rows) {
-  @if (rows.length === 0) {
-    <p class="m-0 py-3 text-sm text-color-secondary" role="status">No recent orders.</p>
+} @else if (orders.value(); as groups) {
+  @if (groups.length === 0) {
+    <div class="empty-state" role="status">
+      <i class="pi pi-inbox" aria-hidden="true"></i>
+      <span>No recent orders.</span>
+    </div>
   } @else {
-    <p-table [value]="rows" dataKey="order_id" [stripedRows]="true" aria-label="Recent orders">
-      <ng-template #caption><span class="text-sm font-semibold">Recent orders</span></ng-template>
-      <ng-template #header>
-        <tr>
-          <th scope="col">Symbol</th>
-          <th scope="col">Side</th>
-          <th scope="col">Type</th>
-          <th scope="col" class="text-right">Qty</th>
-          <th scope="col" class="text-right">Filled</th>
-          <th scope="col">Status</th>
-          <th scope="col">Submitted</th>
-          <th scope="col">Actions</th>
-        </tr>
-      </ng-template>
-      <ng-template #body let-row>
-          <tr>
-            <th scope="row">{{ row.symbol }}</th>
-            <td>{{ row.side | receiptLabel }}</td>
-            <td>{{ row.order_type | receiptLabel }}</td>
-            <td class="text-right tabular-nums">{{ row.quantity | number: '1.0-4' }}</td>
-            <td class="text-right tabular-nums">{{ row.filled_quantity | number: '1.0-4' }}</td>
-            <td><p-tag severity="info" [value]="row.status | receiptLabel" /></td>
-            <td>
-              <app-timestamp-display [value]="row.submitted_at_ms" mode="local" />
-            </td>
-            <td>
-              @if (isCancelable(row)) {
-                <p-button
-                  label="Cancel"
-                  severity="danger"
-                  size="small"
-                  [text]="true"
-                  [loading]="cancelingId() === row.order_id"
-                  [disabled]="cancelingId() !== null"
-                  [ariaLabel]="'Cancel order for ' + row.symbol"
-                  (onClick)="cancel(row)"
-                />
-                @if (cancelError()[row.order_id]; as message) {
-                  <p class="m-0 mt-1 text-xs text-red-500" role="alert">{{ message }}</p>
+    <div class="order-groups" aria-label="Recent orders grouped by symbol">
+      @for (group of groups; track group.symbol) {
+        <article class="order-group">
+          <header class="order-group__header">
+            <app-asset-identity [symbol]="group.symbol" size="lg" />
+            <span class="order-count">
+              {{ group.order_count }} {{ group.order_count === 1 ? 'order' : 'orders' }}
+            </span>
+          </header>
+
+          <dl class="order-totals" aria-label="Cumulative quantities">
+            <div>
+              <dt>Gross requested</dt>
+              <dd>{{ group.gross_requested_quantity | number: '1.0-4' }}</dd>
+            </div>
+            <div class="order-total--filled">
+              <dt>Gross filled</dt>
+              <dd>{{ group.gross_filled_quantity | number: '1.0-4' }}</dd>
+            </div>
+            <div class="order-total--working">
+              <dt>Gross working</dt>
+              <dd>{{ group.gross_working_quantity | number: '1.0-4' }}</dd>
+            </div>
+          </dl>
+
+          <div class="order-stack" role="list" [attr.aria-label]="group.symbol + ' orders'">
+            @for (row of visibleOrders(group); track row.order_id) {
+              <div class="order-item" role="listitem">
+                <div class="order-item__summary">
+                  <span class="side-chip" [class.side-chip--sell]="row.side === 'sell'">
+                    {{ row.side | receiptLabel }}
+                  </span>
+                  <strong>
+                    {{ row.quantity | number: '1.0-4' }} · {{ row.order_type | receiptLabel }}
+                  </strong>
+                  @if (row.limit_price !== null) {
+                    <span class="order-price">@ {{ row.limit_price | number: '1.2-4' }}</span>
+                  }
+                  <p-tag severity="info" [value]="row.status | receiptLabel" />
+                </div>
+
+                <div class="order-item__meta">
+                  <span>
+                    Filled <strong>{{ row.filled_quantity | number: '1.0-4' }}</strong>
+                  </span>
+                  <span>{{ row.time_in_force | receiptLabel }}</span>
+                  @if (row.submitted_at_ms !== null) {
+                    <app-timestamp-display [value]="row.submitted_at_ms" mode="local" />
+                  }
+                </div>
+
+                @if (isCancelable(row)) {
+                  <div class="order-item__action">
+                    <p-button
+                      label="Cancel"
+                      severity="danger"
+                      size="small"
+                      [text]="true"
+                      [loading]="cancelingId() === row.order_id"
+                      [disabled]="cancelingId() !== null"
+                      [ariaLabel]="'Cancel order for ' + row.symbol"
+                      (onClick)="cancel(row)"
+                    />
+                  </div>
                 }
-              }
-            </td>
-          </tr>
-      </ng-template>
-    </p-table>
+                @if (cancelError()[row.order_id]; as message) {
+                  <p class="order-error" role="alert">{{ message }}</p>
+                }
+              </div>
+            }
+          </div>
+
+          @if (group.order_count > 3) {
+            <button
+              type="button"
+              class="order-group__toggle"
+              [attr.aria-expanded]="expandedSymbols().has(group.symbol)"
+              (click)="toggleGroup(group.symbol)"
+            >
+              <span>
+                {{ expandedSymbols().has(group.symbol) ? 'Show recent only' : 'Show ' + (group.order_count - 3) + ' more' }}
+              </span>
+              <i class="pi pi-chevron-down" aria-hidden="true"></i>
+            </button>
+          }
+        </article>
+      }
+    </div>
   }
 }

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { BrokerOrder, OrderCancelResult } from '../../../api/alpaca.types';
+import type { BrokerOrder, BrokerOrderGroup, OrderCancelResult } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaOrdersTableComponent } from './alpaca-orders-table.component';
 
@@ -46,22 +46,42 @@ function ackedCancel(orderId: string): OrderCancelResult {
 }
 
 async function renderTable(
-  listOrders: () => Promise<BrokerOrder[]>,
+  listOrderGroups: () => Promise<BrokerOrderGroup[]>,
   cancelOrder?: (broker: string, orderId: string) => Promise<OrderCancelResult>,
 ) {
   return render(AlpacaOrdersTableComponent, {
-    providers: [{ provide: BrokersService, useValue: { listOrders, cancelOrder } }],
+    providers: [{ provide: BrokersService, useValue: { listOrderGroups, cancelOrder } }],
   });
+}
+
+function fakeGroup(
+  symbol: string,
+  orders: BrokerOrder[],
+  overrides: Partial<BrokerOrderGroup> = {},
+): BrokerOrderGroup {
+  return {
+    symbol,
+    orders,
+    order_count: orders.length,
+    working_order_count: 0,
+    gross_requested_quantity: 10,
+    gross_filled_quantity: 10,
+    gross_working_quantity: 0,
+    ...overrides,
+  };
 }
 
 describe('AlpacaOrdersTableComponent', () => {
   it('renders a row per order with the status routed through receiptLabel', async () => {
-    await renderTable(() => Promise.resolve([fakeOrder({ order_id: 'o-9', status: 'filled' })]));
+    await renderTable(() =>
+      Promise.resolve([
+        fakeGroup('AAPL', [fakeOrder({ order_id: 'o-9', status: 'filled' })]),
+      ]),
+    );
 
     expect(await screen.findByText('AAPL')).toBeTruthy();
-    // receiptLabel title-cases the status code ("filled" → "Filled"); query by
-    // cell role to disambiguate from the "Filled" (filled-qty) column header.
-    expect(screen.getByRole('cell', { name: 'Filled' })).toBeTruthy();
+    // receiptLabel title-cases the status code ("filled" → "Filled").
+    expect(screen.getAllByText('Filled').length).toBeGreaterThan(0);
   });
 
   it('renders honest-empty ("no recent orders"), distinct from error', async () => {
@@ -69,6 +89,18 @@ describe('AlpacaOrdersTableComponent', () => {
 
     expect(await screen.findByText('No recent orders.')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows three recent orders per symbol until the group is expanded', async () => {
+    const orders = Array.from({ length: 5 }, (_, index) =>
+      fakeOrder({ order_id: `o-${index}`, submitted_at_ms: 1_700_000_000_000 + index }),
+    );
+    await renderTable(() => Promise.resolve([fakeGroup('AAPL', orders)]));
+
+    expect(await screen.findAllByRole('listitem')).toHaveLength(3);
+    fireEvent.click(screen.getByRole('button', { name: 'Show 2 more' }));
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(5));
+    expect(screen.getByRole('button', { name: 'Show recent only' })).toBeTruthy();
   });
 
   it('renders an error state when Alpaca is unreachable', async () => {
@@ -81,9 +113,15 @@ describe('AlpacaOrdersTableComponent', () => {
   it('offers a Cancel action only on a still-working (cancelable) order', async () => {
     await renderTable(() =>
       Promise.resolve([
-        fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' }),
-        fakeOrder({ order_id: 'o-day-end', symbol: 'GTC', status: 'done_for_day' }),
-        fakeOrder({ order_id: 'o-done', symbol: 'AAPL', status: 'filled' }),
+        fakeGroup('MSFT', [fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })], {
+          working_order_count: 1,
+          gross_working_quantity: 10,
+        }),
+        fakeGroup('GTC', [fakeOrder({ order_id: 'o-day-end', symbol: 'GTC', status: 'done_for_day' })], {
+          working_order_count: 1,
+          gross_working_quantity: 10,
+        }),
+        fakeGroup('AAPL', [fakeOrder({ order_id: 'o-done', symbol: 'AAPL', status: 'filled' })]),
       ]),
     );
 
@@ -97,11 +135,13 @@ describe('AlpacaOrdersTableComponent', () => {
     const cancelOrder = vi
       .fn<(broker: string, orderId: string) => Promise<OrderCancelResult>>()
       .mockResolvedValue(ackedCancel('o-open'));
-    const listOrders = vi
-      .fn<() => Promise<BrokerOrder[]>>()
-      .mockResolvedValue([fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })]);
+    const listOrderGroups = vi
+      .fn<() => Promise<BrokerOrderGroup[]>>()
+      .mockResolvedValue([
+        fakeGroup('MSFT', [fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })]),
+      ]);
 
-    await renderTable(listOrders, cancelOrder);
+    await renderTable(listOrderGroups, cancelOrder);
 
     const button = await screen.findByRole('button', { name: 'Cancel order for MSFT' });
     fireEvent.click(button);
@@ -109,7 +149,7 @@ describe('AlpacaOrdersTableComponent', () => {
     // Cancel is called with the opaque broker order_id.
     expect(cancelOrder).toHaveBeenCalledWith('alpaca', 'o-open');
     // The list reloads after a successful cancel (initial load + reload).
-    await waitFor(() => expect(listOrders).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(listOrderGroups).toHaveBeenCalledTimes(2));
   });
 
   it('surfaces a typed cancel failure inline without refreshing', async () => {
@@ -122,16 +162,18 @@ describe('AlpacaOrdersTableComponent', () => {
         order_ref: null,
         error: { message: 'order is not cancelable', why: 'HTTP 422' },
       });
-    const listOrders = vi
-      .fn<() => Promise<BrokerOrder[]>>()
-      .mockResolvedValue([fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })]);
+    const listOrderGroups = vi
+      .fn<() => Promise<BrokerOrderGroup[]>>()
+      .mockResolvedValue([
+        fakeGroup('MSFT', [fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })]),
+      ]);
 
-    await renderTable(listOrders, cancelOrder);
+    await renderTable(listOrderGroups, cancelOrder);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel order for MSFT' }));
 
     expect(await screen.findByText('order is not cancelable')).toBeTruthy();
     // A failed cancel does not reload the list (only the initial load ran).
-    expect(listOrders).toHaveBeenCalledTimes(1);
+    expect(listOrderGroups).toHaveBeenCalledTimes(1);
   });
 });

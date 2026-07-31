@@ -11,8 +11,9 @@ import type { AlpacaOrderDraftLeg } from './alpaca-order-entry.types';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [FormField, ButtonModule, InputTextModule],
   templateUrl: './alpaca-order-leg-row.component.html',
+  styleUrl: './alpaca-order-leg-row.component.scss',
   host: {
-    class: 'flex flex-wrap items-end gap-2 rounded border border-surface p-2',
+    class: 'order-leg',
     role: 'listitem',
   },
 })

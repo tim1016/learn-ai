@@ -29,6 +29,7 @@ from time import monotonic
 from typing import Any
 
 import anyio
+from alpaca.common.enums import Sort
 from alpaca.common.exceptions import APIError
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import AssetStatus, QueryOrderStatus
@@ -206,7 +207,7 @@ class AlpacaTradingClient:
             kwargs["limit"] = limit
         if after_ms is not None:
             kwargs["after"] = _ms_to_utc(after_ms)
-        request = GetOrdersRequest(**kwargs)
+        request = GetOrdersRequest(direction=Sort.DESC, **kwargs)
         return await self._call(lambda c: c.get_orders(filter=request), describe="orders")
 
     async def list_activities(

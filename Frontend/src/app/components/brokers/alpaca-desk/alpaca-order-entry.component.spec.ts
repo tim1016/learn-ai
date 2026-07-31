@@ -54,7 +54,6 @@ async function renderPanel(
 }
 
 async function fillFirstLeg(symbol: string, quantity: string): Promise<void> {
-  fireEvent.click(screen.getByRole('button', { name: 'Add equity leg' }));
   fireEvent.input(await screen.findByLabelText('Leg 1 symbol'), {
     target: { value: symbol },
   });
@@ -170,12 +169,12 @@ describe('AlpacaOrderEntryComponent', () => {
     expect('limit_price' in request.legs[0]).toBe(false);
   });
 
-  it('disables the option-leg button with a coming-soon hint', async () => {
+  it('presents the supported equity order capabilities', async () => {
     await renderPanel(vi.fn());
 
-    const optionButton = screen.getByRole('button', { name: 'Add option leg' });
-    expect(optionButton.hasAttribute('disabled')).toBe(true);
-    expect(screen.getByText('Option legs are coming in 2b.')).toBeTruthy();
+    expect(screen.getAllByText('Market').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Limit').length).toBeGreaterThan(0);
+    expect(screen.getByText('Day or GTC')).toBeTruthy();
   });
 
   it('renders a typed per-leg failure without a raw error', async () => {

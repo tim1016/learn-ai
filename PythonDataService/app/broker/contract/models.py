@@ -211,6 +211,22 @@ class BrokerOrder(_ContractModel):
     observed_at_ms: int
 
 
+class BrokerOrderGroup(_ContractModel):
+    """Recent orders grouped by symbol with canonical gross quantity totals.
+
+    Quantities are absolute broker-reported shares across both buy and sell
+    orders. They are activity totals, not net position or directional exposure.
+    """
+
+    symbol: str
+    orders: list[BrokerOrder]
+    order_count: int
+    working_order_count: int
+    gross_requested_quantity: float
+    gross_filled_quantity: float
+    gross_working_quantity: float
+
+
 class BrokerActivity(_ContractModel):
     """An account activity row (trade fills and non-trade events)."""
 

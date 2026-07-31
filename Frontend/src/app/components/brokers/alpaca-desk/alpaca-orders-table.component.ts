@@ -1,10 +1,10 @@
 import { DecimalPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, inject, resource, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, input, resource, signal } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
-import { TableModule } from 'primeng/table';
 import { TagModule } from 'primeng/tag';
 
-import type { BrokerOrder } from '../../../api/alpaca.types';
+import type { BrokerOrder, BrokerOrderGroup } from '../../../api/alpaca.types';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../services/brokers.service';
@@ -33,20 +33,23 @@ const NON_CANCELABLE_STATUSES: ReadonlySet<string> = new Set([
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     DecimalPipe,
+    AssetIdentityComponent,
     ReceiptLabelPipe,
     ButtonModule,
-    TableModule,
     TagModule,
     TimestampDisplayComponent,
   ],
   templateUrl: './alpaca-orders-table.component.html',
+  styleUrl: './alpaca-orders-table.component.scss',
   host: { class: 'block' },
 })
 export class AlpacaOrdersTableComponent {
   private readonly brokers = inject(BrokersService);
+  readonly refreshVersion = input(0);
 
   protected readonly orders = resource({
-    loader: () => this.brokers.listOrders('alpaca', { status: 'all', limit: 50 }),
+    params: () => this.refreshVersion(),
+    loader: () => this.brokers.listOrderGroups('alpaca', { status: 'all', limit: 50 }),
   });
 
   // The order_id currently being canceled (disables its button + shows a
@@ -54,6 +57,20 @@ export class AlpacaOrdersTableComponent {
   protected readonly cancelingId = signal<string | null>(null);
   // A per-order cancel failure message, keyed by order_id, cleared on retry.
   protected readonly cancelError = signal<Record<string, string>>({});
+  protected readonly expandedSymbols = signal<ReadonlySet<string>>(new Set());
+
+  protected visibleOrders(group: BrokerOrderGroup): BrokerOrder[] {
+    return this.expandedSymbols().has(group.symbol) ? group.orders : group.orders.slice(0, 3);
+  }
+
+  protected toggleGroup(symbol: string): void {
+    this.expandedSymbols.update((expanded) => {
+      const next = new Set(expanded);
+      if (next.has(symbol)) next.delete(symbol);
+      else next.add(symbol);
+      return next;
+    });
+  }
 
   protected isCancelable(order: BrokerOrder): boolean {
     return !NON_CANCELABLE_STATUSES.has(order.status);

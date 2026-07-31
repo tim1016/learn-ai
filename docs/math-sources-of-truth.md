@@ -17,6 +17,12 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 
 ## Registry
 
+### Broker display read models
+
+| Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
+|---|---|---|---|---|---|
+| Broker orders grouped by symbol (gross requested, filled, and working quantities) | `PythonDataService/app/services/broker_order_groups.py` | — | Product read-model formula over absolute broker-reported quantities; decimal arithmetic from the Python standard library. These activity totals are never net position or directional exposure. | `PythonDataService/tests/services/test_broker_order_groups.py` | canonical |
+
 ### Indicators — Python-canonical, ported from LEAN
 
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
