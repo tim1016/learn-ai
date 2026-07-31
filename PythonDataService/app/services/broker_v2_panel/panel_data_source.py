@@ -539,6 +539,17 @@ def _action_performers(
         if clerk is None:
             raise PanelUnavailableError("Alpaca order management is not configured.")
         binding = registry.binding_for_control(broker, sid)
+        status = registry.status(broker, sid)
+        if status.running:
+            # STOP-AND-FLATTEN is ordered custody: first persist STOPPED and
+            # cancel strategy evaluation/working entries, then derive the
+            # reducing EXIT. A failed flatten must never leave the strategy
+            # running or able to submit a fresh entry.
+            await registry.stop(
+                broker,
+                sid,
+                reason=f"Panel flatten-and-stop by {operator}",
+            )
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=sid,
             run_id=binding.run_id,
@@ -552,9 +563,6 @@ def _action_performers(
                 "The bot is stopped, but the Clerk cannot prove that attributed exposure "
                 "is flat. Inspect the Clerk receipt before issuing another action."
             )
-        status = registry.status(broker, sid)
-        if status.running:
-            await registry.stop(broker, sid, reason=f"Panel flatten-and-stop by {operator}")
         if receipt.state is EffectOperationState.FLAT:
             return "The Clerk proved attributed exposure is flat and the bot is stopped."
         return (

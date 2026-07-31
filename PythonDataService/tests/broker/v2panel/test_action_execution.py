@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from app.broker.alpaca.clerk.models import EffectOperationState
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
@@ -220,6 +222,46 @@ async def test_start_performer_resumes_durable_binding(monkeypatch) -> None:
         "Bot started from its durable deployment configuration. "
         "The Clerk remains the only owner of broker order effects."
     )
+
+
+async def test_flatten_stop_stops_strategy_before_unprovable_exit(monkeypatch) -> None:
+    events: list[str] = []
+    binding = SimpleNamespace(run_id="run-1", action_plan=object(), quantity=1)
+
+    class _Registry:
+        def binding_for_control(self, broker: str, sid: str):
+            assert (broker, sid) == ("alpaca", _SID)
+            return binding
+
+        def status(self, broker: str, sid: str):
+            assert (broker, sid) == ("alpaca", _SID)
+            return SimpleNamespace(running=True)
+
+        async def stop(self, broker: str, sid: str, *, reason: str) -> None:
+            assert (broker, sid) == ("alpaca", _SID)
+            events.append("stop")
+
+    class _Clerk:
+        async def execute_for_instance(self, **kwargs):
+            assert kwargs["strategy_instance_id"] == _SID
+            events.append("execute")
+            return SimpleNamespace(state=EffectOperationState.UNPROVABLE)
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
+        lambda: _Registry(),
+    )
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
+        lambda: _Clerk(),
+    )
+
+    message = await _action_performers(
+        "alpaca", _SID, idempotency_key="flatten-1"
+    )["flatten_stop"]("desk-operator")
+
+    assert events == ["stop", "execute"]
+    assert "cannot prove" in message
 
 
 async def _noop() -> str:

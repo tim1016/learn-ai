@@ -289,8 +289,10 @@ async def test_crash_records_typed_evidence_and_reaps(tmp_path: Path) -> None:
     assert view.duty_outcome is not None
     assert view.duty_outcome.kind == "CRASHED"
     assert view.duty_outcome.reason_code == "RuntimeError"
-    # Crash is distinct from a clean stop and preserves operator intent.
-    assert view.desired_state == "RUNNING"
+    # A terminal crash is fail-closed.  Leaving RUNNING behind strands the
+    # off-duty bot because the panel's proof-gated Start path requires STOPPED.
+    assert view.desired_state == "STOPPED"
+    assert _desired_json(tmp_path)["desired_state"] == "STOPPED"
 
     lifecycle = _lifecycle_json(tmp_path)
     assert lifecycle["duty_outcome"]["kind"] == "CRASHED"
@@ -308,6 +310,7 @@ async def test_feed_death_records_feed_death_crash(tmp_path: Path) -> None:
     assert view.duty_outcome is not None
     assert view.duty_outcome.kind == "CRASHED"
     assert view.duty_outcome.reason_code == "FEED_DEATH"
+    assert view.desired_state == "STOPPED"
 
 
 @pytest.mark.asyncio
@@ -326,6 +329,7 @@ async def test_kill_without_stop_intent_is_exited_unverified(tmp_path: Path) -> 
     assert view.duty_outcome is not None
     assert view.duty_outcome.kind == "EXITED_UNVERIFIED"
     assert view.duty_outcome.reason_code == "CANCELLED_WITHOUT_STOP_INTENT"
+    assert view.desired_state == "STOPPED"
 
 
 @pytest.mark.asyncio
@@ -340,6 +344,7 @@ async def test_bar_stream_end_is_exited_unverified(tmp_path: Path) -> None:
     assert view.duty_outcome is not None
     assert view.duty_outcome.kind == "EXITED_UNVERIFIED"
     assert view.duty_outcome.reason_code == "BAR_STREAM_ENDED"
+    assert view.desired_state == "STOPPED"
 
 
 # ── restart intensity (canonical policy semantics, per bot) ───────────

@@ -526,21 +526,21 @@ class BotTaskRegistry:
                 if (
                     record.phase is BotLifecyclePhase.OFF_DUTY
                     and record.duty_outcome is not None
-                    and record.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
                     and self._desired_repo(sid).read_state() is DesiredState.RUNNING
                 ):
                     self._desired_repo(sid).set(
                         DesiredState.STOPPED,
                         updated_by="bot_runner_boot_sweep",
                         now_ms=self._now_ms(),
-                        reason="repair_interrupted_restart_intent",
+                        reason="repair_terminal_running_intent",
                     )
                     logger.warning(
-                        "Boot sweep repaired interrupted bot desired state",
+                        "Boot sweep repaired terminal bot desired state",
                         extra={
-                            "action": "boot_sweep_repaired_interrupted_intent",
+                            "action": "boot_sweep_repaired_terminal_intent",
                             "strategy_instance_id": sid,
                             "run_id": record.duty_outcome.run_id,
+                            "reason_code": record.duty_outcome.reason_code,
                         },
                     )
                     continue
@@ -779,10 +779,22 @@ class BotTaskRegistry:
             if managed.finalized:
                 return
             managed.finalized = True
+        now_ms = self._now_ms()
+        if kind in ("CRASHED", "EXITED_UNVERIFIED"):
+            # Unexpected terminal exits are fail-closed.  A RUNNING intent with
+            # no live task strands the bot because proof-gated Start is legal
+            # only from STOPPED; persist the legal recovery state before the
+            # lifecycle terminal so a crash between writes remains conservative.
+            self._desired_repo(binding.strategy_instance_id).set(
+                DesiredState.STOPPED,
+                updated_by=_UPDATED_BY,
+                now_ms=now_ms,
+                reason=f"terminal_outcome:{reason_code}",
+            )
         outcome = BotDutyOutcome(
             kind=kind,
             reason_code=reason_code,
-            recorded_at_ms=self._now_ms(),
+            recorded_at_ms=now_ms,
             run_id=binding.run_id,
         )
         self._lifecycle_repo(binding.strategy_instance_id).record_terminal_outcome(

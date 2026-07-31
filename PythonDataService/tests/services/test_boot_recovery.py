@@ -178,6 +178,28 @@ async def test_boot_sweep_repairs_interrupted_bot_stranded_as_running(
     assert view.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
 
 
+async def test_boot_sweep_repairs_service_shutdown_stranded_as_running(
+    tmp_path: Path,
+) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.run_boot_recovery()
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    await registry.stop_all()
+    assert registry.status("alpaca", _SID).desired_state == "RUNNING"
+
+    rebooted = _registry(tmp_path, feed)
+    report = await rebooted.run_boot_recovery()
+
+    assert report.interrupted_instances == ()
+    view = rebooted.status("alpaca", _SID)
+    assert view.phase == "OFF_DUTY"
+    assert view.desired_state == "STOPPED"
+    assert view.duty_outcome is not None
+    assert view.duty_outcome.reason_code == "SERVICE_SHUTDOWN"
+
+
 async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
     tmp_path: Path,
 ) -> None:
