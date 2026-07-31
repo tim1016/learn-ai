@@ -2769,10 +2769,7 @@ class LiveEngine:
         raises so ``AutoReconnectMonitor`` can mark recovery failed.
         """
         request_id = mint_intent_id()
-        self._inhibit_submits = True
-        self._paused = True
-        self._persist_desired_state(
-            DesiredState.PAUSED,
+        self._apply_reconciliation_pause(
             "broker_recovery:operator_resume_required",
         )
         try:
@@ -2889,9 +2886,7 @@ class LiveEngine:
                     # Ambiguous exposure: keep the barrier set AND mark the
                     # engine paused so the operator must explicitly resume
                     # before any new submission lands.
-                    self._paused = True
-                    self._persist_desired_state(
-                        DesiredState.PAUSED,
+                    self._apply_reconciliation_pause(
                         (
                             "broker_recovery_reconcile:ambiguous_exposure"
                             if source == "broker_recovery"
@@ -2924,6 +2919,13 @@ class LiveEngine:
             )
             verdict_payload.update({"verdict": "error", "detail": repr(exc)})
         return verdict_payload
+
+    def _apply_reconciliation_pause(self, reason: str) -> None:
+        """Persist a reconciliation pause before mutating runtime flags."""
+
+        self._persist_desired_state(DesiredState.PAUSED, reason)
+        self._inhibit_submits = True
+        self._paused = True
 
     def _mark_reconnect_revalidation_observed(self) -> None:
         """Snapshot the client reconnect counter after monitor recovery.

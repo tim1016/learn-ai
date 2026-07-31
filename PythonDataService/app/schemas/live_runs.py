@@ -742,60 +742,18 @@ class HostRunnerDeployBaseRequest(BaseModel):
 
     @field_validator("live_config", mode="after")
     @classmethod
-    def _validate_sizing(cls, value: dict) -> dict:
-        """ADR 0009 / VCR-0001 — enforce an explicit sizing policy at the
-        deploy boundary.
-
-        Phase 1 closes the back door that let an empty ``live_config`` fall
-        through to legacy ``SimpleFloorSizing`` (the ``set_holdings(SPY, 1.0)``
-        → all-in path). New deploys must carry ``live_config.sizing`` and may
-        only use the keys ``_live_config_from_ledger`` knows how to round-trip
-        — anything else would be hashed into ``run_id`` and then refused at
-        start, leaving an unstartable ledger on disk.
-
-        Three gates:
-
-        1. ``sizing`` is required. Empty / missing rejects.
-        2. Unknown sibling keys reject (mirrors the ledger reader's allow-list).
-        3. ``sizing`` round-trips through the ``SizingPolicy`` discriminated
-           union and is re-serialized via ``policy_to_ledger_dict`` so the hash
-           stays stable regardless of how the operator stringified ``Decimal``.
-        """
+    def _validate_live_config(cls, value: dict) -> dict:
+        """Delegate deploy-domain normalization outside the schema model."""
         if not isinstance(value, dict):
             return value
-        from app.engine.execution.order_sizer import (
-            parse_sizing_policy,
-            policy_to_ledger_dict,
+        from app.engine.live.deploy import (
+            DeployError,
+            validate_and_normalize_deploy_config,
         )
-        from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS, normalize_allowed_sessions
-        from app.schemas.action_plan import ActionPlan
-
-        unknown = set(value.keys()) - LIVE_CONFIG_LEDGER_KEYS
-        if unknown:
-            raise ValueError(f"unknown live_config keys: {sorted(unknown)}")
-        sizing = value.get("sizing")
-        if sizing is None:
-            raise ValueError(
-                "live_config.sizing is required — Phase 1 / ADR 0009 closes the "
-                "empty-live_config back door (VCR-0001). Submit an explicit "
-                "policy (Safe canary: {'sizing': {'kind': 'FixedShares', 'value': 1}})."
-            )
-        policy = parse_sizing_policy(sizing)
-        value["sizing"] = policy_to_ledger_dict(policy)
-        if "action" in value:
-            value["action"] = ActionPlan.model_validate(value["action"]).model_dump()
-        if "allowed_sessions" in value:
-            value["allowed_sessions"] = list(normalize_allowed_sessions(value["allowed_sessions"]))
-        # ADR 0014 §6 — round-trip the reconciliation_timing_policy block
-        # through its Pydantic model so the deploy boundary rejects
-        # mis-shaped configs (e.g. excessive_lag_ms <= caveat_lag_ms) at
-        # admission time, not at runtime when the publisher starts.
-        if "reconciliation_timing_policy" in value:
-            from app.schemas.broker_activity import ReconciliationTimingPolicy
-
-            policy_block = value["reconciliation_timing_policy"]
-            value["reconciliation_timing_policy"] = ReconciliationTimingPolicy.model_validate(policy_block).model_dump()
-        return value
+        try:
+            return validate_and_normalize_deploy_config(value)
+        except DeployError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class LiveInstanceDeployRequest(HostRunnerDeployBaseRequest):

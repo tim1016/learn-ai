@@ -48,10 +48,6 @@ from app.engine.live.account_clerk_rpc import (
 from app.engine.live.account_clerk_supervisor import (
     AccountClerkProcessEvidence,
     AccountClerkSupervisor,
-    ManagedClerk,
-)
-from app.engine.live.account_clerk_supervisor import (
-    AdoptedAccountClerkProcess as _AdoptedAccountClerkProcess,
 )
 from app.engine.live.account_clerk_supervisor import (
     inspect_account_clerk_process as _inspect_account_clerk_process,
@@ -126,7 +122,6 @@ from app.schemas.journal_cures import (
     OperatorRecoveryFlattenResponse,
 )
 from app.schemas.live_runs import (
-    AccountClerkHealth,
     AccountEmergencyFlattenAuthorizationRequest,
     AccountEmergencyFlattenDispatchRequest,
     AccountEmergencyFlattenResponse,
@@ -480,24 +475,6 @@ class RunnerProcessManager:
         self._flatten_in_flight: set[str] = set()
         self._account_starts_in_flight: dict[str, int] = {}
 
-    @property
-    def _clerks(self) -> dict[str, ManagedClerk]:
-        """Compatibility view of Clerk state owned by the dedicated supervisor."""
-
-        return self._clerk_supervisor.clerks
-
-    @property
-    def _quarantined_account_clerk_client_ids(self) -> set[int]:
-        """Compatibility view of Clerk IDs withheld pending confirmed exit."""
-
-        return self._clerk_supervisor.quarantined_client_ids
-
-    @property
-    def _account_clerk_start_blockers(self) -> dict[str, str]:
-        """Compatibility view of durable Clerk replacement blockers."""
-
-        return self._clerk_supervisor.start_blockers
-
     def health(self) -> HostRunnerHealth:
         """Return daemon health plus a representative active subprocess.
 
@@ -536,7 +513,7 @@ class RunnerProcessManager:
             live_runs_root=str(self.live_runs_root),
             fetched_at_ms=self._clock_ms(),
             process=self._first_process_status(),
-            clerks=self._clerk_health(),
+            clerks=self._clerk_supervisor.health(),
             git_sha=running,
             repo_head_sha=on_disk,
             code_stale=bool(running and on_disk and running != on_disk),
@@ -663,7 +640,7 @@ class RunnerProcessManager:
             self._refresh(managed)
         with self._managed_lock:
             self._prune_exited_records_locked()
-        self._supervise_account_clerks()
+        self._clerk_supervisor.supervise()
         self.reconcile_pending_account_binding_retirements()
 
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
@@ -707,7 +684,7 @@ class RunnerProcessManager:
         # The compatibility status endpoint historically performed the idle
         # Clerk reap after observing a bot exit.  Keep that behavior, but do
         # the bounded process work after releasing the registry lock.
-        self._supervise_account_clerks()
+        self._clerk_supervisor.supervise()
         self.reconcile_pending_account_binding_retirements()
         return process_status
 
@@ -1122,7 +1099,7 @@ class RunnerProcessManager:
                 )
             self._flatten_in_flight.add(account)
         try:
-            self._ensure_account_clerk(account)
+            self._clerk_supervisor.ensure(account)
             client = AccountClerkHostRpcClient(
                 artifacts_root=self.artifacts_root,
                 account_id=account,
@@ -1462,7 +1439,10 @@ class RunnerProcessManager:
         if not isinstance(binding, AccountInstanceBinding):
             raise TypeError("binding must be an AccountInstanceBinding")
         try:
-            self._ensure_account_clerk(binding.account_id, ibkr_host=ibkr_host)
+            self._clerk_supervisor.ensure(
+                binding.account_id,
+                ibkr_host=ibkr_host,
+            )
             asyncio.run(
                 AccountClerkHostRpcClient(
                     artifacts_root=self.artifacts_root,
@@ -2099,49 +2079,6 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_404_NOT_FOUND, f"Run {run_id!r} not found under {self.live_runs_root}")
         return run_dir
 
-    def reconcile_account_clerks_on_boot(self) -> None:
-        """Resolve durable Clerk evidence before a bot can request a writer."""
-
-        self._clerk_supervisor.reconcile_on_boot()
-
-    def _account_ids_with_clerk_evidence(self) -> tuple[str, ...]:
-        """Compatibility delegate for Clerk evidence discovery."""
-
-        return self._clerk_supervisor.account_ids_with_evidence()
-
-    def _resolve_orphan_account_clerk(self, account_id: str) -> ManagedClerk | None:
-        """Compatibility delegate for orphan Clerk adoption."""
-
-        return self._clerk_supervisor.resolve_orphan(account_id)
-
-    def _terminate_account_clerk_process(
-        self,
-        process: subprocess.Popen | _AdoptedAccountClerkProcess,
-        *,
-        account_id: str,
-    ) -> bool:
-        """Compatibility delegate for Clerk TERM/KILL escalation."""
-
-        return self._clerk_supervisor.terminate(process, account_id=account_id)
-
-    def _ensure_account_clerk(
-        self,
-        account_id: str,
-        *,
-        ibkr_host: str | None = None,
-    ) -> ManagedClerk:
-        """Ensure account authority through the dedicated Clerk supervisor."""
-
-        return self._clerk_supervisor.ensure(
-            account_id,
-            ibkr_host=ibkr_host,
-        )
-
-    def _release_account_clerk(self, account_id: str) -> bool:
-        """Release account authority after an explicit broker detach."""
-
-        return self._clerk_supervisor.release(account_id)
-
     @staticmethod
     def _verify_account_clerk_generation(
         *,
@@ -2187,16 +2124,6 @@ class RunnerProcessManager:
             f"Account clerk RPC generation {expected_generation} did not become ready for {account_id}"
         )
 
-    def _clerk_health(self) -> list[AccountClerkHealth]:
-        """Return the dedicated supervisor health snapshot."""
-
-        return self._clerk_supervisor.health()
-
-    def _supervise_account_clerks(self, *, account_ids: set[str] | None = None) -> None:
-        """Keep every attached Account service healthy."""
-
-        self._clerk_supervisor.supervise(account_ids=account_ids)
-
     def reconcile_pending_account_binding_retirements(
         self,
         *,
@@ -2229,7 +2156,7 @@ class RunnerProcessManager:
                     account_id=candidate_account_id,
                 ):
                     continue
-                self._ensure_account_clerk(candidate_account_id)
+                self._clerk_supervisor.ensure(candidate_account_id)
                 result = asyncio.run(
                     AccountClerkRpcClient(
                         artifacts_root=self.artifacts_root,
@@ -2550,7 +2477,9 @@ def create_app(
             # RPC handshakes and bounded process waits are synchronous host
             # operations.  Keep them off the FastAPI loop. A newly started
             # Clerk folds boot proposals before this daemon accepts requests.
-            await asyncio.to_thread(process_manager.reconcile_account_clerks_on_boot)
+            await asyncio.to_thread(
+                process_manager._clerk_supervisor.reconcile_on_boot
+            )
             await asyncio.to_thread(process_manager.reconcile_pending_account_binding_retirements)
         except Exception:
             logger.exception("account Clerk reconciliation on boot failed")
@@ -2660,7 +2589,9 @@ def create_app(
             fetched_at_ms=_now_ms(),
             gateway_port=gateway_port,
             sockets=sockets,
-            account_clerks=await run_in_threadpool(process_manager._clerk_health),
+            account_clerks=await run_in_threadpool(
+                process_manager._clerk_supervisor.health
+            ),
         )
 
     @app.post("/control-plane/renew-lease", response_model=HostRunnerHealth, dependencies=auth)
@@ -2680,7 +2611,7 @@ def create_app(
         try:
             validate_ibkr_host_allowed(request.ibkr_host)
             await run_in_threadpool(
-                process_manager._ensure_account_clerk,
+                process_manager._clerk_supervisor.ensure,
                 account_id,
                 ibkr_host=request.ibkr_host,
             )
@@ -2716,7 +2647,10 @@ def create_app(
         """
 
         try:
-            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            await run_in_threadpool(
+                process_manager._clerk_supervisor.ensure,
+                account_id,
+            )
             return await AccountClerkRpcClient(
                 artifacts_root=process_manager.artifacts_root,
                 account_id=account_id,
@@ -2754,7 +2688,10 @@ def create_app(
                 "intent account_id does not match path",
             )
         try:
-            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            await run_in_threadpool(
+                process_manager._clerk_supervisor.ensure,
+                account_id,
+            )
             receipt = await AccountClerkRpcClient(
                 artifacts_root=process_manager.artifacts_root,
                 account_id=account_id,
@@ -2800,7 +2737,10 @@ def create_app(
         if request.intent.account_id != account_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "intent account_id does not match path")
         try:
-            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            await run_in_threadpool(
+                process_manager._clerk_supervisor.ensure,
+                account_id,
+            )
             receipt = await AccountClerkRpcClient(
                 artifacts_root=process_manager.artifacts_root,
                 account_id=account_id,
@@ -2844,7 +2784,10 @@ def create_app(
         if request.intent.account_id != account_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "intent account_id does not match path")
         try:
-            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            await run_in_threadpool(
+                process_manager._clerk_supervisor.ensure,
+                account_id,
+            )
             receipt = await AccountClerkRpcClient(
                 artifacts_root=process_manager.artifacts_root,
                 account_id=account_id,
@@ -2883,7 +2826,10 @@ def create_app(
 
         try:
             account_id = normalize_account_id(account_id)
-            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            await run_in_threadpool(
+                process_manager._clerk_supervisor.ensure,
+                account_id,
+            )
             return await AccountClerkRpcClient(
                 artifacts_root=process_manager.artifacts_root,
                 account_id=account_id,
@@ -2945,7 +2891,10 @@ def create_app(
     async def release_account_clerk(account_id: str) -> HostRunnerHealth:
         """Stop the Account service only for an explicit account detach."""
 
-        released = await run_in_threadpool(process_manager._release_account_clerk, account_id)
+        released = await run_in_threadpool(
+            process_manager._clerk_supervisor.release,
+            account_id,
+        )
         if not released:
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
