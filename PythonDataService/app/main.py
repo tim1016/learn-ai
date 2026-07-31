@@ -26,6 +26,7 @@ from app.config import settings
 from app.routers import (
     account_reconciliation,
     aggregates,
+    alpaca_bot_control_examples,
     baselines,
     bot_events,
     broker,
@@ -675,6 +676,10 @@ app.include_router(
     broker_v2_panel.router,
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
+# Static fixture-envelope contract for the unlinked Clerk diagnostic gallery.
+# The Angular example imports these committed documents locally and never calls
+# this read-only OpenAPI anchor.
+app.include_router(alpaca_bot_control_examples.router)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])

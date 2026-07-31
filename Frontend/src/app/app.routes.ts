@@ -204,6 +204,15 @@ export const routes: Routes = [
       ),
   },
   {
+    // Unlinked, fixture-only review surface. It imports committed contracts
+    // locally and deliberately has no data service or mutation path.
+    path: "examples/alpaca-bot-control",
+    loadComponent: () =>
+      import(
+        "./components/examples/alpaca-bot-control/alpaca-bot-control-example.component"
+      ).then((m) => m.AlpacaBotControlExampleComponent),
+  },
+  {
     path: "broker",
     redirectTo: "broker/accounts",
     pathMatch: "full",

@@ -1,0 +1,38 @@
+@let trader = fixture().trader;
+<article class="trader-card">
+  <header>
+    <div>
+      <p class="instrument">{{ trader.title }}</p>
+      <h2>{{ trader.headline }}</h2>
+    </div>
+    <span class="status" [attr.data-tone]="trader.status_tone">{{ trader.status_label }}</span>
+  </header>
+
+  <dl class="truth-rows">
+    @for (row of trader.truth_rows; track row.label) {
+      <div><dt>{{ row.label }}</dt><dd>{{ row.value }}</dd></div>
+    }
+  </dl>
+
+  <section class="price-context" aria-labelledby="price-context-title">
+    <h3 id="price-context-title">{{ trader.price_context_label }}</h3>
+    <ol>
+      @for (point of trader.price_points; track point.label) {
+        <li [attr.data-fill-tone]="point.fill_tone ?? ''">
+          <span>{{ point.label }}</span><strong>{{ point.price }}</strong>
+          @if (point.fill_label) { <em>{{ point.fill_label }}</em> }
+        </li>
+      }
+    </ol>
+  </section>
+
+  <section class="operation" aria-label="Operation summary">
+    <strong>{{ trader.operation_summary }}</strong>
+    <p>{{ trader.fill_summary }}</p>
+  </section>
+
+  <button type="button" disabled [attr.data-tone]="trader.primary_action.tone" [attr.aria-describedby]="'primary-action-copy'">
+    {{ trader.primary_action.label }}
+  </button>
+  <p id="primary-action-copy" class="action-copy">{{ trader.primary_action.explanation }}</p>
+</article>

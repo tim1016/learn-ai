@@ -1,0 +1,41 @@
+@let operator = fixture().operator;
+<article class="operator-board">
+  <section class="scope-grid" aria-label="Diagnostic scopes">
+    @for (scope of operator.scope_cards; track scope.label) {
+      <div><h2>{{ scope.label }}</h2><p>{{ scope.value }}</p></div>
+    }
+  </section>
+
+  <section class="admission-grid">
+    <div><h2>{{ operator.admission_label }}</h2><p>{{ operator.admission_explanation }}</p></div>
+    <div><h2>{{ operator.reduction_label }}</h2><p>{{ operator.reduction_explanation }}</p></div>
+  </section>
+
+  <section class="spine" aria-labelledby="spine-title">
+    <h2 id="spine-title">{{ operator.custody_spine_label }}</h2>
+    <ol>
+      @for (step of operator.custody_spine; track step.label) {
+        <li [attr.data-tone]="step.tone"><span>{{ step.label }}</span><strong>{{ step.state_label }}</strong></li>
+      }
+    </ol>
+  </section>
+
+  <div class="diagnostic-grid">
+    <section><h2>{{ operator.exposure_label }}</h2>
+      @for (slice of operator.exposure_slices; track slice.label) { <div class="slice"><strong>{{ slice.label }} · {{ slice.quantity_label }}</strong><p>{{ slice.explanation }}</p></div> }
+    </section>
+    <section><h2>{{ operator.resume_label }}</h2><p>{{ operator.resume_result }}</p>
+      <dl>@for (comparison of operator.resume_comparisons; track comparison.label) { <div [attr.data-tone]="comparison.tone"><dt>{{ comparison.label }}</dt><dd>{{ comparison.checkpoint }} → {{ comparison.observed }} · {{ comparison.result_label }}</dd></div> }</dl>
+    </section>
+  </div>
+
+  <section class="freeze"><h2>{{ operator.freeze_label }}</h2><p>{{ operator.freeze_explanation }}</p><strong>Next step: {{ operator.next_step }}</strong></section>
+
+  <section class="evidence" aria-labelledby="evidence-title"><h2 id="evidence-title">{{ operator.evidence_label }}</h2>
+    @for (item of operator.evidence; track item.opaque_id) { <details><summary>{{ item.label }} · {{ item.age_label }}</summary><p>{{ item.explanation }}</p><dl><div><dt>Receipt</dt><dd>{{ item.code | receiptLabel }}</dd></div><div><dt>Evidence ID</dt><dd><code>{{ item.opaque_id }}</code></dd></div></dl></details> }
+  </section>
+
+  <div class="action-examples" aria-label="Static action examples">
+    @for (action of operator.actions; track action.label) { <div><button type="button" disabled [attr.data-tone]="action.tone">{{ action.label }}</button><p>{{ action.explanation }}</p></div> }
+  </div>
+</article>

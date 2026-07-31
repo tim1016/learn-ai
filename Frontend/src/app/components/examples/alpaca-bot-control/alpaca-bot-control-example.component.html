@@ -1,0 +1,57 @@
+<main class="gallery" aria-labelledby="gallery-title">
+  <header class="gallery__header">
+    <div>
+      <p class="eyebrow">Alpaca Clerk custody</p>
+      <h1 id="gallery-title">Static diagnostic example</h1>
+      <p>Static product example — no broker actions or production API calls.</p>
+    </div>
+    <span class="static-badge">15 committed scenarios</span>
+  </header>
+
+  <section class="scenario-picker" aria-label="Scenario selection">
+    <label id="scenario-picker-title" for="diagnostic-scenario">Review scenario</label>
+    <select
+      id="diagnostic-scenario"
+      [value]="selectedScenarioId()"
+      (change)="selectScenario($event)"
+    >
+      @for (fixture of fixtures; track fixture.scenario_id) {
+        <option [value]="fixture.scenario_id">{{ fixture.scenario_label }}</option>
+      }
+    </select>
+    <p>{{ selectedFixture().review_note }}</p>
+  </section>
+
+  <div class="lens-tabs" role="tablist" aria-label="Diagnostic lens">
+    <button
+      id="trader-tab"
+      type="button"
+      role="tab"
+      [attr.aria-selected]="activeLens() === 'trader'"
+      [class.active]="activeLens() === 'trader'"
+      (click)="selectLens('trader')"
+    >Trader</button>
+    <button
+      id="operator-tab"
+      type="button"
+      role="tab"
+      [attr.aria-selected]="activeLens() === 'operator'"
+      [class.active]="activeLens() === 'operator'"
+      (click)="selectLens('operator')"
+    >Operator</button>
+  </div>
+
+  @if (activeLens() === 'trader') {
+    <app-alpaca-bot-control-trader-diagnostic
+      role="tabpanel"
+      aria-labelledby="trader-tab"
+      [fixture]="selectedFixture()"
+    />
+  } @else {
+    <app-alpaca-bot-control-operator-diagnostic
+      role="tabpanel"
+      aria-labelledby="operator-tab"
+      [fixture]="selectedFixture()"
+    />
+  }
+</main>

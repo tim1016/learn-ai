@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "entry_partial_pending",
+  "scenario_label": "Partial entry pending",
+  "review_note": "Separates partial attributed exposure from the working entry remainder.",
+  "trader": {
+    "title": "SPY · Two-green-bar · Alpaca paper",
+    "status_label": "Entry pending 4 of 10",
+    "status_tone": "active",
+    "truth_rows": [{"label": "Desired", "value": "RUNNING"}, {"label": "Runtime", "value": "On duty · signal accepted"}, {"label": "Execution", "value": "Account exposure attributed here: SPY +4"}],
+    "headline": "The Clerk owns a partial entry and its remaining six-share broker intent.",
+    "operation_summary": "ENTER is active: 4 filled, 6 working.",
+    "price_context_label": "Compact price context · partial attributed fill",
+    "price_points": [{"label": "10:41", "price": "$590.34"}, {"label": "10:42", "price": "$590.38", "fill_label": "Entry +4", "fill_tone": "active"}, {"label": "10:43", "price": "$590.31"}],
+    "fill_summary": "Partial fill: 4 of 10 attributed shares; six remain working.",
+    "primary_action": {"label": "STOP", "explanation": "Stop cancels working entries but does not silently flatten the four shares.", "availability": "available", "tone": "caution"}
+  },
+  "operator": {
+    "scope_cards": [{"label": "Instance scope", "value": "Desired RUNNING · instance inst-spy-001"}, {"label": "Runtime / feed scope", "value": "On duty · decision accepted"}, {"label": "Account / Clerk scope", "value": "SPY +4 attributed · entry remainder +6"}],
+    "admission_label": "Entry admission: ACTIVE OPERATION",
+    "admission_explanation": "A Clerk-owned ENTER operation is already resolving; the runtime cannot create another entry.",
+    "reduction_label": "Reduction availability: AVAILABLE",
+    "reduction_explanation": "The Clerk may cancel the working remainder and reduce the filled exposure if needed.",
+    "custody_spine_label": "Clerk custody spine",
+    "custody_spine": [{"label": "Strategy decision", "state_label": "Accepted", "tone": "verified"}, {"label": "Clerk custody", "state_label": "Active", "tone": "active"}, {"label": "Broker effects", "state_label": "4 filled · 6 working", "tone": "active"}, {"label": "Attributed exposure", "state_label": "SPY +4", "tone": "active"}, {"label": "Reconciliation", "state_label": "Pending operation", "tone": "caution"}],
+    "exposure_label": "Attributed account exposure",
+    "exposure_slices": [{"label": "This instance", "quantity_label": "SPY +4", "explanation": "Filled quantity is distinct from the working entry remainder."}],
+    "resume_label": "Resume custody proof",
+    "resume_result": "Unavailable while the entry operation is non-terminal.",
+    "resume_comparisons": [{"label": "Configuration", "checkpoint": "Current", "observed": "Current", "result_label": "Waiting", "tone": "active"}, {"label": "Checkpoint quantity", "checkpoint": "0", "observed": "+4", "result_label": "Operation active", "tone": "active"}, {"label": "Clerk attribution", "checkpoint": "Pending", "observed": "+4", "result_label": "Operation active", "tone": "active"}, {"label": "Unresolved orders", "checkpoint": "0", "observed": "1", "result_label": "Operation active", "tone": "active"}],
+    "freeze_label": "Account freeze: none",
+    "freeze_explanation": "The state is attributable; it is simply not terminal.",
+    "next_step": "Wait for the entry to resolve or request an EXIT operation.",
+    "evidence_label": "Recent evidence",
+    "evidence": [{"label": "Partial broker fill", "explanation": "The active effect operation owns both the fill and remainder.", "code": "PARTIAL_FILL", "opaque_id": "effect_01J9PARTIAL", "age_label": "8 seconds old"}],
+    "actions": [{"label": "STOP", "explanation": "Static example only; this documents cancellation without implicit flattening.", "availability": "available", "tone": "caution"}]
+  }
+}

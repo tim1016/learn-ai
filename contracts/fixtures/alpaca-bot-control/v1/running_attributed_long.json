@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "running_attributed_long",
+  "scenario_label": "Running with attributed long exposure",
+  "review_note": "Shows that a bot sees the account exposure attributed to its instance, not a bot-local position.",
+  "trader": {
+    "title": "SPY · Two-green-bar · Alpaca paper",
+    "status_label": "Running with attributed exposure",
+    "status_tone": "active",
+    "truth_rows": [{"label": "Desired", "value": "RUNNING"}, {"label": "Runtime", "value": "On duty · fresh one-minute bar"}, {"label": "Execution", "value": "Account exposure attributed here: SPY +10"}],
+    "headline": "The Clerk attributes ten SPY shares to this running instance.",
+    "operation_summary": "No effect operation is active; the position is reconciled.",
+    "price_context_label": "Compact price context · attributed entry marker",
+    "price_points": [{"label": "10:38", "price": "$589.94"}, {"label": "10:39", "price": "$590.12", "fill_label": "Entry +10", "fill_tone": "verified"}, {"label": "10:40", "price": "$590.28"}],
+    "fill_summary": "Open P&L and realized P&L are shown only from attributed fills.",
+    "primary_action": {"label": "EXIT", "explanation": "Request a Clerk-owned reduction; this static example cannot submit it.", "availability": "available", "tone": "active"}
+  },
+  "operator": {
+    "scope_cards": [{"label": "Instance scope", "value": "Desired RUNNING · instance inst-spy-001"}, {"label": "Runtime / feed scope", "value": "On duty · market data fresh"}, {"label": "Account / Clerk scope", "value": "SPY +10 attributed · account reconciled"}],
+    "admission_label": "Entry admission: READY",
+    "admission_explanation": "The current configuration permits the instance to keep evaluating signals.",
+    "reduction_label": "Reduction availability: AVAILABLE",
+    "reduction_explanation": "The Clerk can reduce the exact attributed quantity.",
+    "custody_spine_label": "Clerk custody spine",
+    "custody_spine": [{"label": "Strategy decision", "state_label": "Enter complete", "tone": "verified"}, {"label": "Clerk custody", "state_label": "Accepted", "tone": "verified"}, {"label": "Broker effects", "state_label": "Filled", "tone": "verified"}, {"label": "Attributed exposure", "state_label": "SPY +10", "tone": "active"}, {"label": "Reconciliation", "state_label": "Proven", "tone": "verified"}],
+    "exposure_label": "Attributed account exposure",
+    "exposure_slices": [{"label": "This instance", "quantity_label": "SPY +10", "explanation": "Folded from Clerk-owned fill evidence."}],
+    "resume_label": "Resume custody proof",
+    "resume_result": "Not applicable while the instance is running.",
+    "resume_comparisons": [{"label": "Configuration", "checkpoint": "Current", "observed": "Current", "result_label": "Not required", "tone": "neutral"}, {"label": "Checkpoint quantity", "checkpoint": "+10", "observed": "+10", "result_label": "Observed", "tone": "verified"}, {"label": "Clerk attribution", "checkpoint": "+10", "observed": "+10", "result_label": "Observed", "tone": "verified"}, {"label": "Unresolved orders", "checkpoint": "0", "observed": "0", "result_label": "Observed", "tone": "verified"}],
+    "freeze_label": "Account freeze: none",
+    "freeze_explanation": "The account observation is current and fully attributable.",
+    "next_step": "Request EXIT if the strategy decision changes.",
+    "evidence_label": "Recent evidence",
+    "evidence": [{"label": "Attributed fill", "explanation": "The Clerk folded the fill into this instance's exposure.", "code": "ATTRIBUTED_FILL", "opaque_id": "fill_01J9SPYLONG", "age_label": "2 minutes old"}],
+    "actions": [{"label": "EXIT", "explanation": "Static example only; no broker reduction is sent.", "availability": "available", "tone": "active"}]
+  }
+}
