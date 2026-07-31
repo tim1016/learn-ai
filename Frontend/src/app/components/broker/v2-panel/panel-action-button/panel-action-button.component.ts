@@ -24,9 +24,17 @@ export class PanelActionButtonComponent {
   readonly action = input.required<PanelAction>();
   readonly pending = input(false);
   readonly tone = input<PanelActionTone>('neutral');
+  readonly suppressedBlockerId = input<string | null>(null);
 
   readonly triggered = output<PanelAction>();
   protected readonly confirmationOpen = signal(false);
+
+  protected readonly visibleBlockers = computed(() => {
+    const suppressedBlockerId = this.suppressedBlockerId();
+    return this.action().blockers.filter(
+      (blocker) => blocker.condition.id !== suppressedBlockerId,
+    );
+  });
 
   protected readonly disabled = computed(
     () => !this.action().enabled || this.pending(),

@@ -108,6 +108,24 @@ function makePanel(): BotPanelView {
   };
 }
 
+function makeReadinessCheck(
+  action: PanelAction,
+  overrides: Partial<BotPanelView['readiness_checks'][number]> = {},
+): BotPanelView['readiness_checks'][number] {
+  return {
+    operation: action.action_id,
+    label: action.label,
+    ready: action.enabled,
+    scope: 'bot',
+    authority: 'Bot lifecycle registry + Alpaca Clerk',
+    explanation: action.explanation,
+    evidence: {},
+    evaluated_at_ms: 1_700_000_001_000,
+    cure: null,
+    ...overrides,
+  };
+}
+
 function makeProfile(): PanelProfile {
   return {
     broker: 'alpaca',
@@ -285,20 +303,20 @@ describe('OperatorLensComponent', () => {
 
   it('flatten-stop button is present when the action is in the panel', async () => {
     const fakeSvc = makeFakePanelService();
+    const flattenAction: PanelAction = {
+      action_id: 'flatten_stop',
+      label: 'Flatten & Stop',
+      explanation: 'Flattens all positions and stops the bot.',
+      enabled: true,
+      blockers: [],
+      confirmation: null,
+      revision: 1,
+      concurrency_token: 'test-token',
+    };
     const panel: BotPanelView = {
       ...makePanel(),
-      actions: [
-        {
-          action_id: 'flatten_stop',
-          label: 'Flatten & Stop',
-          explanation: 'Flattens all positions and stops the bot.',
-          enabled: true,
-          blockers: [],
-          confirmation: null,
-          revision: 1,
-          concurrency_token: 'test-token',
-        },
-      ],
+      actions: [flattenAction],
+      readiness_checks: [makeReadinessCheck(flattenAction)],
     };
 
     await render(OperatorLensComponent, {
@@ -318,20 +336,20 @@ describe('OperatorLensComponent', () => {
 
   it('flatten-stop button is disabled when action is disabled', async () => {
     const fakeSvc = makeFakePanelService();
+    const flattenAction: PanelAction = {
+      action_id: 'flatten_stop',
+      label: 'Flatten & Stop',
+      explanation: 'Not available.',
+      enabled: false,
+      blockers: [],
+      confirmation: null,
+      revision: 1,
+      concurrency_token: 'test-token',
+    };
     const panel: BotPanelView = {
       ...makePanel(),
-      actions: [
-        {
-          action_id: 'flatten_stop',
-          label: 'Flatten & Stop',
-          explanation: 'Not available.',
-          enabled: false,
-          blockers: [],
-          confirmation: null,
-          revision: 1,
-          concurrency_token: 'test-token',
-        },
-      ],
+      actions: [flattenAction],
+      readiness_checks: [makeReadinessCheck(flattenAction)],
     };
 
     await render(OperatorLensComponent, {
@@ -366,6 +384,7 @@ describe('OperatorLensComponent', () => {
     const panel: BotPanelView = {
       ...makePanel(),
       actions: [flattenAction],
+      readiness_checks: [makeReadinessCheck(flattenAction)],
     };
 
     const { fixture } = await render(OperatorLensComponent, {
@@ -408,25 +427,25 @@ describe('OperatorLensComponent', () => {
 
   it('shows confirmation prompt when flatten-stop has confirmation.required', async () => {
     const fakeSvc = makeFakePanelService();
+    const flattenAction: PanelAction = {
+      action_id: 'flatten_stop',
+      label: 'Flatten & Stop',
+      explanation: '',
+      enabled: true,
+      blockers: [],
+      confirmation: {
+        title: 'Flatten and stop',
+        body: 'This will close all open positions.',
+        consequence: 'Attributed exposure will be reduced to zero.',
+        confirm_label: 'Flatten and stop',
+      },
+      revision: 1,
+      concurrency_token: 'test-token',
+    };
     const panel: BotPanelView = {
       ...makePanel(),
-      actions: [
-        {
-          action_id: 'flatten_stop',
-          label: 'Flatten & Stop',
-          explanation: '',
-          enabled: true,
-          blockers: [],
-          confirmation: {
-            title: 'Flatten and stop',
-            body: 'This will close all open positions.',
-            consequence: 'Attributed exposure will be reduced to zero.',
-            confirm_label: 'Flatten and stop',
-          },
-          revision: 1,
-          concurrency_token: 'test-token',
-        },
-      ],
+      actions: [flattenAction],
+      readiness_checks: [makeReadinessCheck(flattenAction)],
     };
 
     await render(OperatorLensComponent, {
@@ -447,26 +466,26 @@ describe('OperatorLensComponent', () => {
 
   it('shows the inventory recovery action with typed confirmation', async () => {
     const fakeSvc = makeFakePanelService();
+    const recoveryAction: PanelAction = {
+      action_id: 'record_inventory_baseline',
+      label: 'Recover inventory baseline',
+      explanation: 'Record a verified accounting cutover.',
+      enabled: true,
+      blockers: [],
+      confirmation: {
+        title: 'Adopt current broker inventory?',
+        body: 'Reads the current Alpaca positions.',
+        consequence: 'Earlier trades remain in audit history.',
+        confirm_label: 'Recover inventory baseline',
+        required_token: 'BASELINE',
+      },
+      revision: 1,
+      concurrency_token: 'baseline-token',
+    };
     const panel: BotPanelView = {
       ...makePanel(),
-      actions: [
-        {
-          action_id: 'record_inventory_baseline',
-          label: 'Recover inventory baseline',
-          explanation: 'Record a verified accounting cutover.',
-          enabled: true,
-          blockers: [],
-          confirmation: {
-            title: 'Adopt current broker inventory?',
-            body: 'Reads the current Alpaca positions.',
-            consequence: 'Earlier trades remain in audit history.',
-            confirm_label: 'Recover inventory baseline',
-            required_token: 'BASELINE',
-          },
-          revision: 1,
-          concurrency_token: 'baseline-token',
-        },
-      ],
+      actions: [recoveryAction],
+      readiness_checks: [makeReadinessCheck(recoveryAction)],
     };
 
     await render(OperatorLensComponent, {
@@ -486,5 +505,91 @@ describe('OperatorLensComponent', () => {
     );
     expect(screen.getByText('Reads the current Alpaca positions.')).toBeTruthy();
     expect(screen.getByText('BASELINE')).toBeTruthy();
+  });
+
+  it('combines an operator action with its current gate without duplicate blocker copy', async () => {
+    const fakeSvc = makeFakePanelService();
+    const blockedExplanation = 'The bot is already stopped with no attributed exposure.';
+    const flattenAction: PanelAction = {
+      action_id: 'flatten_stop',
+      label: 'Flatten & stop',
+      explanation: blockedExplanation,
+      enabled: false,
+      blockers: [
+        {
+          condition: {
+            id: 'BOT_ALREADY_STOPPED_FLAT',
+            severity: 'blocking',
+            scope: 'bot',
+          },
+          host: 'bot_cockpit',
+          anchor: { kind: 'surface', subject_key: null },
+          audience: 'both',
+          disposition: 'terminal',
+          headline: blockedExplanation,
+          detail: 'No flatten command is necessary.',
+          primary_move: null,
+          secondary_moves: [],
+          applies_to: 'run',
+        },
+        {
+          condition: {
+            id: 'ACCOUNT_CUSTODY_UNPROVABLE',
+            severity: 'blocking',
+            scope: 'account',
+          },
+          host: 'bot_cockpit',
+          anchor: { kind: 'surface', subject_key: null },
+          audience: 'both',
+          disposition: 'fix_elsewhere',
+          headline: 'The Clerk cannot prove the exposure to flatten.',
+          detail: 'Restore broker observation and run Reconcile now before flattening.',
+          primary_move: null,
+          secondary_moves: [],
+          applies_to: 'run',
+        },
+      ],
+      confirmation: null,
+      revision: 1,
+      concurrency_token: 'test-token',
+    };
+    const panel: BotPanelView = {
+      ...makePanel(),
+      actions: [flattenAction],
+      readiness_checks: [
+        makeReadinessCheck(flattenAction, {
+          explanation: blockedExplanation,
+          cure: 'No flatten command is necessary.',
+        }),
+      ],
+    };
+
+    await render(OperatorLensComponent, {
+      inputs: {
+        panel,
+        profile: makeProfile(),
+        actionPending: false,
+        broker: 'alpaca',
+        accountId: 'acc-1',
+        sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
+    });
+
+    expect(screen.getByText('Active command gates')).toBeTruthy();
+    expect(
+      screen.queryByText(
+        'These checks gate commands now. They are not historical transaction stages.',
+      ),
+    ).toBeNull();
+    expect(screen.getAllByText(blockedExplanation)).toHaveLength(1);
+    expect(
+      screen.getAllByText(/No flatten command is necessary\./),
+    ).toHaveLength(1);
+    expect(
+      screen.getByRole('alert').textContent,
+    ).toContain('The Clerk cannot prove the exposure to flatten.');
+    expect(screen.getByRole('button', { name: 'Flatten & stop' })).toBeTruthy();
+    expect(screen.queryByLabelText('Operator commands')).toBeNull();
   });
 });
