@@ -8,6 +8,7 @@ export interface ActionReceiptView {
   readonly receiptId: string | null;
   readonly recordedAtMs: number;
   readonly message: string;
+  readonly remediation: string | null;
 }
 
 @Component({

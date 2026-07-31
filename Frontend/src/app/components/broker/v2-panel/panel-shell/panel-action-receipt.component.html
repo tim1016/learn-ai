@@ -6,6 +6,9 @@
   <div>
     <strong>{{ receipt().outcome | receiptLabel }}</strong>
     <span>{{ receipt().message }}</span>
+    @if (receipt().remediation) {
+      <span>{{ receipt().remediation }}</span>
+    }
     <app-timestamp-display [value]="receipt().recordedAtMs" mode="local" />
     @if (receipt().receiptId) { <code>{{ receipt().receiptId }}</code> }
   </div>

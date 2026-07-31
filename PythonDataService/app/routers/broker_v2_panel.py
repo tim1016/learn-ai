@@ -74,9 +74,10 @@ def _raise_panel_error(error: ds.PanelDataError) -> NoReturn:
 
 
 def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest) -> NoReturn:
+    outcome_unknown = isinstance(error, ActionOutcomeUnknownError)
     outcome = (
         "unknown"
-        if isinstance(error, ActionOutcomeUnknownError)
+        if outcome_unknown
         else ("conflict" if isinstance(error, StaleRevisionError) else "failure")
     )
     raise HTTPException(
@@ -84,7 +85,7 @@ def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest
         detail={
             "action_id": request.action_id,
             "outcome": outcome,
-            "receipt_id": request.idempotency_key,
+            "receipt_id": request.idempotency_key if outcome_unknown else None,
             "recorded_at_ms": now_ms_utc(),
             "message": str(error),
             "why": error.detail,

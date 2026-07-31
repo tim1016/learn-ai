@@ -7,6 +7,8 @@ desired_state (never PAUSED).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ChannelHealth,
@@ -41,13 +43,14 @@ def _status(
     carryover_account_policy_enabled: bool = True,
     checkpoint_exposure: dict[str, float] | None = None,
     checkpoint_matches: bool = False,
+    mode: Literal["log_only", "trade"] = "log_only",
 ) -> BotStatusView:
     resolved_desired_state = desired_state or ("RUNNING" if running else "STOPPED")
     return BotStatusView(
         strategy_instance_id=SID,
         broker="alpaca",
         symbol="SPY",
-        mode="log_only",
+        mode=mode,
         quantity=1,
         carryover_policy=carryover_policy,  # type: ignore[arg-type]
         carryover_account_policy_enabled=carryover_account_policy_enabled,
@@ -199,6 +202,38 @@ def test_working_orders_and_fills_are_bounded_clerk_attributed_projections() -> 
     assert filled.working_orders == []
     assert len(filled.recent_fills) == 1
     assert filled.recent_fills[0].symbol == "SPY"
+
+
+def test_recent_fills_reuse_canonical_fill_deduplication() -> None:
+    first = fill_entry(
+        sid=SID,
+        intent="open",
+        ts_ms=_NOW - 800,
+        event_key="exec:redelivered",
+    )
+    redelivery = fill_entry(
+        sid=SID,
+        intent="open",
+        ts_ms=_NOW - 700,
+        event_key="exec:redelivered",
+    )
+
+    panel = _panel(_status(), _clerk_status(), [first, redelivery])
+
+    assert len(panel.recent_fills) == 1
+    assert panel.recent_fills[0].filled_at_ms == _NOW - 800
+
+
+def test_unhealthy_required_channel_blocks_trade_mode_mission() -> None:
+    panel = _panel(
+        _status(mode="trade"),
+        _clerk_status(healthy=False),
+        [],
+    )
+
+    assert panel.mission_verdict.state == "blocked"
+    assert "market_data" in panel.mission_verdict.explanation
+    assert "execution" in panel.mission_verdict.explanation
 
 
 def test_panel_never_emits_paused_desired_state() -> None:

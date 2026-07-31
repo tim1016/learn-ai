@@ -241,6 +241,7 @@ export class BotPanelShellComponent {
       receiptId: result.receipt_id,
       recordedAtMs: result.recorded_at_ms,
       message: result.message,
+      remediation: null,
     };
   }
 
@@ -276,6 +277,8 @@ export class BotPanelShellComponent {
           : error instanceof Error
             ? error.message
             : `Action "${action.label}" failed.`,
+      remediation:
+        typeof detail?.['why'] === 'string' ? detail['why'] : null,
     };
   }
 }

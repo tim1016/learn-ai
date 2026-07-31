@@ -141,6 +141,7 @@ async def test_performer_failure_returns_unknown_and_burns_receipt_key() -> None
 
 async def test_disabled_presented_action_cannot_bypass_guard_via_post(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
     async def _panel(*_args, **_kwargs):
         return SimpleNamespace(
@@ -157,6 +158,12 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
         )
 
     monkeypatch.setattr("app.services.broker_v2_panel.panel_data_source.get_panel", _panel)
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
+        lambda: SimpleNamespace(
+            panel_action_receipt_path=lambda _sid: tmp_path / "receipts.json"
+        ),
+    )
 
     with pytest.raises(ActionNotAvailableError) as exc:
         await run_action(
@@ -269,6 +276,7 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
         ),
         encoding="utf-8",
     )
+    legacy_observed_at_ms = path.stat().st_mtime_ns // 1_000_000
 
     result = await execute_action(
         _request(key="legacy"),
@@ -282,7 +290,7 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
 
     assert result.applied is False
     assert result.receipt_id == "legacy"
-    assert result.recorded_at_ms == 0
+    assert result.recorded_at_ms == legacy_observed_at_ms
 
 
 async def test_unwired_action_is_typed_not_available() -> None:

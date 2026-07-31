@@ -189,6 +189,7 @@ class DurableIdempotencyStore(IdempotencyStore):
         if not self._path.is_file():
             return
         raw = json.loads(self._path.read_text(encoding="utf-8"))
+        legacy_observed_at_ms = self._path.stat().st_mtime_ns // 1_000_000
         for compound, payload in raw.items():
             sid, action_id, key = compound.split("\u001f", 2)
             state = payload["state"]
@@ -198,7 +199,10 @@ class DurableIdempotencyStore(IdempotencyStore):
                 # only the action result. Preserve them as successful legacy
                 # receipts instead of making an upgrade re-fire a command.
                 result_payload.setdefault("receipt_id", key)
-                result_payload.setdefault("recorded_at_ms", 0)
+                # Legacy receipts did not persist their recording time. The
+                # file modification time is the earliest durable observation
+                # available after upgrade; use it instead of fabricating 1970.
+                result_payload.setdefault("recorded_at_ms", legacy_observed_at_ms)
                 result = PanelActionResult.model_validate(result_payload)
                 self._records[(sid, action_id, key)] = IdempotencyRecord(state="succeeded", result=result)
             else:
@@ -281,6 +285,7 @@ async def execute_action(
     operator_identity: str,
     current_concurrency_token: str,
     store: IdempotencyStore | None = None,
+    availability_error: ActionNotAvailableError | None = None,
 ) -> PanelActionResult:
     """Execute one presented action under the three invariants (§11).
 
@@ -324,6 +329,12 @@ async def execute_action(
         )
 
     try:
+        # Availability is checked only after idempotency recovery. A retry of
+        # a completed Start/Stop may observe the action disabled precisely
+        # because its first request succeeded.
+        if availability_error is not None:
+            raise availability_error
+
         # 1. Action-specific concurrency guard.  Display revisions intentionally
         # advance for unrelated evidence; only this action's declared inputs may
         # invalidate a presented command.

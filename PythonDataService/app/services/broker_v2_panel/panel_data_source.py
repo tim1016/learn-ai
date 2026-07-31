@@ -627,9 +627,10 @@ async def run_action(
             f"Action '{request.action_id}' is not available for bot '{sid}'.",
             detail="Refresh the panel before retrying the command.",
         )
+    availability_error: ActionNotAvailableError | None = None
     if not action.enabled:
         blocker = action.blockers[0] if action.blockers else None
-        raise ActionNotAvailableError(
+        availability_error = ActionNotAvailableError(
             f"The '{action.label}' action is blocked by the current panel state.",
             detail=(
                 blocker.detail
@@ -648,4 +649,5 @@ async def run_action(
         performers=_action_performers(broker, sid, idempotency_key=request.idempotency_key),
         operator_identity=operator_identity,
         store=durable_idempotency_store_for(registry.panel_action_receipt_path(sid)),
+        availability_error=availability_error,
     )

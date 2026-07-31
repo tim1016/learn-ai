@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
+import { HttpErrorResponse } from '@angular/common/http';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
@@ -276,5 +277,58 @@ describe('BotPanelShellComponent', () => {
 
     expect(screen.getByText('Bot start requested.')).toBeTruthy();
     expect(screen.getByText('receipt-001')).toBeTruthy();
+  });
+
+  it('renders backend-authored remediation for an unknown action outcome', async () => {
+    mockService.getPanel.mockResolvedValueOnce({
+      ...PANEL,
+      health: { ...PANEL.health, running: false },
+      actions: [
+        {
+          action_id: 'start',
+          label: 'Start',
+          explanation: 'Start evaluating bars.',
+          enabled: true,
+          blockers: [],
+          confirmation: null,
+          revision: 1,
+          concurrency_token: 'start-token',
+        },
+      ],
+    });
+    mockService.runBotAction.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 500,
+        error: {
+          detail: {
+            action_id: 'start',
+            outcome: 'unknown',
+            receipt_id: 'receipt-unknown',
+            recorded_at_ms: 1_753_800_000_000,
+            message: 'The command did not return a terminal receipt.',
+            why: 'Inspect Clerk evidence before issuing another lifecycle command.',
+          },
+        },
+      }),
+    );
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(
+      screen.getByText('The command did not return a terminal receipt.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Inspect Clerk evidence before issuing another lifecycle command.',
+      ),
+    ).toBeTruthy();
   });
 });

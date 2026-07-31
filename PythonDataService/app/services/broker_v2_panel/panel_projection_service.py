@@ -15,6 +15,7 @@ lets the idempotency key make double-clicks safe (§11).
 from __future__ import annotations
 
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
+from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
 from app.broker.v2panel.vocabulary import (
     HOLD_REASONS,
@@ -307,30 +308,18 @@ def _recent_decision_views(receipts: list[DecisionReceipt], *, limit: int = 8) -
 
 
 def _recent_fill_views(sid: str, entries: list[OrderJournalEntry], *, limit: int = 8) -> list[RecentFillView]:
-    owned_refs = set(transaction_refs_for_bot(sid, entries))
-    fills: list[RecentFillView] = []
-    for entry in reversed(entries):
-        if (
-            entry.order_ref not in owned_refs
-            or entry.kind is not ClerkEntryKind.ORDER_EVENT
-            or entry.event is None
-            or entry.event.event_type not in {"fill", "partial_fill"}
-            or entry.leg is None
-        ):
-            continue
-        fills.append(
-            RecentFillView(
-                order_ref=entry.order_ref,
-                symbol=entry.leg.symbol,
-                side=entry.leg.side.value,
-                quantity=entry.event.quantity,
-                price=entry.event.price,
-                filled_at_ms=entry.event.occurred_at_ms,
-            )
+    fills = project_instance_fills(sid, entries)
+    return [
+        RecentFillView(
+            order_ref=fill.order_ref,
+            symbol=fill.symbol,
+            side=fill.side.value,
+            quantity=fill.quantity,
+            price=fill.fill_price,
+            filled_at_ms=fill.filled_at_ms,
         )
-        if len(fills) == limit:
-            break
-    return fills
+        for fill in reversed(fills[-limit:])
+    ]
 
 
 def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[ReadinessCheckView]:
@@ -395,6 +384,24 @@ def _mission_verdict(
             next_action=next_action,
             evaluated_at_ms=now_ms,
         )
+    if status.mode == "trade":
+        channel_states = {channel.stream: channel.state for channel in clerk.channels}
+        unhealthy_channels = [
+            stream
+            for stream in ("market_data", "execution")
+            if channel_states.get(stream) != "healthy"
+        ]
+        if unhealthy_channels:
+            return MissionVerdictView(
+                state="blocked",
+                label="Mission blocked",
+                explanation=(
+                    "Required Clerk channels are not healthy: "
+                    f"{', '.join(unhealthy_channels)}."
+                ),
+                next_action="Restore fresh market-data and execution health before expecting order effects.",
+                evaluated_at_ms=now_ms,
+            )
     if status.running:
         return MissionVerdictView(
             state="working",
