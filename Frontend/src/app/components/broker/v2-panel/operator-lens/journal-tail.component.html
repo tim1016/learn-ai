@@ -47,7 +47,7 @@
           type="button"
           class="journal-entry__row"
           [attr.aria-expanded]="isExpanded(entry.seq)"
-          [attr.aria-label]="entry.kind_label + ' at ' + entry.recorded_at_ms"
+          [attr.aria-label]="entryAriaLabel(entry)"
           (click)="toggleExpand(entry.seq)"
         >
           <span class="journal-entry__kind">{{ entry.kind_label }}</span>

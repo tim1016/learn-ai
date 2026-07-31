@@ -5,7 +5,12 @@ import {
   input,
   output,
 } from '@angular/core';
-import type { PanelProfile, StationView, TransactionRail } from '../lib/broker-v2-panel.types';
+import type {
+  PanelProfile,
+  StationState,
+  StationView,
+  TransactionRail,
+} from '../lib/broker-v2-panel.types';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 
 /**
@@ -42,16 +47,13 @@ export class TransactionRailComponent {
   protected readonly transactionRef = computed(() => this.rail().transaction_ref);
   protected readonly hasTransaction = computed(() => this.transactionRef() !== null);
 
-  protected stationIcon(state: string): string {
-    switch (state) {
-      case 'satisfied': return '✓';
-      case 'waiting': return '⏳';
-      case 'blocked': return '⚠';
-      case 'unknown_stale': return '?';
-      case 'not_applicable': return '—';
-      default: return '?';
-    }
-  }
+  protected readonly stationIcon: Record<StationState, string> = {
+    satisfied: '✓',
+    waiting: '⏳',
+    blocked: '⚠',
+    unknown_stale: '?',
+    not_applicable: '—',
+  };
 
   protected stationAriaLabel(station: StationView): string {
     return `${station.label}: ${station.state_label}`;

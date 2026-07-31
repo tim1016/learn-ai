@@ -10,7 +10,7 @@ import {
 import { ButtonModule } from 'primeng/button';
 
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import type { BotCatalogView, PanelActionRequest } from '../lib/broker-v2-panel.types';
+import type { BotCatalogView } from '../lib/broker-v2-panel.types';
 import { AccountStripComponent } from '../account-strip/account-strip.component';
 import { BotsRosterComponent, type RowActionEvent } from '../bots-roster/bots-roster.component';
 import { DeployDialogComponent } from '../deploy-dialog/deploy-dialog.component';
@@ -94,14 +94,7 @@ export class BotsListPageComponent {
         this.actionError.set(`Action "${event.action}" is not available for bot ${sid}.`);
         return;
       }
-      const request: PanelActionRequest = {
-        action_id: action.action_id,
-        revision: action.revision,
-        concurrency_token: action.concurrency_token,
-        idempotency_key: crypto.randomUUID(),
-        reason: null,
-      };
-      await this.panelService.runAction(broker, accountId, sid, request);
+      await this.panelService.runBotAction(broker, accountId, sid, action);
       this.catalog.reload();
     } catch {
       this.actionError.set(`Action "${event.action}" failed for bot ${sid}.`);

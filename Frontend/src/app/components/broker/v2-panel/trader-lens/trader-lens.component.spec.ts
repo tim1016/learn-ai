@@ -7,6 +7,7 @@ import type { BotPanelView, PanelProfile, ChartLiveResponse } from '../lib/broke
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
   const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn() });
+  const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
   const createMockChart = () => ({
     addSeries: vi.fn().mockReturnValue(createMockSeries()),
     timeScale: vi.fn().mockReturnValue(mockTimeScale),
@@ -15,6 +16,7 @@ vi.mock('lightweight-charts', () => {
   });
   return {
     createChart: vi.fn().mockImplementation(() => createMockChart()),
+    createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
   };
 });

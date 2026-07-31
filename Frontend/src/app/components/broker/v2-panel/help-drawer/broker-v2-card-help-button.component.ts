@@ -13,10 +13,6 @@ import {
  * `BROKER_V2_CARD_ANCHOR_MAP`.  Templates receive a compile-time error if they
  * pass an unrecognised card name.
  *
- * S4 wiring note: S4 operator-lens card components will wire `cardName` once
- * the S4 branch is rebased onto this branch.  The anchor lookup and type are
- * intentionally frozen here so S4 has a stable contract to target.
- *
  * @example
  * <app-broker-v2-card-help-btn cardName="signal" />
  * <app-broker-v2-card-help-btn cardName="submit-gate" label="Submit gate help" />

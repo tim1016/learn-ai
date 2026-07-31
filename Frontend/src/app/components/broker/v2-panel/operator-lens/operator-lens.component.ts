@@ -6,6 +6,7 @@ import {
   effect,
   inject,
   input,
+  output,
   signal,
 } from '@angular/core';
 import type {
@@ -20,6 +21,7 @@ import { HealthCardComponent } from './health-card.component';
 import { ClerkCardComponent } from './clerk-card.component';
 import { JournalTailComponent } from './journal-tail.component';
 import { EvidenceDrawerComponent } from './evidence-drawer.component';
+import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 
 /**
  * Operator lens (spec §7).
@@ -43,6 +45,7 @@ import { EvidenceDrawerComponent } from './evidence-drawer.component';
     ClerkCardComponent,
     JournalTailComponent,
     EvidenceDrawerComponent,
+    PanelActionButtonComponent,
   ],
   templateUrl: './operator-lens.component.html',
   styleUrl: './operator-lens.component.scss',
@@ -54,9 +57,7 @@ export class OperatorLensComponent {
   readonly profile = input.required<PanelProfile>();
   readonly actionPending = input(false);
 
-  // The shell exposes an output for action execution; we bubble up through it
-  // the same way the trader lens does.
-  readonly actionRequested = input.required<(action: PanelAction) => void>();
+  readonly actionRequested = output<PanelAction>();
 
   // Route context — needed for the evidence endpoint calls.
   readonly broker = input.required<string>();
@@ -82,6 +83,7 @@ export class OperatorLensComponent {
   /** Journal tail evidence page (operator-gated endpoint). */
   protected readonly journalPage = signal<EvidencePage | null>(null);
   protected readonly journalLoading = signal(false);
+  protected readonly journalError = signal<string | null>(null);
 
   // ── Derived ──────────────────────────────────────────────────────────────
 
@@ -155,20 +157,14 @@ export class OperatorLensComponent {
   }
 
   protected onActionRequested(action: PanelAction): void {
-    this.actionRequested()(action);
-  }
-
-  protected onFlattenStop(): void {
-    const action = this.flattenStopAction();
-    if (action && action.enabled) {
-      this.actionRequested()(action);
-    }
+    this.actionRequested.emit(action);
   }
 
   // ── Private ───────────────────────────────────────────────────────────────
 
   private async loadJournalPage(): Promise<void> {
     this.journalLoading.set(true);
+    this.journalError.set(null);
     try {
       const page = await this.panelSvc.getEvidence(
         this.broker(),
@@ -177,8 +173,12 @@ export class OperatorLensComponent {
         { clientHint: 'operator-lens-journal-tail' },
       );
       this.journalPage.set(page);
-    } catch {
-      // Non-fatal: journal tail stays empty until next poll cycle.
+    } catch (error) {
+      this.journalError.set(
+        error instanceof Error
+          ? error.message
+          : 'Could not load journal evidence.',
+      );
     } finally {
       this.journalLoading.set(false);
     }

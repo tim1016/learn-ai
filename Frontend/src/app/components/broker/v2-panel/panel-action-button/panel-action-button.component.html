@@ -1,0 +1,26 @@
+<div class="panel-action">
+  <button
+    type="button"
+    [class]="'panel-action__button panel-action__button--' + tone()"
+    [disabled]="disabled()"
+    [attr.aria-disabled]="disabled()"
+    [attr.aria-busy]="pending()"
+    [attr.aria-label]="action().label"
+    [title]="action().explanation"
+    (click)="trigger()"
+  >
+    {{ action().label }}
+  </button>
+
+  @if (action().confirmation; as confirmation) {
+    @if (confirmation.required) {
+      <p class="panel-action__confirmation" role="note">
+        {{ confirmation.prompt }}
+      </p>
+    }
+  }
+
+  @for (blocker of action().blockers; track blocker.code) {
+    <p class="panel-action__blocker" role="alert">{{ blocker.label }}</p>
+  }
+</div>

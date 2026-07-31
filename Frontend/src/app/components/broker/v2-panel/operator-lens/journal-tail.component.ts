@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import type { EvidenceEntry, EvidencePage } from '../lib/broker-v2-panel.types';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
+import { fmtTimestampLocal } from '../../format';
 
 /** The set of allowed kind filter tokens (empty = all). */
 const ALL_KINDS = '' as const;
@@ -99,6 +100,10 @@ export class JournalTailComponent {
 
   protected isExpanded(seq: number): boolean {
     return this.expandedSeqs().has(seq);
+  }
+
+  protected entryAriaLabel(entry: EvidenceEntry): string {
+    return `${entry.kind_label} at ${fmtTimestampLocal(entry.recorded_at_ms)}`;
   }
 
   protected trackEntry(_index: number, entry: EvidenceEntry): number {

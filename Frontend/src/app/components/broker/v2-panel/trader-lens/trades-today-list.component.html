@@ -35,9 +35,9 @@
                 granularity="time"
               />
             </td>
-            <td class="fill-side">{{ fill.side }}</td>
+            <td class="fill-side">{{ fill.side | receiptLabel }}</td>
             <td>{{ fill.quantity }}</td>
-            <td>${{ fill.price.toFixed(2) }}</td>
+            <td>{{ fmtCurrency(fill.price) }}</td>
           </tr>
         }
       </tbody>
@@ -46,12 +46,12 @@
     <div class="pnl-summary" aria-label="P&L summary">
       <span class="pnl-label">Realized today</span>
       <span [class]="pnlClass(realizedPnlToday())" aria-label="Realized P&L today">
-        {{ formatPnl(realizedPnlToday()) }}
+        {{ fmtSignedCurrency(realizedPnlToday()) }}
       </span>
       <span class="pnl-separator" aria-hidden="true">·</span>
       <span class="pnl-label">Open P&amp;L</span>
       <span [class]="pnlClass(openPnl())" aria-label="Open P&L">
-        {{ formatPnl(openPnl()) }}
+        {{ fmtSignedCurrency(openPnl()) }}
       </span>
       @if (feesLabel()) {
         <span class="fees-note">{{ feesLabel() }}</span>

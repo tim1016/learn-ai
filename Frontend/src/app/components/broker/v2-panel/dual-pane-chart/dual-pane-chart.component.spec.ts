@@ -1,11 +1,13 @@
 import { render, screen } from '@testing-library/angular';
 import { describe, it, expect, vi } from 'vitest';
+import { createSeriesMarkers } from 'lightweight-charts';
 import { DualPaneChartComponent } from './dual-pane-chart.component';
 
 // Mock lightweight-charts — the actual DOM chart is not exercised in unit tests.
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
   const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn() });
+  const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
   const createMockChart = () => ({
     addSeries: vi.fn().mockReturnValue(createMockSeries()),
     removeSeries: vi.fn(),
@@ -15,6 +17,7 @@ vi.mock('lightweight-charts', () => {
   });
   return {
     createChart: vi.fn().mockImplementation(() => createMockChart()),
+    createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
   };
 });
@@ -83,5 +86,47 @@ describe('DualPaneChartComponent', () => {
     expect(
       screen.getByRole('button', { name: /expand history chart to fullscreen/i }),
     ).toBeTruthy();
+  });
+
+  it('renders live fill markers on the candle series', async () => {
+    const markersFactory = vi.mocked(createSeriesMarkers);
+    markersFactory.mockClear();
+
+    await render(DualPaneChartComponent, {
+      inputs: {
+        symbol: 'SPY',
+        liveBars: [
+          {
+            start_ms: 1_700_000_000_000,
+            end_ms: 1_700_000_060_000,
+            open: '100',
+            high: '102',
+            low: '99',
+            close: '101',
+            volume: 1_000,
+            source: 'ibkr',
+          },
+        ],
+        liveFillMarkers: [
+          {
+            filled_at_ms: 1_700_000_030_000,
+            side: 'buy',
+            quantity: 2,
+            price: 101,
+            order_ref: 'order-1',
+          },
+        ],
+        histBars: [],
+      },
+    });
+
+    const livePlugin = markersFactory.mock.results[0]?.value;
+    expect(livePlugin?.setMarkers).toHaveBeenCalledWith([
+      expect.objectContaining({
+        position: 'belowBar',
+        shape: 'arrowUp',
+        text: 'BUY 2',
+      }),
+    ]);
   });
 });

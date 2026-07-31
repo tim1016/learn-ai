@@ -1,15 +1,11 @@
 <!-- Bot health card (spec §7.2) -->
-<!-- card-help anchor: bot-lifecycle — wired to S5 drawer in end-phase integration -->
 <section class="health-card" aria-label="Bot health">
   <header class="health-card__header">
     <h3 class="health-card__title">Bot health</h3>
-    <button
-      type="button"
-      class="health-card__help"
-      aria-label="Help: bot lifecycle"
-      disabled
-      title="Help drawer wired in S5"
-    >?</button>
+    <app-broker-v2-card-help-btn
+      cardName="bot-lifecycle"
+      label="Help: bot lifecycle"
+    />
   </header>
 
   <dl class="health-card__facts">
@@ -61,21 +57,12 @@
   @if (retireAction()) {
     @let action = retireAction()!;
     <div class="health-card__actions">
-      <button
-        type="button"
-        class="health-card__retire-btn"
-        [disabled]="!canRetire() || actionPending()"
-        [attr.aria-disabled]="!canRetire() || actionPending()"
-        [attr.aria-label]="action.label"
-        [title]="action.explanation"
-        (click)="onRetire()"
-      >
-        {{ action.label }}
-      </button>
-
-      @for (blocker of retireBlockers(); track blocker.code) {
-        <p class="health-card__blocker" role="alert">{{ blocker.label }}</p>
-      }
+      <app-panel-action-button
+        [action]="action"
+        [pending]="actionPending()"
+        tone="danger"
+        (triggered)="actionRequested.emit($event)"
+      />
     </div>
   }
 </section>

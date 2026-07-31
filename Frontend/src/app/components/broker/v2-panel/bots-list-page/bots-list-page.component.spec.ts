@@ -91,7 +91,7 @@ async function renderPage(
   const mockPanelService = {
     getCatalog: () => Promise.resolve(bots),
     getPanelProfile: () => Promise.resolve(profile),
-    runAction: () => Promise.resolve({ action_id: 'start', applied: true, revision: 1, message: 'ok' }),
+    runBotAction: () => Promise.resolve({ action_id: 'start', applied: true, revision: 1, message: 'ok' }),
   };
 
   return render(BotsListPageComponent, {

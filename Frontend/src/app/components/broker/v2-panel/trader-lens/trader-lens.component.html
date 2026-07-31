@@ -14,18 +14,14 @@
     {{ headline() }}
   </p>
 
-  @if (primaryButtonLabel()) {
-    <button
-      type="button"
-      class="primary-verb-btn"
-      [class.primary-verb-btn--stop]="primaryAction()?.action_id === 'stop'"
-      [disabled]="!primaryButtonEnabled() || actionPending()"
-      [attr.aria-label]="primaryButtonLabel()!"
-      [attr.aria-busy]="actionPending()"
-      (click)="onPrimaryAction()"
-    >
-      {{ primaryButtonLabel() }}
-    </button>
+  @if (primaryAction()) {
+    @let action = primaryAction()!;
+    <app-panel-action-button
+      [action]="action"
+      [pending]="actionPending()"
+      [tone]="action.action_id === 'stop' ? 'danger' : 'primary'"
+      (triggered)="actionRequested.emit($event)"
+    />
   }
 </div>
 
