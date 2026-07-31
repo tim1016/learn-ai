@@ -34,6 +34,7 @@ from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
 from app.services.broker_v2_panel import panel_data_source
+from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.fixtures import ACCT, SID
 
 _T0 = 1_700_000_000_000
@@ -89,15 +90,16 @@ def deploy_app(tmp_path: Path, monkeypatch):
     set_bot_task_registry(registry)  # type: ignore[arg-type]
 
     async def clerk_status() -> ClerkStatus:
+        observed_at_ms = now_ms_utc()
         return ClerkStatus(
             broker="alpaca",
             account_id=ACCT,
             hold=HoldState(active=False),
             outstanding_intents=0,
-            observed_at_ms=_T0,
+            observed_at_ms=observed_at_ms,
             channel_healths=[
-                ChannelHealth(stream="market_data", healthy=True, observed_at_ms=_T0),
-                ChannelHealth(stream="execution", healthy=True, observed_at_ms=_T0),
+                ChannelHealth(stream="market_data", healthy=True, observed_at_ms=observed_at_ms),
+                ChannelHealth(stream="execution", healthy=True, observed_at_ms=observed_at_ms),
             ],
         )
 
@@ -151,6 +153,21 @@ async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
     assert call["mode"] == "trade"
     assert call["quantity"] == 2
     assert call["use_rth"] is True
+
+
+@pytest.mark.asyncio
+async def test_deploy_accepts_dotted_equity_symbol_supported_by_form(deploy_app) -> None:
+    fast_app, registry = deploy_app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={**_BODY, "strategy_instance_id": "brk-b-validation", "symbol": " brk.b "},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "BRK.B"
+    assert registry.deploy_calls[0]["symbol"] == "BRK.B"
 
 
 @pytest.mark.asyncio
@@ -274,6 +291,56 @@ async def test_deploy_blocks_when_clerk_channel_health_is_unproven(
     channel_gate = next(check for check in view["readiness_checks"] if check["gate_id"] == "clerk.channel_health")
     assert channel_gate["ready"] is False
     assert channel_gate["evidence"]["channel_count"] == 0
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("channels", "evidence_key", "expected_channel"),
+    [
+        (
+            [ChannelHealth(stream="market_data", healthy=True, observed_at_ms=now_ms_utc())],
+            "missing_channels",
+            "execution",
+        ),
+        (
+            [
+                ChannelHealth(stream="market_data", healthy=True, observed_at_ms=0),
+                ChannelHealth(stream="execution", healthy=True, observed_at_ms=now_ms_utc()),
+            ],
+            "stale_channels",
+            "market_data",
+        ),
+    ],
+)
+async def test_deploy_requires_both_fresh_clerk_channels(
+    deploy_app,
+    monkeypatch,
+    channels: list[ChannelHealth],
+    evidence_key: str,
+    expected_channel: str,
+) -> None:
+    fast_app, registry = deploy_app
+
+    async def incomplete_channel_status() -> ClerkStatus:
+        return ClerkStatus(
+            broker="alpaca",
+            account_id=ACCT,
+            hold=HoldState(active=False),
+            outstanding_intents=0,
+            observed_at_ms=now_ms_utc(),
+            channel_healths=channels,
+        )
+
+    monkeypatch.setattr(panel_data_source, "_clerk_status", incomplete_channel_status)
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy")
+
+    channel_gate = next(
+        check for check in response.json()["readiness_checks"] if check["gate_id"] == "clerk.channel_health"
+    )
+    assert channel_gate["ready"] is False
+    assert channel_gate["evidence"][evidence_key] == expected_channel
     assert registry.deploy_calls == []
 
 

@@ -7,6 +7,7 @@ derives state that is not artifact- or registry-backed.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -21,10 +22,15 @@ def _validated_strategy_instance_id(value: str) -> str:
     return validate_strategy_instance_id(value)
 
 
+_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
+
+
 def _normalized_symbol(value: str) -> str:
     normalized = value.strip().upper()
-    if not normalized.isalnum():
-        raise ValueError("symbol must be alphanumeric")
+    if _SYMBOL_RE.fullmatch(normalized) is None:
+        raise ValueError(
+            "symbol must start with a letter and contain only letters, numbers, periods, or hyphens"
+        )
     return normalized
 
 

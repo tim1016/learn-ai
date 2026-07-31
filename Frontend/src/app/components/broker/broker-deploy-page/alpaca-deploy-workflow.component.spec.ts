@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -215,6 +215,27 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     expect((service.deployBot.mock.calls[0][2] as DeployBotBody).sizing)
       .toEqual({ preset: 'custom', quantity: 7 });
+  });
+
+  it('normalizes text fields before Signal Form validation and submission gating', async () => {
+    const { fixture } = await renderWorkflow();
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+
+    fireEvent.input(screen.getByPlaceholderText('alpaca-spy-validation-01'), {
+      target: { value: ' spy-validation-01 ' },
+    });
+    fireEvent.input(screen.getByPlaceholderText('SPY'), {
+      target: { value: ' brk.b ' },
+    });
+    component['ticketForm'].instanceId().markAsTouched();
+    component['ticketForm'].symbol().markAsTouched();
+    fixture.detectChanges();
+
+    expect(component['ticket']().instanceId).toBe('spy-validation-01');
+    expect(component['ticket']().symbol).toBe('BRK.B');
+    expect(component['ticketForm']().valid()).toBe(true);
+    expect(screen.getByRole('button', { name: 'Deploy paper bot' }).hasAttribute('disabled'))
+      .toBe(false);
   });
 
   it('distinguishes a stale-state conflict from an unknown outcome', async () => {

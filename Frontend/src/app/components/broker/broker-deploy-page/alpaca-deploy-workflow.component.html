@@ -59,6 +59,7 @@
                   autocomplete="off"
                   spellcheck="false"
                   [attr.aria-invalid]="instanceIdError() !== null"
+                  (input)="normalizeInstanceId($event)"
                 />
                 <small>Letters, numbers, periods, underscores, and hyphens.</small>
                 @if (instanceIdError(); as error) { <em role="alert">{{ error }}</em> }
@@ -103,6 +104,7 @@
                 autocomplete="off"
                 spellcheck="false"
                 [attr.aria-invalid]="symbolError() !== null"
+                (input)="normalizeSymbol($event)"
               />
               <small>{{ view.action_plan_explanation }}</small>
               @if (symbolError(); as error) { <em role="alert">{{ error }}</em> }

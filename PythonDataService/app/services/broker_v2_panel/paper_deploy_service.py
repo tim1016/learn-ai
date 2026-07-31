@@ -18,6 +18,8 @@ from app.schemas.broker_bots import (
 )
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
+from app.services.broker_v2_panel.panel_projection_service import evaluate_channel_health
+from app.utils.timestamps import now_ms_utc
 
 
 def _strategy_views(
@@ -76,6 +78,8 @@ def _readiness_checks(
     account: BrokerAccountSnapshot,
     clerk_status: ClerkStatus,
     strategies: tuple[AlpacaPaperDeployStrategy, ...],
+    *,
+    now_ms: int,
 ) -> tuple[AlpacaPaperDeployReadinessCheck, ...]:
     account_ready = (
         account.account_mode == "paper"
@@ -86,7 +90,8 @@ def _readiness_checks(
     freeze = clerk_status.freeze
     hold = clerk_status.hold
     channels = clerk_status.channel_healths or []
-    channel_ready = bool(channels) and all(channel.healthy for channel in channels)
+    channel_evaluation = evaluate_channel_health(clerk_status, now_ms)
+    channel_ready = channel_evaluation.ready
     channel_summary = (
         ", ".join(
             f"{channel.stream.replace('_', ' ').title()} is {'healthy' if channel.healthy else 'unhealthy'}"
@@ -240,7 +245,13 @@ def _readiness_checks(
             ),
             explanation=f"Current channel observations: {channel_summary}.",
             evidence_summary=f"{len(channels)} channel observation(s): {channel_summary}.",
-            evidence={"channel_count": len(channels), "channels": channel_summary},
+            evidence={
+                "channel_count": len(channels),
+                "channels": channel_summary,
+                "missing_channels": ", ".join(channel_evaluation.missing) or "none",
+                "stale_channels": ", ".join(channel_evaluation.stale) or "none",
+                "unhealthy_channels": ", ".join(channel_evaluation.unhealthy) or "none",
+            },
             recovery=None if channel_ready else "Restore both Clerk channels and refresh the deployment check.",
         ),
     )
@@ -285,7 +296,12 @@ def build_alpaca_paper_deploy_view(
 ) -> AlpacaPaperDeployView:
     """Author the closed form choices and current launch verdict."""
     strategies = _strategy_views(validation_entries)
-    readiness_checks = _readiness_checks(account, clerk_status, strategies)
+    readiness_checks = _readiness_checks(
+        account,
+        clerk_status,
+        strategies,
+        now_ms=now_ms_utc(),
+    )
     eligibility = _eligibility(readiness_checks)
     return AlpacaPaperDeployView(
         broker="alpaca",

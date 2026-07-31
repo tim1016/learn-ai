@@ -9,7 +9,15 @@ import {
   resource,
   signal,
 } from '@angular/core';
-import { FormField, form, max, min, pattern, required } from '@angular/forms/signals';
+import {
+  FormField,
+  form,
+  max,
+  min,
+  pattern,
+  required,
+  validate,
+} from '@angular/forms/signals';
 import { RouterLink } from '@angular/router';
 
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
@@ -97,6 +105,11 @@ export class AlpacaDeployWorkflowComponent {
     pattern(ticket.symbol, SYMBOL_RE, { message: 'Enter a valid stock symbol.' });
     min(ticket.quantity, 1, { message: 'Quantity must be at least one whole share.' });
     max(ticket.quantity, 100, { message: 'Quantity cannot exceed 100 shares.' });
+    validate(ticket.quantity, ({ value }) =>
+      Number.isInteger(value())
+        ? undefined
+        : { kind: 'whole-share-quantity', message: 'Quantity must be a whole number.' },
+    );
   });
 
   protected readonly selectedStrategy = computed(() => {
@@ -128,7 +141,6 @@ export class AlpacaDeployWorkflowComponent {
       && view.eligibility.eligible
       && view.allowed_actions.includes('deploy')
       && this.ticketForm().valid()
-      && (this.ticket().sizingPreset !== 'custom' || Number.isInteger(this.ticket().quantity))
       && !this.submitting(),
     );
   });
@@ -160,6 +172,14 @@ export class AlpacaDeployWorkflowComponent {
     if (!this.currentView()?.carryover_available) return;
     const checked = (event.target as HTMLInputElement).checked;
     this.ticket.update((current) => ({ ...current, allowCarryover: checked }));
+  }
+
+  protected normalizeInstanceId(event: Event): void {
+    this.normalizeTextInput(event, 'instanceId', (value) => value.trim());
+  }
+
+  protected normalizeSymbol(event: Event): void {
+    this.normalizeTextInput(event, 'symbol', (value) => value.trim().toUpperCase());
   }
 
   protected reload(): void {
@@ -197,28 +217,30 @@ export class AlpacaDeployWorkflowComponent {
 
   protected instanceIdError(): string | null {
     if (!this.ticketForm.instanceId().touched()) return null;
-    const value = this.ticket().instanceId.trim();
-    if (!value) return 'Enter a deployment name.';
-    return INSTANCE_ID_RE.test(value)
-      ? null
-      : 'Use letters, numbers, periods, underscores, or hyphens.';
+    return this.ticketForm.instanceId().errors()[0]?.message ?? null;
   }
 
   protected symbolError(): string | null {
     if (!this.ticketForm.symbol().touched()) return null;
-    const value = this.ticket().symbol.trim();
-    if (!value) return 'Enter the strategy signal symbol.';
-    return SYMBOL_RE.test(value) ? null : 'Enter a valid stock symbol.';
+    return this.ticketForm.symbol().errors()[0]?.message ?? null;
   }
 
   protected quantityError(): string | null {
     if (this.ticket().sizingPreset !== 'custom' || !this.ticketForm.quantity().touched()) {
       return null;
     }
-    const quantity = this.ticket().quantity;
-    if (!Number.isInteger(quantity)) return 'Quantity must be a whole number.';
-    if (quantity < 1 || quantity > 100) return 'Choose 1 through 100 whole shares.';
-    return null;
+    return this.ticketForm.quantity().errors()[0]?.message ?? null;
+  }
+
+  private normalizeTextInput(
+    event: Event,
+    field: 'instanceId' | 'symbol',
+    normalize: (value: string) => string,
+  ): void {
+    const input = event.target as HTMLInputElement;
+    const normalized = normalize(input.value);
+    input.value = normalized;
+    this.ticket.update((current) => ({ ...current, [field]: normalized }));
   }
 
   private markFormTouched(): void {

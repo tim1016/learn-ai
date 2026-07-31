@@ -14,6 +14,8 @@ lets the idempotency key make double-clicks safe (§11).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.models import ClerkEntryKind, ClerkStatus, OrderJournalEntry
@@ -48,6 +50,17 @@ from app.services.broker_v2_panel.station_derivation import (
 # A channel-health observation older than this is not "fresh" for the clear-hold
 # gate (§7.3). Reuse the station staleness threshold — one trading day.
 CHANNEL_FRESH_THRESHOLD_MS = STALE_THRESHOLD_MS
+_REQUIRED_CLERK_CHANNELS = ("market_data", "execution")
+
+
+@dataclass(frozen=True)
+class ChannelHealthEvaluation:
+    """Canonical health/freshness verdict for Clerk submission channels."""
+
+    ready: bool
+    missing: tuple[str, ...]
+    stale: tuple[str, ...]
+    unhealthy: tuple[str, ...]
 
 _STOP_OUTCOME_COPY: dict[str, tuple[str, str]] = {
     "STOPPED_FLAT": (
@@ -242,16 +255,35 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
     )
 
 
-def channel_health_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
-    """True iff every channel health was freshly observed (clear-hold gate, §7.3).
+def evaluate_channel_health(
+    clerk_status: ClerkStatus,
+    now_ms: int,
+) -> ChannelHealthEvaluation:
+    """Evaluate the exact channel set required by every submission gate."""
+    by_stream = {health.stream: health for health in clerk_status.channel_healths or []}
+    missing = tuple(stream for stream in _REQUIRED_CLERK_CHANNELS if stream not in by_stream)
+    stale = tuple(
+        stream
+        for stream in _REQUIRED_CLERK_CHANNELS
+        if stream in by_stream
+        and now_ms - by_stream[stream].observed_at_ms > CHANNEL_FRESH_THRESHOLD_MS
+    )
+    unhealthy = tuple(
+        stream
+        for stream in _REQUIRED_CLERK_CHANNELS
+        if stream in by_stream and not by_stream[stream].healthy
+    )
+    return ChannelHealthEvaluation(
+        ready=not missing and not stale and not unhealthy,
+        missing=missing,
+        stale=stale,
+        unhealthy=unhealthy,
+    )
 
-    An empty channel list is treated as not-fresh — the clear-hold action stays
-    disabled until the health of the hold's root condition is observed.
-    """
-    channels = clerk_status.channel_healths or []
-    if not channels:
-        return False
-    return all(now_ms - health.observed_at_ms <= CHANNEL_FRESH_THRESHOLD_MS and health.healthy for health in channels)
+
+def channel_health_fresh(clerk_status: ClerkStatus, now_ms: int) -> bool:
+    """True iff market-data and execution health are both healthy and fresh."""
+    return evaluate_channel_health(clerk_status, now_ms).ready
 
 
 _TERMINAL_ORDER_EVENTS = frozenset({"fill", "canceled", "rejected", "expired"})
