@@ -9010,6 +9010,7 @@ export interface components {
             phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
             /** Realized Pnl Today */
             realized_pnl_today: number;
+            row_action?: components["schemas"]["PanelAction"] | null;
             /** Running */
             running: boolean;
             /** Status Explanation */

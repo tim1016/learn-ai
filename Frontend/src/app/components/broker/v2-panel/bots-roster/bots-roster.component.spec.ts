@@ -2,7 +2,7 @@ import { render, screen, fireEvent } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it } from 'vitest';
 
-import type { BotCatalogView, PanelProfile } from '../lib/broker-v2-panel.types';
+import type { BotCatalogView } from '../lib/broker-v2-panel.types';
 import { BotsRosterComponent } from './bots-roster.component';
 
 function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
@@ -28,24 +28,31 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
   };
 }
 
-function fakeProfile(supported: string[] = ['start', 'stop']): PanelProfile {
+function fakeRowAction(
+  actionId: 'start' | 'stop' = 'stop',
+): NonNullable<BotCatalogView['row_action']> {
   return {
-    broker: 'alpaca',
-    fee_fidelity: 'none',
-    flatten_supported: false,
-    live_bars_supported: true,
-    stations: [],
-    supported_action_ids: supported as PanelProfile['supported_action_ids'],
+    action_id: actionId,
+    label: actionId === 'start' ? 'Start' : 'Stop',
+    explanation: `${actionId} this bot.`,
+    enabled: true,
+    blockers: [],
+    confirmation: null,
+    revision: 1,
+    concurrency_token: `${actionId}-token`,
   };
 }
 
-async function renderRoster(bots: BotCatalogView[], profile: PanelProfile = fakeProfile()) {
+async function renderRoster(
+  bots: BotCatalogView[],
+  pendingBotIds: ReadonlySet<string> = new Set(),
+) {
   return render(BotsRosterComponent, {
     providers: [provideRouter([])],
     componentInputs: {
       bots,
-      profile,
       broker: 'alpaca',
+      pendingBotIds,
     },
   });
 }
@@ -146,5 +153,18 @@ describe('BotsRosterComponent', () => {
     const urgentIdx = bodyText.indexOf('urgent-bot');
     const normalIdx = bodyText.indexOf('normal-bot');
     expect(urgentIdx).toBeLessThan(normalIdx);
+  });
+
+  it('renders the server-presented row action as pending and disabled', async () => {
+    await renderRoster(
+      [fakeBot({ row_action: fakeRowAction('stop') })],
+      new Set(['spy-01']),
+    );
+
+    const action = await screen.findByRole('button', { name: 'Stop spy-01' });
+    if (!(action instanceof HTMLButtonElement)) throw new Error('Expected a button action.');
+    expect(action.getAttribute('aria-busy')).toBe('true');
+    expect(action.disabled).toBe(true);
+    expect(action.textContent).toContain('Stopping…');
   });
 });

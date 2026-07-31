@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular';
+import { render, screen, waitFor } from '@testing-library/angular';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { DualPaneChartComponent } from './dual-pane-chart.component';
 
@@ -126,12 +126,14 @@ describe('DualPaneChartComponent', () => {
       },
     });
 
-    expect(chartMocks.setMarkers).toHaveBeenCalledWith([
-      expect.objectContaining({
-        position: 'belowBar',
-        shape: 'arrowUp',
-        text: 'BUY 2',
-      }),
-    ]);
+    await waitFor(() => {
+      expect(chartMocks.setMarkers).toHaveBeenCalledWith([
+        expect.objectContaining({
+          position: 'belowBar',
+          shape: 'arrowUp',
+          text: 'BUY 2',
+        }),
+      ]);
+    });
   });
 });

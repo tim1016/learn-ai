@@ -44,6 +44,9 @@
         <span class="posture-fact__label">Account service</span>
         <strong>{{ freezeActive() ? 'Frozen' : holdActive() ? 'Hold active' : 'Clear' }}</strong>
         <span>{{ freezeActive() || holdActive() ? 'New entries blocked' : 'No custody block' }}</span>
+        @if (clerkStatus(); as clerk) {
+          <app-timestamp-display [value]="clerk.observed_at_ms" mode="local" />
+        }
       </div>
 
       <div class="posture-fact posture-fact--channels">
@@ -67,17 +70,20 @@
       <span><small>Equity</small><strong>{{ fmtCurrency(snap.equity) }}</strong></span>
       <span><small>Cash</small><strong>{{ fmtCurrency(snap.cash) }}</strong></span>
       <span><small>Buying power</small><strong>{{ fmtCurrency(snap.buying_power) }}</strong></span>
-      @if (updatedAtMs(); as updatedAt) {
-        <span class="financial-line__freshness">
-          {{ refreshing() ? 'Refreshing' : 'Account updated' }}
-          <app-timestamp-display [value]="updatedAt" mode="local" />
-        </span>
-      }
+      <span class="financial-line__freshness">
+        {{ refreshing() ? 'Refreshing · account observed' : 'Account observed' }}
+        <app-timestamp-display [value]="snap.observed_at_ms" mode="local" />
+      </span>
     </div>
 
-    @if (accountUnavailable() || clerkUnavailable()) {
+    @if (accountUnavailable()) {
       <div class="posture-refresh-warning" role="status">
-        Posture refresh failed. Showing the last successful account observation.
+        Account refresh failed. Showing the last broker observation.
+      </div>
+    }
+    @if (clerkUnavailable()) {
+      <div class="posture-refresh-warning" role="status">
+        Clerk refresh failed. Showing the last Clerk observation.
       </div>
     }
 

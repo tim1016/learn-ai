@@ -11,7 +11,7 @@
     />
   </label>
 
-  <div class="roster-filters" aria-label="Filter bots by state">
+  <div class="roster-filters" role="group" aria-label="Filter bots by state">
     @for (option of statusOptions; track option.value) {
       <button
         type="button"
@@ -57,6 +57,7 @@
       </thead>
       <tbody>
         @for (bot of filtered(); track bot.strategy_instance_id) {
+          @let exposure = exposureText(bot);
           <tr [class.roster-row--attention]="bot.needs_attention">
             <td data-label="Bot">
               <a class="bot-identity" [routerLink]="botLink(bot)">
@@ -73,19 +74,21 @@
               <span class="state-explanation">{{ bot.status_explanation }}</span>
             </td>
             <td data-label="Exposure">
-              <strong class="exposure" [class.exposure--flat]="exposureText(bot) === 'Flat'">
-                {{ exposureText(bot) }}
+              <strong class="exposure" [class.exposure--flat]="exposure === 'Flat'">
+                {{ exposure }}
               </strong>
               <span>Clerk attributed</span>
             </td>
             <td data-label="Today">
+              @let realizedTone = pnlTone(bot.realized_pnl_today);
+              @let openTone = pnlTone(bot.open_pnl);
               <div class="today-metrics">
                 <span>
                   <small>Realized</small>
                   <strong
-                    [class.pnl--positive]="pnlTone(bot.realized_pnl_today) === 'positive'"
-                    [class.pnl--negative]="pnlTone(bot.realized_pnl_today) === 'negative'"
-                    [class.pnl--neutral]="pnlTone(bot.realized_pnl_today) === 'neutral'"
+                    [class.pnl--positive]="realizedTone === 'positive'"
+                    [class.pnl--negative]="realizedTone === 'negative'"
+                    [class.pnl--neutral]="realizedTone === 'neutral'"
                   >
                     {{ fmtSignedCurrency(bot.realized_pnl_today) }}
                   </strong>
@@ -93,9 +96,9 @@
                 <span>
                   <small>Open</small>
                   <strong
-                    [class.pnl--positive]="pnlTone(bot.open_pnl) === 'positive'"
-                    [class.pnl--negative]="pnlTone(bot.open_pnl) === 'negative'"
-                    [class.pnl--neutral]="pnlTone(bot.open_pnl) === 'neutral'"
+                    [class.pnl--positive]="openTone === 'positive'"
+                    [class.pnl--negative]="openTone === 'negative'"
+                    [class.pnl--neutral]="openTone === 'neutral'"
                   >
                     {{ fmtSignedCurrency(bot.open_pnl) }}
                   </strong>
@@ -111,25 +114,20 @@
               }
             </td>
             <td data-label="Action" class="roster-action">
-              @if (canStart(bot)) {
+              @if (bot.row_action; as action) {
                 <button
                   type="button"
-                  [disabled]="isPending(bot)"
+                  [disabled]="isPending(bot) || !action.enabled"
                   [attr.aria-busy]="isPending(bot)"
-                  [attr.aria-label]="'Start ' + bot.strategy_instance_id"
-                  (click)="onStart(bot)"
+                  [attr.aria-label]="action.label + ' ' + bot.strategy_instance_id"
+                  [attr.title]="action.explanation"
+                  (click)="onAction(bot)"
                 >
-                  {{ isPending(bot) ? 'Starting…' : 'Start' }}
-                </button>
-              } @else if (canStop(bot)) {
-                <button
-                  type="button"
-                  [disabled]="isPending(bot)"
-                  [attr.aria-busy]="isPending(bot)"
-                  [attr.aria-label]="'Stop ' + bot.strategy_instance_id"
-                  (click)="onStop(bot)"
-                >
-                  {{ isPending(bot) ? 'Stopping…' : 'Stop' }}
+                  @if (isPending(bot)) {
+                    {{ action.action_id === 'start' ? 'Starting…' : 'Stopping…' }}
+                  } @else {
+                    {{ action.label }}
+                  }
                 </button>
               } @else {
                 <a [routerLink]="botLink(bot)">Review</a>

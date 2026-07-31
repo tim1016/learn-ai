@@ -58,11 +58,17 @@ from app.services.broker_v2_panel.chart_projection_service import (
     live_window,
 )
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
-from app.services.broker_v2_panel.panel_projection_service import build_panel
+from app.services.broker_v2_panel.panel_projection_service import (
+    build_clerk_card,
+    build_panel,
+    channel_health_fresh,
+    compute_revision,
+)
 from app.services.broker_v2_panel.paper_deploy_service import (
     build_alpaca_paper_deploy_receipt,
     build_alpaca_paper_deploy_view,
 )
+from app.services.broker_v2_panel.presented_actions import build_roster_action
 from app.services.live_chart_window import (
     ChartWindowError,
     ChartWindowResult,
@@ -349,7 +355,51 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     decisions = {sid: _latest_decision(resolved, sid) for sid in sids}
     owner = get_or_create_owner(resolved, broker)
     owner.sync(entries, sids, decisions=decisions)
-    return owner.snapshot_catalog(statuses)
+    rows = owner.snapshot_catalog(statuses)
+
+    now_ms = now_ms_utc()
+    try:
+        clerk_status = await _clerk_status()
+    except PanelUnavailableError as exc:
+        logger.warning(
+            "broker panel roster actions are failing closed because Clerk posture is unavailable",
+            extra={"broker": broker, "account_id": account_id, "detail": exc.detail},
+        )
+        clerk_status = None
+    clerk = (
+        build_clerk_card(clerk_status, now_ms)
+        if clerk_status is not None
+        else None
+    )
+    profile = panel_profile_for(broker)
+    flatten_supported = profile.flatten_supported if profile is not None else False
+    clerk_channel_fresh = (
+        channel_health_fresh(clerk_status, now_ms)
+        if clerk_status is not None
+        else False
+    )
+    status_by_sid = {status.strategy_instance_id: status for status in statuses}
+    row_actions: list[BotCatalogView] = []
+    for row in rows:
+        status = status_by_sid[row.strategy_instance_id]
+        decision = decisions[row.strategy_instance_id]
+        revision = compute_revision(
+            journal_len=len(entries),
+            last_transition_at_ms=status.last_transition_at_ms,
+            desired_state=status.desired_state,
+            hold_active=clerk_status.hold.active if clerk_status is not None else False,
+            last_decision_at_ms=decision.ts_ms if decision is not None else None,
+        )
+        action = build_roster_action(
+            status,
+            clerk,
+            revision=revision,
+            flatten_supported=flatten_supported,
+            channel_fresh=clerk_channel_fresh,
+            exposure=dict(row.exposure),
+        )
+        row_actions.append(row.model_copy(update={"row_action": action}))
+    return row_actions
 
 
 async def get_panel(

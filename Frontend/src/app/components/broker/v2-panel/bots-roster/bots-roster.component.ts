@@ -5,7 +5,7 @@ import { formatReceiptLabel, ReceiptLabelPipe } from '../../../../shared/pipes/r
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { fmtInteger, fmtSignedCurrency, fmtSignedQuantity } from '../../format';
 import { BotStatusChipComponent } from '../bot-status-chip/bot-status-chip.component';
-import type { ActionId, BotCatalogView, PanelProfile } from '../lib/broker-v2-panel.types';
+import type { ActionId, BotCatalogView } from '../lib/broker-v2-panel.types';
 
 export interface RowActionEvent {
   bot: BotCatalogView;
@@ -29,7 +29,6 @@ interface StatusOption {
 })
 export class BotsRosterComponent {
   readonly bots = input.required<BotCatalogView[]>();
-  readonly profile = input<PanelProfile | null>(null);
   readonly broker = input.required<string>();
   readonly accountId = input<string | undefined>(undefined);
   readonly pendingBotIds = input<ReadonlySet<string>>(new Set());
@@ -99,14 +98,6 @@ export class BotsRosterComponent {
       .join(', ');
   }
 
-  protected canStart(bot: BotCatalogView): boolean {
-    return bot.phase === 'OFF_DUTY' && this.supports('start');
-  }
-
-  protected canStop(bot: BotCatalogView): boolean {
-    return bot.phase === 'ON_DUTY' && this.supports('stop');
-  }
-
   protected isPending(bot: BotCatalogView): boolean {
     return this.pendingBotIds().has(bot.strategy_instance_id);
   }
@@ -122,20 +113,14 @@ export class BotsRosterComponent {
     ];
   }
 
-  protected pnlTone(value: number | null): 'positive' | 'negative' | 'neutral' {
-    if (value === null || value === 0) return 'neutral';
+  protected pnlTone(value: number | null | undefined): 'positive' | 'negative' | 'neutral' {
+    if (value == null || value === 0) return 'neutral';
     return value > 0 ? 'positive' : 'negative';
   }
 
-  protected onStart(bot: BotCatalogView): void {
-    this.rowAction.emit({ bot, action: 'start' });
-  }
-
-  protected onStop(bot: BotCatalogView): void {
-    this.rowAction.emit({ bot, action: 'stop' });
-  }
-
-  private supports(action: ActionId): boolean {
-    return this.profile()?.supported_action_ids.includes(action) ?? false;
+  protected onAction(bot: BotCatalogView): void {
+    const action = bot.row_action?.action_id;
+    if (action !== 'start' && action !== 'stop') return;
+    this.rowAction.emit({ bot, action });
   }
 }

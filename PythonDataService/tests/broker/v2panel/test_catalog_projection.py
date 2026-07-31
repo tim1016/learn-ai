@@ -24,6 +24,7 @@ from tests.broker.v2panel.fixtures import ACCT, OTHER_SID, SID, fill_entry
 def _status(
     *,
     sid: str,
+    strategy_key: str = "deployment_validation",
     phase: str = "ON_DUTY",
     running: bool = True,
     desired_state: str = "RUNNING",
@@ -38,6 +39,7 @@ def _status(
     )
     return BotStatusView(
         strategy_instance_id=sid,
+        strategy_key=strategy_key,
         broker="alpaca",
         symbol="SPY",
         mode="log_only",
@@ -65,12 +67,16 @@ def test_catalog_composes_rollups_and_status() -> None:
     cache = BotRollupCache()
     bootstrap_rollup_cache(cache, [SID], entries)
 
-    catalog = build_catalog([_status(sid=SID)], cache, account_id=ACCT)
+    catalog = build_catalog(
+        [_status(sid=SID, strategy_key="opening_range_breakout")],
+        cache,
+        account_id=ACCT,
+    )
 
     assert len(catalog) == 1
     row = catalog[0]
     assert row.strategy_instance_id == SID
-    assert row.strategy_key == "deployment_validation"
+    assert row.strategy_key == "opening_range_breakout"
     assert row.mode == "log_only"
     assert row.account_id == ACCT
     assert row.status_label == "Working"

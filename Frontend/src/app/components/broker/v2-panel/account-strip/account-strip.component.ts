@@ -26,7 +26,6 @@ export class AccountStripComponent {
   readonly refreshing = input(false);
   readonly accountUnavailable = input(false);
   readonly clerkUnavailable = input(false);
-  readonly updatedAtMs = input<number | null>(null);
 
   protected readonly fmtCurrency = fmtCurrency;
 
@@ -42,7 +41,7 @@ export class AccountStripComponent {
   );
 
   protected readonly holdActive = computed(
-    () => this.clerkStatus()?.hold.active ?? false,
+    () => this.clerkStatus()?.hold?.active ?? false,
   );
 
   protected readonly freezeActive = computed(

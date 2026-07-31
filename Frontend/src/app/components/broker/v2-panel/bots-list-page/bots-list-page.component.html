@@ -32,11 +32,10 @@
     <app-account-strip
       [account]="accountValue()"
       [clerkStatus]="clerkValue()"
-      [loading]="account.isLoading() || clerkStatus.isLoading()"
-      [refreshing]="account.isLoading() || clerkStatus.isLoading()"
+      [loading]="postureLoading()"
+      [refreshing]="postureRefreshing()"
       [accountUnavailable]="!!account.error()"
       [clerkUnavailable]="!!clerkStatus.error()"
-      [updatedAtMs]="postureUpdatedAtMs()"
     />
   </header>
 
@@ -60,7 +59,9 @@
     <div class="roster-heading">
       <div>
         <span class="roster-heading__eyebrow">Fleet roster</span>
-        <strong>{{ bots().length }} configured bots</strong>
+        <strong>
+          {{ bots().length }} configured {{ bots().length === 1 ? 'bot' : 'bots' }}
+        </strong>
       </div>
       @if (catalogUpdatedAtMs(); as updatedAt) {
         <span class="roster-heading__freshness">
@@ -85,7 +86,6 @@
     } @else {
       <app-bots-roster
         [bots]="bots()"
-        [profile]="panelProfile()"
         [broker]="broker()"
         [accountId]="accountId()"
         [pendingBotIds]="pendingBotIds()"

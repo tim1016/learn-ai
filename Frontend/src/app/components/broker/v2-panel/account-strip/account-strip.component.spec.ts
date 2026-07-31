@@ -48,7 +48,7 @@ describe('AccountStripComponent', () => {
 
   it('renders reconciliation and channel health as text, not color alone', async () => {
     await render(AccountStripComponent, {
-      componentInputs: { account, clerkStatus, updatedAtMs: 1_700_000_000_000 },
+      componentInputs: { account, clerkStatus },
     });
 
     const posture = screen.getByLabelText('Alpaca account posture');
@@ -83,7 +83,36 @@ describe('AccountStripComponent', () => {
     });
 
     expect(screen.getByRole('status').textContent).toContain(
-      'Showing the last successful account observation',
+      'Showing the last broker observation',
     );
+  });
+
+  it('renders account freeze ahead of an active hold', async () => {
+    await render(AccountStripComponent, {
+      componentInputs: {
+        account,
+        clerkStatus: {
+          ...clerkStatus,
+          freeze: {
+            active: true,
+            category: 'ACCOUNT_STATE_UNPROVABLE',
+            explanation: 'Current custody cannot be proved.',
+            next_step: 'Run reconciliation.',
+            observed_at_ms: 1_700_000_000_000,
+          },
+          hold: {
+            active: true,
+            reason_code: 'BROKER_POSITION_UNATTRIBUTED',
+            reason: 'This hold must remain hidden behind the freeze.',
+          },
+        },
+      },
+    });
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Account frozen');
+    expect(alert.textContent).toContain('Current custody cannot be proved.');
+    expect(screen.getByText('Frozen')).toBeTruthy();
+    expect(screen.queryByText('This hold must remain hidden behind the freeze.')).toBeNull();
   });
 });

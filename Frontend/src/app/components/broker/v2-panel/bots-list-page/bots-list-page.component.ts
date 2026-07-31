@@ -2,6 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
+  Injector,
   afterNextRender,
   computed,
   inject,
@@ -9,6 +10,7 @@ import {
   resource,
   signal,
 } from '@angular/core';
+import { DOCUMENT } from '@angular/common';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
@@ -18,7 +20,7 @@ import { AccountStripComponent } from '../account-strip/account-strip.component'
 import { BotsRosterComponent, type RowActionEvent } from '../bots-roster/bots-roster.component';
 import { DeployDialogComponent } from '../deploy-dialog/deploy-dialog.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import type { BotCatalogView, PanelProfile } from '../lib/broker-v2-panel.types';
+import type { BotCatalogView } from '../lib/broker-v2-panel.types';
 
 const CATALOG_POLL_MS = 5_000;
 const ACCOUNT_POLL_MS = 15_000;
@@ -50,6 +52,8 @@ export class BotsListPageComponent {
   private readonly brokersService = inject(BrokersService);
   private readonly panelService = inject(BrokerV2PanelService);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly injector = inject(Injector);
+  private readonly document = inject(DOCUMENT);
   private readonly fleetScope = computed(() => `${this.broker()}:${this.accountId()}`);
   private readonly catalogSnapshot = signal<ScopedSnapshot<BotCatalogView[]> | null>(null);
   private readonly accountSnapshot = signal<ScopedSnapshot<BrokerAccountSnapshot> | null>(null);
@@ -66,35 +70,53 @@ export class BotsListPageComponent {
     loader: async ({ params }) => {
       const startedAt = this.performanceNow();
       const bots = await this.panelService.getCatalog(params.broker, params.accountId);
+      const scope = `${params.broker}:${params.accountId}`;
+      const firstUsefulPaint = this.catalogSnapshot()?.scope !== scope;
       this.catalogSnapshot.set({
-        scope: `${params.broker}:${params.accountId}`,
+        scope,
         updatedAtMs: Date.now(),
         value: bots,
       });
-      this.measure('alpaca-bots-fresh-roster', startedAt);
+      if (firstUsefulPaint) {
+        this.measureAfterPaint('alpaca-bots-first-useful-roster-paint', startedAt);
+      }
+      this.measureAfterPaint('alpaca-bots-fresh-roster-paint', startedAt);
       return bots;
     },
   });
 
-  protected readonly profile = resource({
-    params: () => this.broker(),
-    loader: ({ params }) => this.panelService.getPanelProfile(params),
-  });
-
   protected readonly account = resource({
-    params: () => this.broker(),
+    params: () => ({ broker: this.broker(), accountId: this.accountId() }),
     loader: async ({ params }) => {
-      const snapshot = await this.brokersService.getAccount(params);
-      this.accountSnapshot.set({ scope: params, updatedAtMs: Date.now(), value: snapshot });
+      const snapshot = await this.brokersService.getAccount(params.broker);
+      if (snapshot.account_id !== params.accountId) {
+        throw new Error(
+          `Alpaca confirmed account ${snapshot.account_id}, not routed account ${params.accountId}.`,
+        );
+      }
+      this.accountSnapshot.set({
+        scope: `${params.broker}:${params.accountId}`,
+        updatedAtMs: snapshot.observed_at_ms,
+        value: snapshot,
+      });
       return snapshot;
     },
   });
 
   protected readonly clerkStatus = resource({
-    params: () => this.broker(),
+    params: () => ({ broker: this.broker(), accountId: this.accountId() }),
     loader: async ({ params }) => {
-      const snapshot = await this.brokersService.getClerkStatus(params);
-      this.clerkSnapshot.set({ scope: params, updatedAtMs: Date.now(), value: snapshot });
+      const snapshot = await this.brokersService.getClerkStatus(params.broker);
+      if (snapshot.account_id !== params.accountId) {
+        throw new Error(
+          `The Clerk is observing account ${snapshot.account_id}, not routed account ${params.accountId}.`,
+        );
+      }
+      this.clerkSnapshot.set({
+        scope: `${params.broker}:${params.accountId}`,
+        updatedAtMs: snapshot.observed_at_ms,
+        value: snapshot,
+      });
       return snapshot;
     },
   });
@@ -105,24 +127,31 @@ export class BotsListPageComponent {
   });
   protected readonly accountValue = computed(() => {
     const snapshot = this.accountSnapshot();
-    return snapshot?.scope === this.broker() ? snapshot.value : null;
+    return snapshot?.scope === this.fleetScope() ? snapshot.value : null;
   });
   protected readonly clerkValue = computed(() => {
     const snapshot = this.clerkSnapshot();
-    return snapshot?.scope === this.broker() ? snapshot.value : null;
+    return snapshot?.scope === this.fleetScope() ? snapshot.value : null;
   });
   protected readonly catalogUpdatedAtMs = computed(() => {
     const snapshot = this.catalogSnapshot();
     return snapshot?.scope === this.fleetScope() ? snapshot.updatedAtMs : null;
   });
-  protected readonly panelProfile = computed<PanelProfile | null>(() =>
-    this.profile.hasValue() ? this.profile.value() : null,
-  );
   protected readonly initialLoading = computed(
     () => this.catalog.isLoading() && this.bots().length === 0,
   );
   protected readonly refreshing = computed(
     () => this.catalog.isLoading() && this.bots().length > 0,
+  );
+  protected readonly postureLoading = computed(
+    () =>
+      (this.account.isLoading() || this.clerkStatus.isLoading()) &&
+      !this.accountValue(),
+  );
+  protected readonly postureRefreshing = computed(
+    () =>
+      (this.account.isLoading() || this.clerkStatus.isLoading()) &&
+      Boolean(this.accountValue()),
   );
   protected readonly unavailable = computed(
     () => Boolean(this.catalog.error()) && this.bots().length === 0,
@@ -130,24 +159,23 @@ export class BotsListPageComponent {
   protected readonly stale = computed(
     () => Boolean(this.catalog.error()) && this.bots().length > 0,
   );
-  protected readonly postureUpdatedAtMs = computed(() => {
-    const broker = this.broker();
-    const account = this.accountSnapshot();
-    const clerk = this.clerkSnapshot();
-    const observations = [
-      account?.scope === broker ? account.updatedAtMs : null,
-      clerk?.scope === broker ? clerk.updatedAtMs : null,
-    ].filter((value): value is number => value !== null);
-    return observations.length > 0 ? Math.max(...observations) : null;
-  });
-
   constructor() {
     afterNextRender(() => this.mark('alpaca-bots-route-shell'));
 
-    const catalogTimer = setInterval(() => this.catalog.reload(), CATALOG_POLL_MS);
+    const catalogTimer = setInterval(() => {
+      if (this.document.visibilityState === 'visible' && !this.catalog.isLoading()) {
+        this.catalog.reload();
+      }
+    }, CATALOG_POLL_MS);
     const accountTimer = setInterval(() => {
-      this.account.reload();
-      this.clerkStatus.reload();
+      if (
+        this.document.visibilityState === 'visible' &&
+        !this.account.isLoading() &&
+        !this.clerkStatus.isLoading()
+      ) {
+        this.account.reload();
+        this.clerkStatus.reload();
+      }
     }, ACCOUNT_POLL_MS);
     this.destroyRef.onDestroy(() => {
       clearInterval(catalogTimer);
@@ -168,14 +196,14 @@ export class BotsListPageComponent {
 
   protected async onRowAction(event: RowActionEvent): Promise<void> {
     const sid = event.bot.strategy_instance_id;
+    if (this.pendingBotIds().has(sid)) return;
     const startedAt = this.performanceNow();
     this.actionNotice.set(null);
     this.pendingBotIds.update((current) => new Set([...current, sid]));
 
     try {
-      const panel = await this.panelService.getPanel(this.broker(), this.accountId(), sid);
-      const action = panel.actions.find((candidate) => candidate.action_id === event.action);
-      if (!action?.enabled) {
+      const action = event.bot.row_action;
+      if (action?.action_id !== event.action || !action.enabled) {
         this.actionNotice.set({
           tone: 'danger',
           message: `${event.action === 'start' ? 'Start' : 'Stop'} is no longer available for ${sid}. Refreshing its current state.`,
@@ -203,7 +231,7 @@ export class BotsListPageComponent {
         next.delete(sid);
         return next;
       });
-      this.measure('alpaca-bots-routine-action', startedAt);
+      this.measure('alpaca-bots-action-round-trip', startedAt);
     }
   }
 
@@ -219,5 +247,22 @@ export class BotsListPageComponent {
     if (typeof performance !== 'undefined') {
       performance.measure(name, { start, end: performance.now() });
     }
+  }
+
+  private measureAfterPaint(name: string, start: number): void {
+    afterNextRender(
+      {
+        write: () => {
+          if (typeof requestAnimationFrame === 'undefined') {
+            this.measure(name, start);
+            return;
+          }
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => this.measure(name, start));
+          });
+        },
+      },
+      { injector: this.injector },
+    );
   }
 }

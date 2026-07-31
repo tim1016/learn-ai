@@ -7269,6 +7269,16 @@
             "title": "Realized Pnl Today",
             "type": "number"
           },
+          "row_action": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelAction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "running": {
             "title": "Running",
             "type": "boolean"
