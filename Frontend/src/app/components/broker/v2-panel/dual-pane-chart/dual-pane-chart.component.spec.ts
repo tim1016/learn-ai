@@ -90,7 +90,11 @@ describe('DualPaneChartComponent', () => {
 
   it('renders live fill markers on the candle series', async () => {
     const markersFactory = vi.mocked(createSeriesMarkers);
-    markersFactory.mockClear();
+    const liveSetMarkers = vi.fn();
+    markersFactory.mockReset();
+    markersFactory
+      .mockReturnValueOnce({ setMarkers: liveSetMarkers } as never)
+      .mockReturnValueOnce({ setMarkers: vi.fn() } as never);
 
     await render(DualPaneChartComponent, {
       inputs: {
@@ -120,8 +124,7 @@ describe('DualPaneChartComponent', () => {
       },
     });
 
-    const livePlugin = markersFactory.mock.results[0]?.value;
-    expect(livePlugin?.setMarkers).toHaveBeenCalledWith([
+    expect(liveSetMarkers).toHaveBeenCalledWith([
       expect.objectContaining({
         position: 'belowBar',
         shape: 'arrowUp',
