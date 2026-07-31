@@ -55,7 +55,9 @@ def status_explanation_for(status: BotStatusView, rollup: BotRollup) -> str:
     if status.phase == "RETIRED":
         return "Retired; no further runs can start."
     if status.running:
-        return "Running under Account Clerk custody."
+        if status.mode == "trade":
+            return "Running under Account Clerk custody."
+        return "Running in log-only mode; no order custody is active."
     if rollup.exposure:
         return "Off duty with Clerk-attributed exposure."
     return "Off duty and flat."

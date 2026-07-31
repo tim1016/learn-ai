@@ -7,6 +7,8 @@ attention-first sort, and the narrowed desired_state.
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
@@ -29,6 +31,7 @@ def _status(
     running: bool = True,
     desired_state: str = "RUNNING",
     duty_kind: str | None = None,
+    mode: Literal["log_only", "trade"] = "log_only",
 ) -> BotStatusView:
     duty = (
         BotDutyOutcomeView(
@@ -42,7 +45,7 @@ def _status(
         strategy_key=strategy_key,
         broker="alpaca",
         symbol="SPY",
-        mode="log_only",
+        mode=mode,
         quantity=1,
         running=running,
         phase=phase,  # type: ignore[arg-type]
@@ -80,9 +83,22 @@ def test_catalog_composes_rollups_and_status() -> None:
     assert row.mode == "log_only"
     assert row.account_id == ACCT
     assert row.status_label == "Working"
-    assert row.status_explanation == "Running under Account Clerk custody."
+    assert row.status_explanation == "Running in log-only mode; no order custody is active."
     assert row.desired_state == "RUNNING"
     assert row.exposure == {"SPY": 100.0}
+
+
+def test_catalog_reserves_clerk_custody_claim_for_trade_mode() -> None:
+    cache = BotRollupCache()
+    bootstrap_rollup_cache(cache, [SID], [])
+
+    catalog = build_catalog(
+        [_status(sid=SID, mode="trade")],
+        cache,
+        account_id=ACCT,
+    )
+
+    assert catalog[0].status_explanation == "Running under Account Clerk custody."
 
 
 def test_catalog_is_attention_first() -> None:

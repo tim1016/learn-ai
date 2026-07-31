@@ -42,10 +42,13 @@
 
       <div class="posture-fact">
         <span class="posture-fact__label">Account service</span>
-        <strong>{{ freezeActive() ? 'Frozen' : holdActive() ? 'Hold active' : 'Clear' }}</strong>
-        <span>{{ freezeActive() || holdActive() ? 'New entries blocked' : 'No custody block' }}</span>
         @if (clerkStatus(); as clerk) {
+          <strong>{{ freezeActive() ? 'Frozen' : holdActive() ? 'Hold active' : 'Clear' }}</strong>
+          <span>{{ freezeActive() || holdActive() ? 'New entries blocked' : 'No custody block' }}</span>
           <app-timestamp-display [value]="clerk.observed_at_ms" mode="local" />
+        } @else {
+          <strong>{{ clerkUnavailable() ? 'Unavailable' : 'Loading' }}</strong>
+          <span>Custody not observed</span>
         }
       </div>
 

@@ -57,6 +57,27 @@ describe('AccountStripComponent', () => {
     expect(within(posture).getByText(/Execution unhealthy/i)).toBeTruthy();
   });
 
+  it('does not claim custody is clear before Clerk posture is observed', async () => {
+    await render(AccountStripComponent, {
+      componentInputs: { account },
+    });
+
+    expect(screen.getByText('Loading')).toBeTruthy();
+    expect(screen.getByText('Custody not observed')).toBeTruthy();
+    expect(screen.queryByText('Clear')).toBeNull();
+    expect(screen.queryByText('No custody block')).toBeNull();
+  });
+
+  it('renders unavailable custody without a last-good Clerk snapshot', async () => {
+    await render(AccountStripComponent, {
+      componentInputs: { account, clerkUnavailable: true },
+    });
+
+    expect(screen.getAllByText('Unavailable')).toHaveLength(3);
+    expect(screen.getByText('Custody not observed')).toBeTruthy();
+    expect(screen.queryByText('Clear')).toBeNull();
+  });
+
   it('preserves backend-authored hold prose in an alert', async () => {
     await render(AccountStripComponent, {
       componentInputs: {
