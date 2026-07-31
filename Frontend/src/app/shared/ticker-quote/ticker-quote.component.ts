@@ -1,0 +1,94 @@
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  input,
+} from '@angular/core';
+import { DecimalPipe } from '@angular/common';
+import { AssetIdentityComponent } from '../asset-identity';
+
+export interface TickerQuoteView {
+  symbol: string;
+  name?: string | null;
+  exchange?: string | null;
+  price: number;
+  change?: number | null;
+  changePercent: number;
+  logoSlug?: string | null;
+  currencySymbol?: string;
+}
+
+@Component({
+  selector: 'app-ticker-quote',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [AssetIdentityComponent, DecimalPipe],
+  templateUrl: './ticker-quote.component.html',
+  styleUrl: './ticker-quote.component.scss',
+  host: {
+    '[class.ticker-quote--inline]': 'mode() === "inline"',
+    '[class.ticker-quote--card]': 'mode() === "card"',
+    '[class.ticker-quote--inverse]': 'tone() === "inverse"',
+    '[attr.title]': 'hostTitle()',
+  },
+})
+export class TickerQuoteComponent {
+  readonly quote = input.required<TickerQuoteView>();
+  readonly mode = input<'inline' | 'card'>('inline');
+  readonly size = input<'sm' | 'md' | 'lg'>('md');
+  readonly tone = input<'default' | 'inverse'>('default');
+  readonly logo = input<boolean>(true);
+
+  readonly isCard = computed(() => this.mode() === 'card');
+
+  readonly effectiveSize = computed(() => (this.isCard() ? this.size() : 'sm'));
+
+  readonly currencySymbol = computed(() => this.quote().currencySymbol ?? '$');
+
+  readonly trend = computed(() => {
+    const pct = this.quote().changePercent;
+    if (pct > 0) return 'positive' as const;
+    if (pct < 0) return 'negative' as const;
+    return 'flat' as const;
+  });
+
+  readonly signPrefix = computed(() =>
+    this.quote().changePercent > 0 ? '+' : '',
+  );
+
+  readonly caretClass = computed(() => {
+    const t = this.trend();
+    if (t === 'positive') return 'pi pi-caret-up';
+    if (t === 'negative') return 'pi pi-caret-down';
+    return 'pi pi-minus';
+  });
+
+  readonly changeAriaLabel = computed(() => {
+    const pct = this.quote().changePercent;
+    const t = this.trend();
+    const abs = Math.abs(pct).toFixed(2);
+    if (t === 'positive') return `up ${abs} percent`;
+    if (t === 'negative') return `down ${abs} percent`;
+    return 'unchanged';
+  });
+
+  readonly identityName = computed(() =>
+    this.isCard() ? (this.quote().name ?? null) : null,
+  );
+
+  readonly identityExchange = computed(() =>
+    this.isCard() ? (this.quote().exchange ?? null) : null,
+  );
+
+  readonly hostTitle = computed(() => {
+    const q = this.quote();
+    const name = q.name?.trim() || null;
+    const symbol = q.symbol;
+    const currency = q.currencySymbol ?? '$';
+    const priceStr = `${currency}${q.price.toFixed(2)}`;
+    const pct = q.changePercent;
+    const sign = pct > 0 ? '+' : '';
+    const pctStr = `${sign}${pct.toFixed(2)}%`;
+    const identity = name ? `${name} (${symbol})` : symbol;
+    return `${identity} — ${priceStr}, ${pctStr}`;
+  });
+}

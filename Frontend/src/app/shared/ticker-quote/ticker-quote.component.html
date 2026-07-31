@@ -1,0 +1,26 @@
+<app-asset-identity
+  [symbol]="quote().symbol"
+  [name]="identityName()"
+  [exchange]="identityExchange()"
+  [logoSlug]="quote().logoSlug ?? null"
+  [size]="effectiveSize()"
+  [tone]="tone()"
+  [logo]="logo()"
+/>
+
+<span class="ticker-quote__figures">
+  <span class="ticker-quote__price">{{ currencySymbol() }}{{ quote().price | number:'1.2-2' }}</span>
+
+  <span
+    class="ticker-quote__change"
+    [class.positive]="trend() === 'positive'"
+    [class.negative]="trend() === 'negative'"
+    [class.flat]="trend() === 'flat'"
+    [attr.aria-label]="changeAriaLabel()"
+  >
+    @if (isCard()) {
+      <i [class]="caretClass()" aria-hidden="true"></i>
+    }
+    <span>{{ signPrefix() }}{{ quote().changePercent | number:'1.2-2' }}%</span>
+  </span>
+</span>

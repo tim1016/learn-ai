@@ -1,0 +1,95 @@
+@use '../../styles/tokens' as *;
+
+:host {
+  --ticker-quote-price-color: var(--text-primary, #{$text-primary});
+  --ticker-quote-change-positive: var(--bull, #{$bull});
+  --ticker-quote-change-negative: var(--bear, #{$bear});
+  --ticker-quote-change-flat: var(--text-muted, #{$text-muted});
+  --ticker-quote-bg: var(--bg-elevated, #{$bg-elevated});
+  --ticker-quote-border: var(--border-light, #{$border-light});
+  --ticker-quote-radius: var(--radius-md, #{$radius-md});
+  --ticker-quote-shadow: var(--shadow-card, #{$shadow-card});
+
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+// ── Inline mode ────────────────────────────────────────────────
+:host(.ticker-quote--inline) {
+  flex-direction: row;
+  vertical-align: middle;
+
+  .ticker-quote__figures {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+  }
+}
+
+// ── Card mode ──────────────────────────────────────────────────
+:host(.ticker-quote--card) {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--ticker-quote-border);
+  border-radius: var(--ticker-quote-radius);
+  background: var(--ticker-quote-bg);
+  box-shadow: var(--ticker-quote-shadow);
+  white-space: normal;
+
+  .ticker-quote__figures {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+  }
+}
+
+// ── Figures ────────────────────────────────────────────────────
+.ticker-quote__price {
+  color: var(--ticker-quote-price-color);
+  font-weight: 700;
+  font-size: var(--fs-base, 0.875rem);
+  letter-spacing: var(--ls-tight, -0.02em);
+}
+
+:host(.ticker-quote--card) .ticker-quote__price {
+  font-size: var(--fs-lg, 1.1rem);
+}
+
+.ticker-quote__change {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-sm, 0.8rem);
+  font-weight: 500;
+
+  &.positive {
+    color: var(--ticker-quote-change-positive);
+  }
+
+  &.negative {
+    color: var(--ticker-quote-change-negative);
+  }
+
+  &.flat {
+    color: var(--ticker-quote-change-flat);
+  }
+}
+
+:host(.ticker-quote--card) .ticker-quote__change {
+  font-size: var(--fs-base, 0.875rem);
+}
+
+// ── Inverse tone ───────────────────────────────────────────────
+:host(.ticker-quote--inverse) {
+  --ticker-quote-price-color: #ffffff;
+  --ticker-quote-bg: rgba(255, 255, 255, 0.08);
+  --ticker-quote-border: rgba(255, 255, 255, 0.14);
+}

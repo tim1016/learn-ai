@@ -95,6 +95,7 @@ function fallbackTextForSymbol(symbol: string): string {
 export class AssetIdentityComponent {
   readonly symbol = input.required<string>();
   readonly name = input<string | null>(null);
+  readonly exchange = input<string | null>(null);
   readonly logoSlug = input<string | null>(null);
   readonly logo = input<boolean>(true);
   readonly size = input<AssetIdentitySize>('md');
@@ -111,6 +112,7 @@ export class AssetIdentityComponent {
   });
   readonly showFallback = computed(() => this.logo() && !this.showLogo());
   readonly fallbackText = computed(() => fallbackTextForSymbol(this.symbol()));
+  readonly displayExchange = computed(() => this.exchange()?.trim() || null);
   readonly titleText = computed(() => {
     const name = this.displayName();
     const symbol = this.displaySymbol();

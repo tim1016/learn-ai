@@ -58,6 +58,34 @@ describe('AssetIdentityComponent', () => {
     expect(fallback.textContent).toBe('AAPL');
   });
 
+  it('renders exchange chip when exchange input is provided', async () => {
+    const { container } = await render(AssetIdentityComponent, {
+      inputs: { symbol: 'SPY', exchange: 'ARCA' },
+    });
+
+    const chip = requireElement(
+      container.querySelector<HTMLElement>('.asset-identity__exchange'),
+      '.asset-identity__exchange',
+    );
+    expect(chip.textContent?.trim()).toBe('ARCA');
+  });
+
+  it('does not render exchange chip when exchange is not provided', async () => {
+    const { container } = await render(AssetIdentityComponent, {
+      inputs: { symbol: 'SPY' },
+    });
+
+    expect(container.querySelector('.asset-identity__exchange')).toBeNull();
+  });
+
+  it('does not render exchange chip when exchange is null', async () => {
+    const { container } = await render(AssetIdentityComponent, {
+      inputs: { symbol: 'SPY', exchange: null },
+    });
+
+    expect(container.querySelector('.asset-identity__exchange')).toBeNull();
+  });
+
   it('hides a broken image and keeps the symbol visible', async () => {
     const { container, fixture } = await render(AssetIdentityComponent, {
       inputs: { symbol: 'MSFT', logoSlug: 'microsoft' },

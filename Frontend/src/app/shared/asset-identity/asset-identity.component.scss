@@ -72,6 +72,13 @@
   line-height: 1.1;
 }
 
+.asset-identity__symbol-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
 .asset-identity__symbol,
 .asset-identity__name {
   overflow: hidden;
@@ -84,6 +91,19 @@
   color: var(--asset-identity-symbol-color);
   font-weight: 700;
   letter-spacing: 0;
+}
+
+.asset-identity__exchange {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border: 1px solid var(--asset-identity-fallback-border);
+  border-radius: 3px;
+  color: var(--asset-identity-name-color);
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.6;
+  text-transform: uppercase;
 }
 
 .asset-identity__name {
