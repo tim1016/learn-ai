@@ -81,6 +81,34 @@ identity-scoped rejection, and replay. Clerk process lifecycle and lease
 fencing follow in #1018; the broker drain and receipt #2 follow in #1020; the
 journal ledger verdict cutover follows the reconciler and shadow-parity work.
 
+## Alpaca effect-operation coordination (2026-07-30)
+
+For Alpaca, the Account Clerk is also the sole execution coordinator. A
+strategy runtime emits only a restart-stable `ENTER` or `EXIT` decision plus
+its immutable ActionPlan; it never authors BUY/SELL, a fill, or a position
+claim. The Clerk journals one `(strategy_instance_id, decision_id)` effect
+operation before any child broker intent. That pair, deliberately excluding
+`run_id`, is the durable idempotency boundary across a runtime restart. One
+operation may finish with zero child intents (for example, an already-satisfied
+ENTER) or with its journal-linked child intents. The Clerk derives entry side
+from the deployed plan and exit side/quantity from current attributed signed
+quantity, then returns backend-authored state, trader-safe explanation,
+operator next step, and opaque evidence references.
+
+An accepted operation remains Clerk custody when the runtime is cancelled.
+`ENTER` is a no-op when the configured exposure or a working entry already
+satisfies the plan. `EXIT` first cancels working entries, waits for terminal
+broker evidence, then reduces the final instance-attributed quantity exactly;
+it reports pending or unprovable evidence honestly rather than inventing flat.
+
+The Clerk alone issues durable account freezes: `ACCOUNT_STATE_UNATTRIBUTABLE`
+for unmappable broker state and `ACCOUNT_STATE_UNPROVABLE` for unavailable
+current truth. These account freezes are distinct from an instance-scoped
+operation block such as an uncertain ENTER: an instance result cannot freeze a
+healthy sibling. Lifecycle intent (desired), observed runtime, and Clerk
+execution (attributed exposure plus working intents) are distinct projections;
+none may be inferred from another or recomposed in the presentation layer.
+
 ## Account Observation Lease migration boundary (2026-07-15)
 
 The Account Observation Lease is now fenced by the accepting Account Clerk

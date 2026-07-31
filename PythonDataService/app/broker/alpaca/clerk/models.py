@@ -16,9 +16,76 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.schemas.action_plan import ActionPlan, StockEntryLeg
+
+
+class EffectPurpose(StrEnum):
+    """The only executable decisions a strategy runtime may emit to Alpaca."""
+
+    ENTER = "ENTER"
+    EXIT = "EXIT"
+
+
+class EffectOperationState(StrEnum):
+    """Clerk-authored state of one durable strategy decision."""
+
+    ACCEPTED = "accepted"
+    NOOP = "noop"
+    SUBMITTED = "submitted"
+    REJECTED = "rejected"
+    UNCERTAIN = "uncertain"
+    EXIT_PENDING = "exit_pending"
+    FLAT = "flat"
+    UNPROVABLE = "unprovable"
+
+
+class AlpacaEffectOperation(BaseModel):
+    """One durable Clerk operation, not a bot-authored broker order.
+
+    The plan is deployed configuration.  It is recorded with the operation so
+    replay after a runtime or Clerk restart has the exact immutable intent
+    without consulting a second execution ledger.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    decision_id: str = Field(min_length=1, max_length=256)
+    purpose: EffectPurpose
+    action_plan: ActionPlan
+    quantity: int = Field(ge=1, le=100)
+
+    @model_validator(mode="after")
+    def _requires_one_stock_entry_and_matching_close(self) -> AlpacaEffectOperation:
+        stock_entries = [leg for leg in self.action_plan.on_enter if isinstance(leg, StockEntryLeg)]
+        if len(stock_entries) != 1 or len(self.action_plan.on_enter) != 1:
+            raise ValueError("Alpaca effect operations require exactly one stock entry leg")
+        entry = stock_entries[0]
+        if len(self.action_plan.on_exit) != 1 or self.action_plan.on_exit[0].entry_leg_id != entry.leg_id:
+            raise ValueError("Alpaca effect operations require one matching close_leg exit")
+        return self
+
+    @property
+    def entry_leg(self) -> StockEntryLeg:
+        entry = self.action_plan.on_enter[0]
+        assert isinstance(entry, StockEntryLeg)
+        return entry
+
+
+class EffectOperationReceipt(BaseModel):
+    """Backend-authored effect progress for trader/operator projections."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operation: AlpacaEffectOperation
+    state: EffectOperationState
+    explanation: str
+    next_step: str | None = None
+    child_order_refs: tuple[str, ...] = ()
 
 
 class ClerkEntryKind(StrEnum):
@@ -62,6 +129,10 @@ class ClerkEntryKind(StrEnum):
     RECONCILIATION = "reconciliation"
     HOLD_SET = "hold_set"
     HOLD_CLEARED = "hold_cleared"
+    # S7 Clerk-owned strategy effects.  These are journal rows, not a second
+    # execution store: one operation can link to zero or more child intents.
+    EFFECT_ACCEPTED = "effect_accepted"
+    EFFECT_RECEIPT = "effect_receipt"
 
 
 # The named reconciliation verdicts (kept in lockstep with the sweep). ``clean``
@@ -176,6 +247,10 @@ class OrderJournalEntry(BaseModel):
     # prose (backend-authored, rendered unpiped).
     reason_code: str | None = None
     reason: str | None = None
+    # Present on EFFECT_* rows.  Child submit rows carry only the stable
+    # decision id below, preserving their existing order identity shape.
+    effect_receipt: EffectOperationReceipt | None = None
+    effect_operation_id: str | None = None
 
     @model_validator(mode="after")
     def _kind_requires_fields(self) -> OrderJournalEntry:
@@ -220,6 +295,9 @@ class OrderJournalEntry(BaseModel):
                 raise ValueError("activity_recovery requires activity")
         elif self.kind in (ClerkEntryKind.HOLD_SET, ClerkEntryKind.HOLD_CLEARED):
             self._require("reason_code", "reason")
+        elif self.kind in (ClerkEntryKind.EFFECT_ACCEPTED, ClerkEntryKind.EFFECT_RECEIPT):
+            if self.effect_receipt is None:
+                raise ValueError(f"{self.kind.value} requires effect_receipt")
         return self
 
     def _require(self, *fields: str) -> None:

@@ -75,6 +75,7 @@ from app.engine.live.identity import strategy_instance_artifact_dir
 # (the shared-helper extraction flagged in #367 review remains the follow-up).
 from app.engine.live.run_status import _atomic_write_json
 from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
+from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
 from app.schemas.broker_bots import BotDutyOutcomeView, BotStatusView
 from app.utils.timestamps import now_ms_utc
 
@@ -83,6 +84,25 @@ logger = logging.getLogger(__name__)
 _BINDING_FILENAME = "broker_binding.json"
 _UPDATED_BY = "bot_runner"
 _STOP_TIMEOUT_S = 5.0
+
+
+def _default_alpaca_action_plan(symbol: str) -> ActionPlan:
+    """Build the v1 stock plan from the existing deploy controls.
+
+    The plan becomes durable deployment configuration on the binding; strategy
+    code receives it as opaque configuration and never authors an order side.
+    """
+    return ActionPlan(
+        on_enter=[
+            StockEntryLeg(
+                leg_id="primary",
+                instrument=StockInstrument(kind="stock", underlying=symbol),
+                position="long",
+                qty_ratio=1,
+            )
+        ],
+        on_exit=[CloseLegExit(kind="close_leg", entry_leg_id="primary")],
+    )
 
 
 class BotRunnerError(Exception):
@@ -128,13 +148,14 @@ class BrokerBotBinding(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     strategy_instance_id: str
     broker: str
     symbol: str
     use_rth: bool = True
     mode: Literal["log_only", "trade"] = "log_only"
     quantity: int = 1
+    action_plan: ActionPlan
     run_id: str
     created_at_ms: int
 
@@ -238,6 +259,7 @@ class BotTaskRegistry:
             use_rth=use_rth,
             mode=mode,
             quantity=quantity,
+            action_plan=_default_alpaca_action_plan(symbol),
             run_id=run_id,
             created_at_ms=now,
         )
