@@ -32,6 +32,7 @@ from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.clerk.recovery import UNCERTAIN_SUBMIT_GRACE_MS
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
+from app.engine.live.desired_state import DesiredState
 from app.engine.live.order_identity import build_bot_order_namespace
 from app.services.bot_runner import (
     BootRecoveryIncompleteError,
@@ -142,6 +143,39 @@ async def test_boot_sweep_records_interrupted_evidence_and_never_restarts(
     view = rebooted.status("alpaca", _SID)
     assert view.running is False  # never rendered healthy, never auto-restarted
     assert view.phase == "OFF_DUTY"
+    assert view.desired_state == "STOPPED"
+
+
+async def test_boot_sweep_repairs_interrupted_bot_stranded_as_running(
+    tmp_path: Path,
+) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.run_boot_recovery()
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    registry._bots[_SID].finalized = True
+    registry._bots[_SID].task.cancel()
+    await asyncio.sleep(0)
+
+    first_reboot = _registry(tmp_path, feed)
+    await first_reboot.run_boot_recovery()
+    first_reboot._desired_repo(_SID).set(
+        DesiredState.RUNNING,
+        updated_by="legacy_boot_sweep",
+        now_ms=_T0,
+        reason="legacy_interrupted_state",
+    )
+    assert first_reboot.status("alpaca", _SID).desired_state == "RUNNING"
+
+    second_reboot = _registry(tmp_path, feed)
+    report = await second_reboot.run_boot_recovery()
+
+    assert report.interrupted_instances == ()
+    view = second_reboot.status("alpaca", _SID)
+    assert view.phase == "OFF_DUTY"
+    assert view.desired_state == "STOPPED"
+    assert view.duty_outcome is not None
+    assert view.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
 
 
 async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(

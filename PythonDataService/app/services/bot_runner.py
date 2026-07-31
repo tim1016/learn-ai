@@ -510,10 +510,6 @@ class BotTaskRegistry:
                         extra={"action": "boot_sweep_corrupt_lifecycle", "path": str(exc.path)},
                     )
                     continue
-                if record is None or record.phase is not BotLifecyclePhase.ON_DUTY:
-                    continue
-                if sid in self._bots and not self._bots[sid].task.done():
-                    continue  # genuinely alive (non-boot rerun) — not interrupted
                 # Skip bots bound to a broker this runner does not manage.
                 # (IBKR bots share the same artifacts_root but are owned by
                 # the host daemon; marking them interrupted would corrupt their
@@ -525,6 +521,43 @@ class BotTaskRegistry:
                         binding = None
                     if binding is None or binding.broker not in self._supported_broker_ids:
                         continue
+                if record is None:
+                    continue
+                if (
+                    record.phase is BotLifecyclePhase.OFF_DUTY
+                    and record.duty_outcome is not None
+                    and record.duty_outcome.reason_code == "INTERRUPTED_BY_RESTART"
+                    and self._desired_repo(sid).read_state() is DesiredState.RUNNING
+                ):
+                    self._desired_repo(sid).set(
+                        DesiredState.STOPPED,
+                        updated_by="bot_runner_boot_sweep",
+                        now_ms=self._now_ms(),
+                        reason="repair_interrupted_restart_intent",
+                    )
+                    logger.warning(
+                        "Boot sweep repaired interrupted bot desired state",
+                        extra={
+                            "action": "boot_sweep_repaired_interrupted_intent",
+                            "strategy_instance_id": sid,
+                            "run_id": record.duty_outcome.run_id,
+                        },
+                    )
+                    continue
+                if record.phase is not BotLifecyclePhase.ON_DUTY:
+                    continue
+                if sid in self._bots and not self._bots[sid].task.done():
+                    continue  # genuinely alive (non-boot rerun) — not interrupted
+                # A restart is an explicit fail-closed transition, not a pending
+                # request to auto-relaunch. Persist STOPPED before recording the
+                # terminal lifecycle outcome so the panel always has a legal,
+                # proof-gated Resume path after recovery.
+                self._desired_repo(sid).set(
+                    DesiredState.STOPPED,
+                    updated_by="bot_runner_boot_sweep",
+                    now_ms=self._now_ms(),
+                    reason="interrupted_by_restart",
+                )
                 repo.record_terminal_outcome(
                     BotDutyOutcome(
                         kind="EXITED_UNVERIFIED",
