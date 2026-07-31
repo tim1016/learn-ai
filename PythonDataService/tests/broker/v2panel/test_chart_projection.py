@@ -10,6 +10,8 @@ from __future__ import annotations
 import pytest
 
 from app.data_lake.polygon_fetcher import PolygonBar
+from app.schemas.broker_bots import BotStatusView
+from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.chart_projection_service import (
     _MAX_HISTORY_BARS,
     ChartPresetError,
@@ -138,9 +140,7 @@ def test_live_chart_tags_source_and_markers() -> None:
         fetched_at_ms=_NOW,
         source="ibkr",
     )
-    chart_window = ChartWindowResult(
-        bars=[bar], timeframe="1m", resolution="1m", is_streaming=True
-    )
+    chart_window = ChartWindowResult(bars=[bar], timeframe="1m", resolution="1m", is_streaming=True)
     entries = [fill_entry(sid=SID, intent="i1", ts_ms=_NOW - 30_000)]
 
     result = build_live_chart(
@@ -164,3 +164,49 @@ def test_live_window_falls_back_when_market_closed() -> None:
     open_ms, close_ms = live_window(saturday_ms)
     assert open_ms <= saturday_ms < close_ms
     assert close_ms - open_ms == 86_400_000
+
+
+async def test_live_chart_before_session_open_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    open_ms = _NOW + 60_000
+    close_ms = open_ms + 6 * 60 * 60_000
+
+    async def validate_account(broker: str, account_id: str) -> str:
+        return account_id
+
+    async def unexpected_resolver(**kwargs) -> ChartWindowResult:
+        pytest.fail("the range resolver must not run before the session opens")
+
+    monkeypatch.setattr(panel_data_source, "_validate_account", validate_account)
+    monkeypatch.setattr(
+        panel_data_source,
+        "_bot_status",
+        lambda broker, sid: BotStatusView(
+            strategy_instance_id=sid,
+            broker=broker,
+            symbol="SPY",
+            mode="trade",
+            quantity=1,
+            running=True,
+            phase="ON_DUTY",
+            desired_state="RUNNING",
+            active_run_id="run-1",
+            duty_outcome=None,
+            binding_created_at_ms=_NOW - 60_000,
+            last_transition_at_ms=_NOW - 60_000,
+        ),
+    )
+    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda account_id: [])
+    monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: _NOW)
+    monkeypatch.setattr(panel_data_source, "live_window", lambda now_ms: (open_ms, close_ms))
+    monkeypatch.setattr(panel_data_source, "resolve_chart_window", unexpected_resolver)
+
+    result = await panel_data_source.get_live_chart("alpaca", "paper-account", SID)
+
+    assert result.trading_date_open_ms == open_ms
+    assert result.trading_date_close_ms == close_ms
+    assert result.resolution == "1m"
+    assert result.bars == []
+    assert result.fill_markers == []
+    assert result.overlay_notices == []
