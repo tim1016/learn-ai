@@ -3,6 +3,10 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { vi } from 'vitest';
 import { StrategyBuilderComponent } from './strategy-builder.component';
+import {
+  SnapshotContractResult,
+  StrategyAnalyzeResult,
+} from '../../graphql/types';
 
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
@@ -50,6 +54,26 @@ function expectGraphQLOptional(httpMock: HttpTestingController, needle: string) 
     r.url === GRAPHQL_URL && typeof (r.body as { query?: string } | null)?.query === 'string'
     && (r.body as { query: string }).query.includes(needle));
   return matches[0] ?? null;
+}
+
+function buildAnalysisResult(): StrategyAnalyzeResult {
+  return {
+    success: true,
+    symbol: 'SPY',
+    spotPrice: 100,
+    strategyCost: 0,
+    pop: 0,
+    expectedValue: 0,
+    maxProfit: 0,
+    maxLoss: 0,
+    breakevens: [],
+    curve: [],
+    greeks: { delta: 0, gamma: 0, theta: 0, vega: 0 },
+    currentCurve: null,
+    greekCurves: null,
+    legDiagnostics: null,
+    error: null,
+  };
 }
 
 describe('StrategyBuilderComponent', () => {
@@ -157,7 +181,7 @@ describe('StrategyBuilderComponent', () => {
       component.availableExpirations.set(['2026-01-01']);
       component.selectedExpiration.set('2026-01-01');
       component.legs.set([{ strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true }]);
-      component.analysisResult.set({ success: true } as any);
+      component.analysisResult.set(buildAnalysisResult());
 
       component.ticker.set('AAPL');
       const promise = component.fetchExpirations();
@@ -188,7 +212,7 @@ describe('StrategyBuilderComponent', () => {
     function seedReadyState(): void {
       component.ticker.set('SPY');
       component.selectedExpiration.set('2099-01-01');
-      component.underlying.set({ ticker: 'SPY', price: 100, change: 0, changePercent: 0 } as any);
+      component.underlying.set({ ticker: 'SPY', price: 100, change: 0, changePercent: 0 });
       component.legs.set([
         { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
         { strike: 105, optionType: 'call', position: 'short', premium: 3, iv: 0.28, quantity: 1, enabled: true },
@@ -232,12 +256,13 @@ describe('StrategyBuilderComponent', () => {
 
       const result = component.analysisResult();
       expect(result).not.toBeNull();
-      expect(result!.success).toBe(true);
-      expect(result!.pop).toBe(0.45);
-      expect(result!.maxProfit).toBe(3);
-      expect(result!.maxLoss).toBe(-2);
-      expect(result!.breakevens).toEqual([102]);
-      expect(result!.curve.length).toBe(3);
+      if (!result) throw new Error('Expected an analysis result');
+      expect(result.success).toBe(true);
+      expect(result.pop).toBe(0.45);
+      expect(result.maxProfit).toBe(3);
+      expect(result.maxLoss).toBe(-2);
+      expect(result.breakevens).toEqual([102]);
+      expect(result.curve.length).toBe(3);
       expect(component.analyzing()).toBe(false);
       expect(component.error()).toBeNull();
     });
@@ -253,9 +278,12 @@ describe('StrategyBuilderComponent', () => {
       const promise = component.analyzeStrategy();
 
       const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
-      const sentLegs = req.request.body.variables.legs;
+      const requestBody = req.request.body as {
+        variables: { legs: { optionType: string }[] };
+      };
+      const sentLegs = requestBody.variables.legs;
       expect(sentLegs.length).toBe(2);
-      expect(sentLegs.every((l: any) => l.optionType === 'call')).toBe(true);
+      expect(sentLegs.every((leg) => leg.optionType === 'call')).toBe(true);
 
       req.flush({ data: { analyzeOptionsStrategy: { success: true, symbol: 'SPY', spotPrice: 100, strategyCost: 0, pop: 0, expectedValue: 0, maxProfit: 0, maxLoss: 0, breakevens: [], curve: [], greeks: { delta: 0, gamma: 0, theta: 0, vega: 0 }, currentCurve: null, greekCurves: null, legDiagnostics: null, error: null } } });
 
@@ -311,7 +339,7 @@ describe('StrategyBuilderComponent', () => {
       component.legs.set([
         { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
       ]);
-      component.underlying.set({ ticker: 'SPY', price: 100, change: 0, changePercent: 0 } as any);
+      component.underlying.set({ ticker: 'SPY', price: 100, change: 0, changePercent: 0 });
       component.selectedExpiration.set(null);
 
       await component.analyzeStrategy();
@@ -396,7 +424,7 @@ describe('StrategyBuilderComponent', () => {
 
   // ── UX-Q1 / R0b: drill-down icon-per-side trigger ────────────────
   describe('UX-Q1: drill-down history drawer', () => {
-    function buildContract(side: 'call' | 'put') {
+    function buildContract(side: 'call' | 'put'): SnapshotContractResult {
       return {
         ticker: `O:SPY260220${side === 'call' ? 'C' : 'P'}00590000`,
         contractType: side,
@@ -406,10 +434,10 @@ describe('StrategyBuilderComponent', () => {
         impliedVolatility: 0.20,
         openInterest: 1000,
         greeks: { delta: 0.5, gamma: 0.02, theta: -0.05, vega: 0.15 },
-        day: { open: 5, high: 6, low: 4.5, close: 5.5, volume: 1000 },
+        day: { open: 5, high: 6, low: 4.5, close: 5.5, volume: 1000, vwap: null },
         lastTrade: null,
         lastQuote: null,
-      } as any;
+      };
     }
 
     it('openContractHistory populates state and fires the aggregates fetch', async () => {
@@ -452,7 +480,7 @@ describe('StrategyBuilderComponent', () => {
       expect(component.historyDrawerOpen()).toBe(false);
       expect(component.selectedHistoryContract()).toBeNull();
 
-      await component.openContractHistory({ ticker: null } as any, 'put');
+      await component.openContractHistory({ ...buildContract('put'), ticker: null }, 'put');
       expect(component.historyDrawerOpen()).toBe(false);
     });
 
@@ -463,9 +491,11 @@ describe('StrategyBuilderComponent', () => {
         contractType: 'call', strikePrice: 590, expirationDate: '2026-02-20',
         snapshot: buildContract('call'),
       });
-      component.historyAggregates.set([
-        { open: 5, high: 6, low: 4, close: 5.5, volume: 1000, timestamp: '2026-02-19T00:00:00Z' } as any,
-      ]);
+      component.historyAggregates.set([{
+        id: 1, tickerId: 1, open: 5, high: 6, low: 4, close: 5.5,
+        volume: 1000, volumeWeightedAveragePrice: null, timestamp: 1_771_465_600_000,
+        timespan: 'day', multiplier: 1, transactionCount: null,
+      }]);
       component.historyError.set('boom');
 
       component.closeHistoryDrawer();

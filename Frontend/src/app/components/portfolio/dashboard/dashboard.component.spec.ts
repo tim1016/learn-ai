@@ -177,8 +177,9 @@ describe('DashboardComponent', () => {
     const snapshotBtn = Array.from(el.querySelectorAll('button'))
       .find(b => b.textContent?.includes('Take Snapshot'));
     expect(snapshotBtn).toBeDefined();
+    if (!snapshotBtn) throw new Error('Take Snapshot button was not rendered');
 
-    snapshotBtn!.click();
+    snapshotBtn.click();
 
     const req = httpMock.expectOne(GRAPHQL_URL);
     expect(req.request.body.query).toContain('takePortfolioSnapshot');
@@ -206,7 +207,8 @@ describe('DashboardComponent', () => {
     const el = getDashboardEl();
     const snapshotBtn = Array.from(el.querySelectorAll('button'))
       .find(b => b.textContent?.includes('Take Snapshot'));
-    snapshotBtn!.click();
+    if (!snapshotBtn) throw new Error('Take Snapshot button was not rendered');
+    snapshotBtn.click();
 
     const req = httpMock.expectOne(GRAPHQL_URL);
     req.flush({

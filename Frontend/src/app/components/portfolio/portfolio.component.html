@@ -5,11 +5,11 @@
   />
   <div class="portfolio-header">
     <div class="account-selector">
-      <label>Account:</label>
+      <label for="portfolio-account">Account:</label>
       @if (loadingAccounts()) {
         <span class="text-muted">Loading accounts...</span>
       } @else {
-        <select [ngModel]="selectedAccountId()" (ngModelChange)="selectedAccountId.set($event)">
+        <select id="portfolio-account" [ngModel]="selectedAccountId()" (ngModelChange)="selectedAccountId.set($event)">
           @for (account of accounts(); track account.id) {
             <option [value]="account.id">{{ account.name }} ({{ account.type }}) — ${{ account.cash | number:'1.2-2' }}</option>
           }

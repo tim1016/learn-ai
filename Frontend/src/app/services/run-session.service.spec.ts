@@ -183,7 +183,8 @@ describe('RunSessionService', () => {
 
     const queued = service.chunks().find((c) => c.status === 'queued');
     expect(queued).toBeDefined();
-    expect(queued!.waitSeconds).toBe(9);
+    if (!queued) throw new Error('Expected a queued chunk');
+    expect(queued.waitSeconds).toBe(9);
 
     // Close the stream so the start() promise resolves and Vitest doesn't
     // hang waiting for it.
@@ -293,8 +294,9 @@ describe('RunSessionService', () => {
 
     const progress = service.bundleProgress();
     expect(progress).not.toBeNull();
-    expect(progress!.component).toBe('options_calls.csv');
-    expect(progress!.step).toBe(12);
+    if (!progress) throw new Error('Expected bundle progress');
+    expect(progress.component).toBe('options_calls.csv');
+    expect(progress.step).toBe(12);
 
     source.dispatch({ type: 'job.cancelled', reason: 'test cleanup' });
     await done;
@@ -310,11 +312,16 @@ describe('RunSessionService', () => {
     expect(service.bundleComponents().every((c) => c.status === 'queued')).toBe(true);
 
     source.dispatch({ type: 'bundle_component_start', name: 'news.csv' });
-    expect(service.bundleComponents().find((c) => c.name === 'news.csv')!.status).toBe('fetching');
-    expect(service.bundleComponents().find((c) => c.name === 'financials.csv')!.status).toBe('queued');
+    const news = service.bundleComponents().find((c) => c.name === 'news.csv');
+    const financials = service.bundleComponents().find((c) => c.name === 'financials.csv');
+    if (!news || !financials) throw new Error('Expected both bundle components');
+    expect(news.status).toBe('fetching');
+    expect(financials.status).toBe('queued');
 
     source.dispatch({ type: 'bundle_component_done', name: 'news.csv' });
-    expect(service.bundleComponents().find((c) => c.name === 'news.csv')!.status).toBe('done');
+    const completedNews = service.bundleComponents().find((c) => c.name === 'news.csv');
+    if (!completedNews) throw new Error('Expected the news bundle component');
+    expect(completedNews.status).toBe('done');
 
     source.dispatch({ type: 'job.cancelled', reason: 'test cleanup' });
     await done;

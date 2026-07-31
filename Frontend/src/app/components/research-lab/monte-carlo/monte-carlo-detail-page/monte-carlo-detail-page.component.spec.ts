@@ -147,7 +147,9 @@ describe('MonteCarloDetailPageComponent', () => {
     // Resolve the *first* call slowly, *second* call quickly. Verify
     // the first's response is dropped because the second changed the
     // load token.
-    let resolveFirst: ((v: MonteCarloResponse) => void) | null = null;
+    let resolveFirst: (value: MonteCarloResponse) => void = () => {
+      throw new Error('First Monte Carlo request did not expose a resolver');
+    };
     const firstPromise = new Promise<MonteCarloResponse>((res) => {
       resolveFirst = res;
     });
@@ -172,7 +174,7 @@ describe('MonteCarloDetailPageComponent', () => {
     // overwrite the newer one, and ``loading`` must NOT be flipped
     // back on by the late call (the second load's finally already
     // set it false).
-    resolveFirst!(stalePayload);
+    resolveFirst(stalePayload);
     await firstLoad;
     expect(component.monteCarlo()?.config.monte_carlo_id).toBe('e'.repeat(32));
     expect(component.loading()).toBe(false);

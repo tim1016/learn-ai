@@ -22,7 +22,7 @@ import { AccuracyHeatmapComponent } from './accuracy-heatmap/accuracy-heatmap.co
  *  - Scrollable insight detail table with per-prediction scores
  */
 
-interface InsightRecord {
+export interface InsightRecord {
   id: string;
   symbol: string;
   direction: string;
@@ -49,7 +49,7 @@ interface CalibrationBucket {
   accuracy: number;
 }
 
-interface InsightSummaryData {
+export interface InsightSummaryData {
   total_insights: number;
   scored_insights: number;
   direction_accuracy: number;
@@ -70,8 +70,8 @@ interface InsightSummaryData {
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class InsightPanelComponent {
-  insights = input<Record<string, any>[]>([]);
-  summary = input<Record<string, any>>({});
+  insights = input<InsightRecord[]>([]);
+  summary = input<InsightSummaryData | null>(null);
 
   collapsed = signal(false);
   showTable = signal(false);
@@ -131,12 +131,11 @@ export class InsightPanelComponent {
 
   // Typed access
   get summaryData(): InsightSummaryData | null {
-    const s = this.summary();
-    return (s && s['total_insights'] !== undefined) ? s as unknown as InsightSummaryData : null;
+    return this.summary();
   }
 
   get insightRecords(): InsightRecord[] {
-    return this.insights() as unknown as InsightRecord[];
+    return this.insights();
   }
 
   get calibrationRows(): CalibrationBucket[] {

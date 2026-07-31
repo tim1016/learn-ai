@@ -178,7 +178,6 @@ export class PayoffChartComponent implements OnDestroy {
     const curr = this.currentPnlCurve();
     const greekPts = this.greekCurve();
     const whatIfs = this.whatIfCurves();
-    const spot = this.spotPrice();
 
     if (!this.chart || !this.expSeries || !this.currSeries || !this.greekSeries) return;
 
@@ -310,10 +309,15 @@ export class PayoffChartComponent implements OnDestroy {
       return;
     }
 
+    const expSeries = this.expSeries;
+    const currSeries = this.currSeries;
+    const greekSeries = this.greekSeries;
+    if (!expSeries || !currSeries || !greekSeries) return;
+
     const price = Number(param.time);
-    const expRaw = param.seriesData.get(this.expSeries!) as any;
-    const currRaw = param.seriesData.get(this.currSeries!) as any;
-    const greekRaw = param.seriesData.get(this.greekSeries!) as any;
+    const expRaw = param.seriesData.get(expSeries) as { value?: number } | undefined;
+    const currRaw = param.seriesData.get(currSeries) as { value?: number } | undefined;
+    const greekRaw = param.seriesData.get(greekSeries) as { value?: number } | undefined;
     const expVal: number | null = expRaw?.value ?? null;
     const currVal: number | null = currRaw?.value ?? null;
     const greekVal: number | null = greekRaw?.value ?? null;
