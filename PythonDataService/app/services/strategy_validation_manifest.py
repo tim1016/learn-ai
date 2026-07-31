@@ -61,6 +61,7 @@ class StrategyEvidenceSeed:
     verdict: str = "passed"
     reconciliation_status: str = "passed"
     settings_file_verified: bool = True
+    audit_copy_verified: bool = True
     validator_code_ref: str | None = None
     validator_code_sha256: str | None = None
     notes: list[str] = field(default_factory=list)
@@ -278,6 +279,21 @@ def reference_code_for_entry(entry: StrategyValidationEntry, *, repo_root: Path 
     return StrategyReferenceCode(path=entry.audit_copy_ref, sha256=sha256, source=source)
 
 
+def strategy_audit_copy_is_current(
+    entry: StrategyValidationEntry,
+    *,
+    repo_root: Path = _REPO_ROOT,
+) -> bool:
+    """Return whether the entry's referenced audit copy still matches its hash."""
+    if entry.audit_copy_ref is None or entry.audit_copy_sha256 is None:
+        return False
+    return _ref_matches_sha256(
+        repo_root,
+        entry.audit_copy_ref,
+        entry.audit_copy_sha256,
+    )
+
+
 class StrategyValidationManifestError(RuntimeError):
     pass
 
@@ -403,6 +419,7 @@ def _event_accepts_deploy(event: StrategyValidationFlagEvent | None) -> bool:
         event is not None
         and event.flag == "validated"
         and event.behavioral_equivalence.verdict == "accepted_for_deploy"
+        and not any(event.behavioral_equivalence.gating_divergence_counts.values())
     )
 
 
@@ -527,6 +544,13 @@ def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> Strategy
         and validator_code_sha256 is not None
         and _ref_matches_sha256(repo_root, validator_code_ref, validator_code_sha256)
     )
+    audit_copy_ref = str(raw["audit_copy_ref"])
+    audit_copy_sha256 = str(raw["audit_copy_sha256"])
+    audit_copy_verified = _ref_matches_sha256(
+        repo_root,
+        audit_copy_ref,
+        audit_copy_sha256,
+    )
     return StrategyEvidenceSeed(
         strategy_key=str(raw["strategy_key"]),
         validator_code_ref=validator_code_ref,
@@ -534,8 +558,8 @@ def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> Strategy
         settings_file_ref=settings_file_ref,
         settings_file_sha256=settings_file_sha256,
         qc_cloud_backtest_id=str(raw["qc_cloud_backtest_id"]),
-        audit_copy_ref=str(raw["audit_copy_ref"]),
-        audit_copy_sha256=str(raw["audit_copy_sha256"]),
+        audit_copy_ref=audit_copy_ref,
+        audit_copy_sha256=audit_copy_sha256,
         reconciliation_ref=str(raw["reconciliation_ref"]),
         validation_case_symbol=str(raw["validation_case_symbol"]),
         trades_matched=int(diagnostics.get("trades_matched", 0)),
@@ -545,6 +569,7 @@ def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> Strategy
         verdict=str(diagnostics.get("verdict", "passed")),
         reconciliation_status=str(raw.get("reconciliation_status", "passed")),
         settings_file_verified=settings_file_verified and validator_code_verified,
+        audit_copy_verified=audit_copy_verified,
         notes=list(diagnostics.get("notes") or []),
     )
 
@@ -554,8 +579,10 @@ def _evidence_is_deployable(proof: StrategyEvidenceSeed) -> bool:
         proof.reconciliation_status == "passed"
         and proof.verdict == "passed"
         and proof.settings_file_verified
+        and proof.audit_copy_verified
         and proof.validator_code_ref is not None
         and proof.validator_code_sha256 is not None
+        and not any(proof.divergence_counts.values())
     )
 
 
@@ -569,6 +596,10 @@ def _validation_failure_notes(proof: StrategyEvidenceSeed) -> list[str]:
         notes.append("LEAN validator evidence is missing; deployability requires an explicit validator binding.")
     if not proof.settings_file_verified:
         notes.append("Validator/deploy binding hash no longer matches the validation manifest.")
+    if not proof.audit_copy_verified:
+        notes.append("The referenced LEAN audit copy no longer matches its validation hash.")
+    if any(proof.divergence_counts.values()):
+        notes.append("Gating divergences must all be zero before deployment.")
     return notes
 
 

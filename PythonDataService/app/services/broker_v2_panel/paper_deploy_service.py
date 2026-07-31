@@ -19,7 +19,29 @@ from app.schemas.broker_bots import (
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.broker_v2_panel.panel_projection_service import evaluate_channel_health
+from app.services.strategy_validation_manifest import strategy_audit_copy_is_current
 from app.utils.timestamps import now_ms_utc
+
+
+def _entry_matches_accepted_snapshot(entry: StrategyValidationEntry) -> bool:
+    """Require the deploy projection to use exactly the human-accepted proof."""
+    event = entry.current_flag_event
+    if event is None:
+        return False
+    snapshot = event.evidence_snapshot
+    return (
+        entry.validator_code_ref == snapshot.validator_code_ref
+        and entry.validator_code_sha256 == snapshot.validator_code_sha256
+        and entry.settings_file_ref == snapshot.settings_file_ref
+        and entry.settings_file_sha256 == snapshot.settings_file_sha256
+        and entry.qc_cloud_backtest_id == snapshot.qc_cloud_backtest_id
+        and entry.audit_copy_ref == snapshot.audit_copy_ref
+        and entry.audit_copy_sha256 == snapshot.audit_copy_sha256
+        and entry.reconciliation_ref == snapshot.reconciliation_ref
+        and entry.validation_case_symbol == snapshot.validation_case_symbol
+        and entry.reconciliation_status == snapshot.reconciliation_status
+        and entry.diagnostics == snapshot.diagnostics
+    )
 
 
 def _strategy_views(
@@ -29,7 +51,8 @@ def _strategy_views(
     strategies: list[AlpacaPaperDeployStrategy] = []
     for entry in entries:
         event = entry.current_flag_event
-        diagnostics = entry.diagnostics
+        snapshot = event.evidence_snapshot if event is not None else None
+        diagnostics = snapshot.diagnostics if snapshot is not None else None
         if (
             entry.strategy_key != "deployment_validation"
             or entry.validation_state != "validated"
@@ -37,14 +60,18 @@ def _strategy_views(
             or event is None
             or event.flag != "validated"
             or event.behavioral_equivalence.verdict != "accepted_for_deploy"
+            or any(event.behavioral_equivalence.gating_divergence_counts.values())
+            or not _entry_matches_accepted_snapshot(entry)
             or diagnostics is None
-            or not entry.validation_case_symbol
-            or not entry.qc_cloud_backtest_id
-            or not entry.settings_file_ref
-            or not entry.settings_file_sha256
-            or not entry.audit_copy_ref
-            or not entry.audit_copy_sha256
-            or not entry.reconciliation_ref
+            or any(diagnostics.divergence_counts.values())
+            or not snapshot.validation_case_symbol
+            or not snapshot.qc_cloud_backtest_id
+            or not snapshot.settings_file_ref
+            or not snapshot.settings_file_sha256
+            or not snapshot.audit_copy_ref
+            or not snapshot.audit_copy_sha256
+            or not snapshot.reconciliation_ref
+            or not strategy_audit_copy_is_current(entry)
         ):
             continue
         strategies.append(
@@ -52,19 +79,19 @@ def _strategy_views(
                 strategy_key="deployment_validation",
                 label=entry.display_name,
                 explanation=entry.description,
-                validation_case_symbol=entry.validation_case_symbol,
+                validation_case_symbol=snapshot.validation_case_symbol,
                 validated_at_ms=event.flagged_at_ms,
                 validated_by=event.flagged_by,
                 validation_reason=event.reason,
                 behavioral_equivalence_verdict="accepted_for_deploy",
                 behavioral_equivalence_detail=event.behavioral_equivalence.detail,
                 tolerance=event.behavioral_equivalence.tolerance,
-                qc_cloud_backtest_id=entry.qc_cloud_backtest_id,
-                settings_file_ref=entry.settings_file_ref,
-                settings_file_sha256=entry.settings_file_sha256,
-                audit_copy_ref=entry.audit_copy_ref,
-                audit_copy_sha256=entry.audit_copy_sha256,
-                reconciliation_ref=entry.reconciliation_ref,
+                qc_cloud_backtest_id=snapshot.qc_cloud_backtest_id,
+                settings_file_ref=snapshot.settings_file_ref,
+                settings_file_sha256=snapshot.settings_file_sha256,
+                audit_copy_ref=snapshot.audit_copy_ref,
+                audit_copy_sha256=snapshot.audit_copy_sha256,
+                reconciliation_ref=snapshot.reconciliation_ref,
                 trades_matched=diagnostics.trades_matched,
                 trades_validated=diagnostics.trades_validated,
                 pnl_max_abs_diff=diagnostics.pnl_max_abs_diff,

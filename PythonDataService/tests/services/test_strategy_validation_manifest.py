@@ -363,6 +363,70 @@ def test_load_manifest_fails_closed_when_settings_hash_mismatches(tmp_path) -> N
     assert "Validator/deploy binding hash no longer matches" in " ".join(entry.diagnostics.notes)
 
 
+def test_load_manifest_fails_closed_when_audit_copy_hash_mismatches(tmp_path) -> None:
+    repo_root = tmp_path / "repo"
+    settings_ref = "PythonDataService/app/engine/strategy/spec/fixtures/test.spec.json"
+    settings_path = repo_root / settings_ref
+    settings_path.parent.mkdir(parents=True)
+    settings_payload = b'{"name":"deployment_validation"}'
+    settings_path.write_bytes(settings_payload)
+    validator_ref = "PythonDataService/app/lean_sidecar/trusted_samples/test_validator.py"
+    validator_path = repo_root / validator_ref
+    validator_path.parent.mkdir(parents=True)
+    validator_payload = b"class MyAlgorithm: pass\n"
+    validator_path.write_bytes(validator_payload)
+    audit_ref = "references/qc-shadow/DeploymentValidationAlgorithm.py"
+    audit_path = repo_root / audit_ref
+    audit_path.parent.mkdir(parents=True)
+    audit_path.write_text("modified audit copy", encoding="utf-8")
+    manifest_path = tmp_path / "strategy_validation_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "validated_strategies": [
+                    {
+                        "strategy_key": "deployment_validation",
+                        "validator_code_ref": validator_ref,
+                        "validator_code_sha256": hashlib.sha256(validator_payload).hexdigest(),
+                        "settings_file_ref": settings_ref,
+                        "settings_file_sha256": hashlib.sha256(settings_payload).hexdigest(),
+                        "qc_cloud_backtest_id": "bt-1",
+                        "audit_copy_ref": audit_ref,
+                        "audit_copy_sha256": "0" * 64,
+                        "reconciliation_ref": "references/qc-shadow/backtests/attribution.md",
+                        "validation_case_symbol": "SPY",
+                        "reconciliation_status": "passed",
+                        "diagnostics": {
+                            "verdict": "passed",
+                            "trades_matched": 1,
+                            "trades_validated": 1,
+                            "pnl_max_abs_diff": "0.00",
+                            "divergence_counts": {},
+                        },
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [entry] = load_strategy_validation_entries(
+        [
+            StrategyRegistrySeed(
+                strategy_key="deployment_validation",
+                display_name="Deployment Validation",
+                description="Two-green-minute deployment validation primitive.",
+            )
+        ],
+        manifest_path=manifest_path,
+        repo_root=repo_root,
+    )
+
+    assert entry.deployable is False
+    assert entry.diagnostics is not None
+    assert "audit copy no longer matches" in " ".join(entry.diagnostics.notes)
+
+
 def test_load_manifest_fails_closed_when_event_snapshot_hash_mismatches(tmp_path) -> None:
     repo_root = tmp_path / "repo"
     manifest_path = tmp_path / "strategy_validation_manifest.json"
@@ -452,6 +516,12 @@ def test_append_flag_event_derives_actor_and_snapshots_evidence(tmp_path) -> Non
     validator_payload = b"class MyAlgorithm: pass\n"
     validator_path.write_bytes(validator_payload)
     validator_sha = hashlib.sha256(validator_payload).hexdigest()
+    audit_ref = "references/qc-shadow/DeploymentValidationAlgorithm.py"
+    audit_path = repo_root / audit_ref
+    audit_path.parent.mkdir(parents=True)
+    audit_payload = b"class DeploymentValidationAlgorithm: pass\n"
+    audit_path.write_bytes(audit_payload)
+    audit_sha = hashlib.sha256(audit_payload).hexdigest()
     manifest_path = tmp_path / "strategy_validation_manifest.json"
     flag_events_path = tmp_path / "flag_events.json"
     manifest_path.write_text(
@@ -466,8 +536,8 @@ def test_append_flag_event_derives_actor_and_snapshots_evidence(tmp_path) -> Non
                         "settings_file_ref": settings_ref,
                         "settings_file_sha256": settings_sha,
                         "qc_cloud_backtest_id": "bt-1",
-                        "audit_copy_ref": "references/qc-shadow/DeploymentValidationAlgorithm.py",
-                        "audit_copy_sha256": "audit-sha",
+                        "audit_copy_ref": audit_ref,
+                        "audit_copy_sha256": audit_sha,
                         "reconciliation_ref": "references/qc-shadow/backtests/attribution.md",
                         "validation_case_symbol": "SPY",
                         "reconciliation_status": "passed",

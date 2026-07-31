@@ -395,6 +395,7 @@ def _mission_verdict(
     clerk: ClerkCard,
     actions: list[PanelAction],
     *,
+    channel_health: ChannelHealthEvaluation,
     now_ms: int,
 ) -> MissionVerdictView:
     start = next((action for action in actions if action.action_id == "start"), None)
@@ -416,24 +417,22 @@ def _mission_verdict(
             next_action=next_action,
             evaluated_at_ms=now_ms,
         )
-    if status.mode == "trade":
-        channel_states = {channel.stream: channel.state for channel in clerk.channels}
-        unhealthy_channels = [
-            stream
-            for stream in ("market_data", "execution")
-            if channel_states.get(stream) != "healthy"
-        ]
-        if unhealthy_channels:
-            return MissionVerdictView(
-                state="blocked",
-                label="Mission blocked",
-                explanation=(
-                    "Required Clerk channels are not healthy: "
-                    f"{', '.join(unhealthy_channels)}."
-                ),
-                next_action="Restore fresh market-data and execution health before expecting order effects.",
-                evaluated_at_ms=now_ms,
-            )
+    if status.mode == "trade" and not channel_health.ready:
+        blocked_channels = (
+            *channel_health.missing,
+            *channel_health.stale,
+            *channel_health.unhealthy,
+        )
+        return MissionVerdictView(
+            state="blocked",
+            label="Mission blocked",
+            explanation=(
+                "Required Clerk channels are not healthy: "
+                f"{', '.join(dict.fromkeys(blocked_channels))}."
+            ),
+            next_action="Restore fresh market-data and execution health before expecting order effects.",
+            evaluated_at_ms=now_ms,
+        )
     if status.running:
         return MissionVerdictView(
             state="working",
@@ -516,12 +515,13 @@ def build_panel(
     )
 
     working_orders = _working_orders(status.strategy_instance_id, entries)
+    channel_health = evaluate_channel_health(clerk_status, now_ms)
     actions = build_actions(
         status,
         clerk,
         revision=revision,
         flatten_supported=flatten_supported,
-        channel_fresh=channel_health_fresh(clerk_status, now_ms),
+        channel_fresh=channel_health.ready,
         exposure=exposure,
         account_id=account_id,
         working_order_count=len(working_orders),
@@ -539,7 +539,13 @@ def build_panel(
         mode=status.mode,
         updated_at_ms=now_ms,
         revision=revision,
-        mission_verdict=_mission_verdict(status, clerk, actions, now_ms=now_ms),
+        mission_verdict=_mission_verdict(
+            status,
+            clerk,
+            actions,
+            channel_health=channel_health,
+            now_ms=now_ms,
+        ),
         execution_policy=(
             "Observation only. Decisions are recorded, but the Clerk will not place orders."
             if status.mode == "log_only"

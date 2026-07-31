@@ -29,11 +29,17 @@ from app.broker.contract.registry import (
 from app.config import settings
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
-from app.services.bot_runner import set_bot_task_registry
+from app.schemas.strategy_validation import StrategyValidationEntry
+from app.services.bot_runner import BotRunnerError, set_bot_task_registry
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
 from app.services.broker_v2_panel import panel_data_source
+from app.services.broker_v2_panel.paper_deploy_service import _strategy_views
+from app.services.strategy_validation_manifest import (
+    load_strategy_validation_entries,
+    strategy_registry_seeds,
+)
 from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.fixtures import ACCT, SID
 
@@ -122,6 +128,14 @@ _BODY = {
     "symbol": "SPY",
     "sizing": {"preset": "custom", "quantity": 2},
 }
+
+
+def _accepted_deploy_entry() -> StrategyValidationEntry:
+    return next(
+        entry
+        for entry in load_strategy_validation_entries(strategy_registry_seeds())
+        if entry.strategy_key == "deployment_validation"
+    )
 
 
 @pytest.mark.asyncio
@@ -263,6 +277,108 @@ async def test_deploy_requires_current_accepted_validation_provenance(
     assert deploy_response.status_code == 409
     assert deploy_response.json()["detail"]["outcome"] == "conflict"
     assert registry.deploy_calls == []
+
+
+def test_deploy_rejects_manifest_proof_that_differs_from_accepted_snapshot() -> None:
+    entry = _accepted_deploy_entry()
+    changed = entry.model_copy(update={"settings_file_sha256": "0" * 64})
+
+    assert _strategy_views([changed]) == ()
+
+
+def test_deploy_reverifies_the_accepted_audit_copy_hash() -> None:
+    entry = _accepted_deploy_entry()
+    event = entry.current_flag_event
+    assert event is not None
+    bad_hash = "0" * 64
+    changed_snapshot = event.evidence_snapshot.model_copy(
+        update={"audit_copy_sha256": bad_hash}
+    )
+    changed_event = event.model_copy(
+        update={"evidence_snapshot": changed_snapshot}
+    )
+    changed = entry.model_copy(
+        update={
+            "audit_copy_sha256": bad_hash,
+            "current_flag_event": changed_event,
+        }
+    )
+
+    assert _strategy_views([changed]) == ()
+
+
+def test_deploy_rejects_accepted_event_with_gating_divergence() -> None:
+    entry = _accepted_deploy_entry()
+    event = entry.current_flag_event
+    assert event is not None
+    changed_event = event.model_copy(
+        update={
+            "behavioral_equivalence": event.behavioral_equivalence.model_copy(
+                update={"gating_divergence_counts": {"DECISION_MISMATCH": 1}}
+            )
+        }
+    )
+    changed = entry.model_copy(update={"current_flag_event": changed_event})
+
+    assert _strategy_views([changed]) == ()
+
+
+@pytest.mark.asyncio
+async def test_pre_execution_service_failure_is_blocked_not_unknown(
+    deploy_app,
+    monkeypatch,
+) -> None:
+    fast_app, registry = deploy_app
+
+    async def unavailable_clerk() -> ClerkStatus:
+        raise panel_data_source.PanelUnavailableError(
+            "The Clerk is unavailable.",
+            detail="No deployment was attempted.",
+        )
+
+    monkeypatch.setattr(panel_data_source, "_clerk_status", unavailable_clerk)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json=_BODY,
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["outcome"] == "blocked"
+    assert response.json()["detail"]["receipt_id"] is None
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
+async def test_failure_after_runner_dispatch_is_unknown(
+    deploy_app,
+    monkeypatch,
+) -> None:
+    fast_app, registry = deploy_app
+
+    async def failed_dispatch(**_kwargs) -> BotStatusView:
+        raise BotRunnerError(
+            "Runner response was lost.",
+            detail="The deployment outcome cannot be proved.",
+        )
+
+    monkeypatch.setattr(registry, "deploy", failed_dispatch)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json=_BODY,
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["outcome"] == "unknown"
 
 
 @pytest.mark.asyncio

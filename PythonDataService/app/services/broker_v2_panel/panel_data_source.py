@@ -131,9 +131,11 @@ class PanelRunnerError(PanelDataError):
         detail: str | None,
         http_status: int,
         next_action: str | None = None,
+        operation_attempted: bool = False,
     ) -> None:
         super().__init__(message, detail=detail, next_action=next_action)
         self.http_status = http_status
+        self.operation_attempted = operation_attempted
 
 
 # Only Alpaca has a panel-backing clerk in phase 1.
@@ -357,6 +359,7 @@ async def deploy_alpaca_paper_bot(
             detail=exc.detail,
             next_action="Correct the deployment inputs or bot state, then submit a new command.",
             http_status=exc.http_status,
+            operation_attempted=True,
         ) from exc
     return build_alpaca_paper_deploy_receipt(
         broker=broker,
