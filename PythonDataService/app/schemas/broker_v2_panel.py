@@ -225,6 +225,10 @@ class PanelAction(BaseModel):
     blockers: list[OperatorBlocker]
     confirmation: OperatorConfirmationCopy | None
     revision: int
+    # An action-scoped optimistic-concurrency token.  This deliberately is
+    # narrower than the display revision: a new chart point or journal receipt
+    # must not make a presented STOP falsely stale.
+    concurrency_token: str
 
 
 class BotPanelView(BaseModel):
@@ -272,6 +276,7 @@ class PanelActionRequest(BaseModel):
 
     action_id: ActionId
     revision: int = Field(ge=0)
+    concurrency_token: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=128)
     reason: str | None = Field(default=None, max_length=512)
 
@@ -289,6 +294,7 @@ class PanelActionResult(BaseModel):
     action_id: ActionId
     applied: bool
     revision: int
+    concurrency_token: str
     message: str
 
 

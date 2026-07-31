@@ -318,6 +318,16 @@ class BotTaskRegistry:
                 f"Bot '{strategy_instance_id}' is not bound to broker '{broker}'.",
                 detail=f"The bot's binding carries broker '{managed.binding.broker}'.",
             )
+        # Clerk owns broker-facing STOP custody.  A bare task cancellation is
+        # insufficient: it can leave a bot-authored ENTER still working after
+        # desired state has become STOPPED.  No Clerk means no trade custody
+        # was installed (the log-only/test path), so there is nothing to cancel.
+        if broker == "alpaca":
+            from app.broker.alpaca.clerk import get_alpaca_clerk
+
+            clerk = get_alpaca_clerk()
+            if clerk is not None:
+                await clerk.cancel_working_entries_for_instance(strategy_instance_id)
         now = self._now_ms()
         # Durable intent BEFORE the in-process cancellation: if the container
         # dies between these two steps, the STOPPED intent survives.
@@ -489,6 +499,25 @@ class BotTaskRegistry:
                 detail="Deploy the bot first; bindings are broker-tagged.",
             )
         return self._compose_status(binding)
+
+    def panel_action_receipt_path(self, strategy_instance_id: str) -> Path:
+        """Return this instance's durable panel-command receipt location.
+
+        Panel commands are lifecycle custody, so their idempotency evidence is
+        co-located with the binding and lifecycle artifacts rather than held in
+        a process-local web handler.
+        """
+        return self._confined_instance_dir(strategy_instance_id) / "panel_action_receipts.json"
+
+    def binding_for_control(self, broker: str, strategy_instance_id: str) -> BrokerBotBinding:
+        """Return immutable deployed configuration for a Clerk control action."""
+        binding = self._read_binding(strategy_instance_id)
+        if binding is None or binding.broker != broker:
+            raise UnknownBotError(
+                f"No bot '{strategy_instance_id}' is bound to broker '{broker}'.",
+                detail="Deploy the bot first; bindings are broker-tagged.",
+            )
+        return binding
 
     def list_bots(self, broker: str) -> list[BotStatusView]:
         """All bots whose durable binding carries ``broker``."""

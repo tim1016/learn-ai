@@ -3,8 +3,8 @@
 ``execute_action`` enforces the three execution invariants and dispatches to the
 backend capability that performs the action:
 
-1. **Revision guard.** The POST carries the panel-state ``revision`` it was
-   presented against. If the current revision differs, the action is stale →
+1. **Action token guard.** The POST carries the action-specific concurrency
+   token it was presented against. If that action's relevant state differs, it is stale →
    ``StaleRevisionError`` (the router maps it to ``409`` + a refresh).
 2. **Idempotency.** An ``idempotency_key`` seen before is a no-op — the same
    double-click or retry does not re-fire the action (``applied=False``).
@@ -23,8 +23,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import os
+import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from app.broker.v2panel.vocabulary import ActionId
@@ -42,7 +46,7 @@ class ActionExecutionError(Exception):
 
 
 class StaleRevisionError(ActionExecutionError):
-    """The POST bound to a panel revision that is no longer current (409)."""
+    """The POST's action-scoped concurrency token is no longer current (409)."""
 
     http_status = 409
 
@@ -155,7 +159,94 @@ class IdempotencyStore:
                 record._event.set()
 
 
+class DurableIdempotencyStore(IdempotencyStore):
+    """File-backed command receipts for one bot's panel actions.
+
+    A process restart cannot forget a completed STOP/FLATTEN command and fire it
+    again.  A persisted in-flight reservation is deliberately restored as a
+    failed/unknown command: replaying it would be less safe than asking the
+    operator to inspect its Clerk evidence and issue a fresh command.
+    """
+
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self._path = path
+        self._loaded = False
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        if not self._path.is_file():
+            return
+        raw = json.loads(self._path.read_text(encoding="utf-8"))
+        for compound, payload in raw.items():
+            sid, action_id, key = compound.split("\u001f", 2)
+            state = payload["state"]
+            if state == "succeeded":
+                result = PanelActionResult.model_validate(payload["result"])
+                self._records[(sid, action_id, key)] = IdempotencyRecord(
+                    state="succeeded", result=result
+                )
+            else:
+                self._records[(sid, action_id, key)] = IdempotencyRecord(
+                    state="failed",
+                    error_detail=(
+                        payload.get("error_detail")
+                        or "The prior command did not finish with a durable receipt. "
+                        "Inspect Clerk evidence before issuing a new command."
+                    ),
+                )
+
+    def _persist(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, object] = {}
+        for (sid, action_id, key), record in self._records.items():
+            compound = "\u001f".join((sid, action_id, key))
+            payload[compound] = {
+                "state": record.state,
+                "result": record.result.model_dump() if record.result is not None else None,
+                "error_detail": record.error_detail,
+            }
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{self._path.name}.", dir=self._path.parent, text=True
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self._path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    async def reserve_or_get(
+        self, sid: str, action_id: str, key: str
+    ) -> IdempotencyRecord | None:
+        self._load()
+        record = await super().reserve_or_get(sid, action_id, key)
+        if record is None:
+            self._persist()
+        return record
+
+    async def complete(
+        self, sid: str, action_id: str, key: str, result: PanelActionResult
+    ) -> None:
+        await super().complete(sid, action_id, key, result)
+        self._persist()
+
+    async def fail(self, sid: str, action_id: str, key: str, error: str) -> None:
+        await super().fail(sid, action_id, key, error)
+        self._persist()
+
+    async def release(self, sid: str, action_id: str, key: str) -> None:
+        await super().release(sid, action_id, key)
+        self._persist()
+
+
 _IDEMPOTENCY_STORE = IdempotencyStore()
+_DURABLE_STORES: dict[Path, DurableIdempotencyStore] = {}
 
 
 def get_idempotency_store() -> IdempotencyStore:
@@ -166,6 +257,12 @@ def get_idempotency_store() -> IdempotencyStore:
 def reset_idempotency_store_for_testing() -> None:
     """Clear the process-level idempotency ledger (test isolation)."""
     _IDEMPOTENCY_STORE._records.clear()
+    _DURABLE_STORES.clear()
+
+
+def durable_idempotency_store_for(path: Path) -> DurableIdempotencyStore:
+    """Return the restart-safe receipt ledger for one bot instance."""
+    return _DURABLE_STORES.setdefault(path, DurableIdempotencyStore(path))
 
 
 async def execute_action(
@@ -175,6 +272,7 @@ async def execute_action(
     current_revision: int,
     performers: dict[ActionId, ActionPerformer],
     operator_identity: str,
+    current_concurrency_token: str,
     store: IdempotencyStore | None = None,
 ) -> PanelActionResult:
     """Execute one presented action under the three invariants (§11).
@@ -196,6 +294,7 @@ async def execute_action(
                 action_id=request.action_id,
                 applied=False,
                 revision=current_revision,
+                concurrency_token=current_concurrency_token,
                 message=record.result.message,
             )
         if record.state == "failed":
@@ -208,13 +307,15 @@ async def execute_action(
         # this reservation, so we must not release/complete it below.
 
     try:
-        # 1. Revision guard.
-        if request.revision != current_revision:
+        # 1. Action-specific concurrency guard.  Display revisions intentionally
+        # advance for unrelated evidence; only this action's declared inputs may
+        # invalidate a presented command.
+        if request.concurrency_token != current_concurrency_token:
             raise StaleRevisionError(
-                "The panel changed since this action was presented.",
+                "This action changed since it was presented.",
                 detail=(
-                    f"Presented revision {request.revision} no longer matches the "
-                    f"current revision {current_revision}. Refresh and retry."
+                    "The action's current concurrency token no longer matches. "
+                    "Refresh and retry."
                 ),
             )
 
@@ -245,6 +346,7 @@ async def execute_action(
         action_id=request.action_id,
         applied=True,
         revision=current_revision,
+        concurrency_token=current_concurrency_token,
         message=message,
     )
     if reserved_fresh:

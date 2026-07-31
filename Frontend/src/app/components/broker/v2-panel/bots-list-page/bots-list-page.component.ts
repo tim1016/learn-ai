@@ -97,6 +97,7 @@ export class BotsListPageComponent {
       const request: PanelActionRequest = {
         action_id: action.action_id,
         revision: action.revision,
+        concurrency_token: action.concurrency_token,
         idempotency_key: crypto.randomUUID(),
         reason: null,
       };

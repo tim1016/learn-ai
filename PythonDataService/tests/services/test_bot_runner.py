@@ -514,7 +514,13 @@ class _FakeClerk:
 
     def __init__(self, *, should_raise: Exception | None = None) -> None:
         self.calls: list[dict] = []
+        self.stop_cancellations: list[str] = []
         self._should_raise = should_raise
+
+    async def cancel_working_entries_for_instance(self, strategy_instance_id: str) -> tuple[()]:
+        """Test-double boundary for Clerk-owned STOP custody."""
+        self.stop_cancellations.append(strategy_instance_id)
+        return ()
 
     async def execute_for_instance(
         self,

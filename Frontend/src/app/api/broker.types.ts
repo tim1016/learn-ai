@@ -19858,6 +19858,8 @@ export interface components {
             action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
+            /** Concurrency Token */
+            concurrency_token: string;
             confirmation: components["schemas"]["OperatorConfirmationCopy"] | null;
             /** Enabled */
             enabled: boolean;
@@ -19881,6 +19883,8 @@ export interface components {
              * @enum {string}
              */
             action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
+            /** Concurrency Token */
+            concurrency_token: string;
             /** Idempotency Key */
             idempotency_key: string;
             /** Reason */
@@ -19904,6 +19908,8 @@ export interface components {
             action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "reconcile_now";
             /** Applied */
             applied: boolean;
+            /** Concurrency Token */
+            concurrency_token: string;
             /** Message */
             message: string;
             /** Revision */

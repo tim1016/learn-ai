@@ -256,12 +256,13 @@ async def test_action_reconcile_now_applies(api) -> None:
         panel = await client.get(
             f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/panel"
         )
-        revision = panel.json()["revision"]
+        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
             json={
                 "action_id": "reconcile_now",
-                "revision": revision,
+                "revision": panel.json()["revision"],
+                "concurrency_token": action["concurrency_token"],
                 "idempotency_key": "k1",
             },
         )
@@ -279,6 +280,7 @@ async def test_action_stale_revision_is_409(api) -> None:
             json={
                 "action_id": "reconcile_now",
                 "revision": 999_999_999,
+                "concurrency_token": "stale-token",
                 "idempotency_key": "k1",
             },
         )
@@ -292,10 +294,11 @@ async def test_action_idempotent_repost_is_noop(api) -> None:
         panel = await client.get(
             f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/panel"
         )
-        revision = panel.json()["revision"]
+        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
         body = {
             "action_id": "reconcile_now",
-            "revision": revision,
+            "revision": panel.json()["revision"],
+            "concurrency_token": action["concurrency_token"],
             "idempotency_key": "dup",
         }
         first = await client.post(

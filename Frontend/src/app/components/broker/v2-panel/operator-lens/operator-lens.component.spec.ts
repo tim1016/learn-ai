@@ -227,6 +227,7 @@ describe('OperatorLensComponent', () => {
           blockers: [],
           confirmation: null,
           revision: 1,
+          concurrency_token: 'test-token',
         },
       ],
     };
@@ -260,6 +261,7 @@ describe('OperatorLensComponent', () => {
           blockers: [],
           confirmation: null,
           revision: 1,
+          concurrency_token: 'test-token',
         },
       ],
     };
@@ -292,6 +294,7 @@ describe('OperatorLensComponent', () => {
       blockers: [],
       confirmation: null,
       revision: 2,
+      concurrency_token: 'test-token',
     };
     const panel: BotPanelView = {
       ...makePanel(),
@@ -354,6 +357,7 @@ describe('OperatorLensComponent', () => {
             ack_phrase: null,
           },
           revision: 1,
+          concurrency_token: 'test-token',
         },
       ],
     };

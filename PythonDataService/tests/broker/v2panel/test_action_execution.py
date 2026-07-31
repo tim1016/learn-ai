@@ -7,12 +7,14 @@ Pins the three execution invariants: revision guard (stale → 409), idempotency
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
+    DurableIdempotencyStore,
     IdempotencyStore,
     StaleRevisionError,
     execute_action,
@@ -21,10 +23,13 @@ from app.services.broker_v2_panel.action_execution_service import (
 _SID = "bot-alpha"
 
 
-def _request(*, action_id: str = "stop", revision: int = 42, key: str = "k1") -> PanelActionRequest:
+def _request(
+    *, action_id: str = "stop", revision: int = 42, key: str = "k1", token: str = "token"
+) -> PanelActionRequest:
     return PanelActionRequest(
         action_id=action_id,  # type: ignore[arg-type]
         revision=revision,
+        concurrency_token=token,
         idempotency_key=key,
     )
 
@@ -41,6 +46,7 @@ async def test_action_applies_and_records_identity() -> None:
         _request(),
         sid=_SID,
         current_revision=42,
+        current_concurrency_token="token",
         performers={"stop": _perform},
         operator_identity="desk-operator",
         store=store,
@@ -59,9 +65,10 @@ async def test_stale_revision_is_409() -> None:
 
     with pytest.raises(StaleRevisionError) as exc:
         await execute_action(
-            _request(revision=41),
+            _request(token="stale-token"),
             sid=_SID,
             current_revision=42,
+            current_concurrency_token="token",
             performers={"stop": _perform},
             operator_identity="op",
             store=IdempotencyStore(),
@@ -82,6 +89,7 @@ async def test_idempotent_repost_is_a_noop() -> None:
         _request(key="dup"),
         sid=_SID,
         current_revision=42,
+        current_concurrency_token="token",
         performers={"stop": _perform},
         operator_identity="op",
         store=store,
@@ -90,6 +98,7 @@ async def test_idempotent_repost_is_a_noop() -> None:
         _request(key="dup"),
         sid=_SID,
         current_revision=42,
+        current_concurrency_token="token",
         performers={"stop": _perform},
         operator_identity="op",
         store=store,
@@ -110,6 +119,7 @@ async def test_idempotent_repost_survives_revision_advance() -> None:
         _request(key="dup", revision=42),
         sid=_SID,
         current_revision=42,
+        current_concurrency_token="token",
         performers={"stop": _perform},
         operator_identity="op",
         store=store,
@@ -120,11 +130,58 @@ async def test_idempotent_repost_survives_revision_advance() -> None:
         _request(key="dup", revision=42),
         sid=_SID,
         current_revision=99,
+        current_concurrency_token="token",
         performers={"stop": _perform},
         operator_identity="op",
         store=store,
     )
     assert result.applied is False
+
+
+async def test_unrelated_panel_revision_does_not_stale_an_action_token() -> None:
+    """A new receipt may refresh the panel while an unchanged STOP stays valid."""
+    result = await execute_action(
+        _request(revision=1),
+        sid=_SID,
+        current_revision=99,
+        current_concurrency_token="token",
+        performers={"stop": lambda _operator: _noop()},
+        operator_identity="op",
+        store=IdempotencyStore(),
+    )
+    assert result.applied is True
+
+
+async def test_durable_receipt_prevents_reexecution_after_store_restart(tmp_path: Path) -> None:
+    calls = 0
+
+    async def _perform(_operator: str) -> str:
+        nonlocal calls
+        calls += 1
+        return "stopped"
+
+    path = tmp_path / "panel_action_receipts.json"
+    first = await execute_action(
+        _request(key="durable"),
+        sid=_SID,
+        current_revision=42,
+        current_concurrency_token="token",
+        performers={"stop": _perform},
+        operator_identity="op",
+        store=DurableIdempotencyStore(path),
+    )
+    replay = await execute_action(
+        _request(key="durable"),
+        sid=_SID,
+        current_revision=99,
+        current_concurrency_token="token",
+        performers={"stop": _perform},
+        operator_identity="op",
+        store=DurableIdempotencyStore(path),
+    )
+    assert first.applied is True
+    assert replay.applied is False
+    assert calls == 1
 
 
 async def test_unwired_action_is_typed_not_available() -> None:
@@ -133,6 +190,7 @@ async def test_unwired_action_is_typed_not_available() -> None:
             _request(action_id="retire"),
             sid=_SID,
             current_revision=42,
+            current_concurrency_token="token",
             performers={"stop": lambda op: _noop()},  # retire not wired
             operator_identity="op",
             store=IdempotencyStore(),
@@ -162,9 +220,10 @@ async def test_stale_revision_releases_key_for_corrected_retry() -> None:
 
     with pytest.raises(StaleRevisionError):
         await execute_action(
-            _request(key="retry", revision=41),
+            _request(key="retry", token="stale-token"),
             sid=_SID,
             current_revision=42,
+            current_concurrency_token="token",
             performers={"stop": _perform},
             operator_identity="op",
             store=store,
@@ -177,6 +236,7 @@ async def test_stale_revision_releases_key_for_corrected_retry() -> None:
         _request(key="retry", revision=42),
         sid=_SID,
         current_revision=42,
+        current_concurrency_token="token",
         performers={"stop": _perform},
         operator_identity="op",
         store=store,
@@ -194,6 +254,7 @@ async def test_not_available_action_releases_key() -> None:
             _request(action_id="retire", key="na"),
             sid=_SID,
             current_revision=42,
+            current_concurrency_token="token",
             performers={"stop": lambda op: _noop()},  # retire not wired
             operator_identity="op",
             store=store,
@@ -221,6 +282,7 @@ async def test_duplicate_concurrent_posts_run_mutation_once() -> None:
                 _request(key="race"),
                 sid=_SID,
                 current_revision=42,
+                current_concurrency_token="token",
                 performers={"stop": _slow_perform},
                 operator_identity="op",
                 store=store,
