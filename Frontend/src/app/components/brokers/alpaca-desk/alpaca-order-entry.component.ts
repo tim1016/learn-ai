@@ -57,7 +57,7 @@ export class AlpacaOrderEntryComponent {
   protected readonly results = signal<OrderLegResult[] | null>(null);
   protected readonly submitError = signal<string | null>(null);
   /** Fires after any broker submission attempt, including uncertain outcomes. */
-  readonly submissionFinished = output<void>();
+  readonly submissionFinished = output();
 
   private nextId = 1;
 
