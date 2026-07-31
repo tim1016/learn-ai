@@ -235,9 +235,14 @@ jobs:
                 ;;
             esac
           done <<< "$changed"
-          # (2) tests/**/test_<name>.py and test_<name>_*.py for each changed app/**/<name>.py.
+          # (2) Tests matching each changed app/**/<name>.py, plus explicit integration ownership.
           while IFS= read -r p; do
             [ -z "$p" ] && continue
+            case "$p" in
+              PythonDataService/app/services/offline_replay_service.py|PythonDataService/app/services/offline_replay_data.py)
+                extra="$extra tests/integration/test_offline_replay_market_capture.py"
+                ;;
+            esac
             case "$p" in
               PythonDataService/app/*.py)
                 stem=$(basename "$p" .py)

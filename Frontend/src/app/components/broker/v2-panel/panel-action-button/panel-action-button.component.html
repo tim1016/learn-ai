@@ -12,7 +12,7 @@
     {{ action().label }}
   </button>
 
-  @for (blocker of action().blockers; track blocker.condition.id) {
+  @for (blocker of visibleBlockers(); track blocker.condition.id) {
     <div class="panel-action__blocker" role="alert">
       <strong>{{ blocker.headline }}</strong>
       @if (blocker.detail) { <span>{{ blocker.detail }}</span> }
