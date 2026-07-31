@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/angular';
+import { render, screen, within } from '@testing-library/angular';
 import { provideRouter } from '@angular/router';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
@@ -49,7 +49,10 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
     phase: 'ON_DUTY',
     desired_state: 'RUNNING',
     running: true,
+    strategy_key: 'deployment_validation',
+    mode: 'trade',
     status_label: 'Working',
+    status_explanation: 'Running under Account Clerk custody.',
     exposure: {},
     fills_today: 2,
     realized_pnl_today: 45.5,
@@ -77,7 +80,7 @@ async function renderPage(
     account?: BrokerAccountSnapshot;
     clerk?: ClerkStatus;
     profile?: PanelProfile;
-    getCatalog?: () => Promise<BotCatalogView[]>;
+    getCatalog?: (broker: string, accountId: string) => Promise<BotCatalogView[]>;
     getPanelProfile?: () => Promise<PanelProfile>;
   } = {},
 ) {
@@ -94,7 +97,8 @@ async function renderPage(
     getCatalog: overrides.getCatalog ?? (() => Promise.resolve(bots)),
     getPanelProfile:
       overrides.getPanelProfile ?? (() => Promise.resolve(profile)),
-    runBotAction: () => Promise.resolve({ action_id: 'start', applied: true, revision: 1, message: 'ok' }),
+    runBotAction: () =>
+      Promise.resolve({ action_id: 'start', applied: true, revision: 1, message: 'ok' }),
   };
 
   return render(BotsListPageComponent, {
@@ -117,7 +121,8 @@ describe('BotsListPageComponent', () => {
   it('renders PAPER badge for paper accounts', async () => {
     await renderPage([], { account: fakeAccount({ account_id: 'PA9' }) });
 
-    expect(await screen.findByText('PAPER')).toBeTruthy();
+    const accountPosture = await screen.findByLabelText('Alpaca account posture');
+    expect(within(accountPosture).getByText('Paper')).toBeTruthy();
   });
 
   it('renders "Working" status label for an ON_DUTY bot', async () => {
@@ -134,7 +139,7 @@ describe('BotsListPageComponent', () => {
     const bot = fakeBot({ needs_attention: true });
     await renderPage([bot]);
 
-    const attentionEl = await screen.findByLabelText('Needs attention');
+    const attentionEl = await screen.findByLabelText('Working, needs attention');
     expect(attentionEl).toBeTruthy();
   });
 
@@ -154,7 +159,14 @@ describe('BotsListPageComponent', () => {
   it('renders empty state message when no bots', async () => {
     await renderPage([]);
 
-    expect(await screen.findByText(/No bots match/i)).toBeTruthy();
+    expect(await screen.findByText(/No Alpaca bots yet/i)).toBeTruthy();
+  });
+
+  it('renders explicit refresh and snapshot freshness', async () => {
+    await renderPage([fakeBot()]);
+
+    expect(await screen.findByRole('button', { name: 'Refresh fleet' })).toBeTruthy();
+    expect((await screen.findAllByText(/Updated/i)).length).toBeGreaterThan(0);
   });
 
   it('renders the retry state when a transient catalog load fails', async () => {
@@ -163,8 +175,35 @@ describe('BotsListPageComponent', () => {
       getPanelProfile: () => Promise.reject(new Error('data plane restarting')),
     });
 
-    expect((await screen.findByRole('alert')).textContent).toContain(
-      'Could not load bots. Retrying…',
-    );
+    expect((await screen.findByRole('alert')).textContent).toContain('Fleet unavailable');
+  });
+
+  it('never carries a last-good roster across an account route change', async () => {
+    let resolvePa10!: (bots: BotCatalogView[]) => void;
+    const pa10Catalog = new Promise<BotCatalogView[]>((resolve) => {
+      resolvePa10 = resolve;
+    });
+    const getCatalog = vi.fn((_broker: string, accountId: string) => {
+      if (accountId === 'PA10') return pa10Catalog;
+      return Promise.resolve([
+        fakeBot({
+          strategy_instance_id: 'pa9-bot',
+          account_id: accountId,
+        }),
+      ]);
+    });
+    const view = await renderPage([], { getCatalog });
+    expect(await screen.findByText('pa9-bot')).toBeTruthy();
+
+    view.fixture.componentRef.setInput('accountId', 'PA10');
+    view.fixture.detectChanges();
+
+    await vi.waitFor(() => expect(getCatalog).toHaveBeenCalledWith('alpaca', 'PA10'));
+    expect(screen.queryByText('pa9-bot')).toBeNull();
+
+    resolvePa10([
+      fakeBot({ strategy_instance_id: 'pa10-bot', account_id: 'PA10' }),
+    ]);
+    expect(await screen.findByText('pa10-bot')).toBeTruthy();
   });
 });

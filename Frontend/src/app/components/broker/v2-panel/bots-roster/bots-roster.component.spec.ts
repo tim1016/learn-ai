@@ -14,7 +14,10 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
     phase: 'ON_DUTY',
     desired_state: 'RUNNING',
     running: true,
+    strategy_key: 'deployment_validation',
+    mode: 'trade',
     status_label: 'Working',
+    status_explanation: 'Running under Account Clerk custody.',
     exposure: {},
     fills_today: 1,
     realized_pnl_today: 10,
@@ -66,11 +69,67 @@ describe('BotsRosterComponent', () => {
     ];
     await renderRoster(bots);
 
-    const search = screen.getByPlaceholderText(/Filter by bot ID/i);
+    const search = screen.getByRole('searchbox', { name: 'Search bots' });
     fireEvent.input(search, { target: { value: 'qqq' } });
 
     expect(await screen.findByText('qqq-01')).toBeTruthy();
     expect(screen.queryByText('spy-01')).toBeNull();
+  });
+
+  it('filters by the human strategy label', async () => {
+    const bots = [
+      fakeBot({ strategy_instance_id: 'validation-01', strategy_key: 'deployment_validation' }),
+      fakeBot({ strategy_instance_id: 'other-01', strategy_key: 'ema_crossover_signal' }),
+    ];
+    await renderRoster(bots);
+
+    fireEvent.input(screen.getByRole('searchbox', { name: 'Search bots' }), {
+      target: { value: 'deployment validation' },
+    });
+
+    expect(await screen.findByText('validation-01')).toBeTruthy();
+    expect(screen.queryByText('other-01')).toBeNull();
+  });
+
+  it('filters bots that need attention', async () => {
+    const bots = [
+      fakeBot({ strategy_instance_id: 'normal-bot' }),
+      fakeBot({ strategy_instance_id: 'urgent-bot', needs_attention: true }),
+    ];
+    await renderRoster(bots);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Needs attention' }));
+
+    expect(await screen.findByText('urgent-bot')).toBeTruthy();
+    expect(screen.queryByText('normal-bot')).toBeNull();
+  });
+
+  it('renders a dedicated empty-fleet state', async () => {
+    await renderRoster([]);
+    expect(await screen.findByText(/No Alpaca bots yet/i)).toBeTruthy();
+  });
+
+  it('renders a dedicated empty-filter state', async () => {
+    await renderRoster([fakeBot()]);
+    fireEvent.input(screen.getByRole('searchbox', { name: 'Search bots' }), {
+      target: { value: 'missing' },
+    });
+    expect(await screen.findByText(/No bots match these filters/i)).toBeTruthy();
+  });
+
+  it('renders one semantic six-column roster', async () => {
+    await renderRoster([fakeBot()]);
+
+    expect(screen.getAllByRole('columnheader').map((header) => header.textContent?.trim())).toEqual([
+      'Bot',
+      'State',
+      'Exposure',
+      'Today',
+      'Last activity',
+      'Action',
+    ]);
+    expect(screen.getByText(/Deployment Validation/)).toBeTruthy();
+    expect(screen.getByText('Running under Account Clerk custody.')).toBeTruthy();
   });
 
   it('sorts attention bots first', async () => {

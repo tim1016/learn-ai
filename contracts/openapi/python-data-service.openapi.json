@@ -7233,6 +7233,14 @@
             ],
             "title": "Last Activity At Ms"
           },
+          "mode": {
+            "enum": [
+              "log_only",
+              "trade"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
           "needs_attention": {
             "title": "Needs Attention",
             "type": "boolean"
@@ -7265,12 +7273,20 @@
             "title": "Running",
             "type": "boolean"
           },
+          "status_explanation": {
+            "title": "Status Explanation",
+            "type": "string"
+          },
           "status_label": {
             "title": "Status Label",
             "type": "string"
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
             "type": "string"
           },
           "symbol": {
@@ -7280,13 +7296,16 @@
         },
         "required": [
           "strategy_instance_id",
+          "strategy_key",
           "broker",
           "account_id",
           "symbol",
+          "mode",
           "phase",
           "desired_state",
           "running",
           "status_label",
+          "status_explanation",
           "exposure",
           "fills_today",
           "realized_pnl_today",
@@ -8656,6 +8675,11 @@
           },
           "strategy_instance_id": {
             "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "strategy_key": {
+            "default": "deployment_validation",
+            "title": "Strategy Key",
             "type": "string"
           },
           "symbol": {

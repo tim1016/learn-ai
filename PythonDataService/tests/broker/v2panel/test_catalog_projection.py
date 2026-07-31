@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
 from app.broker.alpaca.clerk.rollup_cache import BotRollupCache
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.live_runs import BotDutyOutcomeView
@@ -69,8 +70,11 @@ def test_catalog_composes_rollups_and_status() -> None:
     assert len(catalog) == 1
     row = catalog[0]
     assert row.strategy_instance_id == SID
+    assert row.strategy_key == "deployment_validation"
+    assert row.mode == "log_only"
     assert row.account_id == ACCT
     assert row.status_label == "Working"
+    assert row.status_explanation == "Running under Account Clerk custody."
     assert row.desired_state == "RUNNING"
     assert row.exposure == {"SPY": 100.0}
 
@@ -89,7 +93,28 @@ def test_catalog_is_attention_first() -> None:
 
     assert catalog[0].strategy_instance_id == OTHER_SID
     assert catalog[0].needs_attention is True
+    assert catalog[0].status_explanation == "The previous run ended without verified custody."
     assert catalog[1].needs_attention is False
+
+
+def test_catalog_explains_decision_attention() -> None:
+    cache = BotRollupCache()
+    bootstrap_rollup_cache(cache, [SID], [])
+    cache.on_decision_appended(
+        DecisionReceipt(
+            seq=1,
+            ts_ms=1_700_000_000_000,
+            outcome="blocked",
+            reason_code="CLERK_HOLD_ACTIVE",
+            bar_ref="SPY@1700000000000",
+        ),
+        sid=SID,
+    )
+
+    catalog = build_catalog([_status(sid=SID)], cache, account_id=ACCT)
+
+    assert catalog[0].needs_attention is True
+    assert catalog[0].status_explanation == "The latest strategy decision is blocked."
 
 
 def test_catalog_no_journal_activity_still_lists_the_bot() -> None:

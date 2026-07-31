@@ -29,12 +29,18 @@ from app.broker.contract.registry import (
 from app.config import settings
 from app.main import app
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
+from app.services.broker_account_snapshot import (
+    clear_broker_account_snapshot_cache_for_testing,
+)
+from app.services.broker_v2_panel.panel_data_source import resolve_account_id
 
 
 @pytest.fixture(autouse=True)
 def _clean_registry() -> Generator[None, None, None]:
     reset_broker_registry_for_testing()
+    clear_broker_account_snapshot_cache_for_testing()
     yield
+    clear_broker_account_snapshot_cache_for_testing()
     reset_broker_registry_for_testing()
 
 
@@ -82,11 +88,13 @@ class _FakePort:
         self._assets = assets if assets is not None else []
         self._clock = clock
         self._error = error
+        self.account_calls = 0
         self.orders_call: dict[str, str | int | None] | None = None
         self.activities_call: dict[str, int | None] | None = None
         self.assets_call: dict[str, str | int | None] | None = None
 
     async def get_account(self) -> BrokerAccountSnapshot:
+        self.account_calls += 1
         if self._error is not None:
             raise self._error
         assert self._account is not None
@@ -167,6 +175,18 @@ async def test_account_endpoint_returns_snapshot() -> None:
     assert body["account_id"] == "PA9"
     assert body["broker"] == "alpaca"
     assert body["buying_power"] == 300.0
+
+
+async def test_account_endpoint_and_panel_scope_share_one_broker_snapshot() -> None:
+    port = _FakePort(account=_snapshot(account_id="PA-SHARED"))
+    get_broker_registry().register(port)
+
+    response = await _get("/api/brokers/alpaca/account")
+    resolved_account_id = await resolve_account_id("alpaca")
+
+    assert response.status_code == 200
+    assert resolved_account_id == "PA-SHARED"
+    assert port.account_calls == 1
 
 
 async def test_unknown_broker_returns_404() -> None:

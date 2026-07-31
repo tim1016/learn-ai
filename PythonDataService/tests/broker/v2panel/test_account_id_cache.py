@@ -8,11 +8,16 @@ when a different port instance is registered (tests, reconnect).
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
+)
+from app.services.broker_account_snapshot import (
+    clear_broker_account_snapshot_cache_for_testing,
 )
 from app.services.broker_v2_panel import panel_data_source as ds
 
@@ -39,9 +44,11 @@ class _CountingPort:
 @pytest.fixture()
 def registry():
     reset_broker_registry_for_testing()
+    clear_broker_account_snapshot_cache_for_testing()
     try:
         yield get_broker_registry()
     finally:
+        clear_broker_account_snapshot_cache_for_testing()
         reset_broker_registry_for_testing()
 
 
@@ -54,6 +61,20 @@ async def test_resolve_account_id_cached_within_ttl(registry) -> None:
     second = await ds.resolve_account_id("alpaca")
 
     assert first == second == "PA-CACHED"
+    assert port.get_account_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_account_id_coalesces_concurrent_reads(registry) -> None:
+    port = _CountingPort("PA-COALESCED")
+    registry.register(port)  # type: ignore[arg-type]
+
+    first, second = await asyncio.gather(
+        ds.resolve_account_id("alpaca"),
+        ds.resolve_account_id("alpaca"),
+    )
+
+    assert first == second == "PA-COALESCED"
     assert port.get_account_calls == 1
 
 

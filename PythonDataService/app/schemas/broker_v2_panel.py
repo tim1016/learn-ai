@@ -90,14 +90,18 @@ class BotCatalogView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     strategy_instance_id: str
+    strategy_key: str
     broker: str
     account_id: str
     symbol: str
+    mode: Literal["log_only", "trade"]
     phase: Phase
     desired_state: DesiredState
     running: bool
     # Closed status label from the vocabulary: Working / Off duty / Retired.
     status_label: str
+    # Backend-authored, trader-facing explanation for the row's current state.
+    status_explanation: str
     # Rollups (S0 BotRollup) — never account-net; attributed to this bot.
     exposure: dict[str, float]
     fills_today: int

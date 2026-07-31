@@ -40,6 +40,20 @@ describe('BrokersService', () => {
     await promise;
   });
 
+  it('coalesces concurrent account reads for the same broker', async () => {
+    const first = service.getAccount('alpaca');
+    const second = service.getAccount('alpaca');
+
+    const requests = httpMock.match('/api/brokers/alpaca/account');
+    expect(requests).toHaveLength(1);
+    requests[0].flush({ account_id: 'PA-SHARED' });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { account_id: 'PA-SHARED' },
+      { account_id: 'PA-SHARED' },
+    ]);
+  });
+
   it('POSTs an order to the control-prefixed orders endpoint', async () => {
     const request = {
       operator: 'desk',

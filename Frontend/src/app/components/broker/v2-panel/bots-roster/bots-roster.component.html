@@ -1,106 +1,148 @@
-<div class="roster-toolbar" role="search">
-  <input
-    pInputText
-    type="search"
-    placeholder="Filter by bot ID or symbol…"
-    [value]="searchTerm()"
-    (input)="onSearch($event)"
-    aria-label="Filter bots"
-    class="roster-search"
-  />
-  <p-selectbutton
-    [options]="statusOptions"
-    [ngModel]="statusFilter()"
-    (ngModelChange)="statusFilter.set($event)"
-    optionLabel="label"
-    optionValue="value"
-    aria-label="Status filter"
-  />
+<div class="roster-toolbar">
+  <label class="roster-search">
+    <span class="sr-only">Search bots</span>
+    <span class="roster-search__icon" aria-hidden="true">⌕</span>
+    <input
+      type="search"
+      placeholder="Bot, symbol, or strategy"
+      [value]="searchTerm()"
+      (input)="onSearch($event)"
+      aria-label="Search bots"
+    />
+  </label>
+
+  <div class="roster-filters" aria-label="Filter bots by state">
+    @for (option of statusOptions; track option.value) {
+      <button
+        type="button"
+        [class.roster-filter--active]="statusFilter() === option.value"
+        [attr.aria-pressed]="statusFilter() === option.value"
+        (click)="selectFilter(option.value)"
+      >
+        {{ option.label }}
+      </button>
+    }
+  </div>
+
+  <span class="roster-count" role="status">
+    {{ filtered().length }} of {{ bots().length }} bots
+  </span>
 </div>
 
-<div class="roster-table-wrap" role="region" aria-label="Bots roster">
-  <table class="roster-table roster-table--header" aria-label="Bots">
-    <thead>
-      <tr>
-        <th scope="col">Bot</th>
-        <th scope="col">Symbol</th>
-        <th scope="col">Status</th>
-        <th scope="col">Exposure</th>
-        <th scope="col">Fills today</th>
-        <th scope="col">Realized P&amp;L</th>
-        <th scope="col">Open P&amp;L</th>
-        <th scope="col">Last activity</th>
-        <th scope="col"><span class="sr-only">Actions</span></th>
-      </tr>
-    </thead>
-  </table>
-
+<div class="roster-table-wrap" role="region" aria-label="Alpaca bots roster" tabindex="0">
   @if (filtered().length === 0) {
-    <div class="roster-empty" role="status">No bots match the current filter.</div>
+    <div class="roster-empty" role="status">
+      <strong>{{ bots().length === 0 ? 'Fleet is empty' : 'Nothing in this view' }}</strong>
+      <span>{{ emptyMessage() }}</span>
+    </div>
   } @else {
-    <cdk-virtual-scroll-viewport [itemSize]="itemSize" class="roster-scroll">
-      <table class="roster-table roster-table--body">
-        <tbody>
-          <tr
-            *cdkVirtualFor="let bot of filtered(); trackBy: botTrackFn"
-            class="roster-row"
-            [class.roster-row--attention]="bot.needs_attention"
-            (click)="navigateToBot(bot)"
-            (keydown.enter)="navigateToBot(bot)"
-            tabindex="0"
-            role="row"
-            [attr.aria-label]="'Bot ' + bot.strategy_instance_id"
-          >
-            <td class="roster-cell roster-cell--id">{{ bot.strategy_instance_id }}</td>
-            <td class="roster-cell">{{ bot.symbol }}</td>
-            <td class="roster-cell">
+    <table class="roster-table">
+      <colgroup>
+        <col class="col-bot" />
+        <col class="col-state" />
+        <col class="col-exposure" />
+        <col class="col-today" />
+        <col class="col-activity" />
+        <col class="col-action" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th scope="col">Bot</th>
+          <th scope="col">State</th>
+          <th scope="col">Exposure</th>
+          <th scope="col">Today</th>
+          <th scope="col">Last activity</th>
+          <th scope="col">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (bot of filtered(); track bot.strategy_instance_id) {
+          <tr [class.roster-row--attention]="bot.needs_attention">
+            <td data-label="Bot">
+              <a class="bot-identity" [routerLink]="botLink(bot)">
+                <strong>{{ bot.symbol }}</strong>
+                <span class="bot-identity__sid">{{ bot.strategy_instance_id }}</span>
+                <span>{{ bot.strategy_key | receiptLabel }} · {{ bot.mode | receiptLabel }}</span>
+              </a>
+            </td>
+            <td data-label="State">
               <app-bot-status-chip
                 [statusLabel]="bot.status_label"
                 [needsAttention]="bot.needs_attention"
               />
+              <span class="state-explanation">{{ bot.status_explanation }}</span>
             </td>
-            <td class="roster-cell roster-cell--mono">{{ exposureText(bot) }}</td>
-            <td class="roster-cell roster-cell--num">{{ fmtInteger(bot.fills_today) }}</td>
-            <td class="roster-cell roster-cell--num">{{ fmtSignedCurrency(bot.realized_pnl_today) }}</td>
-            <td class="roster-cell roster-cell--num">{{ fmtSignedCurrency(bot.open_pnl) }}</td>
-            <td class="roster-cell">
+            <td data-label="Exposure">
+              <strong class="exposure" [class.exposure--flat]="exposureText(bot) === 'Flat'">
+                {{ exposureText(bot) }}
+              </strong>
+              <span>Clerk attributed</span>
+            </td>
+            <td data-label="Today">
+              <div class="today-metrics">
+                <span>
+                  <small>Realized</small>
+                  <strong
+                    [class.pnl--positive]="pnlTone(bot.realized_pnl_today) === 'positive'"
+                    [class.pnl--negative]="pnlTone(bot.realized_pnl_today) === 'negative'"
+                    [class.pnl--neutral]="pnlTone(bot.realized_pnl_today) === 'neutral'"
+                  >
+                    {{ fmtSignedCurrency(bot.realized_pnl_today) }}
+                  </strong>
+                </span>
+                <span>
+                  <small>Open</small>
+                  <strong
+                    [class.pnl--positive]="pnlTone(bot.open_pnl) === 'positive'"
+                    [class.pnl--negative]="pnlTone(bot.open_pnl) === 'negative'"
+                    [class.pnl--neutral]="pnlTone(bot.open_pnl) === 'neutral'"
+                  >
+                    {{ fmtSignedCurrency(bot.open_pnl) }}
+                  </strong>
+                </span>
+                <span><small>Fills</small><strong>{{ fmtInteger(bot.fills_today) }}</strong></span>
+              </div>
+            </td>
+            <td data-label="Last activity">
               @if (bot.last_activity_at_ms) {
                 <app-timestamp-display [value]="bot.last_activity_at_ms" mode="local" />
               } @else {
-                <span>—</span>
+                <strong>Not yet active</strong>
               }
             </td>
-            <td class="roster-cell roster-cell--actions" (click)="$event.stopPropagation()">
+            <td data-label="Action" class="roster-action">
               @if (canStart(bot)) {
                 <button
-                  pButton
                   type="button"
-                  size="small"
-                  severity="secondary"
-                  label="Start"
-                  (click)="onStart(bot)"
+                  [disabled]="isPending(bot)"
+                  [attr.aria-busy]="isPending(bot)"
                   [attr.aria-label]="'Start ' + bot.strategy_instance_id"
-                ></button>
-              }
-              @if (canStop(bot)) {
+                  (click)="onStart(bot)"
+                >
+                  {{ isPending(bot) ? 'Starting…' : 'Start' }}
+                </button>
+              } @else if (canStop(bot)) {
                 <button
-                  pButton
                   type="button"
-                  size="small"
-                  severity="secondary"
-                  label="Stop"
-                  (click)="onStop(bot)"
+                  [disabled]="isPending(bot)"
+                  [attr.aria-busy]="isPending(bot)"
                   [attr.aria-label]="'Stop ' + bot.strategy_instance_id"
-                ></button>
+                  (click)="onStop(bot)"
+                >
+                  {{ isPending(bot) ? 'Stopping…' : 'Stop' }}
+                </button>
+              } @else {
+                <a [routerLink]="botLink(bot)">Review</a>
               }
             </td>
           </tr>
-        </tbody>
-      </table>
-    </cdk-virtual-scroll-viewport>
+        }
+      </tbody>
+    </table>
   }
 </div>
 
-<div class="roster-footer" role="note" aria-label="Fee notice">
-  Fees not reported — P&amp;L figures exclude transaction costs.
+<div class="roster-footer" role="note">
+  <span>Attention-first ordering</span>
+  <span>Fees not reported — P&amp;L excludes transaction costs.</span>
 </div>

@@ -22,11 +22,31 @@ import type {
 export class BrokersService {
   private readonly http = inject(HttpClient);
   private readonly base = '/api/brokers';
+  private readonly accountReads = new Map<
+    string,
+    { expiresAtMs: number; promise: Promise<BrokerAccountSnapshot> }
+  >();
+
+  private static readonly ACCOUNT_CACHE_MS = 10_000;
 
   getAccount(broker = 'alpaca'): Promise<BrokerAccountSnapshot> {
-    return firstValueFrom(
+    const cached = this.accountReads.get(broker);
+    if (cached && cached.expiresAtMs > Date.now()) return cached.promise;
+
+    const promise = firstValueFrom(
       this.http.get<BrokerAccountSnapshot>(`${this.base}/${broker}/account`),
     );
+    const entry = {
+      expiresAtMs: Date.now() + BrokersService.ACCOUNT_CACHE_MS,
+      promise,
+    };
+    this.accountReads.set(broker, entry);
+    void promise.catch(() => {
+      if (this.accountReads.get(broker) === entry) {
+        this.accountReads.delete(broker);
+      }
+    });
+    return promise;
   }
 
   listPositions(broker = 'alpaca'): Promise<BrokerPosition[]> {

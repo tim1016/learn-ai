@@ -14,7 +14,6 @@ a stale deep link never reads another account's evidence.
 from __future__ import annotations
 
 import logging
-import time
 
 from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
@@ -27,7 +26,6 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerAccountSnapshot
-from app.broker.contract.registry import get_broker_registry
 from app.config import settings
 from app.data_lake.polygon_fetcher import fetch_aggregate_bars
 from app.schemas.broker_bots import (
@@ -47,6 +45,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
 )
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
+from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_v2_panel.account_projection_owner import get_or_create_owner
 from app.services.broker_v2_panel.action_execution_service import (
     ActionPerformer,
@@ -128,41 +127,16 @@ class PanelRunnerError(PanelDataError):
 # Only Alpaca has a panel-backing clerk in phase 1.
 _PANEL_BROKER = "alpaca"
 
-# Account-id resolution cache. The broker's account id is static for the life
-# of a registered port, but resolving it costs a full Alpaca REST round-trip
-# (measured 5-15s against the paper API on 2026-07-30) — and every panel and
-# catalog request validates the account. Keyed by the resolved port's identity
-# so a re-registered port (tests, reconnect) naturally misses the cache.
-_ACCOUNT_ID_TTL_S = 60.0
-_account_cache: dict[tuple[str, int], tuple[BrokerAccountSnapshot, float]] = {}
-
 
 async def resolve_account_snapshot(broker: str) -> BrokerAccountSnapshot:
     """Return the cached broker-authored account posture."""
     _require_panel_broker(broker)
     try:
-        port = get_broker_registry().resolve(broker)
+        return await resolve_broker_account_snapshot(broker)
     except BrokerError as exc:
         raise PanelUnavailableError(
             "The broker account could not be read.", detail=exc.detail
         ) from exc
-    cache_key = (broker, id(port))
-    cached = _account_cache.get(cache_key)
-    if cached is not None:
-        account, expires_at = cached
-        if time.monotonic() < expires_at:
-            return account
-    try:
-        account = await port.get_account()
-    except BrokerError as exc:
-        raise PanelUnavailableError(
-            "The broker account could not be read.", detail=exc.detail
-        ) from exc
-    _account_cache[cache_key] = (
-        account,
-        time.monotonic() + _ACCOUNT_ID_TTL_S,
-    )
-    return account
 
 
 async def resolve_account_id(broker: str) -> str:
@@ -344,6 +318,7 @@ async def deploy_alpaca_paper_bot(
         bot = await registry.deploy(
             broker=broker,
             strategy_instance_id=request.strategy_instance_id,
+            strategy_key=request.strategy_key,
             symbol=request.symbol,
             use_rth=True,
             mode="trade",

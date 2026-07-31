@@ -8994,6 +8994,11 @@ export interface components {
             fills_today: number;
             /** Last Activity At Ms */
             last_activity_at_ms: number | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "log_only" | "trade";
             /** Needs Attention */
             needs_attention: boolean;
             /** Open Pnl */
@@ -9007,10 +9012,14 @@ export interface components {
             realized_pnl_today: number;
             /** Running */
             running: boolean;
+            /** Status Explanation */
+            status_explanation: string;
             /** Status Label */
             status_label: string;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+            /** Strategy Key */
+            strategy_key: string;
             /** Symbol */
             symbol: string;
         };
@@ -9607,6 +9616,11 @@ export interface components {
             running: boolean;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+            /**
+             * Strategy Key
+             * @default deployment_validation
+             */
+            strategy_key?: string;
             /** Symbol */
             symbol: string;
         };

@@ -39,3 +39,23 @@ change the current total and the next fresh page remains authoritative for its
 own `observed_at_ms`; keyset pagination does not replay already loaded IDs.
 New IDs that sort before the cursor appear on the next full refresh rather than
 being inserted into an in-progress browse.
+
+## Alpaca account-scoped fleet signals
+
+The v2 route at `/brokers/alpaca/accounts/:accountId/bots` exposes three User
+Timing entries so a repeatable browser trace can distinguish rendering from
+broker and catalog latency:
+
+| Entry | Kind | Boundary |
+| --- | --- | --- |
+| `alpaca-bots-route-shell` | mark | Angular rendered the route shell and loading posture |
+| `alpaca-bots-fresh-roster` | measure | catalog request started → fresh roster committed |
+| `alpaca-bots-routine-action` | measure | Start/Stop requested → action settled locally |
+
+Account resolution no longer performs independent vendor reads for the route,
+account posture, and panel/catalog validation. Those consumers share one
+broker-authored observation, coalesce concurrent requests, and retain it for a
+60-second server-side window keyed to the registered broker port. The Angular
+service also coalesces account reads during route construction. This does not
+make a stale observation look fresh: the fleet and posture retain explicit
+loading, refreshing, last-good, and unavailable labels.

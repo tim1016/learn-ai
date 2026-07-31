@@ -1,66 +1,229 @@
-.account-strip {
-  padding: 0.5rem 1rem;
-  background: var(--p-surface-100, #f4f4f5);
-  border-bottom: 1px solid var(--p-surface-200, #e4e4e7);
+.account-posture {
+  position: relative;
+  margin: 0 var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+
+  &::before {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: var(--accent);
+    content: '';
+  }
 }
 
-.strip-row {
+.account-posture__identity {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-2);
+}
+
+.account-posture__eyebrow,
+.posture-fact__label,
+.financial-line small {
+  display: block;
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.account-posture__account {
+  display: block;
+  margin-top: 0.125rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.posture-badge {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.posture-badge--paper {
+  border-color: rgba(41, 182, 246, 0.42);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.posture-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-block: 1px solid var(--border);
+}
+
+.posture-fact {
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-right: 1px solid var(--border);
+
+  &:last-child {
+    border-right: 0;
+  }
+
+  strong,
+  > span:last-child,
+  app-timestamp-display {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  strong {
+    margin-top: var(--space-1);
+    font-size: var(--fs-sm);
+  }
+
+  > span:last-child,
+  app-timestamp-display {
+    margin-top: 0.125rem;
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+  }
+}
+
+.channel-list {
+  display: flex;
   flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
 }
 
-.strip-stat {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.25rem;
-  font-size: 0.875rem;
-
-  &__label {
-    color: var(--p-text-muted-color, #6b7280);
-    font-size: 0.75rem;
-  }
-
-  &__value {
-    font-weight: 600;
-  }
-}
-
-.strip-divider {
-  color: var(--p-text-muted-color, #6b7280);
-}
-
-.strip-badge {
-  flex-shrink: 0;
-}
-
-.strip-channels {
+.channel-state {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  margin-left: auto;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
 }
 
-.strip-hold-banner {
-  margin-top: 0.375rem;
-  padding: 0.25rem 0.5rem;
-  background: var(--p-orange-100, #ffedd5);
-  color: var(--p-orange-800, #9a3412);
-  border-radius: 4px;
-  font-size: 0.8125rem;
+.channel-state__dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--bull);
+}
 
-  &__icon {
-    margin-right: 0.25rem;
+.channel-state--unhealthy {
+  color: var(--bear);
+
+  .channel-state__dot {
+    background: var(--bear);
   }
 }
 
-.strip-loading,
-.strip-error {
-  font-size: 0.875rem;
-  color: var(--p-text-muted-color, #6b7280);
+.financial-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-sunken);
+
+  > span {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+  }
+
+  strong {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+  }
 }
 
-.strip-error {
-  color: var(--p-red-600, #dc2626);
+.financial-line__freshness {
+  margin-left: auto;
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.custody-alert,
+.account-posture__unavailable,
+.posture-refresh-warning {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid rgba(255, 152, 0, 0.35);
+  background: var(--warn-soft);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+
+  strong {
+    flex: 0 0 auto;
+    color: var(--warn);
+  }
+}
+
+.posture-refresh-warning {
+  border-top-color: var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.account-posture__unavailable,
+.account-posture__skeleton {
+  min-height: 6rem;
+  padding: var(--space-4);
+}
+
+.account-posture__unavailable {
+  flex-direction: column;
+  justify-content: center;
+  border: 0;
+}
+
+.account-posture__skeleton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  color: var(--text-secondary);
+}
+
+.skeleton-line {
+  width: min(40rem, 60%);
+  height: 0.75rem;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, var(--bg-elevated), var(--bg-hover), var(--bg-elevated));
+  background-size: 200% 100%;
+  animation: posture-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes posture-pulse {
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-line { animation: none; }
+}
+
+@media (max-width: 900px) {
+  .posture-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .posture-fact:nth-child(2) { border-right: 0; }
+  .posture-fact:nth-child(-n + 2) { border-bottom: 1px solid var(--border); }
+  .financial-line { flex-wrap: wrap; gap: var(--space-3) var(--space-5); }
+  .financial-line__freshness { width: 100%; margin-left: 0; }
+}
+
+@media (max-width: 560px) {
+  .account-posture { margin-inline: var(--space-3); }
+  .posture-grid { grid-template-columns: 1fr; }
+  .posture-fact { border-right: 0; border-bottom: 1px solid var(--border); }
+  .posture-fact:last-child { border-bottom: 0; }
+  .financial-line > span { width: calc(50% - var(--space-3)); }
+  .custody-alert { flex-direction: column; gap: var(--space-1); }
 }
