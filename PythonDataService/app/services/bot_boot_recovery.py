@@ -102,6 +102,8 @@ class BotBootRecovery:
             if not (child / "lifecycle_state.json").is_file():
                 continue
             strategy_instance_id = child.name
+            if not self._manages_instance(strategy_instance_id):
+                continue
             repo = self._lifecycle_repo_for(strategy_instance_id)
             try:
                 record = repo.read()
@@ -110,8 +112,6 @@ class BotBootRecovery:
                     "Boot sweep skipping corrupt lifecycle state",
                     extra={"action": "boot_sweep_corrupt_lifecycle", "path": str(exc.path)},
                 )
-                continue
-            if not self._manages_instance(strategy_instance_id):
                 continue
             if record is None:
                 continue

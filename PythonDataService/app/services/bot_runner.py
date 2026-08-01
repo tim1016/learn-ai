@@ -54,6 +54,8 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
@@ -661,6 +663,16 @@ class BotTaskRegistry:
         try:
             binding = self._read_binding(strategy_instance_id)
         except InvalidStrategyInstanceIdError:
+            return False
+        except (OSError, ValidationError, ValueError) as exc:
+            logger.warning(
+                "Boot sweep skipping undecodable broker binding",
+                extra={
+                    "action": "boot_sweep_undecodable_binding",
+                    "strategy_instance_id": strategy_instance_id,
+                    "error": str(exc),
+                },
+            )
             return False
         return binding is not None and binding.broker in self._supported_broker_ids
 

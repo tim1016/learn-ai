@@ -46,7 +46,7 @@ class BrokerBotBinding(BaseModel):
 
     schema_version: Literal[2] = 2
     strategy_instance_id: str
-    # Version-2 Alpaca bindings predated this field and all used the only
+    # Version-1 Alpaca bindings predated this field and all used the only
     # available deployment strategy. The default lifts those durable records.
     strategy_key: str = "deployment_validation"
     broker: str
