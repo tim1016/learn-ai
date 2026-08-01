@@ -5,45 +5,81 @@
     Couldn't reach Alpaca. The account figures are unavailable right now.
   </p>
 } @else if (account.value(); as acct) {
-  <p-card aria-label="Alpaca account summary">
-    <section>
-      <header class="mb-3 flex items-center gap-2">
-        <h3 class="m-0 flex-1 text-base font-semibold">Account {{ acct.account_id }}</h3>
-        <p-tag severity="warn" value="Paper" />
-        <p-tag severity="info" [value]="acct.account_status | receiptLabel" />
-      </header>
+  <section class="account-strip" aria-label="Alpaca account summary" [attr.data-expanded]="expanded()">
+    <div class="account-strip__primary">
+      <div class="account-identity">
+        <span class="account-identity__label">Account</span>
+        <strong class="account-identity__id">{{ acct.account_id }}</strong>
+        <div class="account-identity__badges">
+          <p-tag severity="warn" value="Paper" />
+          <p-tag severity="info" [value]="acct.account_status | receiptLabel" />
+        </div>
+      </div>
 
-      <dl class="m-0 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <div class="flex flex-col gap-0.5">
-          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Equity</dt>
-          <dd class="m-0 text-base tabular-nums">{{ acct.equity | currency: acct.currency }}</dd>
+      <dl class="headline-metrics">
+        <div>
+          <dt>Equity</dt>
+          <dd>{{ acct.equity | currency: acct.currency }}</dd>
         </div>
-        <div class="flex flex-col gap-0.5">
-          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Cash</dt>
-          <dd class="m-0 text-base tabular-nums">{{ acct.cash | currency: acct.currency }}</dd>
-        </div>
-        <div class="flex flex-col gap-0.5">
-          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Buying power</dt>
-          <dd class="m-0 text-base tabular-nums">{{ acct.buying_power | currency: acct.currency }}</dd>
-        </div>
-        <div class="flex flex-col gap-0.5">
-          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Portfolio value</dt>
-          <dd class="m-0 text-base tabular-nums">{{ acct.portfolio_value | currency: acct.currency }}</dd>
-        </div>
-        <div class="flex flex-col gap-0.5">
-          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Long market value</dt>
-          <dd class="m-0 text-base tabular-nums">{{ acct.long_market_value | currency: acct.currency }}</dd>
-        </div>
-        <div class="flex flex-col gap-0.5">
-          <dt class="text-xs font-medium uppercase tracking-wide text-color-secondary">Short market value</dt>
-          <dd class="m-0 text-base tabular-nums">{{ acct.short_market_value | currency: acct.currency }}</dd>
+        <div>
+          <dt>Cash</dt>
+          <dd>{{ acct.cash | currency: acct.currency }}</dd>
         </div>
       </dl>
 
-      <footer class="mt-3 text-xs text-color-secondary">
-        <span>As of </span>
-        <app-timestamp-display [value]="acct.observed_at_ms" mode="local" />
-      </footer>
-    </section>
-  </p-card>
+      <button
+        type="button"
+        class="account-toggle"
+        [attr.aria-expanded]="expanded()"
+        aria-controls="alpaca-account-details"
+        (click)="expanded.update(value => !value)"
+      >
+        <span>{{ expanded() ? 'Hide details' : 'Account details' }}</span>
+        <i class="pi pi-chevron-down" aria-hidden="true"></i>
+      </button>
+    </div>
+
+    <div id="alpaca-account-details" class="account-strip__details" [attr.aria-hidden]="!expanded()">
+      <div class="account-strip__details-inner">
+        <dl class="detail-metrics">
+          <div>
+            <dt>Buying power</dt>
+            <dd>{{ acct.buying_power | currency: acct.currency }}</dd>
+          </div>
+          <div>
+            <dt>Portfolio value</dt>
+            <dd>{{ acct.portfolio_value | currency: acct.currency }}</dd>
+          </div>
+          <div>
+            <dt>Long market value</dt>
+            <dd>{{ acct.long_market_value | currency: acct.currency }}</dd>
+          </div>
+          <div>
+            <dt>Short market value</dt>
+            <dd>{{ acct.short_market_value | currency: acct.currency }}</dd>
+          </div>
+        </dl>
+
+        <div class="account-flags" aria-label="Account permissions">
+          <span [class.account-flag--alert]="acct.trading_blocked">
+            Trading {{ acct.trading_blocked ? 'blocked' : 'enabled' }}
+          </span>
+          <span [class.account-flag--alert]="acct.account_blocked">
+            Account {{ acct.account_blocked ? 'blocked' : 'clear' }}
+          </span>
+          <span>Pattern day trader: {{ acct.pattern_day_trader === null ? 'Unknown' : (acct.pattern_day_trader ? 'Yes' : 'No') }}</span>
+        </div>
+
+        <footer class="account-timestamp">
+          <span>Observed </span>
+          <app-timestamp-display [value]="acct.observed_at_ms" mode="local" />
+          @if (acct.created_at_ms !== null) {
+            <span class="account-timestamp__divider" aria-hidden="true">·</span>
+            <span>Opened </span>
+            <app-timestamp-display [value]="acct.created_at_ms" mode="local" />
+          }
+        </footer>
+      </div>
+    </div>
+  </section>
 }

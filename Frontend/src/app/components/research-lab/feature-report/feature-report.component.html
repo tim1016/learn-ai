@@ -190,7 +190,7 @@
 
   <!-- 5. t-Stat Method Selector -->
   <div class="method-selector mb-4">
-    <label class="method-label">t-Stat Method:</label>
+    <span class="method-label">t-Stat Method:</span>
     <p-select
       [options]="tStatOptions"
       [(ngModel)]="selectedTStatMethod"
@@ -302,7 +302,7 @@
 
     @if (hasMeaningfulSpread) {
       <div class="cost-slider-container mt-3">
-        <label class="method-label">Assumed one-way cost:</label>
+        <span class="method-label">Assumed one-way cost:</span>
         <p-slider [(ngModel)]="costBps" [min]="0" [max]="10" [step]="1"
                   [style]="{ width: '200px' }" />
         <span class="cost-value">{{ costBps() }} bps</span>

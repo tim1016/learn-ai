@@ -1,0 +1,114 @@
+:host {
+  display: block;
+}
+
+.position-list {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.position-card {
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+}
+
+.position-card__header,
+.position-price {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.position-side {
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-faint);
+  color: var(--accent-text);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.position-price {
+  margin: 0.8rem 0;
+  padding: 0.7rem 0;
+  border-block: 1px solid var(--border);
+}
+
+.position-price__label,
+.position-metrics dt {
+  color: var(--text-muted);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.position-price strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  font-variant-numeric: tabular-nums;
+}
+
+.position-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem 1rem;
+  margin: 0;
+}
+
+.position-metrics dd {
+  margin: 0.1rem 0 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.position-metrics dd span {
+  color: inherit;
+}
+
+.position-metrics dd.positive {
+  color: var(--bull);
+}
+
+.position-metrics dd.negative {
+  color: var(--bear);
+}
+
+.empty-state {
+  display: grid;
+  min-height: 11rem;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.empty-state i {
+  font-size: 1.3rem;
+}
+
+@container ide (max-width: 30rem) {
+  .position-card__header,
+  .position-price {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .position-side {
+    align-self: flex-start;
+  }
+
+  .position-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

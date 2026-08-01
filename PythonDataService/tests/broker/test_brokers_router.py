@@ -150,7 +150,7 @@ async def _get(path: str) -> Response:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        return await client.get(path)
+        return await client.get(path, headers=_control_headers())
 
 
 def _control_headers() -> dict[str, str]:
@@ -345,6 +345,37 @@ async def test_orders_endpoint_returns_list_and_forwards_query_params() -> None:
     assert response.status_code == 200
     assert response.json()[0]["order_id"] == "o-9"
     assert port.orders_call == {"status": "open", "limit": 5, "after_ms": 123}
+
+
+async def test_order_groups_endpoint_returns_python_owned_quantity_totals() -> None:
+    port = _FakePort(
+        orders=[
+            _order(
+                order_id="o-open",
+                symbol="SPY",
+                quantity=5.0,
+                filled_quantity=2.0,
+                status="new",
+            ),
+            _order(
+                order_id="o-filled",
+                symbol="SPY",
+                quantity=3.0,
+                filled_quantity=3.0,
+                status="filled",
+            ),
+        ]
+    )
+    get_broker_registry().register(port)
+
+    response = await _get("/api/brokers/alpaca/order-groups?status=all&limit=50")
+
+    assert response.status_code == 200
+    assert response.json()[0]["symbol"] == "SPY"
+    assert response.json()[0]["gross_requested_quantity"] == 8.0
+    assert response.json()[0]["gross_filled_quantity"] == 5.0
+    assert response.json()[0]["gross_working_quantity"] == 3.0
+    assert port.orders_call == {"status": "all", "limit": 50, "after_ms": None}
 
 
 async def test_orders_endpoint_rejects_invalid_status() -> None:

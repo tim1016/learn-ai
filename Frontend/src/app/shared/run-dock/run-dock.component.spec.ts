@@ -93,7 +93,8 @@ describe('RunDockComponent', () => {
     const host = fixture.nativeElement as HTMLElement;
     const strip = host.querySelector<HTMLButtonElement>('.run-dock__strip');
     expect(strip).not.toBeNull();
-    strip!.click();
+    if (!strip) throw new Error('Expected the collapsed run dock strip');
+    strip.click();
     fixture.detectChanges();
     expect(localStorage.getItem(STORAGE_KEY)).toBe('true');
     expect(host.querySelector('.run-dock__header')).not.toBeNull();
@@ -106,7 +107,8 @@ describe('RunDockComponent', () => {
       'button[aria-label="Collapse run dock"]',
     );
     expect(collapseBtn).not.toBeNull();
-    collapseBtn!.click();
+    if (!collapseBtn) throw new Error('Expected the collapse button');
+    collapseBtn.click();
     fixture.detectChanges();
     expect(localStorage.getItem(STORAGE_KEY)).toBe('false');
     expect(host.querySelector('.run-dock__strip')).not.toBeNull();
@@ -123,7 +125,9 @@ describe('RunDockComponent', () => {
       'engine_backtest · running_indicators',
     );
     // Expand and confirm the headline is mirrored.
-    host.querySelector<HTMLButtonElement>('.run-dock__strip')!.click();
+    const strip = host.querySelector<HTMLButtonElement>('.run-dock__strip');
+    if (!strip) throw new Error('Expected the collapsed run dock strip');
+    strip.click();
     fixture.detectChanges();
     expect(host.querySelector('.run-dock__headline-text')?.textContent).toContain(
       'engine_backtest · running_indicators',
@@ -141,7 +145,8 @@ describe('RunDockComponent', () => {
     fixture.detectChanges();
     const bar = host.querySelector('.run-dock__progress');
     expect(bar).not.toBeNull();
-    const fill = bar!.querySelector<HTMLElement>('.run-dock__progress-fill');
+    if (!bar) throw new Error('Expected the run dock progress bar');
+    const fill = bar.querySelector<HTMLElement>('.run-dock__progress-fill');
     expect(fill?.style.width).toBe('42%');
   });
 
@@ -161,7 +166,9 @@ describe('RunDockComponent', () => {
     source.canCancel.set(true);
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
-    host.querySelector<HTMLButtonElement>('.run-dock__btn--danger')!.click();
+    const cancelButton = host.querySelector<HTMLButtonElement>('.run-dock__btn--danger');
+    if (!cancelButton) throw new Error('Expected the run dock cancel button');
+    cancelButton.click();
     expect(source.cancelCount).toBe(1);
   });
 
@@ -181,7 +188,8 @@ describe('RunDockComponent', () => {
     const buttons = Array.from(host.querySelectorAll<HTMLButtonElement>('.run-dock__btn'));
     const clearBtn = buttons.find((b) => b.textContent?.includes('Clear log'));
     expect(clearBtn).toBeDefined();
-    clearBtn!.click();
+    if (!clearBtn) throw new Error('Expected the Clear log button');
+    clearBtn.click();
     expect(source.clearLogCount).toBe(1);
   });
 

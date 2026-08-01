@@ -102,7 +102,7 @@ export class TrackedInstrumentsComponent implements OnInit {
         next.set(ticker, related);
         return next;
       });
-    } catch (err) {
+    } catch {
       // Show error inline — detail will be null for this ticker
     } finally {
       this.detailLoading.set(false);

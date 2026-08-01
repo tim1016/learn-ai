@@ -54,6 +54,19 @@ interface ChartPanel {
 const PANDAS_TA_COLOR = '#26a69a';
 const TRADINGVIEW_COLOR = '#2962FF';
 
+function hasCompleteOhlc(row: IndicatorTableRow): row is IndicatorTableRow & {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+} {
+  return row.open != null && row.high != null && row.low != null && row.close != null;
+}
+
+function hasVolume(row: IndicatorTableRow): row is IndicatorTableRow & { volume: number } {
+  return row.volume != null;
+}
+
 const CHART_PANELS: ChartPanel[] = [
   { id: 'price', title: 'OHLCV — Candlestick + Close', key: 'close', type: 'price' },
   { id: 'ema_5', title: 'EMA 5', key: 'ema_5', type: 'line' },
@@ -274,10 +287,10 @@ export class IndicatorReportComponent {
       });
       candleSeries.setData(
         ours
-          .filter(r => r.open != null)
+          .filter(hasCompleteOhlc)
           .map(r => ({
             time: toUtc(r.time),
-            open: r.open!, high: r.high!, low: r.low!, close: r.close!,
+            open: r.open, high: r.high, low: r.low, close: r.close,
           } as CandlestickData))
           .sort(byTime)
       );
@@ -306,10 +319,10 @@ export class IndicatorReportComponent {
       });
       volSeries.setData(
         ours
-          .filter(r => r.volume != null)
+          .filter(hasVolume)
           .map(r => ({
             time: toUtc(r.time),
-            value: r.volume!,
+            value: r.volume,
             color: (r.close ?? 0) >= (r.open ?? 0) ? 'rgba(38,166,154,0.3)' : 'rgba(239,83,80,0.3)',
           } as HistogramData))
           .sort(byTime)

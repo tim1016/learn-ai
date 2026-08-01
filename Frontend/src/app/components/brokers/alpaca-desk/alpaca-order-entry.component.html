@@ -1,29 +1,28 @@
-<div class="flex flex-col gap-3">
-  <div class="flex flex-wrap items-center gap-2">
+<div class="order-entry">
+  <div class="order-entry__toolbar">
+    <div>
+      <strong>Order ticket</strong>
+      <p>Each leg is journaled separately before submission.</p>
+    </div>
     <p-button
-      label="Add equity leg"
-      icon="pi pi-plus"
-      size="small"
-      (onClick)="addEquityLeg()"
-    />
-    <p-button
-      label="Add option leg"
+      label="Add another"
       icon="pi pi-plus"
       size="small"
       severity="secondary"
-      [disabled]="true"
-      pTooltip="Option legs are coming in 2b"
-      title="Option legs are coming in 2b"
+      [outlined]="true"
+      ariaLabel="Add equity leg"
+      (onClick)="addEquityLeg()"
     />
-    <span class="text-xs text-color-secondary">Option legs are coming in 2b.</span>
   </div>
 
   @if (legs().length === 0) {
-    <p class="m-0 py-2 text-sm text-color-secondary" role="status">
-      No legs yet. Add an equity leg to build an order.
-    </p>
+    <div class="order-empty" role="status">
+      <i class="pi pi-file-edit" aria-hidden="true"></i>
+      <p>No order legs yet.</p>
+      <p-button label="Add equity leg" icon="pi pi-plus" size="small" (onClick)="addEquityLeg()" />
+    </div>
   } @else {
-    <div class="flex flex-col gap-2" role="list" aria-label="Order legs">
+    <div class="order-legs" role="list" aria-label="Order legs">
       @for (leg of legs(); track leg.id) {
         <app-alpaca-order-leg-row
           [legForm]="legsForm[$index]"
@@ -33,10 +32,16 @@
       }
     </div>
 
-    <div>
+    <div class="order-entry__footer">
+      <div class="order-capabilities">
+        <span><i class="pi pi-check" aria-hidden="true"></i> Market</span>
+        <span><i class="pi pi-check" aria-hidden="true"></i> Limit</span>
+        <span><i class="pi pi-clock" aria-hidden="true"></i> Day or GTC</span>
+      </div>
       <p-button
         label="Preview order"
-        icon="pi pi-eye"
+        icon="pi pi-arrow-right"
+        iconPos="right"
         size="small"
         [disabled]="!canSubmit()"
         (onClick)="openPreview()"

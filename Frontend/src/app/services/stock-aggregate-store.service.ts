@@ -2,14 +2,6 @@ import { Injectable, inject, signal, computed } from '@angular/core';
 import { StockAggregate } from '../graphql/types';
 import { MarketDataService } from './market-data.service';
 
-interface CacheKey {
-  ticker: string;
-  fromDate: string;
-  toDate: string;
-  timespan: string;
-  multiplier: number;
-}
-
 interface CacheEntry {
   aggregates: StockAggregate[];
   timestamp: number;
@@ -54,7 +46,7 @@ export class StockAggregateStore {
       }
 
       // Merge aggregates
-      const existing = result.get(cachedTicker)!;
+      const existing = result.get(cachedTicker) ?? [];
       const merged = [...existing, ...entry.aggregates];
 
       // Deduplicate by timestamp

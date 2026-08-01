@@ -83,8 +83,9 @@ describe('isMarketHoliday', () => {
   it('should return the holiday event for a known holiday', () => {
     const result = isMarketHoliday(new Date(2026, 0, 1), holidays); // Jan 1
     expect(result).not.toBeNull();
-    expect(result!.name).toBe("New Year's Day");
-    expect(result!.status).toBe('Closed');
+    if (!result) throw new Error("Expected New Year's Day to be a market holiday");
+    expect(result.name).toBe("New Year's Day");
+    expect(result.status).toBe('Closed');
   });
 
   it('should return null for a non-holiday', () => {
@@ -95,7 +96,8 @@ describe('isMarketHoliday', () => {
   it('should match early close holidays', () => {
     const result = isMarketHoliday(new Date(2026, 6, 3), holidays); // Jul 3
     expect(result).not.toBeNull();
-    expect(result!.status).toBe('Early Close');
+    if (!result) throw new Error('Expected an early-close market holiday');
+    expect(result.status).toBe('Early Close');
   });
 });
 

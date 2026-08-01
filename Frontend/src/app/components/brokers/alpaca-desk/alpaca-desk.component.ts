@@ -1,4 +1,6 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
+import { ButtonModule } from 'primeng/button';
+import { DialogModule } from 'primeng/dialog';
 import { TagModule } from 'primeng/tag';
 
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
@@ -21,9 +23,19 @@ import { AlpacaPositionsTableComponent } from './alpaca-positions-table.componen
     AlpacaPositionsTableComponent,
     AlpacaOrdersTableComponent,
     AlpacaOrderEntryComponent,
+    ButtonModule,
+    DialogModule,
     TagModule,
   ],
   templateUrl: './alpaca-desk.component.html',
+  styleUrl: './alpaca-desk.component.scss',
   host: { class: 'block h-full' },
 })
-export class AlpacaDeskComponent {}
+export class AlpacaDeskComponent {
+  protected readonly orderEntryOpen = signal(false);
+  protected readonly ordersRefreshVersion = signal(0);
+
+  protected refreshOrders(): void {
+    this.ordersRefreshVersion.update((version) => version + 1);
+  }
+}

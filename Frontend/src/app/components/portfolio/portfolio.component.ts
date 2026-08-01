@@ -83,9 +83,10 @@ export class PortfolioComponent implements OnInit {
       catchError(err => { this.error.set(err?.message); return of(null); }),
       finalize(() => this.creating.set(false)),
     ).subscribe(result => {
-      if (result?.success && result.account) {
-        this.accounts.update(list => [...list, result.account!]);
-        this.selectedAccountId.set(result.account.id);
+      const account = result?.account;
+      if (result?.success && account) {
+        this.accounts.update(list => [...list, account]);
+        this.selectedAccountId.set(account.id);
         this.showCreateForm.set(false);
         this.newAccountName.set('');
       } else if (result?.error) {

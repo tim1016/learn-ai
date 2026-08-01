@@ -438,11 +438,11 @@ export class PricingLabComponent implements OnDestroy {
         type: 'success',
         text: `Loaded ${modelCount} server model${modelCount !== 1 ? 's' : ''} + Legacy BS (client). Hover chart for values.`,
       });
-    } catch (err: any) {
-      console.error('[PricingLab] Comparison failed:', err);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Network error';
       this.statusMessage.set({
         type: 'error',
-        text: `Request failed: ${err?.message || 'Network error'}. Check that the backend services are running.`,
+        text: `Request failed: ${message}. Check that the backend services are running.`,
       });
       this.serverResult.set(null);
     } finally {
@@ -656,7 +656,7 @@ export class PricingLabComponent implements OnDestroy {
       if (!this.visibleModels().has(def.key)) continue;
       const series = this.seriesMap.get(def.key);
       if (!series) continue;
-      const raw = param.seriesData.get(series) as any;
+      const raw = param.seriesData.get(series) as { value?: number } | undefined;
       const val = raw?.value;
       if (val == null) continue;
       anyValue = true;

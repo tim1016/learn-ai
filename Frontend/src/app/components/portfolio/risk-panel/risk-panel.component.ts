@@ -59,8 +59,9 @@ export class RiskPanelComponent {
       takeUntilDestroyed(this.destroyRef),
       finalize(() => this.creating.set(false)),
     ).subscribe(res => {
-      if (res.success && res.rule) {
-        this.rules.update(list => [...list, res.rule!]);
+      const rule = res.rule;
+      if (res.success && rule) {
+        this.rules.update(list => [...list, rule]);
       } else {
         this.error.set(res.error ?? 'Failed to create rule');
       }
