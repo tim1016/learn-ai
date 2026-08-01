@@ -66,14 +66,24 @@
               <div
                 class="session-card"
                 [class.active]="activeSessionId() === s.id"
-                (click)="loadSession(s.id)">
+                role="button"
+                tabindex="0"
+                (click)="loadSession(s.id)"
+                (keydown.enter)="loadSession(s.id)"
+                (keydown.space)="loadSession(s.id); $event.preventDefault()">
 
                 @if (renamingSessionId() === s.id) {
-                  <div class="rename-row" (click)="$event.stopPropagation()">
+                  <div
+                    class="rename-row"
+                    tabindex="0"
+                    (click)="$event.stopPropagation()"
+                    (keydown)="$event.stopPropagation()">
                     <input
                       type="text"
                       class="rename-input"
                       [(ngModel)]="renameValue"
+                      (keydown.enter)="$event.stopPropagation()"
+                      (keydown.escape)="$event.stopPropagation()"
                       (keyup.enter)="confirmRename(s.id)"
                       (keyup.escape)="cancelRename()"
                     />
@@ -532,11 +542,11 @@
 
         <div class="options-row">
           <div class="option-group">
-            <label
+            <label for="options-dte-distance"
               title="Calendar days from each trading day to its target expiry. 0 = 0DTE (same-day expiry). 7 = the option expiring exactly 7 days from each trading day. Strict matching: if no listed expiry lands on (trading_day + DTE), the day is skipped.">
               DTE distance (days)
             </label>
-            <input type="number" [ngModel]="optionsDteDistance()" (ngModelChange)="optionsDteDistance.set(+$event)"
+            <input id="options-dte-distance" type="number" [ngModel]="optionsDteDistance()" (ngModelChange)="optionsDteDistance.set(+$event)"
                    min="0" max="60" class="multiplier-input" />
             <span class="option-hint">
               @if (optionsDteDistance() === 0) {
@@ -547,18 +557,18 @@
             </span>
           </div>
           <div class="option-group">
-            <label>Strikes each side (ATM ± N)</label>
-            <input type="number" [ngModel]="optionsStrikesEachSide()" (ngModelChange)="optionsStrikesEachSide.set(+$event)"
+            <label for="options-strikes-each-side">Strikes each side (ATM ± N)</label>
+            <input id="options-strikes-each-side" type="number" [ngModel]="optionsStrikesEachSide()" (ngModelChange)="optionsStrikesEachSide.set(+$event)"
                    min="1" max="25" class="multiplier-input" />
           </div>
           <div class="option-group">
-            <label>Risk-free rate</label>
-            <input type="number" step="0.005" [ngModel]="optRiskFreeRate()" (ngModelChange)="optRiskFreeRate.set(+$event)"
+            <label for="options-risk-free-rate">Risk-free rate</label>
+            <input id="options-risk-free-rate" type="number" step="0.005" [ngModel]="optRiskFreeRate()" (ngModelChange)="optRiskFreeRate.set(+$event)"
                    min="0" max="0.25" class="multiplier-input" />
           </div>
           <div class="option-group">
-            <label>Dividend yield</label>
-            <input type="number" step="0.005" [ngModel]="optDividendYield()" (ngModelChange)="optDividendYield.set(+$event)"
+            <label for="options-dividend-yield">Dividend yield</label>
+            <input id="options-dividend-yield" type="number" step="0.005" [ngModel]="optDividendYield()" (ngModelChange)="optDividendYield.set(+$event)"
                    min="0" max="0.25" class="multiplier-input" />
           </div>
         </div>
@@ -1100,4 +1110,3 @@
     </div>
   }
 </app-run-dock>
-

@@ -34,14 +34,16 @@ export class ExpirationRibbonComponent {
       const year = d.getFullYear();
       const key = `${year}-${month}`;
 
-      if (!groups.has(key)) {
-        groups.set(key, {
+      let group = groups.get(key);
+      if (!group) {
+        group = {
           label: this.MONTHS[month],
           year,
           dates: [],
-        });
+        };
+        groups.set(key, group);
       }
-      groups.get(key)!.dates.push(dateStr);
+      group.dates.push(dateStr);
     }
 
     return [...groups.values()];

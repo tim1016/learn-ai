@@ -46,7 +46,14 @@ class BrokerReadPort(Protocol):
         status: str | None = None,
         limit: int | None = None,
         after_ms: int | None = None,
-    ) -> list[BrokerOrder]: ...
+    ) -> list[BrokerOrder]:
+        """Return orders newest first by submitted timestamp.
+
+        Consumers may retain the first rows as the most recent per-symbol
+        activity, so every broker adapter must establish this ordering before
+        applying its vendor-side limit.
+        """
+        ...
 
     async def list_activities(
         self,

@@ -35,6 +35,7 @@ from app.broker.contract.models import (
     BrokerAsset,
     BrokerClockEvidence,
     BrokerOrder,
+    BrokerOrderGroup,
     BrokerOrderRequest,
     BrokerPosition,
 )
@@ -42,6 +43,7 @@ from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
 from app.security.data_plane_control import require_data_plane_control_secret
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
+from app.services.broker_order_groups import group_orders_by_symbol
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 
@@ -113,6 +115,21 @@ async def list_orders(
         broker,
         lambda port: port.list_orders(status=status, limit=limit, after_ms=after_ms),
     )
+
+
+@router.get("/{broker}/order-groups", response_model=list[BrokerOrderGroup])
+async def list_order_groups(
+    broker: str,
+    status: Literal["open", "closed", "all"] | None = None,
+    limit: int | None = Query(default=None, ge=1, le=_MAX_READ_LIMIT),
+    after_ms: int | None = Query(default=None, ge=0, le=_MAX_INT64_MS),
+) -> list[BrokerOrderGroup]:
+    """Return recent orders grouped by symbol with Python-owned quantity totals."""
+    orders = await _run(
+        broker,
+        lambda port: port.list_orders(status=status, limit=limit, after_ms=after_ms),
+    )
+    return group_orders_by_symbol(orders)
 
 
 @router.get("/{broker}/activities", response_model=list[BrokerActivity])

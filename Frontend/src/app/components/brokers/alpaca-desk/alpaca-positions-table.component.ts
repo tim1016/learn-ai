@@ -1,8 +1,9 @@
-import { CurrencyPipe, DecimalPipe } from '@angular/common';
+import { CurrencyPipe, DecimalPipe, PercentPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, inject, resource } from '@angular/core';
-import { TableModule } from 'primeng/table';
 
 import { BrokersService } from '../../../services/brokers.service';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 
 /**
  * Alpaca open-positions table. Read-only. Four distinct renders: loading,
@@ -11,8 +12,9 @@ import { BrokersService } from '../../../services/brokers.service';
 @Component({
   selector: 'app-alpaca-positions-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe, DecimalPipe, TableModule],
+  imports: [AssetIdentityComponent, CurrencyPipe, DecimalPipe, PercentPipe, ReceiptLabelPipe],
   templateUrl: './alpaca-positions-table.component.html',
+  styleUrl: './alpaca-positions-table.component.scss',
   host: { class: 'block' },
 })
 export class AlpacaPositionsTableComponent {

@@ -11,6 +11,7 @@ import {
   CandlestickSeries, CandlestickData,
   HistogramSeries, HistogramData,
   LineSeries, LineData,
+  SeriesType,
   UTCTimestamp,
 } from 'lightweight-charts';
 import { environment } from '../../../../environments/environment';
@@ -87,7 +88,30 @@ interface SubPanel {
   id: string;
   container: HTMLDivElement;
   chart: IChartApi;
-  seriesMap: Map<string, ISeriesApi<any>>;
+  seriesMap: Map<string, ISeriesApi<SeriesType>>;
+}
+
+interface ChartRequestErrorDetail {
+  error_code: string;
+  detail?: string;
+  allowed_timeframes?: string[];
+  recommended_timeframe?: string;
+}
+
+function hasIndicatorValue(point: IndicatorPoint): point is IndicatorPoint & { value: number } {
+  return point.value !== null;
+}
+
+function isChartRequestErrorDetail(value: unknown): value is ChartRequestErrorDetail {
+  if (typeof value !== 'object' || value === null) return false;
+  const detail = value as Record<string, unknown>;
+  return typeof detail['error_code'] === 'string'
+    && (detail['detail'] === undefined || typeof detail['detail'] === 'string')
+    && (detail['recommended_timeframe'] === undefined || typeof detail['recommended_timeframe'] === 'string')
+    && (detail['allowed_timeframes'] === undefined || (
+      Array.isArray(detail['allowed_timeframes'])
+      && detail['allowed_timeframes'].every(timeframe => typeof timeframe === 'string')
+    ));
 }
 
 const ALL_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1D', '1W', '1M'];
@@ -381,12 +405,17 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
         visibleIndicatorIds: visibleIds,
         timeframe: this.timeframe(),
       });
-    } catch (e: any) {
-      const detail = e?.error?.detail;
-      if (detail && typeof detail === 'object' && detail.error_code) {
+    } catch (error: unknown) {
+      const detail = error instanceof Error && isChartRequestErrorDetail(
+        (error as Error & { error?: { detail?: unknown } }).error?.detail,
+      )
+        ? (error as Error & { error: { detail: ChartRequestErrorDetail } }).error.detail
+        : null;
+      if (detail) {
+        const detailMessage = detail.detail ?? 'An error occurred';
         switch (detail.error_code) {
           case 'TIMEFRAME_NOT_ALLOWED':
-            this.error.set(detail.detail);
+            this.error.set(detailMessage);
             if (detail.allowed_timeframes) {
               this.allowedTimeframes.set(detail.allowed_timeframes);
             }
@@ -399,7 +428,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
               this.timeframeRejected.emit({
                 requested: this.timeframe(),
                 recommended: detail.recommended_timeframe,
-                detail: detail.detail,
+                detail: detailMessage,
               });
               this.toastMessage.set(`Switched to ${detail.recommended_timeframe} for this range`);
               setTimeout(() => this.toastMessage.set(''), 4000);
@@ -412,10 +441,10 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             this.error.set('Rate limited — please wait a moment and try again');
             break;
           default:
-            this.error.set(detail.detail || 'An error occurred');
+            this.error.set(detailMessage);
         }
       } else {
-        this.error.set(e?.message || 'Failed to fetch chart data');
+        this.error.set(error instanceof Error ? error.message : 'Failed to fetch chart data');
       }
     } finally {
       this.loading.set(false);
@@ -583,10 +612,10 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
     for (const ind of overlayResults) {
       if (ind.type === 'line' && Array.isArray(ind.data)) {
         const lineData: LineData[] = (ind.data as IndicatorPoint[])
-          .filter(p => p.value !== null)
+          .filter(hasIndicatorValue)
           .map(p => ({
             time: (p.t / 1000) as UTCTimestamp,
-            value: p.value!,
+            value: p.value,
           }))
           .sort((a, b) => (a.time as number) - (b.time as number));
 
@@ -702,7 +731,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
       shiftVisibleRangeOnNewBar: false,
     });
 
-    const seriesMap = new Map<string, ISeriesApi<any>>();
+    const seriesMap = new Map<string, ISeriesApi<SeriesType>>();
 
     for (const ind of indicators) {
       if (ind.type === 'macd' && !Array.isArray(ind.data)) {
@@ -714,12 +743,12 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             priceFormat: { type: 'price', precision: 4, minMove: 0.0001 },
           });
           const sorted = macdData['histogram']
-            .filter(p => p.value !== null)
+            .filter(hasIndicatorValue)
             .sort((a, b) => a.t - b.t);
 
           const histData: HistogramData[] = sorted.map((p, i) => {
-            const val = p.value!;
-            const prev = i > 0 ? sorted[i - 1].value! : 0;
+            const val = p.value;
+            const prev = i > 0 ? sorted[i - 1].value : 0;
             const isGrowing = Math.abs(val) >= Math.abs(prev);
             const opacity = isGrowing ? 0.85 : 0.35;
             const color = val >= 0
@@ -744,8 +773,8 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             lastValueVisible: false,
           });
           const lineData: LineData[] = macdData['macd']
-            .filter(p => p.value !== null)
-            .map(p => ({ time: (p.t / 1000) as UTCTimestamp, value: p.value! }))
+            .filter(hasIndicatorValue)
+            .map(p => ({ time: (p.t / 1000) as UTCTimestamp, value: p.value }))
             .sort((a, b) => (a.time as number) - (b.time as number));
           macdSeries.setData(lineData);
           seriesMap.set(`${ind.id}_macd`, macdSeries);
@@ -760,8 +789,8 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             lastValueVisible: false,
           });
           const lineData: LineData[] = macdData['signal']
-            .filter(p => p.value !== null)
-            .map(p => ({ time: (p.t / 1000) as UTCTimestamp, value: p.value! }))
+            .filter(hasIndicatorValue)
+            .map(p => ({ time: (p.t / 1000) as UTCTimestamp, value: p.value }))
             .sort((a, b) => (a.time as number) - (b.time as number));
           signalSeries.setData(lineData);
           seriesMap.set(`${ind.id}_signal`, signalSeries);
@@ -774,8 +803,8 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
           lastValueVisible: false,
         });
         const lineData: LineData[] = (ind.data as IndicatorPoint[])
-          .filter(p => p.value !== null)
-          .map(p => ({ time: (p.t / 1000) as UTCTimestamp, value: p.value! }))
+          .filter(hasIndicatorValue)
+          .map(p => ({ time: (p.t / 1000) as UTCTimestamp, value: p.value }))
           .sort((a, b) => (a.time as number) - (b.time as number));
         lineSeries.setData(lineData);
         seriesMap.set(ind.id, lineSeries);

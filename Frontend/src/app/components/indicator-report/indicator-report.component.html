@@ -8,16 +8,16 @@
   <!-- Controls -->
   <div class="controls">
     <div class="input-group">
-      <label>Ticker</label>
-      <input type="text" [(ngModel)]="ticker" />
+      <label for="indicator-report-ticker">Ticker</label>
+      <input id="indicator-report-ticker" type="text" [(ngModel)]="ticker" />
     </div>
     <div class="input-group">
-      <label>From</label>
-      <input type="date" [(ngModel)]="fromDate" />
+      <label for="indicator-report-from">From</label>
+      <input id="indicator-report-from" type="date" [(ngModel)]="fromDate" />
     </div>
     <div class="input-group">
-      <label>To</label>
-      <input type="date" [(ngModel)]="toDate" />
+      <label for="indicator-report-to">To</label>
+      <input id="indicator-report-to" type="date" [(ngModel)]="toDate" />
     </div>
     <button (click)="generate()" [disabled]="loading()">
       @if (loading()) { Generating... } @else { Generate Report }

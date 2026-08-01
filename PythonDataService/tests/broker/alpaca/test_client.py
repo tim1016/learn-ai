@@ -14,6 +14,7 @@ from typing import Any
 
 import anyio
 import pytest
+from alpaca.common.enums import Sort
 from alpaca.trading.enums import AssetStatus, QueryOrderStatus
 from requests.sessions import Session
 
@@ -102,6 +103,7 @@ async def test_list_orders_builds_filter() -> None:
     assert fake.orders_filter.status == QueryOrderStatus.OPEN
     assert fake.orders_filter.limit == 5
     assert fake.orders_filter.after is not None
+    assert fake.orders_filter.direction == Sort.DESC
 
 
 async def test_list_assets_builds_status_filter_and_caps_response() -> None:

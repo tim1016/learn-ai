@@ -336,7 +336,7 @@
       <!-- Legs -->
       <div class="panel-section">
         <div class="flex items-center justify-between mb-2">
-          <label class="section-label mb-0">Legs ({{ legs().length }})</label>
+          <span class="section-label mb-0">Legs ({{ legs().length }})</span>
           @if (legs().length > 0) {
             <button class="clear-btn" (click)="clearLegs()">Clear</button>
           }
@@ -517,7 +517,7 @@
       <!-- Analysis Results -->
       @if (analysisResult(); as result) {
         <div class="panel-section">
-          <label class="section-label">Analysis Results</label>
+          <span class="section-label">Analysis Results</span>
           <div class="stats-grid">
             <div class="stat-card pop-card">
               <span class="stat-label">Prob. of Profit</span>

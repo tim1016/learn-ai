@@ -182,7 +182,9 @@ describe('StockAggregateStore', () => {
 
       const map = store.getAggregatesByTicker();
       expect(map.has('AAPL')).toBe(true);
-      expect(map.get('AAPL')!.length).toBe(1);
+      const aggregates = map.get('AAPL');
+      if (!aggregates) throw new Error('Expected cached AAPL aggregates');
+      expect(aggregates.length).toBe(1);
     });
   });
 });

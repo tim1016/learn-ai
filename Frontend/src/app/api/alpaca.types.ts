@@ -9,6 +9,7 @@ import type { components } from './broker.types';
 export type BrokerAccountSnapshot = components['schemas']['BrokerAccountSnapshot'];
 export type BrokerPosition = components['schemas']['BrokerPosition'];
 export type BrokerOrder = components['schemas']['BrokerOrder'];
+export type BrokerOrderGroup = components['schemas']['BrokerOrderGroup'];
 export type BrokerOrderEvent = components['schemas']['BrokerOrderEvent'];
 
 // Phase-2 order submission (write path). S2 adds limit orders + time-in-force.

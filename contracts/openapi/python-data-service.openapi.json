@@ -10235,6 +10235,54 @@
         "title": "BrokerOrderEvent",
         "type": "object"
       },
+      "BrokerOrderGroup": {
+        "additionalProperties": false,
+        "description": "Recent orders grouped by symbol with canonical gross quantity totals.\n\nQuantities are absolute broker-reported shares across both buy and sell\norders. They are activity totals, not net position or directional exposure.",
+        "properties": {
+          "gross_filled_quantity": {
+            "title": "Gross Filled Quantity",
+            "type": "number"
+          },
+          "gross_requested_quantity": {
+            "title": "Gross Requested Quantity",
+            "type": "number"
+          },
+          "gross_working_quantity": {
+            "title": "Gross Working Quantity",
+            "type": "number"
+          },
+          "order_count": {
+            "title": "Order Count",
+            "type": "integer"
+          },
+          "orders": {
+            "items": {
+              "$ref": "#/components/schemas/BrokerOrder"
+            },
+            "title": "Orders",
+            "type": "array"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "working_order_count": {
+            "title": "Working Order Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "symbol",
+          "orders",
+          "order_count",
+          "working_order_count",
+          "gross_requested_quantity",
+          "gross_filled_quantity",
+          "gross_working_quantity"
+        ],
+        "title": "BrokerOrderGroup",
+        "type": "object"
+      },
       "BrokerOrderLeg": {
         "additionalProperties": false,
         "description": "One equity leg of an order request (broker-neutral).\n\nS2 adds ``LIMIT`` orders alongside S1's ``MARKET``: a limit leg carries a\n``limit_price`` and rests until filled or canceled. ``time_in_force`` selects\nhow long a resting order stays working (``DAY``/``GTC``). All additions are\nadditive \u2014 a bare S1 market leg (no ``limit_price``, default ``DAY``) still\nvalidates. The quantity is a positive share count; the *sign* is ``side``.",
@@ -51585,6 +51633,126 @@
           }
         },
         "summary": "Get Clock Evidence",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/order-groups": {
+      "get": {
+        "description": "Return recent orders grouped by symbol with Python-owned quantity totals.",
+        "operationId": "list_order_groups_api_brokers__broker__order_groups_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "closed",
+                    "all"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 9223372036854775807,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Ms"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrokerOrderGroup"
+                  },
+                  "title": "Response List Order Groups Api Brokers  Broker  Order Groups Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Order Groups",
         "tags": [
           "brokers-v2"
         ]

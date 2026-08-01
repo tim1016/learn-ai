@@ -10,7 +10,7 @@ import {
   HistogramSeries, HistogramData,
   AreaSeries, AreaData,
   UTCTimestamp,
-  createSeriesMarkers, ISeriesMarkersPluginApi,
+  createSeriesMarkers, ISeriesMarkersPluginApi, SeriesMarker, Time,
 } from 'lightweight-charts';
 
 // ──────────────────────────────────────────────
@@ -86,7 +86,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
   private priceChart: IChartApi | null = null;
   private candleSeries: ISeriesApi<'Candlestick'> | null = null;
   private volumeSeries: ISeriesApi<'Histogram'> | null = null;
-  private markersPlugin: ISeriesMarkersPluginApi<any> | null = null;
+  private markersPlugin: ISeriesMarkersPluginApi<Time> | null = null;
   private equityChart: IChartApi | null = null;
   private equitySeries: ISeriesApi<'Area'> | null = null;
   private resizeObserver: ResizeObserver | null = null;
@@ -95,7 +95,6 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
   constructor() {
     effect(() => {
       const bars = this.chartBars();
-      const trades = this.trades();
       const equity = this.equityCurve();
       if (this.initialized && (bars.length > 0 || equity.length > 0)) {
         setTimeout(() => this.renderAll());
@@ -269,7 +268,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     const tradeList = this.trades();
     if (!tradeList.length) return;
 
-    const markers: any[] = [];
+    const markers: SeriesMarker<Time>[] = [];
 
     for (const trade of tradeList) {
       const entryTs = Math.floor(trade.entry_time / 1000);

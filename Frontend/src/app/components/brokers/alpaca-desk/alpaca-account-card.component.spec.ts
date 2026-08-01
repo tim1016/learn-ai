@@ -37,8 +37,12 @@ describe('AlpacaAccountCardComponent', () => {
   it('renders account figures and a paper badge when loaded', async () => {
     await renderCard(() => Promise.resolve(fakeAccount({ account_id: 'PA9', buying_power: 300 })));
 
-    expect(await screen.findByText('Account PA9')).toBeTruthy();
+    expect(await screen.findByText('PA9')).toBeTruthy();
     expect(screen.getByText('Paper')).toBeTruthy();
+    expect(screen.getByText('Equity')).toBeTruthy();
+    expect(screen.getByText('Cash')).toBeTruthy();
+
+    screen.getByRole('button', { name: 'Account details' }).click();
     expect(screen.getByText('Buying power')).toBeTruthy();
   });
 

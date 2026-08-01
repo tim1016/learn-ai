@@ -6,34 +6,49 @@
   </p>
 } @else if (positions.value(); as rows) {
   @if (rows.length === 0) {
-    <p class="m-0 py-3 text-sm text-color-secondary" role="status">No open positions.</p>
+    <div class="empty-state" role="status">
+      <i class="pi pi-wallet" aria-hidden="true"></i>
+      <span>No open positions.</span>
+    </div>
   } @else {
-    <p-table [value]="rows" dataKey="symbol" [stripedRows]="true" aria-label="Open positions">
-      <ng-template #caption><span class="text-sm font-semibold">Open positions</span></ng-template>
-      <ng-template #header>
-        <tr>
-          <th scope="col">Symbol</th>
-          <th scope="col" class="text-right">Qty</th>
-          <th scope="col" class="text-right">Avg entry</th>
-          <th scope="col" class="text-right">Market value</th>
-          <th scope="col" class="text-right">Unrealized P&amp;L</th>
-        </tr>
-      </ng-template>
-      <ng-template #body let-row>
-          <tr>
-            <th scope="row">{{ row.symbol }}</th>
-            <td class="text-right tabular-nums">{{ row.quantity | number: '1.0-4' }}</td>
-            <td class="text-right tabular-nums">{{ row.average_entry_price | currency: 'USD' }}</td>
-            <td class="text-right tabular-nums">{{ row.market_value | currency: 'USD' }}</td>
-            <td
-              class="text-right tabular-nums"
-              [class.text-green-500]="row.unrealized_pl >= 0"
-              [class.text-red-500]="row.unrealized_pl < 0"
-            >
-              {{ row.unrealized_pl | currency: 'USD' }}
-            </td>
-          </tr>
-      </ng-template>
-    </p-table>
+    <div class="position-list" role="list" aria-label="Open positions">
+      @for (row of rows; track row.symbol) {
+        <article class="position-card" role="listitem">
+          <header class="position-card__header">
+            <app-asset-identity [symbol]="row.symbol" size="md" />
+            <span class="position-side">{{ row.side | receiptLabel }}</span>
+          </header>
+
+          <div class="position-price">
+            <span class="position-price__label">Market value</span>
+            <strong>{{ row.market_value | currency: 'USD' }}</strong>
+          </div>
+
+          <dl class="position-metrics">
+            <div>
+              <dt>Shares</dt>
+              <dd>{{ row.quantity | number: '1.0-4' }}</dd>
+            </div>
+            <div>
+              <dt>Avg entry</dt>
+              <dd>{{ row.average_entry_price | currency: 'USD' }}</dd>
+            </div>
+            <div>
+              <dt>Last</dt>
+              <dd>{{ row.current_price === null ? '—' : (row.current_price | currency: 'USD') }}</dd>
+            </div>
+            <div>
+              <dt>Unrealized</dt>
+              <dd [class.positive]="row.unrealized_pl >= 0" [class.negative]="row.unrealized_pl < 0">
+                {{ row.unrealized_pl | currency: 'USD' }}
+                @if (row.unrealized_plpc !== null) {
+                  <span>({{ row.unrealized_plpc | percent: '1.2-2' }})</span>
+                }
+              </dd>
+            </div>
+          </dl>
+        </article>
+      }
+    </div>
   }
 }

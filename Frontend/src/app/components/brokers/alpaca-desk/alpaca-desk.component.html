@@ -1,28 +1,67 @@
-<main class="flex min-h-full flex-col gap-4 p-6">
-  <header>
-    <div class="flex items-center gap-3">
-      <h1 class="m-0 text-2xl font-semibold">Alpaca</h1>
-      <p-tag severity="warn" value="Paper" />
+<main class="alpaca-desk">
+  <header class="desk-header">
+    <div class="desk-titlebar">
+      <div class="desk-title">
+        <span class="desk-eyebrow">Broker desk</span>
+        <div class="desk-title__line">
+          <h1>Alpaca</h1>
+          <p-tag severity="warn" value="Paper" />
+        </div>
+      </div>
+
+      <p-button
+        label="New order"
+        icon="pi pi-plus"
+        size="small"
+        ariaLabel="Create a new Alpaca order"
+        (onClick)="orderEntryOpen.set(true)"
+      />
     </div>
-    <p class="mb-0 mt-1 text-sm text-color-secondary">Broker desk · Broker System v2</p>
+
+    <app-alpaca-account-card />
   </header>
 
   <app-alpaca-hold-banner />
 
-  <app-alpaca-account-card />
+  <div class="desk-grid">
+    <section class="desk-section positions-section" aria-labelledby="positions-title">
+      <div class="section-heading">
+        <div>
+          <span class="section-eyebrow">Inventory</span>
+          <h2 id="positions-title">Current positions</h2>
+        </div>
+      </div>
+      <app-alpaca-positions-table />
+    </section>
 
-  <section class="flex flex-col gap-2" aria-label="New order">
-    <h2 class="m-0 text-lg font-semibold">New order</h2>
-    <app-alpaca-order-entry />
-  </section>
-
-  <section class="flex flex-col gap-2" aria-label="Positions">
-    <h2 class="m-0 text-lg font-semibold">Positions</h2>
-    <app-alpaca-positions-table />
-  </section>
-
-  <section class="flex flex-col gap-2" aria-label="Orders">
-    <h2 class="m-0 text-lg font-semibold">Orders</h2>
-    <app-alpaca-orders-table />
-  </section>
+    <section class="desk-section orders-section" aria-labelledby="orders-title">
+      <div class="section-heading">
+        <div>
+          <span class="section-eyebrow">Activity</span>
+          <h2 id="orders-title">Orders by symbol</h2>
+        </div>
+        <span class="section-note">Latest 50</span>
+      </div>
+      <app-alpaca-orders-table [refreshVersion]="ordersRefreshVersion()" />
+    </section>
+  </div>
 </main>
+
+<p-dialog
+  header="Create Alpaca order"
+  [visible]="orderEntryOpen()"
+  (visibleChange)="orderEntryOpen.set($event)"
+  [modal]="true"
+  [dismissableMask]="true"
+  [style]="{ width: 'min(62rem, calc(100vw - 2rem))' }"
+  styleClass="alpaca-order-dialog"
+>
+  <div class="order-dialog-intro">
+    <div>
+      <span class="order-dialog-kicker">Paper account · Equities</span>
+      <p>Choose Market for immediate execution or Limit to set the highest buy or lowest sell price.</p>
+    </div>
+    <span class="order-dialog-safety"><i class="pi pi-shield" aria-hidden="true"></i> Preview required</span>
+  </div>
+  <app-alpaca-order-entry (submissionFinished)="refreshOrders()" />
+</p-dialog>

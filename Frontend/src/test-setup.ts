@@ -1,9 +1,10 @@
 // jsdom lacks ResizeObserver — provide a no-op stub
-(globalThis as any).ResizeObserver = class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
+class ResizeObserverMock implements ResizeObserver {
+  observe(_target: Element, _options?: ResizeObserverOptions): void {}
+  unobserve(_target: Element): void {}
+  disconnect(): void {}
+}
+globalThis.ResizeObserver = ResizeObserverMock;
 
 // jsdom lacks Element.scrollIntoView — no-op so components that scroll a card
 // into view (e.g. broker checklist "Fix this") don't crash under test.
@@ -29,7 +30,7 @@ HTMLCanvasElement.prototype.getContext = ((kind: string) => {
     },
     set: () => true,
   });
-}) as any;
+}) as HTMLCanvasElement['getContext'];
 
 // jsdom lacks CSS.escape — stub it so MarkdownViewerComponent.scrollToAnchor
 // doesn't crash when tested with an anchor argument.

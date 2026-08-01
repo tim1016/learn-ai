@@ -1,9 +1,8 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, output, signal } from '@angular/core';
 import { form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
-import { TooltipModule } from 'primeng/tooltip';
 
 import type { BrokerOrderLeg, OrderLegResult } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
@@ -26,12 +25,12 @@ import { AlpacaOrderResultsComponent } from './alpaca-order-results.component';
   imports: [
     ButtonModule,
     MessageModule,
-    TooltipModule,
     AlpacaOrderLegRowComponent,
     AlpacaOrderPreviewComponent,
     AlpacaOrderResultsComponent,
   ],
   templateUrl: './alpaca-order-entry.component.html',
+  styleUrl: './alpaca-order-entry.component.scss',
   host: { class: 'block' },
 })
 export class AlpacaOrderEntryComponent {
@@ -41,14 +40,26 @@ export class AlpacaOrderEntryComponent {
   // desk operator. Later slices thread the signed-in operator through here.
   private readonly operator = 'desk';
 
-  protected readonly legs = signal<AlpacaOrderDraftLeg[]>([]);
+  protected readonly legs = signal<AlpacaOrderDraftLeg[]>([
+    {
+      id: 0,
+      symbol: '',
+      side: 'buy',
+      quantity: '',
+      orderType: 'market',
+      limitPrice: '',
+      timeInForce: 'day',
+    },
+  ]);
   protected readonly legsForm = form(this.legs);
   protected readonly previewOpen = signal(false);
   protected readonly submitting = signal(false);
   protected readonly results = signal<OrderLegResult[] | null>(null);
   protected readonly submitError = signal<string | null>(null);
+  /** Fires after any broker submission attempt, including uncertain outcomes. */
+  readonly submissionFinished = output();
 
-  private nextId = 0;
+  private nextId = 1;
 
   protected readonly canSubmit = computed(
     () => this.legs().length > 0 && this.legs().every((leg) => this.legValid(leg)),
@@ -125,6 +136,7 @@ export class AlpacaOrderEntryComponent {
       this.previewOpen.set(false);
     } finally {
       this.submitting.set(false);
+      this.submissionFinished.emit();
     }
   }
 

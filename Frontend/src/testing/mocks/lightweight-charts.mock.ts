@@ -23,8 +23,8 @@ export const LineSeries = 'LineSeries';
 export const HistogramSeries = 'HistogramSeries';
 
 export type IChartApi = ReturnType<typeof createMockChart>;
-export type ISeriesApi<T extends string = string> = ReturnType<typeof createMockSeries>;
-export type CandlestickData = any;
-export type LineData = any;
-export type HistogramData = any;
+export type ISeriesApi<_T extends string = string> = ReturnType<typeof createMockSeries>;
+export type CandlestickData = unknown;
+export type LineData = unknown;
+export type HistogramData = unknown;
 export type UTCTimestamp = number;

@@ -38,8 +38,9 @@ describe('Date Validation - Holiday Utilities', () => {
     it('should return the holiday event for a matching date', () => {
       const result = isMarketHoliday(new Date(2026, 6, 3), MOCK_HOLIDAYS);
       expect(result).not.toBeNull();
-      expect(result!.name).toBe('Independence Day');
-      expect(result!.status).toBe('Closed');
+      if (!result) throw new Error('Expected Independence Day to be a market holiday');
+      expect(result.name).toBe('Independence Day');
+      expect(result.status).toBe('Closed');
     });
 
     it('should return null for a non-holiday date', () => {
@@ -50,7 +51,8 @@ describe('Date Validation - Holiday Utilities', () => {
     it('should return the early-close event', () => {
       const result = isMarketHoliday(new Date(2026, 10, 27), MOCK_HOLIDAYS);
       expect(result).not.toBeNull();
-      expect(result!.status).toBe('Early Close');
+      if (!result) throw new Error('Expected the day after Thanksgiving to be an early close');
+      expect(result.status).toBe('Early Close');
     });
 
     it('should handle empty holidays list', () => {
