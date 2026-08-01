@@ -47,7 +47,6 @@ All temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -55,14 +54,11 @@ from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, ValidationError
-
 from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
-    BotLifecycleStateCorruptError,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
@@ -72,13 +68,15 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
-
-# Canonical atomic-JSON writer — reused rather than copied a fifth time
-# (the shared-helper extraction flagged in #367 review remains the follow-up).
-from app.engine.live.run_status import _atomic_write_json
 from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
-from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
+from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import BotDutyOutcomeView, BotStatusView
+from app.services.bot_binding_repository import (
+    BotBindingRepository,
+    BrokerBotBinding,
+    alpaca_v1_action_plan,
+)
+from app.services.bot_boot_recovery import BootRecoveryReport, BotBootRecovery
 from app.services.bot_carryover import (
     CarryoverResumeRefusedError,
     checkpoint_status,
@@ -89,29 +87,9 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-_BINDING_FILENAME = "broker_binding.json"
 _CARRYOVER_CHECKPOINT_FILENAME = "carryover_checkpoint.json"
 _UPDATED_BY = "bot_runner"
 _STOP_TIMEOUT_S = 5.0
-
-
-def alpaca_v1_action_plan(symbol: str) -> ActionPlan:
-    """Build the v1 stock plan from the existing deploy controls.
-
-    The plan becomes durable deployment configuration on the binding; strategy
-    code receives it as opaque configuration and never authors an order side.
-    """
-    return ActionPlan(
-        on_enter=[
-            StockEntryLeg(
-                leg_id="primary",
-                instrument=StockInstrument(kind="stock", underlying=symbol),
-                position="long",
-                qty_ratio=1,
-            )
-        ],
-        on_exit=[CloseLegExit(kind="close_leg", entry_leg_id="primary")],
-    )
 
 
 class BotRunnerError(Exception):
@@ -154,37 +132,6 @@ class RecoveryUncertainError(BotRunnerError):
 
 class CarryoverPolicyRefusedError(BotRunnerError):
     http_status = 409
-
-
-class BrokerBotBinding(BaseModel):
-    """Durable broker-tagged run binding (P9)."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: Literal[2] = 2
-    strategy_instance_id: str
-    # Version-2 Alpaca bindings predated this field and all used the only
-    # available deployment strategy. The default lifts those durable records.
-    strategy_key: str = "deployment_validation"
-    broker: str
-    symbol: str
-    use_rth: bool = True
-    mode: Literal["log_only", "trade"] = "log_only"
-    quantity: int = 1
-    carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
-    action_plan: ActionPlan
-    run_id: str
-    created_at_ms: int
-
-
-class BootRecoveryReport(BaseModel):
-    """What the boot sweep found and did (S5, #1263)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    interrupted_instances: tuple[str, ...]
-    unresolved_intents: int
-    completed_at_ms: int
 
 
 @dataclass
@@ -243,6 +190,18 @@ class BotTaskRegistry:
             settings.ALPACA_PAPER_CARRYOVER_ENABLED
             if carryover_allowed is None
             else carryover_allowed
+        )
+        self._bindings = BotBindingRepository(
+            self._artifacts_root,
+            instance_dir_for=self._confined_instance_dir,
+        )
+        self._boot_recovery = BotBootRecovery(
+            self._artifacts_root,
+            lifecycle_repo_for=self._lifecycle_repo,
+            desired_repo_for=self._desired_repo,
+            manages_instance=self._manages_boot_recovery,
+            is_running=self._is_running,
+            now_ms=self._now_ms,
         )
 
     # ── deploy / stop ─────────────────────────────────────────────────
@@ -321,7 +280,7 @@ class BotTaskRegistry:
         reason: Literal["deploy", "resume"],
     ) -> BotStatusView:
         """Launch one run after the shared recovery, intensity, and feed gates."""
-        instance_dir = self._confined_instance_dir(strategy_instance_id)
+        self._confined_instance_dir(strategy_instance_id)
         managed = self._bots.get(strategy_instance_id)
         if managed is not None and not managed.task.done():
             raise BotAlreadyRunningError(
@@ -352,8 +311,7 @@ class BotTaskRegistry:
             run_id=run_id,
             created_at_ms=now,
         )
-        instance_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write_json(instance_dir / _BINDING_FILENAME, binding.model_dump())
+        self._bindings.write(binding)
         self._desired_repo(strategy_instance_id).set(
             DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )
@@ -502,120 +460,13 @@ class BotTaskRegistry:
         journal to speak for itself — the per-deploy uncertainty probe keeps
         starts refused until the intents actually resolve.
         """
-        interrupted: list[str] = []
-        live_state_root = self._artifacts_root / "live_state"
-        if live_state_root.is_dir():
-            for child in sorted(live_state_root.iterdir()):
-                if not (child / "lifecycle_state.json").is_file():
-                    continue
-                sid = child.name
-                repo = self._lifecycle_repo(sid)
-                try:
-                    record = repo.read()
-                except BotLifecycleStateCorruptError as exc:
-                    logger.warning(
-                        "Boot sweep skipping corrupt lifecycle state",
-                        extra={"action": "boot_sweep_corrupt_lifecycle", "path": str(exc.path)},
-                    )
-                    continue
-                # Skip bots bound to a broker this runner does not manage.
-                # (IBKR bots share the same artifacts_root but are owned by
-                # the host daemon; marking them interrupted would corrupt their
-                # durable state from outside the daemon's authority.)
-                if self._supported_broker_ids is not None:
-                    try:
-                        binding = self._read_binding(sid)
-                    except InvalidStrategyInstanceIdError:
-                        binding = None
-                    if binding is None or binding.broker not in self._supported_broker_ids:
-                        continue
-                if record is None:
-                    continue
-                if (
-                    record.phase is BotLifecyclePhase.OFF_DUTY
-                    and record.duty_outcome is not None
-                    and self._desired_repo(sid).read_state() is DesiredState.RUNNING
-                ):
-                    self._desired_repo(sid).set(
-                        DesiredState.STOPPED,
-                        updated_by="bot_runner_boot_sweep",
-                        now_ms=self._now_ms(),
-                        reason="repair_terminal_running_intent",
-                    )
-                    logger.warning(
-                        "Boot sweep repaired terminal bot desired state",
-                        extra={
-                            "action": "boot_sweep_repaired_terminal_intent",
-                            "strategy_instance_id": sid,
-                            "run_id": record.duty_outcome.run_id,
-                            "reason_code": record.duty_outcome.reason_code,
-                        },
-                    )
-                    continue
-                if record.phase is not BotLifecyclePhase.ON_DUTY:
-                    continue
-                if sid in self._bots and not self._bots[sid].task.done():
-                    continue  # genuinely alive (non-boot rerun) — not interrupted
-                # A restart is an explicit fail-closed transition, not a pending
-                # request to auto-relaunch. Persist STOPPED before recording the
-                # terminal lifecycle outcome so the panel always has a legal,
-                # proof-gated Resume path after recovery.
-                self._desired_repo(sid).set(
-                    DesiredState.STOPPED,
-                    updated_by="bot_runner_boot_sweep",
-                    now_ms=self._now_ms(),
-                    reason="interrupted_by_restart",
-                )
-                repo.record_terminal_outcome(
-                    BotDutyOutcome(
-                        kind="EXITED_UNVERIFIED",
-                        reason_code="INTERRUPTED_BY_RESTART",
-                        recorded_at_ms=self._now_ms(),
-                        run_id=record.active_run_id,
-                    ),
-                    updated_by="bot_runner_boot_sweep",
-                    reason="container_restart",
-                    expected_active_run_id=record.active_run_id,
-                )
-                interrupted.append(sid)
-                logger.warning(
-                    "Boot sweep recorded interrupted bot",
-                    extra={
-                        "action": "boot_sweep_interrupted",
-                        "strategy_instance_id": sid,
-                        "run_id": record.active_run_id,
-                    },
-                )
-        for step_name, step in (("recover", recover), ("reconcile", reconcile)):
-            if step is None:
-                continue
-            try:
-                await step()
-            except Exception:
-                # Surfaced, not silenced; the uncertainty probe still refuses
-                # starts while intents remain unresolved in the journal.
-                logger.exception(
-                    "Boot recovery step failed",
-                    extra={"action": "boot_recovery_step_failed", "step": step_name},
-                )
+        report = await self._boot_recovery.run(
+            recover=recover,
+            reconcile=reconcile,
+            unresolved_intents_probe=unresolved_intents_probe,
+        )
         self._unresolved_intents_probe = unresolved_intents_probe
-        unresolved = (
-            await unresolved_intents_probe() if unresolved_intents_probe is not None else 0
-        )
         self._boot_recovery_complete = True
-        report = BootRecoveryReport(
-            interrupted_instances=tuple(interrupted),
-            unresolved_intents=unresolved,
-            completed_at_ms=self._now_ms(),
-        )
-        logger.info(
-            "Boot recovery sweep complete",
-            extra={
-                "action": "boot_recovery_complete",
-                "interrupted": list(report.interrupted_instances),
-                "unresolved_intents": report.unresolved_intents,
-            },
-        )
         return report
 
     async def _require_recovered(self) -> None:
@@ -672,34 +523,10 @@ class BotTaskRegistry:
 
     def list_bots(self, broker: str) -> list[BotStatusView]:
         """All bots whose durable binding carries ``broker``."""
-        live_state_root = self._artifacts_root / "live_state"
-        if not live_state_root.is_dir():
-            return []
-        views: list[BotStatusView] = []
-        for child in sorted(live_state_root.iterdir()):
-            binding_path = child / _BINDING_FILENAME
-            if not binding_path.is_file():
-                continue
-            try:
-                binding = self._decode_binding(
-                    binding_path.read_text(encoding="utf-8")
-                )
-            except (OSError, ValidationError, ValueError) as exc:
-                # Surfaced, not silenced: a corrupt binding must not hide the
-                # rest of the roster, but it must land in the logs.
-                logger.warning(
-                    "Skipping corrupt broker binding",
-                    extra={
-                        "action": "corrupt_broker_binding_skipped",
-                        "path": str(binding_path),
-                        "error": str(exc),
-                    },
-                )
-                continue
-            if binding.broker != broker:
-                continue
-            views.append(self._compose_status(binding))
-        return views
+        return [
+            self._compose_status(binding)
+            for binding in self._bindings.list_for_broker(broker)
+        ]
 
     # ── supervision ───────────────────────────────────────────────────
 
@@ -823,6 +650,20 @@ class BotTaskRegistry:
         """One lifecycle mutation at a time for a strategy instance."""
         return self._operation_locks.setdefault(strategy_instance_id, asyncio.Lock())
 
+    def _is_running(self, strategy_instance_id: str) -> bool:
+        managed = self._bots.get(strategy_instance_id)
+        return managed is not None and not managed.task.done()
+
+    def _manages_boot_recovery(self, strategy_instance_id: str) -> bool:
+        """Keep daemon-owned broker artifacts out of this runner's sweep."""
+        if self._supported_broker_ids is None:
+            return True
+        try:
+            binding = self._read_binding(strategy_instance_id)
+        except InvalidStrategyInstanceIdError:
+            return False
+        return binding is not None and binding.broker in self._supported_broker_ids
+
     async def _prove_stop_outcome(self, binding: BrokerBotBinding) -> str:
         """Cancel entries, obtain fresh custody, and persist the STOP checkpoint."""
         from app.broker.alpaca.clerk import get_alpaca_clerk
@@ -921,34 +762,7 @@ class BotTaskRegistry:
         )
 
     def _read_binding(self, strategy_instance_id: str) -> BrokerBotBinding | None:
-        path = self._confined_instance_dir(strategy_instance_id) / _BINDING_FILENAME
-        if not path.is_file():
-            return None
-        return self._decode_binding(path.read_text(encoding="utf-8"))
-
-    @staticmethod
-    def _decode_binding(raw: str) -> BrokerBotBinding:
-        """Read the current binding contract or lift the Alpaca v1 shape.
-
-        Version 1 predated durable ``ActionPlan`` configuration. Existing
-        Alpaca paper instances still carry enough immutable information to
-        reconstruct the only plan that v1 could execute: one long stock entry
-        and its matching close leg. The migration is read-only so historical
-        artifacts remain byte-for-byte audit evidence.
-        """
-        payload = json.loads(raw)
-        if (
-            payload.get("schema_version") == 1
-            and payload.get("broker") == "alpaca"
-            and isinstance(payload.get("symbol"), str)
-            and "action_plan" not in payload
-        ):
-            payload = {
-                **payload,
-                "schema_version": 2,
-                "action_plan": alpaca_v1_action_plan(payload["symbol"]).model_dump(),
-            }
-        return BrokerBotBinding.model_validate(payload)
+        return self._bindings.read(strategy_instance_id)
 
     def _compose_status(self, binding: BrokerBotBinding) -> BotStatusView:
         sid = binding.strategy_instance_id
