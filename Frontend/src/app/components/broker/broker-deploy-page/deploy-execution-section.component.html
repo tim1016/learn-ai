@@ -1,0 +1,79 @@
+<section class="execution-card" aria-labelledby="deploy-execution-title">
+  <header>
+    <span>Broker capability</span>
+    <h2 id="deploy-execution-title">Choose how this bot trades</h2>
+  </header>
+
+  <div class="mode-grid" role="list" aria-label="Execution modes">
+    @for (mode of executionModes(); track mode.mode) {
+      <article
+        class="mode-card"
+        role="listitem"
+        [class.mode-card--selected]="mode.mode === accountMode()"
+        [class.mode-card--planned]="isPlanned(mode)"
+      >
+        <div><strong>{{ mode.label }}</strong><span>{{ capabilityStatus(mode) }}</span></div>
+        <p>{{ mode.explanation }}</p>
+      </article>
+    }
+  </div>
+
+  <div class="execution-fields">
+    <label class="field">
+      <span>Trading symbol</span>
+      <input
+        type="text"
+        [value]="symbol()"
+        placeholder="SPY"
+        autocomplete="off"
+        spellcheck="false"
+        [attr.aria-invalid]="symbolError() !== null"
+        (input)="changeSymbol($event)"
+        (blur)="symbolBlur.emit()"
+      />
+      <small>{{ actionPlanExplanation() }}</small>
+      @if (symbolError(); as error) { <em role="alert">{{ error }}</em> }
+    </label>
+
+    <fieldset class="sizing-options">
+      <legend>Size per entry</legend>
+      @for (option of sizingOptions(); track option.preset) {
+        <label [class.sizing-option--selected]="sizingPreset() === option.preset">
+          <input
+            type="radio"
+            name="alpaca-sizing"
+            [value]="option.preset"
+            [checked]="sizingPreset() === option.preset"
+            (change)="changeSizing($event)"
+          />
+          <span><strong>{{ option.label }}</strong><small>{{ option.explanation }}</small></span>
+        </label>
+      }
+    </fieldset>
+  </div>
+
+  @if (sizingPreset() === 'custom') {
+    <label class="field field--quantity">
+      <span>Whole shares per entry</span>
+      <input
+        type="number"
+        inputmode="numeric"
+        step="1"
+        [value]="quantity()"
+        [attr.aria-invalid]="quantityError() !== null"
+        (input)="changeQuantity($event)"
+        (blur)="quantityBlur.emit()"
+      />
+      @if (quantityError(); as error) { <em role="alert">{{ error }}</em> }
+    </label>
+  }
+
+  @if (carryoverAvailable()) {
+    <label class="carryover">
+      <input type="checkbox" [checked]="carryoverAllowed()" (change)="changeCarryover($event)" />
+      <span><strong>{{ carryoverLabel() }}</strong><small>{{ carryoverExplanation() }}</small></span>
+    </label>
+  } @else {
+    <p class="carryover-policy"><strong>When stopped:</strong> {{ carryoverExplanation() }}</p>
+  }
+</section>

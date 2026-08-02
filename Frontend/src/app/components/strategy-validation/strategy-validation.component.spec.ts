@@ -216,6 +216,20 @@ describe('StrategyValidationComponent', () => {
     expect(link.getAttribute('href')).toContain('symbol=SPY');
   });
 
+  it('links accepted evidence into the broker-aware Alpaca Deploy trader flow', async () => {
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
+      ],
+    });
+
+    const link = await screen.findByRole('link', { name: /Deploy strategy/ });
+
+    expect(link.getAttribute('href'))
+      .toBe('/brokers/alpaca/deploy?strategy=deployment_validation');
+  });
+
   it('does not treat deploy binding as a LEAN validator when validator evidence is missing', async () => {
     const legacyDetail: StrategyValidationDetail = {
       ...DEPLOYMENT_DETAIL,

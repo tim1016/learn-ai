@@ -14,7 +14,9 @@ from app.broker.alpaca.clerk.models import (
     ClerkCustodySnapshot,
     CustodyCountFact,
     CustodyExposureFact,
+    EffectOperationReceipt,
     EffectOperationState,
+    EffectPurpose,
     InstanceCustodyProof,
     OrderJournalEntry,
     ReconciliationVerdict,
@@ -41,6 +43,7 @@ class CustodyReconciliationResult:
     verdict: ReconciliationVerdict
     proof: InstanceCustodyProof | None
     entries: tuple[OrderJournalEntry, ...]
+    broker_facts_complete: bool
 
 
 def project_instance_custody_proof(
@@ -84,6 +87,26 @@ def _count_fact(count: int) -> CustodyCountFact:
     return CustodyCountFact(state="non_zero" if count else "zero", count=count)
 
 
+def _effect_is_unresolved(
+    receipt: EffectOperationReceipt,
+    latest_order_by_ref: dict[str, BrokerOrder],
+) -> bool:
+    if receipt.state in _TERMINAL_EFFECT_STATES:
+        return False
+    if (
+        receipt.operation.purpose is EffectPurpose.ENTER
+        and receipt.state is EffectOperationState.SUBMITTED
+        and receipt.child_order_refs
+    ):
+        return not all(
+            (order := latest_order_by_ref.get(order_ref)) is not None
+            and order.status.lower()
+            in derive.RECONCILIATION_TERMINAL_ORDER_STATUSES
+            for order_ref in receipt.child_order_refs
+        )
+    return True
+
+
 def _known_custody_facts(
     proof: InstanceCustodyProof,
     entries: tuple[OrderJournalEntry, ...],
@@ -103,7 +126,7 @@ def _known_custody_facts(
         order.status.lower() in derive.RECONCILIATION_TERMINAL_ORDER_STATUSES for order in latest_order_by_ref.values()
     )
     unresolved_effect_count = sum(
-        receipt.state not in _TERMINAL_EFFECT_STATES
+        _effect_is_unresolved(receipt, latest_order_by_ref)
         for receipt in project_effect_receipts_for_instance(entries, proof.strategy_instance_id)
     )
     return (
@@ -130,7 +153,7 @@ def project_custody_snapshot(
     if proof is None:
         raise ValueError("a custody snapshot requires instance reconciliation proof")
 
-    if result.verdict == "clean":
+    if result.verdict == "clean" and result.broker_facts_complete:
         (
             exposure,
             working_orders,
@@ -146,8 +169,13 @@ def project_custody_snapshot(
         pending_orders = CustodyCountFact(state="unknown")
         terminal_orders = CustodyCountFact(state="unknown")
         unresolved_effects = CustodyCountFact(state="unknown")
-        reason_code = "CLERK_CUSTODY_UNPROVABLE" if result.verdict == "stale" else "CLERK_CUSTODY_UNATTRIBUTABLE"
-        next_step = proof.freeze.next_step or ("Reconcile the account before starting new exposure.")
+        if result.verdict == "stale" or not result.broker_facts_complete:
+            reason_code = "CLERK_CUSTODY_UNPROVABLE"
+        else:
+            reason_code = "CLERK_CUSTODY_UNATTRIBUTABLE"
+        next_step = proof.freeze.next_step or (
+            "Await lifecycle evidence, then reconcile the account before starting new exposure."
+        )
 
     journal_sequence = len(result.entries)
     return ClerkCustodySnapshot(

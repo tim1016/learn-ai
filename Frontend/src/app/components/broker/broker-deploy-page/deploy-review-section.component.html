@@ -4,16 +4,16 @@
     <h2 id="deploy-review-title">Review deployment</h2>
   </header>
   <dl>
-    <div><dt>Deployment identity</dt><dd><code>{{ instanceId() || 'Required' }}</code></dd></div>
+    <div><dt>Bot name</dt><dd><code>{{ instanceId() || 'Required' }}</code></dd></div>
     <div><dt>Strategy</dt><dd>{{ strategy()?.label ?? 'Choose strategy' }}</dd></div>
     <div><dt>Account</dt><dd>{{ view().account_label }}</dd></div>
-    <div><dt>Execution</dt><dd>Paper · Clerk governed</dd></div>
+    <div><dt>Execution</dt><dd>{{ view().account_mode | receiptLabel }} · Clerk governed</dd></div>
     <div><dt>Signal</dt><dd>{{ symbol() || 'Required' }}</dd></div>
     <div><dt>Action plan</dt><dd>{{ view().action_plan_explanation }}</dd></div>
     <div><dt>Sizing</dt><dd>{{ sizingLabel() }} · {{ quantity() }} share(s)</dd></div>
     <div><dt>Carryover</dt><dd>{{ carryoverAllowed() ? 'Explicitly allowed' : 'Forbidden' }}</dd></div>
   </dl>
   <p>
-    Deploy creates the durable bot binding and starts it on duty. Validation remains non-trading.
+    Deploy creates the durable bot binding and starts it on duty. Strategy evidence remains in Strategy Validation.
   </p>
 </section>

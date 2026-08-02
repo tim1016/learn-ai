@@ -74,7 +74,12 @@ from app.engine.live.desired_state import (
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan
-from app.schemas.broker_bots import BotDutyOutcomeView, BotProcessFact, BotStatusView
+from app.schemas.broker_bots import (
+    AlpacaPaperStrategyKey,
+    BotDutyOutcomeView,
+    BotProcessFact,
+    BotStatusView,
+)
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
     RunAdmissionDecision,
@@ -1037,6 +1042,10 @@ class BotTaskRegistry:
                 ),
                 desired_state=status.desired_state,
                 phase=status.phase,
+                exposure_carryover_supported=(
+                    binding.strategy_key
+                    != AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL
+                ),
             )
         except CarryoverResumeRefusedError as exc:
             raise RecoveryUncertainError(

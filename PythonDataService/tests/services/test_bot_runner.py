@@ -15,6 +15,7 @@ Covers issue #1260 acceptance criteria:
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -34,8 +35,11 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     InstanceCustodyProof,
 )
+from app.engine.execution.portfolio import Portfolio
 from app.engine.live.account_artifacts import RestartIntensityPolicy
+from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
+from app.schemas.broker_bots import AlpacaPaperStrategyKey
 from app.services.bot_runner import (
     BotAlreadyRunningError,
     BotTaskRegistry,
@@ -47,10 +51,15 @@ from app.services.bot_runner import (
     RunAdmissionRefusedError,
     UnknownBotError,
 )
+from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.utils.timestamps import now_ms_utc
 
 _SID = "alpaca-skeleton-1"
 _T0 = 1_700_000_000_000
+
+
+def test_every_admitted_alpaca_paper_strategy_has_a_runtime() -> None:
+    assert supported_alpaca_paper_strategy_keys() == frozenset(AlpacaPaperStrategyKey)
 
 
 def _bar(start_ms: int, symbol: str = "SPY") -> MarketDataBar:
@@ -677,6 +686,62 @@ async def test_approved_carryover_resumes_only_after_exact_fresh_proof(
 
 
 @pytest.mark.asyncio
+async def test_ema_resume_refuses_carried_exposure_without_restorable_exit_state(
+    tmp_path: Path,
+) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed, carryover_allowed=True)
+    clerk = _CustodyClerk(_custody_proof(exposure={"SPY": 1.0}))
+    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="ema_crossover_signal",
+            symbol="SPY",
+            mode="trade",
+            carryover_policy="ALLOW",
+        )
+        await registry.stop("alpaca", _SID)
+
+        with pytest.raises(RecoveryUncertainError, match="cannot safely restore"):
+            await registry.resume_existing("alpaca", _SID)
+
+        assert registry.status("alpaca", _SID).running is False
+    finally:
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
+async def test_ema_resume_allows_freshly_proven_flat_custody(
+    tmp_path: Path,
+) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed, carryover_allowed=True)
+    clerk = _CustodyClerk(_custody_proof(exposure={"SPY": 1.0}))
+    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+    try:
+        deployed = await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="ema_crossover_signal",
+            symbol="SPY",
+            mode="trade",
+            carryover_policy="ALLOW",
+        )
+        await registry.stop("alpaca", _SID)
+        clerk.proof = _custody_proof(exposure={})
+
+        resumed = await registry.resume_existing("alpaca", _SID)
+
+        assert resumed.running is True
+        assert resumed.active_run_id != deployed.active_run_id
+        await registry.stop("alpaca", _SID)
+    finally:
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
 async def test_carryover_resume_refuses_quantity_mismatch_without_side_effect(
     tmp_path: Path,
 ) -> None:
@@ -952,6 +1017,106 @@ def _install_fake_clerk(monkeypatch: pytest.MonkeyPatch, clerk: _FakeClerk) -> N
     import app.broker.alpaca.clerk.clerk as clerk_mod
 
     monkeypatch.setattr(clerk_mod, "_clerk", clerk)
+
+
+_EMA_FIRST_ENTER_MS = 1_770_389_100_000
+_EMA_FIRST_EXIT_MS = 1_770_393_600_000
+
+
+def _ema_parity_bars_through_first_exit() -> list[MarketDataBar]:
+    """Load the retained LEAN input stream through its first EMA round-trip."""
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures/golden/cross-engine-studies/cells"
+        / "SPY_W3mo_2026-02-02_to_2026-04-30/lean/observations.csv"
+    )
+    bars: list[MarketDataBar] = []
+    with fixture.open(encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            end_ms = int(row["ms_utc"])
+            bars.append(
+                MarketDataBar(
+                    symbol="SPY",
+                    start_ms=end_ms - 60_000,
+                    end_ms=end_ms,
+                    open=Decimal(row["open"]),
+                    high=Decimal(row["high"]),
+                    low=Decimal(row["low"]),
+                    close=Decimal(row["close"]),
+                    volume=int(Decimal(row["volume"])),
+                    fetched_at_ms=end_ms + 100,
+                    feed_id="lean-golden",
+                    session_phase="RTH",
+                )
+            )
+            if end_ms > _EMA_FIRST_EXIT_MS:
+                break
+    return bars
+
+
+@pytest.mark.asyncio
+async def test_ema_trade_bot_matches_first_lean_round_trip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+    bars = _ema_parity_bars_through_first_exit()
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="ema_crossover_signal",
+        symbol="SPY",
+        mode="trade",
+        quantity=3,
+    )
+    await _wait_for(lambda: feed.bars_consumed == len(bars))
+    await _wait_for(lambda: len(clerk.calls) >= 2)
+    await registry.stop("alpaca", _SID)
+
+    assert [(call["decision_id"], call["purpose"], call["quantity"]) for call in clerk.calls[:2]] == [
+        (f"{_EMA_FIRST_ENTER_MS}:ENTER", "ENTER", 3),
+        (f"{_EMA_FIRST_EXIT_MS}:EXIT", "EXIT", 3),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ema_trade_bot_releases_backtest_chart_bars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import bot_trade_strategy
+
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+    contexts: list[StrategyContext] = []
+    context_factory = bot_trade_strategy.StrategyContext
+
+    def capture_context(*, portfolio: Portfolio) -> StrategyContext:
+        context = context_factory(portfolio=portfolio)
+        contexts.append(context)
+        return context
+
+    monkeypatch.setattr(bot_trade_strategy, "StrategyContext", capture_context)
+    bars = _ema_parity_bars_through_first_exit()
+    feed = _FakeFeed(bars, mode="finite")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="ema_crossover_signal",
+        symbol="SPY",
+        mode="trade",
+    )
+    await _wait_for(lambda: feed.bars_consumed == len(bars))
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    assert len(contexts) == 1
+    assert contexts[0].consolidated_bars == []
 
 
 # ── entry after exactly 2 green bars in-window ────────────────────────────────

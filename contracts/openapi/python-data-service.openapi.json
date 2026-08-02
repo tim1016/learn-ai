@@ -5634,8 +5634,7 @@
             "type": "string"
           },
           "strategy_key": {
-            "const": "deployment_validation",
-            "title": "Strategy Key"
+            "$ref": "#/components/schemas/AlpacaPaperStrategyKey"
           },
           "symbol": {
             "maxLength": 12,
@@ -5654,31 +5653,8 @@
       },
       "AlpacaPaperDeployStrategy": {
         "additionalProperties": false,
-        "description": "One currently accepted strategy from the validation catalog.",
+        "description": "Trader-facing option for one currently accepted deploy strategy.",
         "properties": {
-          "audit_copy_ref": {
-            "title": "Audit Copy Ref",
-            "type": "string"
-          },
-          "audit_copy_sha256": {
-            "title": "Audit Copy Sha256",
-            "type": "string"
-          },
-          "behavioral_equivalence_detail": {
-            "title": "Behavioral Equivalence Detail",
-            "type": "string"
-          },
-          "behavioral_equivalence_verdict": {
-            "const": "accepted_for_deploy",
-            "title": "Behavioral Equivalence Verdict"
-          },
-          "divergence_counts": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "title": "Divergence Counts",
-            "type": "object"
-          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
@@ -5687,66 +5663,11 @@
             "title": "Label",
             "type": "string"
           },
-          "pnl_max_abs_diff": {
-            "title": "Pnl Max Abs Diff",
-            "type": "string"
-          },
-          "qc_cloud_backtest_id": {
-            "title": "Qc Cloud Backtest Id",
-            "type": "string"
-          },
-          "reconciliation_ref": {
-            "title": "Reconciliation Ref",
-            "type": "string"
-          },
-          "settings_file_ref": {
-            "title": "Settings File Ref",
-            "type": "string"
-          },
-          "settings_file_sha256": {
-            "title": "Settings File Sha256",
-            "type": "string"
-          },
           "strategy_key": {
-            "const": "deployment_validation",
-            "title": "Strategy Key"
-          },
-          "tolerance": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tolerance"
-          },
-          "trades_matched": {
-            "minimum": 0.0,
-            "title": "Trades Matched",
-            "type": "integer"
-          },
-          "trades_validated": {
-            "minimum": 0.0,
-            "title": "Trades Validated",
-            "type": "integer"
-          },
-          "validated_at_ms": {
-            "minimum": 0.0,
-            "title": "Validated At Ms",
-            "type": "integer"
-          },
-          "validated_by": {
-            "title": "Validated By",
-            "type": "string"
+            "$ref": "#/components/schemas/AlpacaPaperStrategyKey"
           },
           "validation_case_symbol": {
             "title": "Validation Case Symbol",
-            "type": "string"
-          },
-          "validation_reason": {
-            "title": "Validation Reason",
             "type": "string"
           }
         },
@@ -5754,22 +5675,7 @@
           "strategy_key",
           "label",
           "explanation",
-          "validation_case_symbol",
-          "validated_at_ms",
-          "validated_by",
-          "validation_reason",
-          "behavioral_equivalence_verdict",
-          "behavioral_equivalence_detail",
-          "tolerance",
-          "qc_cloud_backtest_id",
-          "settings_file_ref",
-          "settings_file_sha256",
-          "audit_copy_ref",
-          "audit_copy_sha256",
-          "reconciliation_ref",
-          "trades_matched",
-          "trades_validated",
-          "pnl_max_abs_diff"
+          "validation_case_symbol"
         ],
         "title": "AlpacaPaperDeployStrategy",
         "type": "object"
@@ -5820,6 +5726,11 @@
           "eligibility": {
             "$ref": "#/components/schemas/AlpacaPaperDeployEligibility"
           },
+          "evaluated_at_ms": {
+            "minimum": 0.0,
+            "title": "Evaluated At Ms",
+            "type": "integer"
+          },
           "execution_modes": {
             "items": {
               "$ref": "#/components/schemas/AlpacaPaperExecutionMode"
@@ -5854,6 +5765,7 @@
           "account_id",
           "account_mode",
           "account_label",
+          "evaluated_at_ms",
           "eligibility",
           "readiness_checks",
           "execution_modes",
@@ -5872,9 +5784,13 @@
         "additionalProperties": false,
         "description": "Broker-authored execution capability for the shared Deploy page.",
         "properties": {
-          "available": {
-            "title": "Available",
-            "type": "boolean"
+          "availability": {
+            "enum": [
+              "available",
+              "planned"
+            ],
+            "title": "Availability",
+            "type": "string"
           },
           "explanation": {
             "title": "Explanation",
@@ -5896,7 +5812,7 @@
         "required": [
           "mode",
           "label",
-          "available",
+          "availability",
           "explanation"
         ],
         "title": "AlpacaPaperExecutionMode",
@@ -5972,6 +5888,15 @@
         },
         "title": "AlpacaPaperSizingSelection",
         "type": "object"
+      },
+      "AlpacaPaperStrategyKey": {
+        "description": "Strategies supported by the Clerk-governed Alpaca paper runner.",
+        "enum": [
+          "deployment_validation",
+          "ema_crossover_signal"
+        ],
+        "title": "AlpacaPaperStrategyKey",
+        "type": "string"
       },
       "AlphaDecayStatsResponse": {
         "description": "Alpha decay regression statistics with power-guard flags.",

@@ -6,11 +6,12 @@ import {
   effect,
   inject,
   input,
+  linkedSignal,
   resource,
   signal,
 } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import {
-  FormField,
   form,
   max,
   min,
@@ -18,27 +19,33 @@ import {
   required,
   validate,
 } from '@angular/forms/signals';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import {
   BrokerV2PanelService,
   type DeployBotBody,
   type DeployBotReceipt,
+  type DeployBotStrategy,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
+import { DeployBindingStripComponent } from './deploy-binding-strip.component';
+import {
+  DeployExecutionSectionComponent,
+  type DeploySizingPreset,
+} from './deploy-execution-section.component';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
 import { DeployReviewSectionComponent } from './deploy-review-section.component';
 import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
-import { DeployValidationEvidenceComponent } from './deploy-validation-evidence.component';
+import { DeployTraderSummaryComponent } from './deploy-trader-summary.component';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
 
 interface AlpacaDeployTicket {
   instanceId: string;
-  strategyKey: string;
+  strategyKey: DeployBotStrategy['strategy_key'] | '';
   symbol: string;
   sizingPreset: 'safe_canary' | 'custom';
   quantity: number;
@@ -55,18 +62,21 @@ interface DeployError {
   recordedAtMs: number | null;
 }
 
+type DeployLens = 'trader' | 'operator';
+
 @Component({
   selector: 'app-alpaca-deploy-workflow',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    FormField,
     RouterLink,
     TimestampDisplayComponent,
+    DeployBindingStripComponent,
+    DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployReadinessSectionComponent,
     DeployReviewSectionComponent,
     DeployStartAdmissionComponent,
-    DeployValidationEvidenceComponent,
+    DeployTraderSummaryComponent,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
   styleUrl: './alpaca-deploy-workflow.component.scss',
@@ -75,6 +85,16 @@ export class AlpacaDeployWorkflowComponent {
   readonly accountId = input.required<string>();
 
   private readonly panelService = inject(BrokerV2PanelService);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+
+  private readonly queryParams = toSignal(this.route.queryParamMap, {
+    initialValue: this.route.snapshot.queryParamMap,
+  });
+
+  protected readonly activeLens = linkedSignal<DeployLens>(() =>
+    this.queryParams().get('lens') === 'operator' ? 'operator' : 'trader',
+  );
 
   protected readonly submitting = signal(false);
   protected readonly submitError = signal<DeployError | null>(null);
@@ -123,6 +143,15 @@ export class AlpacaDeployWorkflowComponent {
     ) ?? null;
   });
 
+  protected readonly selectedExecutionMode = computed(() => {
+    const view = this.currentView();
+    return view?.execution_modes.find((mode) => mode.mode === view.account_mode) ?? null;
+  });
+
+  protected readonly executionLabel = computed(() =>
+    this.selectedExecutionMode()?.label ?? 'Broker-authored',
+  );
+
   protected readonly selectedSizing = computed(() => {
     const preset = this.ticket().sizingPreset;
     return this.currentView()?.sizing_options.find(
@@ -144,6 +173,7 @@ export class AlpacaDeployWorkflowComponent {
       view
       && view.eligibility.eligible
       && view.allowed_actions.includes('deploy')
+      && this.selectedStrategy() !== null
       && this.ticketForm().valid()
       && !this.submitting(),
     );
@@ -151,7 +181,10 @@ export class AlpacaDeployWorkflowComponent {
 
   constructor() {
     effect(() => {
-      const strategy = this.currentView()?.strategies[0];
+      const view = this.currentView();
+      const requestedKey = this.queryParams().get('strategy') ?? this.queryParams().get('strategy_key');
+      const strategy = view?.strategies.find((candidate) => candidate.strategy_key === requestedKey)
+        ?? view?.strategies[0];
       if (!strategy) return;
       this.ticket.update((current) => {
         const strategyKey = current.strategyKey || strategy.strategy_key;
@@ -162,9 +195,57 @@ export class AlpacaDeployWorkflowComponent {
     });
   }
 
-  protected setSizingPreset(event: Event): void {
-    const value = (event.target as HTMLInputElement).value;
-    if (value !== 'safe_canary' && value !== 'custom') return;
+  protected selectLens(lens: DeployLens): void {
+    this.activeLens.set(lens);
+    void this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { lens },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+  }
+
+  protected onLensKeydown(event: KeyboardEvent): void {
+    const nextLens =
+      event.key === 'ArrowRight' || event.key === 'End'
+        ? 'operator'
+        : event.key === 'ArrowLeft' || event.key === 'Home'
+          ? 'trader'
+          : null;
+    if (nextLens === null) return;
+    event.preventDefault();
+    this.selectLens(nextLens);
+    if (!(event.currentTarget instanceof HTMLElement)) return;
+    const target = event.currentTarget.parentElement?.querySelector(`[data-lens="${nextLens}"]`);
+    if (target instanceof HTMLElement) target.focus();
+  }
+
+  protected setInstanceId(value: string): void {
+    this.clearAdmission();
+    this.ticket.update((current) => ({ ...current, instanceId: value.trim() }));
+  }
+
+  protected setStrategyKey(value: DeployBotStrategy['strategy_key']): void {
+    const strategy = this.currentView()?.strategies.find((candidate) => candidate.strategy_key === value);
+    if (!strategy) return;
+    this.clearAdmission();
+    this.ticket.update((current) => {
+      const previous = this.currentView()?.strategies.find(
+        (candidate) => candidate.strategy_key === current.strategyKey,
+      );
+      const symbol = current.symbol && current.symbol !== previous?.validation_case_symbol
+        ? current.symbol
+        : strategy.validation_case_symbol;
+      return { ...current, strategyKey: strategy.strategy_key, symbol };
+    });
+  }
+
+  protected setSymbol(value: string): void {
+    this.clearAdmission();
+    this.ticket.update((current) => ({ ...current, symbol: value.trim().toUpperCase() }));
+  }
+
+  protected setSizingPreset(value: DeploySizingPreset): void {
     this.clearAdmission();
     this.ticket.update((current) => ({
       ...current,
@@ -173,19 +254,27 @@ export class AlpacaDeployWorkflowComponent {
     }));
   }
 
-  protected setCarryover(event: Event): void {
+  protected setQuantity(quantity: number): void {
+    this.clearAdmission();
+    this.ticket.update((current) => ({ ...current, quantity }));
+  }
+
+  protected setCarryover(checked: boolean): void {
     if (!this.currentView()?.carryover_available) return;
     this.clearAdmission();
-    const checked = (event.target as HTMLInputElement).checked;
     this.ticket.update((current) => ({ ...current, allowCarryover: checked }));
   }
 
-  protected normalizeInstanceId(event: Event): void {
-    this.normalizeTextInput(event, 'instanceId', (value) => value.trim());
+  protected touchInstanceId(): void {
+    this.ticketForm.instanceId().markAsTouched();
   }
 
-  protected normalizeSymbol(event: Event): void {
-    this.normalizeTextInput(event, 'symbol', (value) => value.trim().toUpperCase());
+  protected touchSymbol(): void {
+    this.ticketForm.symbol().markAsTouched();
+  }
+
+  protected touchQuantity(): void {
+    this.ticketForm.quantity().markAsTouched();
   }
 
   protected reload(): void {
@@ -201,13 +290,14 @@ export class AlpacaDeployWorkflowComponent {
   protected async submit(): Promise<void> {
     this.markFormTouched();
     const view = this.currentView();
-    if (!view || !this.canSubmit()) return;
+    const strategy = this.selectedStrategy();
+    if (!view || !strategy || !this.canSubmit()) return;
 
     this.submitting.set(true);
     this.submitError.set(null);
     this.admissionDecision.set(null);
     const ticket = this.ticket();
-    const body = this.deployBody(ticket);
+    const body = this.deployBody(ticket, strategy);
 
     try {
       const decision = await this.panelService.previewStartAdmission(
@@ -227,10 +317,13 @@ export class AlpacaDeployWorkflowComponent {
     }
   }
 
-  private deployBody(ticket: AlpacaDeployTicket): DeployBotBody {
+  private deployBody(
+    ticket: AlpacaDeployTicket,
+    strategy: DeployBotStrategy,
+  ): DeployBotBody {
     return {
       strategy_instance_id: ticket.instanceId.trim(),
-      strategy_key: 'deployment_validation',
+      strategy_key: strategy.strategy_key,
       symbol: ticket.symbol.trim().toUpperCase(),
       sizing: {
         preset: ticket.sizingPreset,
@@ -257,24 +350,11 @@ export class AlpacaDeployWorkflowComponent {
     return this.ticketForm.quantity().errors()[0]?.message ?? null;
   }
 
-  private normalizeTextInput(
-    event: Event,
-    field: 'instanceId' | 'symbol',
-    normalize: (value: string) => string,
-  ): void {
-    const input = event.target as HTMLInputElement;
-    const normalized = normalize(input.value);
-    input.value = normalized;
-    this.clearAdmission();
-    this.ticket.update((current) => ({ ...current, [field]: normalized }));
-  }
-
   private admissionFromError(error: unknown): RunAdmissionDecision | null {
     if (!(error instanceof HttpErrorResponse)) return null;
     const admission = error.error?.detail?.admission as RunAdmissionDecision | undefined;
     return admission ?? null;
   }
-
   private markFormTouched(): void {
     this.ticketForm.instanceId().markAsTouched();
     this.ticketForm.strategyKey().markAsTouched();

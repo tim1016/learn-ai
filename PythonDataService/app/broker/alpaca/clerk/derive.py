@@ -318,11 +318,7 @@ def has_missing_intent(
     # lands, decides. A position with no journal presence still flags
     # (foreign exposure must not be masked by this suppression).
     expected_quantity_by_symbol = project_expected_account_exposure(entries)
-    symbols_with_inflight_order: set[str] = set()
-    for entry in entries:
-        order = entry.order
-        if order is not None and order.status.lower() not in RECONCILIATION_TERMINAL_ORDER_STATUSES:
-            symbols_with_inflight_order.add(order.symbol.upper())
+    symbols_with_inflight_order = inflight_order_symbols(entries)
 
     actual_quantity_by_symbol: dict[str, float] = {}
     for position in positions:
@@ -342,3 +338,29 @@ def has_missing_intent(
         if abs(actual_quantity - expected_quantity) > 1e-9:
             return True
     return False
+
+
+def inflight_order_symbols(entries: list[OrderJournalEntry]) -> frozenset[str]:
+    """Symbols whose latest journal order snapshot is not terminal."""
+    latest_order_by_ref = {
+        entry.order_ref: entry.order
+        for entry in entries
+        if entry.order_ref and entry.order is not None
+    }
+    return frozenset(
+        order.symbol.upper()
+        for order in latest_order_by_ref.values()
+        if order.status.lower() not in RECONCILIATION_TERMINAL_ORDER_STATUSES
+    )
+
+
+def has_inflight_position_evidence(
+    entries: list[OrderJournalEntry], positions: list[BrokerPosition]
+) -> bool:
+    """Whether a broker position can be ahead of its journal fill callback."""
+    inflight_symbols = inflight_order_symbols(entries)
+    return any(
+        position.symbol.upper() in inflight_symbols
+        and signed_broker_position_quantity(position) != 0
+        for position in positions
+    )

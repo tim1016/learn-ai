@@ -953,6 +953,7 @@ class AlpacaClerk(ClerkEffectOperations):
                     verdict=verdict,
                     proof=proof,
                     entries=tuple(final_entries),
+                    broker_facts_complete=False,
                 )
 
         working_orders = [
@@ -1000,6 +1001,12 @@ class AlpacaClerk(ClerkEffectOperations):
                 verdict=verdict,
                 proof=proof,
                 entries=tuple(final_entries),
+                broker_facts_complete=(
+                    verdict == "clean"
+                    and not derive.has_inflight_position_evidence(
+                        current_entries, positions
+                    )
+                ),
             )
 
     async def _apply_reconcile_plan(
