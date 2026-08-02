@@ -29,8 +29,13 @@ from app.broker.contract.registry import (
 from app.config import settings
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
+from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_validation import StrategyValidationEntry
-from app.services.bot_runner import BotRunnerError, set_bot_task_registry
+from app.services.bot_runner import (
+    AdmittedBotStart,
+    BotRunnerError,
+    set_bot_task_registry,
+)
 from app.services.broker_account_snapshot import (
     clear_broker_account_snapshot_cache_for_testing,
 )
@@ -68,9 +73,25 @@ class _FakeDeployRegistry:
     def __init__(self) -> None:
         self.deploy_calls: list[dict] = []
 
-    async def deploy(self, **kwargs) -> BotStatusView:
+    def _decision(self, kwargs: dict) -> RunAdmissionDecision:
+        return RunAdmissionDecision(
+            operation="START",
+            allowed=True,
+            reason_code="START_ADMITTED",
+            explanation="The Clerk and bot registry admit Start.",
+            next_step=None,
+            strategy_instance_id=kwargs["strategy_instance_id"],
+            proposed_run_id="run-test",
+            configuration_hash="a" * 64,
+            account_id=ACCT,
+            evaluated_at_ms=_T0,
+            fact_ages_ms={"runtime": 0, "process": 0, "market_data": 0, "clerk": 0},
+            evidence_refs=("test-admission",),
+        )
+
+    async def deploy_with_admission(self, **kwargs) -> AdmittedBotStart:
         self.deploy_calls.append(kwargs)
-        return BotStatusView(
+        bot = BotStatusView(
             strategy_instance_id=kwargs["strategy_instance_id"],
             strategy_key=kwargs["strategy_key"],
             broker=kwargs["broker"],
@@ -80,11 +101,15 @@ class _FakeDeployRegistry:
             running=True,
             phase="ON_DUTY",
             desired_state="RUNNING",
-            active_run_id=None,
+            active_run_id="run-test",
             duty_outcome=None,
             binding_created_at_ms=_T0,
             last_transition_at_ms=None,
         )
+        return AdmittedBotStart(bot=bot, admission=self._decision(kwargs))
+
+    async def preview_start_admission(self, **kwargs) -> RunAdmissionDecision:
+        return self._decision(kwargs)
 
 
 @pytest.fixture()
@@ -158,6 +183,7 @@ async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
     assert body["bot"]["strategy_instance_id"] == SID
     assert body["bot"]["mode"] == "trade"
     assert body["bot"]["quantity"] == 2
+    assert body["admission"]["reason_code"] == "START_ADMITTED"
     assert body["action_plan"]["on_enter"][0]["instrument"]["underlying"] == "SPY"
     assert body["action_plan"]["on_exit"] == [{"kind": "close_leg", "entry_leg_id": "primary"}]
     assert body["next_action"]
@@ -168,6 +194,21 @@ async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
     assert call["mode"] == "trade"
     assert call["quantity"] == 2
     assert call["use_rth"] is True
+
+
+@pytest.mark.asyncio
+async def test_start_admission_preview_uses_the_request_specific_policy(deploy_app) -> None:
+    fast_app, _registry = deploy_app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/admission",
+            json=_BODY,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["reason_code"] == "START_ADMITTED"
+    assert response.json()["strategy_instance_id"] == SID
 
 
 @pytest.mark.asyncio
@@ -315,12 +356,8 @@ def test_deploy_reverifies_the_accepted_audit_copy_hash() -> None:
     event = entry.current_flag_event
     assert event is not None
     bad_hash = "0" * 64
-    changed_snapshot = event.evidence_snapshot.model_copy(
-        update={"audit_copy_sha256": bad_hash}
-    )
-    changed_event = event.model_copy(
-        update={"evidence_snapshot": changed_snapshot}
-    )
+    changed_snapshot = event.evidence_snapshot.model_copy(update={"audit_copy_sha256": bad_hash})
+    changed_event = event.model_copy(update={"evidence_snapshot": changed_snapshot})
     changed = entry.model_copy(
         update={
             "audit_copy_sha256": bad_hash,
@@ -384,13 +421,13 @@ async def test_failure_after_runner_dispatch_is_unknown(
 ) -> None:
     fast_app, registry = deploy_app
 
-    async def failed_dispatch(**_kwargs) -> BotStatusView:
+    async def failed_dispatch(**_kwargs) -> AdmittedBotStart:
         raise BotRunnerError(
             "Runner response was lost.",
             detail="The deployment outcome cannot be proved.",
         )
 
-    monkeypatch.setattr(registry, "deploy", failed_dispatch)
+    monkeypatch.setattr(registry, "deploy_with_admission", failed_dispatch)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=fast_app),
@@ -403,6 +440,40 @@ async def test_failure_after_runner_dispatch_is_unknown(
 
     assert response.status_code == 500
     assert response.json()["detail"]["outcome"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_start_refusal_returns_the_execution_policy_decision(
+    deploy_app,
+    monkeypatch,
+) -> None:
+    fast_app, registry = deploy_app
+    denied = registry._decision(_BODY).model_copy(
+        update={
+            "allowed": False,
+            "reason_code": "MARKET_DATA_STALE",
+            "explanation": "The required market-data feed is stale.",
+            "next_step": "Restore fresh market data before Start.",
+        }
+    )
+
+    async def refuse(**_kwargs) -> AdmittedBotStart:
+        raise BotRunnerError(
+            "Start admission was refused.",
+            detail=denied.explanation,
+            admission_decision=denied,
+        )
+
+    monkeypatch.setattr(registry, "deploy_with_admission", refuse)
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json=_BODY,
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["outcome"] == "blocked"
+    assert response.json()["detail"]["admission"]["reason_code"] == "MARKET_DATA_STALE"
 
 
 @pytest.mark.asyncio

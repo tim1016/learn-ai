@@ -17,6 +17,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperStrategyKey,
     BotStatusView,
 )
+from app.schemas.run_admission import RunAdmissionDecision
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
@@ -387,6 +388,7 @@ def build_alpaca_paper_deploy_receipt(
     view: AlpacaPaperDeployView,
     request: AlpacaPaperDeployRequest,
     bot: BotStatusView,
+    admission: RunAdmissionDecision,
 ) -> AlpacaPaperDeployReceipt:
     """Author the terminal receipt after the runner accepts the deployment."""
     return AlpacaPaperDeployReceipt(
@@ -403,5 +405,6 @@ def build_alpaca_paper_deploy_receipt(
         sizing=request.sizing,
         carryover_policy=request.carryover_policy,
         action_plan=alpaca_v1_action_plan(request.symbol),
+        admission=admission,
         bot=bot,
     )

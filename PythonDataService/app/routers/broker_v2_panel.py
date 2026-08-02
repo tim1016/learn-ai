@@ -41,6 +41,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionResult,
     PanelProfile,
 )
+from app.schemas.run_admission import RunAdmissionDecision
 from app.services.broker_v2_panel import panel_data_source as ds
 from app.services.broker_v2_panel.action_execution_service import (
     ActionExecutionError,
@@ -163,6 +164,26 @@ async def get_alpaca_paper_deploy_view(
 
 
 @router.post(
+    "/{broker}/accounts/{account_id}/bots/admission",
+    response_model=RunAdmissionDecision,
+    summary="Preview the exact Start admission used by execution",
+)
+async def preview_bot_start_admission_scoped(
+    broker: str,
+    account_id: str,
+    request: AlpacaPaperDeployRequest,
+) -> RunAdmissionDecision:
+    try:
+        return await ds.preview_alpaca_paper_start_admission(
+            broker,
+            account_id,
+            request,
+        )
+    except ds.PanelDataError as error:
+        _raise_panel_error(error)
+
+
+@router.post(
     "/{broker}/accounts/{account_id}/bots",
     response_model=AlpacaPaperDeployReceipt,
     status_code=201,
@@ -198,6 +219,12 @@ async def deploy_bot_scoped(
                 "message": str(error),
                 "why": error.detail,
                 "next_action": error.next_action,
+                "admission": (
+                    error.admission_decision.model_dump(mode="json")
+                    if isinstance(error, ds.PanelRunnerError)
+                    and error.admission_decision is not None
+                    else None
+                ),
             },
         ) from error
 

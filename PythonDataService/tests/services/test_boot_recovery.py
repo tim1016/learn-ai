@@ -44,7 +44,13 @@ from tests.broker.alpaca.clerk.test_instance_orders import (
     _FakeBroker,
     _submit_and_fill,
 )
-from tests.services.test_bot_runner import _bar, _FakeFeed, _lifecycle_json, _wait_for
+from tests.services.test_bot_runner import (
+    _bar,
+    _FakeFeed,
+    _flat_start_guard,
+    _lifecycle_json,
+    _wait_for,
+)
 
 _SID = "alpaca-drill-bot"
 _T0 = 1_700_000_000_000
@@ -63,7 +69,11 @@ def _artifacts_root(tmp_path: Path) -> Path:
 
 
 def _registry(tmp_path: Path, feed: _FakeFeed | None) -> BotTaskRegistry:
-    return BotTaskRegistry(_artifacts_root(tmp_path), feed_resolver=lambda: feed)
+    return BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        start_custody_guard=_flat_start_guard,
+    )
 
 
 async def _unresolved_probe(clerk: AlpacaClerk) -> int:
@@ -210,6 +220,7 @@ async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
         _artifacts_root(tmp_path),
         feed_resolver=lambda: feed,
         supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
     )
     await registry.run_boot_recovery()
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
@@ -233,6 +244,7 @@ async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
         _artifacts_root(tmp_path),
         feed_resolver=lambda: feed,
         supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
     )
     report = await rebooted.run_boot_recovery()
 
@@ -251,6 +263,7 @@ async def test_boot_sweep_skips_corrupt_binding_without_aborting(
         _artifacts_root(tmp_path),
         feed_resolver=lambda: feed,
         supported_broker_ids=frozenset({"alpaca"}),
+        start_custody_guard=_flat_start_guard,
     )
     await registry.run_boot_recovery()
     await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
@@ -415,10 +428,9 @@ async def test_named_restart_drill_end_to_end(tmp_path: Path) -> None:
     )
     assert [(e.symbol, e.quantity) for e in exposure] == [("SPY", 1.0)]
 
-    # AC3: re-start hydrates exactly the journal-owned exposure and resumes.
-    restarted_view = await rebooted.deploy(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY"
-    )
+    # AC3: recovery resumes the immutable instance as a new run; Start cannot
+    # reuse an existing strategy-instance identity.
+    restarted_view = await rebooted.resume_existing("alpaca", _SID)
     assert restarted_view.running is True
     await _wait_for(lambda: feed.bars_consumed >= 1)
     await rebooted.stop("alpaca", _SID)

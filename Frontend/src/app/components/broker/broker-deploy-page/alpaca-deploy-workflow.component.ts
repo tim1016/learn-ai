@@ -27,6 +27,7 @@ import {
   type DeployBotBody,
   type DeployBotReceipt,
   type DeployBotStrategy,
+  type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
 import {
@@ -36,6 +37,7 @@ import {
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
 import { DeployReviewSectionComponent } from './deploy-review-section.component';
+import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
 import { DeployTraderSummaryComponent } from './deploy-trader-summary.component';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -73,6 +75,7 @@ type DeployLens = 'trader' | 'operator';
     DeployLaunchReceiptComponent,
     DeployReadinessSectionComponent,
     DeployReviewSectionComponent,
+    DeployStartAdmissionComponent,
     DeployTraderSummaryComponent,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
@@ -96,6 +99,7 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly submitting = signal(false);
   protected readonly submitError = signal<DeployError | null>(null);
   protected readonly receipt = signal<DeployBotReceipt | null>(null);
+  protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
 
   protected readonly deployView = resource({
     params: () => this.accountId().trim(),
@@ -217,12 +221,14 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   protected setInstanceId(value: string): void {
+    this.clearAdmission();
     this.ticket.update((current) => ({ ...current, instanceId: value.trim() }));
   }
 
   protected setStrategyKey(value: DeployBotStrategy['strategy_key']): void {
     const strategy = this.currentView()?.strategies.find((candidate) => candidate.strategy_key === value);
     if (!strategy) return;
+    this.clearAdmission();
     this.ticket.update((current) => {
       const previous = this.currentView()?.strategies.find(
         (candidate) => candidate.strategy_key === current.strategyKey,
@@ -235,10 +241,12 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   protected setSymbol(value: string): void {
+    this.clearAdmission();
     this.ticket.update((current) => ({ ...current, symbol: value.trim().toUpperCase() }));
   }
 
   protected setSizingPreset(value: DeploySizingPreset): void {
+    this.clearAdmission();
     this.ticket.update((current) => ({
       ...current,
       sizingPreset: value,
@@ -247,11 +255,13 @@ export class AlpacaDeployWorkflowComponent {
   }
 
   protected setQuantity(quantity: number): void {
+    this.clearAdmission();
     this.ticket.update((current) => ({ ...current, quantity }));
   }
 
   protected setCarryover(checked: boolean): void {
     if (!this.currentView()?.carryover_available) return;
+    this.clearAdmission();
     this.ticket.update((current) => ({ ...current, allowCarryover: checked }));
   }
 
@@ -269,7 +279,12 @@ export class AlpacaDeployWorkflowComponent {
 
   protected reload(): void {
     this.submitError.set(null);
+    this.admissionDecision.set(null);
     this.deployView.reload();
+  }
+
+  protected clearAdmission(): void {
+    this.admissionDecision.set(null);
   }
 
   protected async submit(): Promise<void> {
@@ -280,25 +295,55 @@ export class AlpacaDeployWorkflowComponent {
 
     this.submitting.set(true);
     this.submitError.set(null);
+    this.admissionDecision.set(null);
     const ticket = this.ticket();
-    const body = {
+    const body = this.deployBody(ticket, strategy);
+
+    try {
+      const decision = await this.panelService.previewStartAdmission(
+        'alpaca',
+        view.account_id,
+        body,
+      );
+      if (!this.submissionStillCurrent(body)) return;
+      this.admissionDecision.set(decision);
+      if (!decision.allowed) return;
+      this.receipt.set(await this.panelService.deployBot('alpaca', view.account_id, body));
+    } catch (error) {
+      const decision = this.admissionFromError(error);
+      if (decision) this.admissionDecision.set(decision);
+      this.submitError.set(this.toDeployError(error));
+    } finally {
+      this.submitting.set(false);
+    }
+  }
+
+  private deployBody(
+    ticket: AlpacaDeployTicket,
+    strategy: DeployBotStrategy,
+  ): DeployBotBody {
+    return {
       strategy_instance_id: ticket.instanceId.trim(),
       strategy_key: strategy.strategy_key,
       symbol: ticket.symbol.trim().toUpperCase(),
       sizing: {
         preset: ticket.sizingPreset,
-        quantity: this.effectiveQuantity(),
+        quantity: ticket.sizingPreset === 'safe_canary' ? 1 : ticket.quantity,
       },
       carryover_policy: ticket.allowCarryover ? 'ALLOW' : 'FORBID',
-    } satisfies DeployBotBody;
+    };
+  }
 
-    try {
-      this.receipt.set(await this.panelService.deployBot('alpaca', view.account_id, body));
-    } catch (error) {
-      this.submitError.set(this.toDeployError(error));
-    } finally {
-      this.submitting.set(false);
-    }
+  private submissionStillCurrent(submitted: DeployBotBody): boolean {
+    const strategy = this.selectedStrategy();
+    if (!strategy) return false;
+    const current = this.deployBody(this.ticket(), strategy);
+    return current.strategy_instance_id === submitted.strategy_instance_id
+      && current.strategy_key === submitted.strategy_key
+      && current.symbol === submitted.symbol
+      && current.sizing?.preset === submitted.sizing?.preset
+      && current.sizing?.quantity === submitted.sizing?.quantity
+      && current.carryover_policy === submitted.carryover_policy;
   }
 
   protected instanceIdError(): string | null {
@@ -318,6 +363,11 @@ export class AlpacaDeployWorkflowComponent {
     return this.ticketForm.quantity().errors()[0]?.message ?? null;
   }
 
+  private admissionFromError(error: unknown): RunAdmissionDecision | null {
+    if (!(error instanceof HttpErrorResponse)) return null;
+    const admission = error.error?.detail?.admission as RunAdmissionDecision | undefined;
+    return admission ?? null;
+  }
   private markFormTouched(): void {
     this.ticketForm.instanceId().markAsTouched();
     this.ticketForm.strategyKey().markAsTouched();

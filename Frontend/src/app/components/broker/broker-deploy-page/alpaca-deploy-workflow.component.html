@@ -148,6 +148,10 @@
               </section>
             }
 
+            @if (admissionDecision(); as decision) {
+              <app-deploy-start-admission [decision]="decision" />
+            }
+
             <div class="launch-command">
               <dl>
                 <div><dt>Bot</dt><dd>{{ ticket().instanceId || 'Name required' }}</dd></div>

@@ -48,6 +48,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionRequest,
     PanelActionResult,
 )
+from app.schemas.run_admission import RunAdmissionDecision
 from app.services.bot_runner import BotRunnerError, get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_v2_panel.account_projection_owner import get_or_create_owner
@@ -136,10 +137,12 @@ class PanelRunnerError(PanelDataError):
         http_status: int,
         next_action: str | None = None,
         operation_attempted: bool = False,
+        admission_decision: RunAdmissionDecision | None = None,
     ) -> None:
         super().__init__(message, detail=detail, next_action=next_action)
         self.http_status = http_status
         self.operation_attempted = operation_attempted
+        self.admission_decision = admission_decision
 
 
 # Only Alpaca has a panel-backing clerk in phase 1.
@@ -357,6 +360,82 @@ async def deploy_alpaca_paper_bot(
 ) -> AlpacaPaperDeployReceipt:
     """Execute the production paper deployment command through the runner seam."""
     view = await get_alpaca_paper_deploy_view(broker, account_id)
+    _require_alpaca_deploy_request(view, request)
+    registry = get_bot_task_registry()
+    if registry is None:  # guarded by the view; retained for type narrowing
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+        )
+    try:
+        started = await registry.deploy_with_admission(
+            broker=broker,
+            strategy_instance_id=request.strategy_instance_id,
+            strategy_key=request.strategy_key,
+            symbol=request.symbol,
+            use_rth=True,
+            mode="trade",
+            quantity=request.sizing.quantity,
+            carryover_policy=request.carryover_policy,
+        )
+    except BotRunnerError as exc:
+        raise PanelRunnerError(
+            str(exc),
+            detail=exc.detail,
+            next_action="Correct the deployment inputs or bot state, then submit a new command.",
+            http_status=exc.http_status,
+            operation_attempted=exc.admission_decision is None,
+            admission_decision=exc.admission_decision,
+        ) from exc
+    return build_alpaca_paper_deploy_receipt(
+        broker=broker,
+        view=view,
+        request=request,
+        bot=started.bot,
+        admission=started.admission,
+    )
+
+
+async def preview_alpaca_paper_start_admission(
+    broker: str,
+    account_id: str,
+    request: AlpacaPaperDeployRequest,
+) -> RunAdmissionDecision:
+    """Project the same request-specific Start decision used by execution."""
+    view = await get_alpaca_paper_deploy_view(broker, account_id)
+    _require_alpaca_deploy_request(view, request)
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+        )
+    try:
+        return await registry.preview_start_admission(
+            broker=broker,
+            strategy_instance_id=request.strategy_instance_id,
+            strategy_key=request.strategy_key,
+            symbol=request.symbol,
+            use_rth=True,
+            mode="trade",
+            quantity=request.sizing.quantity,
+            carryover_policy=request.carryover_policy,
+        )
+    except BotRunnerError as exc:
+        raise PanelRunnerError(
+            str(exc),
+            detail=exc.detail,
+            next_action="Correct the deployment inputs or bot state, then refresh admission.",
+            http_status=exc.http_status,
+            admission_decision=exc.admission_decision,
+        ) from exc
+
+
+def _require_alpaca_deploy_request(
+    view: AlpacaPaperDeployView,
+    request: AlpacaPaperDeployRequest,
+) -> None:
+    """Apply the shared form/configuration preflight before run admission."""
     if not view.eligibility.eligible:
         raise PanelRunnerError(
             view.eligibility.headline,
@@ -378,37 +457,6 @@ async def deploy_alpaca_paper_bot(
             next_action="Deploy with carryover disabled or enable the account policy first.",
             http_status=409,
         )
-    registry = get_bot_task_registry()
-    if registry is None:  # guarded by the view; retained for type narrowing
-        raise PanelUnavailableError(
-            "The bot runner is not available.",
-            detail="The service is still starting or has shut down.",
-        )
-    try:
-        bot = await registry.deploy(
-            broker=broker,
-            strategy_instance_id=request.strategy_instance_id,
-            strategy_key=request.strategy_key,
-            symbol=request.symbol,
-            use_rth=True,
-            mode="trade",
-            quantity=request.sizing.quantity,
-            carryover_policy=request.carryover_policy,
-        )
-    except BotRunnerError as exc:
-        raise PanelRunnerError(
-            str(exc),
-            detail=exc.detail,
-            next_action="Correct the deployment inputs or bot state, then submit a new command.",
-            http_status=exc.http_status,
-            operation_attempted=True,
-        ) from exc
-    return build_alpaca_paper_deploy_receipt(
-        broker=broker,
-        view=view,
-        request=request,
-        bot=bot,
-    )
 
 
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:

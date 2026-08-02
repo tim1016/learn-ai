@@ -51,7 +51,15 @@ def _require_registry() -> BotTaskRegistry:
 def _raise_runner_error(error: BotRunnerError) -> NoReturn:
     raise HTTPException(
         status_code=error.http_status,
-        detail={"message": str(error), "why": error.detail},
+        detail={
+            "message": str(error),
+            "why": error.detail,
+            "admission": (
+                error.admission_decision.model_dump(mode="json")
+                if error.admission_decision is not None
+                else None
+            ),
+        },
     )
 
 

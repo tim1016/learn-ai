@@ -420,6 +420,27 @@ async def test_custody_snapshot_reports_attributed_non_zero_exposure() -> None:
     assert snapshot.terminal_orders.count == 1
 
 
+async def test_start_admission_snapshot_fences_new_clerk_intake() -> None:
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+
+    async with clerk.start_admission_snapshot("bot-proof") as snapshot:
+        submit_task = asyncio.create_task(
+            clerk.submit_for_instance(
+                strategy_instance_id="bot-proof",
+                legs=[BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)],
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert snapshot.reconciliation_state == "clean"
+        assert snapshot.exposure.state == "zero"
+        assert submit_task.done() is False
+
+    submit = await submit_task
+    assert submit.results[0].status == "acked"
+
+
 async def test_custody_snapshot_retires_filled_enter_effect() -> None:
     broker = _FakeBroker()
     clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)

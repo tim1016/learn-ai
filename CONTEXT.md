@@ -298,8 +298,8 @@ never branch on those strings. This retires `recovery-flatten-*`,
   the portion of account exposure supported by exact order and fill identity
   for one `strategy_instance_id`. _Avoid_: bot exposure, bot-owned position.
 - **Bot process fact** — the bot runner registry's typed observation of whether
-  one bound run has a currently owned process (`STARTING`, `RUNNING`,
-  `STOPPING`, `EXITED`, or `UNKNOWN`). It proves process presence only; it does
+  one bound run has a currently owned process (`RUNNING`, `STOPPING`, `EXITED`,
+  or `UNKNOWN`). It proves process presence only; it does
   not prove broker custody, order state, exposure, or permission to trade.
 - **Clerk custody snapshot** — the Account Clerk's typed, fresh-or-explicitly-
   stale answer for one strategy instance about reconciled broker positions,
@@ -308,6 +308,16 @@ never branch on those strings. This retires `recovery-flatten-*`,
   the Clerk cannot prove it; unknown is never presented as zero. Account facts
   may feed the Clerk internally, but callers do not combine a second independent
   account interpretation with this snapshot.
+- **Start admission decision** — the backend-authored answer to whether a new
+  run may start for one immutable strategy instance. It is a pure function of
+  the bot process fact and Clerk custody snapshot; market-data readiness is
+  carried inside the bot-side facts together with runner boot-recovery and
+  restart-intensity evidence. Preview and execution call the same typed policy,
+  and Angular renders its explanation without recreating safety logic.
+- **Start custody fence** — the Clerk intake lock held across the final Start
+  decision and run activation. The fence proves that no new Clerk effect can
+  change the exact custody journal cut between admission and activation. If the
+  cut cannot stabilize, Start is refused without writing a bot binding.
 - **Clean strategy exit** — a terminal Clerk effect proving that working entry
   and exit orders are resolved and the instance-attributed account exposure is
   zero. An exit that deliberately leaves exposure open is a carryover stop, not

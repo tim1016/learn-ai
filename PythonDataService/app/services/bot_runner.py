@@ -49,6 +49,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -56,6 +57,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
@@ -71,12 +73,16 @@ from app.engine.live.desired_state import (
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
-from app.schemas.action_plan import ActionPlan
 from app.schemas.broker_bots import (
     AlpacaPaperStrategyKey,
     BotDutyOutcomeView,
     BotProcessFact,
     BotStatusView,
+)
+from app.schemas.run_admission import (
+    RunAdmissionDecision,
+    RunProcessAdmissionFact,
+    StartRuntimeAdmissionFact,
 )
 from app.services.bot_binding_repository import (
     BotBindingRepository,
@@ -90,55 +96,55 @@ from app.services.bot_carryover import (
     prove_stop_outcome,
     require_resume_custody,
 )
+from app.services.bot_runner_errors import (
+    BootRecoveryIncompleteError,
+    BotAlreadyRunningError,
+    BotRunnerError,
+    CarryoverPolicyRefusedError,
+    InvalidStrategyInstanceIdError,
+    MarketDataFeedUnavailableError,
+    RecoveryUncertainError,
+    RestartIntensityRefusedError,
+    RunAdmissionRefusedError,
+    UnknownBotError,
+    raise_start_refusal,
+    require_start_configuration,
+)
+from app.services.bot_start_admission import (
+    AdmittedBotStart,
+    BotStartAdmission,
+    StartAdmissionDenied,
+    StartAdmissionEvidenceChanged,
+    StartAdmissionUnavailable,
+    StartRequest,
+    default_start_custody_guard,
+    log_run_launch,
+    make_start_request,
+    new_run_binding,
+    resolve_start_runtime_fact,
+)
 from app.utils.timestamps import now_ms_utc
+
+__all__ = [
+    "AdmittedBotStart",
+    "BootRecoveryIncompleteError",
+    "BotAlreadyRunningError",
+    "BotRunnerError",
+    "BotTaskRegistry",
+    "CarryoverPolicyRefusedError",
+    "InvalidStrategyInstanceIdError",
+    "MarketDataFeedUnavailableError",
+    "RecoveryUncertainError",
+    "RestartIntensityRefusedError",
+    "RunAdmissionRefusedError",
+    "UnknownBotError",
+]
 
 logger = logging.getLogger(__name__)
 
 _CARRYOVER_CHECKPOINT_FILENAME = "carryover_checkpoint.json"
 _UPDATED_BY = "bot_runner"
 _STOP_TIMEOUT_S = 5.0
-
-
-class BotRunnerError(Exception):
-    """Base typed bot-runner error; the router translates to HTTP."""
-
-    http_status: int = 500
-
-    def __init__(self, message: str, *, detail: str | None = None) -> None:
-        super().__init__(message)
-        self.detail = detail
-
-
-class UnknownBotError(BotRunnerError):
-    http_status = 404
-
-
-class InvalidStrategyInstanceIdError(BotRunnerError):
-    http_status = 422
-
-
-class BotAlreadyRunningError(BotRunnerError):
-    http_status = 409
-
-
-class MarketDataFeedUnavailableError(BotRunnerError):
-    http_status = 503
-
-
-class RestartIntensityRefusedError(BotRunnerError):
-    http_status = 429
-
-
-class BootRecoveryIncompleteError(BotRunnerError):
-    http_status = 503
-
-
-class RecoveryUncertainError(BotRunnerError):
-    http_status = 409
-
-
-class CarryoverPolicyRefusedError(BotRunnerError):
-    http_status = 409
 
 
 @dataclass
@@ -172,6 +178,7 @@ class BotTaskRegistry:
         boot_recovery_required: bool = True,
         supported_broker_ids: frozenset[str] | None = None,
         carryover_allowed: bool | None = None,
+        start_custody_guard: Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None = None,
     ) -> None:
         self._artifacts_root = Path(artifacts_root)
         self._feed_resolver = feed_resolver
@@ -195,9 +202,7 @@ class BotTaskRegistry:
         # in-container runner).
         self._supported_broker_ids = supported_broker_ids
         self._carryover_allowed = (
-            settings.ALPACA_PAPER_CARRYOVER_ENABLED
-            if carryover_allowed is None
-            else carryover_allowed
+            settings.ALPACA_PAPER_CARRYOVER_ENABLED if carryover_allowed is None else carryover_allowed
         )
         self._bindings = BotBindingRepository(
             self._artifacts_root,
@@ -210,6 +215,14 @@ class BotTaskRegistry:
             manages_instance=self._manages_boot_recovery,
             is_running=self._is_running,
             now_ms=self._now_ms,
+        )
+        self._start_admission = BotStartAdmission(
+            now_ms=self._now_ms,
+            feed_resolver=self._feed_resolver,
+            custody_guard=start_custody_guard or default_start_custody_guard,
+            process_fact=self._start_process_fact,
+            runtime_fact=self._start_runtime_fact,
+            activate=self._activate_start_binding,
         )
 
     # ── deploy / stop ─────────────────────────────────────────────────
@@ -227,16 +240,8 @@ class BotTaskRegistry:
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
     ) -> BotStatusView:
         """Deploy and start a bot; durable evidence before liveness."""
-        if carryover_policy == "ALLOW" and not self._carryover_allowed:
-            raise CarryoverPolicyRefusedError(
-                "Exposure carryover is disabled for this Alpaca paper account.",
-                detail=(
-                    "Both the account policy and this deployment must opt in; "
-                    "the account policy is currently disabled."
-                ),
-            )
-        async with self._operation_lock(strategy_instance_id):
-            return await self._launch(
+        return (
+            await self.deploy_with_admission(
                 broker=broker,
                 strategy_instance_id=strategy_instance_id,
                 strategy_key=strategy_key,
@@ -245,9 +250,90 @@ class BotTaskRegistry:
                 mode=mode,
                 quantity=quantity,
                 carryover_policy=carryover_policy,
-                action_plan=alpaca_v1_action_plan(symbol),
-                reason="deploy",
             )
+        ).bot
+
+    async def deploy_with_admission(
+        self,
+        *,
+        broker: str,
+        strategy_instance_id: str,
+        strategy_key: str = "deployment_validation",
+        symbol: str,
+        use_rth: bool = True,
+        mode: Literal["log_only", "trade"] = "log_only",
+        quantity: int = 1,
+        carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
+    ) -> AdmittedBotStart:
+        """Start one bot and return the exact execution-time admission."""
+        require_start_configuration(
+            carryover_policy,
+            carryover_allowed=self._carryover_allowed,
+        )
+        self._confined_instance_dir(strategy_instance_id)
+        request = make_start_request(
+            broker=broker,
+            strategy_instance_id=strategy_instance_id,
+            strategy_key=strategy_key,
+            symbol=symbol,
+            use_rth=use_rth,
+            mode=mode,
+            quantity=quantity,
+            carryover_policy=carryover_policy,
+            action_plan=alpaca_v1_action_plan(symbol),
+        )
+        async with self._operation_lock(strategy_instance_id):
+            try:
+                return await self._start_admission.start(request)
+            except StartAdmissionDenied as exc:
+                raise_start_refusal(exc.decision)
+            except StartAdmissionUnavailable as exc:
+                raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
+            except StartAdmissionEvidenceChanged as exc:
+                raise RunAdmissionRefusedError(
+                    "Start admission could not obtain stable Clerk custody.",
+                    detail="Refresh admission after Clerk reconciliation settles.",
+                ) from exc
+
+    async def preview_start_admission(
+        self,
+        *,
+        broker: str,
+        strategy_instance_id: str,
+        strategy_key: str = "deployment_validation",
+        symbol: str,
+        use_rth: bool = True,
+        mode: Literal["log_only", "trade"] = "log_only",
+        quantity: int = 1,
+        carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
+    ) -> RunAdmissionDecision:
+        """Project the same Start decision used immediately before mutation."""
+        require_start_configuration(
+            carryover_policy,
+            carryover_allowed=self._carryover_allowed,
+        )
+        self._confined_instance_dir(strategy_instance_id)
+        request = make_start_request(
+            broker=broker,
+            strategy_instance_id=strategy_instance_id,
+            strategy_key=strategy_key,
+            symbol=symbol,
+            use_rth=use_rth,
+            mode=mode,
+            quantity=quantity,
+            carryover_policy=carryover_policy,
+            action_plan=alpaca_v1_action_plan(symbol),
+        )
+        async with self._operation_lock(strategy_instance_id):
+            try:
+                return await self._start_admission.preview(request)
+            except StartAdmissionUnavailable as exc:
+                raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
+            except StartAdmissionEvidenceChanged as exc:
+                raise RunAdmissionRefusedError(
+                    "Start admission could not obtain stable Clerk custody.",
+                    detail="Refresh admission after Clerk reconciliation settles.",
+                ) from exc
 
     async def resume_existing(self, broker: str, strategy_instance_id: str) -> BotStatusView:
         """Start a new run from one stopped bot's durable deployment binding.
@@ -260,99 +346,118 @@ class BotTaskRegistry:
         async with self._operation_lock(strategy_instance_id):
             binding = self.binding_for_control(broker, strategy_instance_id)
             await self._require_resume_custody(binding)
-            return await self._launch(
-                broker=binding.broker,
-                strategy_instance_id=binding.strategy_instance_id,
-                strategy_key=binding.strategy_key,
-                symbol=binding.symbol,
-                use_rth=binding.use_rth,
-                mode=binding.mode,
-                quantity=binding.quantity,
-                carryover_policy=binding.carryover_policy,
-                action_plan=binding.action_plan,
-                reason="resume",
-            )
+            return await self._launch_resume(binding)
 
-    async def _launch(
-        self,
-        *,
-        broker: str,
-        strategy_instance_id: str,
-        strategy_key: str,
-        symbol: str,
-        use_rth: bool,
-        mode: Literal["log_only", "trade"],
-        quantity: int,
-        carryover_policy: Literal["FORBID", "ALLOW"],
-        action_plan: ActionPlan,
-        reason: Literal["deploy", "resume"],
-    ) -> BotStatusView:
-        """Launch one run after the shared recovery, intensity, and feed gates."""
-        self._confined_instance_dir(strategy_instance_id)
-        managed = self._bots.get(strategy_instance_id)
-        if managed is not None and not managed.task.done():
-            raise BotAlreadyRunningError(
-                f"Bot '{strategy_instance_id}' is already running.",
-                detail=f"Active run {managed.binding.run_id}; stop it before redeploying.",
-            )
+    async def _launch_resume(self, prior: BrokerBotBinding) -> BotStatusView:
+        """Launch a new run from one Clerk-approved immutable binding."""
         await self._require_recovered()
         now = self._now_ms()
-        self._enforce_restart_intensity(strategy_instance_id, now)
+        self._enforce_restart_intensity(prior.strategy_instance_id, now)
         feed = self._feed_resolver()
         if feed is None:
             raise MarketDataFeedUnavailableError(
-                "Market-data feed is not available; bot cannot be deployed.",
-                detail="The shared MarketDataFeed is not installed (broker disabled or not started).",
+                "Market-data feed is not available; bot cannot be resumed.",
+                detail="The shared MarketDataFeed is not installed.",
             )
-
-        run_id = uuid4().hex
-        binding = BrokerBotBinding(
-            strategy_instance_id=strategy_instance_id,
-            strategy_key=strategy_key,
-            broker=broker,
-            symbol=symbol,
-            use_rth=use_rth,
-            mode=mode,
-            quantity=quantity,
-            carryover_policy=carryover_policy,
-            action_plan=action_plan,
-            run_id=run_id,
-            created_at_ms=now,
+        request = StartRequest(
+            broker=prior.broker,
+            strategy_instance_id=prior.strategy_instance_id,
+            strategy_key=prior.strategy_key,
+            symbol=prior.symbol,
+            use_rth=prior.use_rth,
+            mode=prior.mode,
+            quantity=prior.quantity,
+            carryover_policy=prior.carryover_policy,
+            action_plan=prior.action_plan,
         )
+        binding = new_run_binding(request, now_ms=now)
+        await self._activate_binding(binding, feed, now=now, reason="resume")
+        log_run_launch(binding, reason="resume")
+        return self.status(binding.broker, binding.strategy_instance_id)
+
+    async def _activate_start_binding(
+        self,
+        binding: BrokerBotBinding,
+        feed: MarketDataFeed,
+        now_ms: int,
+    ) -> BotStatusView:
+        await self._activate_binding(binding, feed, now=now_ms, reason="deploy")
+        log_run_launch(binding, reason="deploy")
+        return self.status(binding.broker, binding.strategy_instance_id)
+
+    async def _activate_binding(
+        self,
+        binding: BrokerBotBinding,
+        feed: MarketDataFeed,
+        *,
+        now: int,
+        reason: Literal["deploy", "resume"],
+    ) -> None:
+        """Write run evidence and install supervision while caller holds its gate."""
         self._bindings.write(binding)
-        self._desired_repo(strategy_instance_id).set(
+        self._desired_repo(binding.strategy_instance_id).set(
             DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )
-        self._lifecycle_repo(strategy_instance_id).set_phase(
+        self._lifecycle_repo(binding.strategy_instance_id).set_phase(
             BotLifecyclePhase.ON_DUTY,
             now_ms=now,
             updated_by=_UPDATED_BY,
-            active_run_id=run_id,
-            carryover_policy=carryover_policy,
-            reason=f"{reason}_{mode}_bot",
+            active_run_id=binding.run_id,
+            carryover_policy=binding.carryover_policy,
+            reason=f"{reason}_{binding.mode}_bot",
         )
-        task = asyncio.create_task(
-            self._supervise(binding, feed), name=f"bot:{strategy_instance_id}"
+        task = asyncio.create_task(self._supervise(binding, feed), name=f"bot:{binding.strategy_instance_id}")
+        self._bots[binding.strategy_instance_id] = _ManagedBot(
+            binding=binding,
+            task=task,
         )
-        self._bots[strategy_instance_id] = _ManagedBot(binding=binding, task=task)
-        self._start_history.setdefault(strategy_instance_id, []).append(now)
-        # Give the supervisor one scheduling slot so it enters its try block
-        # before deploy returns — a cancel that lands on a never-started
-        # coroutine would otherwise skip supervision entirely and leave the
-        # bot ON_DUTY with no terminal outcome.
+        self._start_history[binding.strategy_instance_id] = [
+            *self._starts_in_window(binding.strategy_instance_id, now),
+            now,
+        ]
+        # Let supervision enter its exception boundary before a Start releases
+        # Clerk intake. A first effect waits on that same fence.
         await asyncio.sleep(0)
-        logger.info(
-            "Bot run launched",
-            extra={
-                "action": "bot_run_launched",
-                "launch_reason": reason,
-                "strategy_instance_id": strategy_instance_id,
-                "broker": broker,
-                "symbol": symbol,
-                "run_id": run_id,
-            },
+
+    def _start_process_fact(
+        self,
+        binding: BrokerBotBinding,
+        observed_at_ms: int,
+    ) -> RunProcessAdmissionFact:
+        stored_binding = self._read_binding(binding.strategy_instance_id)
+        lifecycle = self._lifecycle_repo(binding.strategy_instance_id).read()
+        managed = self._bots.get(binding.strategy_instance_id)
+        if stored_binding is None:
+            state = "ABSENT" if lifecycle is None and managed is None else "UNKNOWN"
+            return RunProcessAdmissionFact(
+                state=state,
+                registry_generation=self._registry_generation,
+                observed_at_ms=observed_at_ms,
+            )
+        current = self.process_fact(binding.broker, binding.strategy_instance_id)
+        return RunProcessAdmissionFact(
+            state=current.state,
+            run_id=current.run_id,
+            process_identity=current.process_identity,
+            registry_generation=current.registry_generation,
+            observed_at_ms=current.observed_at_ms,
         )
-        return self.status(broker, strategy_instance_id)
+
+    async def _start_runtime_fact(
+        self,
+        strategy_instance_id: str,
+        observed_at_ms: int,
+    ) -> StartRuntimeAdmissionFact:
+        return await resolve_start_runtime_fact(
+            strategy_instance_id=strategy_instance_id,
+            observed_at_ms=observed_at_ms,
+            boot_recovery_required=self._boot_recovery_required,
+            boot_recovery_complete=self._boot_recovery_complete,
+            unresolved_intents_probe=self._unresolved_intents_probe,
+            projected_start_count=self._projected_start_count(strategy_instance_id, observed_at_ms),
+            restart_threshold=self._restart_policy.threshold,
+            restart_window_ms=self._restart_policy.window_ms,
+        )
 
     async def stop(
         self,
@@ -444,9 +549,7 @@ class BotTaskRegistry:
             await asyncio.wait([m.task for m in stopping], timeout=_STOP_TIMEOUT_S)
         for managed in stopping:
             # Idempotent backstop, same as stop().
-            self._finalize(
-                managed.binding, kind="STOPPED", reason_code="SERVICE_SHUTDOWN"
-            )
+            self._finalize(managed.binding, kind="STOPPED", reason_code="SERVICE_SHUTDOWN")
             self._reap(managed.binding.strategy_instance_id, managed.binding.run_id)
 
     # ── S5 boot recovery (container restart is a drilled event) ───────
@@ -488,8 +591,7 @@ class BotTaskRegistry:
             unresolved = await self._unresolved_intents_probe()
             if unresolved > 0:
                 raise RecoveryUncertainError(
-                    f"Bot starts are refused: {unresolved} order intent(s) remain "
-                    "unresolved after recovery.",
+                    f"Bot starts are refused: {unresolved} order intent(s) remain unresolved after recovery.",
                     detail=(
                         "An unresolved intent may still represent live broker "
                         "exposure; resolve it (recovery replay / sweep) before "
@@ -572,10 +674,7 @@ class BotTaskRegistry:
 
     def list_bots(self, broker: str) -> list[BotStatusView]:
         """All bots whose durable binding carries ``broker``."""
-        return [
-            self._compose_status(binding)
-            for binding in self._bindings.list_for_broker(broker)
-        ]
+        return [self._compose_status(binding) for binding in self._bindings.list_for_broker(broker)]
 
     # ── supervision ───────────────────────────────────────────────────
 
@@ -740,9 +839,7 @@ class BotTaskRegistry:
         return await prove_stop_outcome(
             binding,
             clerk=clerk,
-            checkpoint_path=self._carryover_checkpoint_path(
-                binding.strategy_instance_id
-            ),
+            checkpoint_path=self._carryover_checkpoint_path(binding.strategy_instance_id),
             now_ms=self._now_ms,
         )
 
@@ -766,38 +863,21 @@ class BotTaskRegistry:
             await require_resume_custody(
                 binding,
                 clerk=clerk,
-                checkpoint_path=self._carryover_checkpoint_path(
-                    binding.strategy_instance_id
-                ),
+                checkpoint_path=self._carryover_checkpoint_path(binding.strategy_instance_id),
                 desired_state=status.desired_state,
                 phase=status.phase,
-                exposure_carryover_supported=(
-                    binding.strategy_key
-                    != AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL
-                ),
+                exposure_carryover_supported=(binding.strategy_key != AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL),
             )
         except CarryoverResumeRefusedError as exc:
-            raise RecoveryUncertainError(
-                str(exc), detail=exc.detail
-            ) from exc
+            raise RecoveryUncertainError(str(exc), detail=exc.detail) from exc
 
     def _carryover_checkpoint_path(self, strategy_instance_id: str) -> Path:
-        return (
-            self._confined_instance_dir(strategy_instance_id)
-            / _CARRYOVER_CHECKPOINT_FILENAME
-        )
+        return self._confined_instance_dir(strategy_instance_id) / _CARRYOVER_CHECKPOINT_FILENAME
 
     def _enforce_restart_intensity(self, strategy_instance_id: str, now_ms: int) -> None:
         """Per-bot projection mirror of ``project_restart_intensity_gate``:
         refuse when ``prior_starts_in_window + 1 >= threshold``."""
-        window_start_ms = now_ms - self._restart_policy.window_ms
-        history = [
-            start_ms
-            for start_ms in self._start_history.get(strategy_instance_id, [])
-            if window_start_ms <= start_ms <= now_ms
-        ]
-        self._start_history[strategy_instance_id] = history
-        projected_count = len(history) + 1
+        projected_count = self._projected_start_count(strategy_instance_id, now_ms)
         if projected_count >= self._restart_policy.threshold:
             raise RestartIntensityRefusedError(
                 f"Restart intensity for bot '{strategy_instance_id}': "
@@ -806,23 +886,30 @@ class BotTaskRegistry:
                 detail="WAIT_OR_RECOVER_ACCOUNT_BEFORE_STARTING_ANOTHER_BOT",
             )
 
+    def _projected_start_count(self, strategy_instance_id: str, now_ms: int) -> int:
+        """Return the next activation count without mutating preview state."""
+        return len(self._starts_in_window(strategy_instance_id, now_ms)) + 1
+
+    def _starts_in_window(self, strategy_instance_id: str, now_ms: int) -> list[int]:
+        """Return bounded activation history for the current policy window."""
+        window_start_ms = now_ms - self._restart_policy.window_ms
+        return [
+            start_ms
+            for start_ms in self._start_history.get(strategy_instance_id, [])
+            if window_start_ms <= start_ms <= now_ms
+        ]
+
     def _confined_instance_dir(self, strategy_instance_id: str) -> Path:
         try:
-            return strategy_instance_artifact_dir(
-                self._artifacts_root, "live_state", strategy_instance_id
-            )
+            return strategy_instance_artifact_dir(self._artifacts_root, "live_state", strategy_instance_id)
         except ValueError as exc:
             raise InvalidStrategyInstanceIdError(str(exc)) from exc
 
     def _lifecycle_repo(self, strategy_instance_id: str) -> BotLifecycleStateRepo:
-        return BotLifecycleStateRepo(
-            stable_bot_lifecycle_state_path(self._artifacts_root, strategy_instance_id)
-        )
+        return BotLifecycleStateRepo(stable_bot_lifecycle_state_path(self._artifacts_root, strategy_instance_id))
 
     def _desired_repo(self, strategy_instance_id: str) -> DesiredStateRepo:
-        return DesiredStateRepo(
-            stable_desired_state_path(self._artifacts_root, strategy_instance_id)
-        )
+        return DesiredStateRepo(stable_desired_state_path(self._artifacts_root, strategy_instance_id))
 
     def _read_binding(self, strategy_instance_id: str) -> BrokerBotBinding | None:
         return self._bindings.read(strategy_instance_id)
@@ -862,9 +949,7 @@ class BotTaskRegistry:
             active_run_id=(lifecycle.active_run_id if lifecycle is not None else None),
             duty_outcome=duty_outcome,
             binding_created_at_ms=binding.created_at_ms,
-            last_transition_at_ms=(
-                lifecycle.last_transition_at_ms if lifecycle is not None else None
-            ),
+            last_transition_at_ms=(lifecycle.last_transition_at_ms if lifecycle is not None else None),
         )
 
 

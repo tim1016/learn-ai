@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.clerk import (
     AlpacaClerk,
+    ClerkAdmissionSnapshotChangedError,
     get_alpaca_clerk,
     reset_alpaca_clerk_for_testing,
     set_alpaca_clerk,
@@ -66,6 +67,7 @@ __all__ = [
     "AccountFreezeState",
     "AlpacaClerk",
     "ChannelHealth",
+    "ClerkAdmissionSnapshotChangedError",
     "ClerkEntryKind",
     "ClerkStatus",
     "FlattenRefusedError",

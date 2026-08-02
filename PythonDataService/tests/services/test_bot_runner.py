@@ -17,23 +17,32 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk import (
+    ClerkAdmissionSnapshotChangedError,
+    set_alpaca_clerk,
+)
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
+    ClerkCustodySnapshot,
+    CustodyCountFact,
+    CustodyExposureFact,
+    HoldState,
     InstanceCustodyProof,
 )
 from app.engine.execution.portfolio import Portfolio
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.strategy.base import StrategyContext
-from app.marketdata.feed import MarketDataBar, MarketDataFeedError
+from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
 from app.services.bot_runner import (
+    BootRecoveryIncompleteError,
     BotAlreadyRunningError,
     BotTaskRegistry,
     CarryoverPolicyRefusedError,
@@ -41,12 +50,16 @@ from app.services.bot_runner import (
     MarketDataFeedUnavailableError,
     RecoveryUncertainError,
     RestartIntensityRefusedError,
+    RunAdmissionRefusedError,
     UnknownBotError,
 )
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
+from app.utils.timestamps import now_ms_utc
 
 _SID = "alpaca-skeleton-1"
 _T0 = 1_700_000_000_000
+_RTH_MS = 1_700_060_400_000
+_CLOSED_MS = 1_700_096_400_000
 
 
 def test_every_admitted_alpaca_paper_strategy_has_a_runtime() -> None:
@@ -80,11 +93,19 @@ class _FakeFeed:
 
     feed_id = "fake"
 
-    def __init__(self, bars: list[MarketDataBar], *, mode: str = "hold", error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        bars: list[MarketDataBar],
+        *,
+        mode: str = "hold",
+        error: Exception | None = None,
+        observed_at_ms: int | None = None,
+    ) -> None:
         self._bars = bars
         self._mode = mode
         self._error = error
         self.bars_consumed = 0
+        self._observed_at_ms = observed_at_ms
 
     async def stream_bars(self, symbol: str, *, use_rth: bool = True):
         for bar in self._bars:
@@ -96,8 +117,25 @@ class _FakeFeed:
         if self._mode == "hold":
             await asyncio.Event().wait()
 
-    def health(self):  # pragma: no cover - not exercised by the runner
-        raise NotImplementedError
+    def health(self) -> FeedHealth:
+        return FeedHealth(
+            connected=True,
+            stale=False,
+            last_bar_ms=self._bars[-1].start_ms if self._bars else None,
+            reason="",
+            active_subscription_count=0,
+            observed_at_ms=self._observed_at_ms or now_ms_utc(),
+        )
+
+
+class _StaleFeed(_FakeFeed):
+    def health(self) -> FeedHealth:
+        return super().health().model_copy(update={"stale": True, "reason": "No recent closed bar."})
+
+
+class _ActiveStaleFeed(_StaleFeed):
+    def health(self) -> FeedHealth:
+        return super().health().model_copy(update={"active_subscription_count": 1})
 
 
 class _CustodyClerk:
@@ -130,6 +168,61 @@ def _custody_proof(
     )
 
 
+def _flat_custody_snapshot(
+    sid: str,
+    *,
+    observed_at_ms: int | None = None,
+) -> ClerkCustodySnapshot:
+    observed_at_ms = observed_at_ms or now_ms_utc()
+    zero = CustodyCountFact(state="zero", count=0)
+    return ClerkCustodySnapshot(
+        broker="alpaca",
+        account_id="paper-account",
+        strategy_instance_id=sid,
+        clerk_generation="test-clerk",
+        journal_sequence=0,
+        reconciliation_state="clean",
+        reconciliation_fresh=True,
+        reconciled_at_ms=observed_at_ms,
+        exposure=CustodyExposureFact(state="zero", positions={}),
+        working_orders=zero,
+        pending_orders=zero,
+        terminal_orders=zero,
+        unresolved_effects=zero,
+        hold=HoldState(active=False),
+        freeze=AccountFreezeState(),
+        reason_code="CLERK_CUSTODY_PROVEN",
+        evidence_refs=("test-clerk:0",),
+        observed_at_ms=observed_at_ms,
+    )
+
+
+@asynccontextmanager
+async def _flat_start_guard(sid: str):
+    yield _flat_custody_snapshot(sid)
+
+
+@asynccontextmanager
+async def _fixed_start_guard(sid: str):
+    yield _flat_custody_snapshot(sid, observed_at_ms=_T0)
+
+
+@asynccontextmanager
+async def _rth_start_guard(sid: str):
+    yield _flat_custody_snapshot(sid, observed_at_ms=_RTH_MS)
+
+
+@asynccontextmanager
+async def _closed_start_guard(sid: str):
+    yield _flat_custody_snapshot(sid, observed_at_ms=_CLOSED_MS)
+
+
+@asynccontextmanager
+async def _changing_start_guard(_sid: str):
+    raise ClerkAdmissionSnapshotChangedError("test evidence race")
+    yield  # pragma: no cover - required to type this as an async context manager
+
+
 def _registry(
     tmp_path: Path,
     feed: _FakeFeed | None,
@@ -144,6 +237,7 @@ def _registry(
         # Boot recovery has its own suite (test_boot_recovery.py).
         boot_recovery_required=False,
         carryover_allowed=carryover_allowed,
+        start_custody_guard=_flat_start_guard,
     )
 
 
@@ -249,9 +343,235 @@ def test_process_fact_rejects_unemittable_starting_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deployed_bot_consumes_bars_and_logs_decisions(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+async def test_start_preview_and_execution_share_the_same_admission_policy(
+    tmp_path: Path,
 ) -> None:
+    feed = _ActiveStaleFeed([], mode="hold", observed_at_ms=_RTH_MS)
+    registry = BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: feed,
+        restart_policy=RestartIntensityPolicy(threshold=100),
+        now_ms=lambda: _RTH_MS,
+        boot_recovery_required=False,
+        start_custody_guard=_rth_start_guard,
+    )
+
+    preview = await registry.preview_start_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    assert preview.allowed is False
+    assert preview.reason_code == "MARKET_DATA_STALE"
+    with pytest.raises(MarketDataFeedUnavailableError) as refused:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+        )
+    assert refused.value.admission_decision is not None
+    assert refused.value.admission_decision.reason_code == preview.reason_code
+    assert not (tmp_path / "live_state" / _SID / "broker_binding.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_start_allows_idle_connected_feed_to_establish_subscription(
+    tmp_path: Path,
+) -> None:
+    feed = _StaleFeed([], mode="hold", observed_at_ms=_RTH_MS)
+    registry = BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: feed,
+        restart_policy=RestartIntensityPolicy(threshold=100),
+        now_ms=lambda: _RTH_MS,
+        boot_recovery_required=False,
+        start_custody_guard=_rth_start_guard,
+    )
+
+    preview = await registry.preview_start_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    assert preview.allowed is True
+    started = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+    assert started.running is True
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_start_does_not_call_expected_rth_silence_a_stalled_feed(
+    tmp_path: Path,
+) -> None:
+    feed = _ActiveStaleFeed([], mode="hold", observed_at_ms=_CLOSED_MS)
+    registry = BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: feed,
+        restart_policy=RestartIntensityPolicy(threshold=100),
+        now_ms=lambda: _CLOSED_MS,
+        boot_recovery_required=False,
+        start_custody_guard=_closed_start_guard,
+    )
+
+    preview = await registry.preview_start_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    assert preview.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_start_preview_and_execution_share_boot_recovery_refusal(
+    tmp_path: Path,
+) -> None:
+    registry = BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: _FakeFeed([], mode="hold"),
+        restart_policy=RestartIntensityPolicy(threshold=100),
+        start_custody_guard=_flat_start_guard,
+    )
+
+    preview = await registry.preview_start_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    assert preview.allowed is False
+    assert preview.reason_code == "BOOT_RECOVERY_INCOMPLETE"
+    with pytest.raises(BootRecoveryIncompleteError) as refused:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+        )
+    assert refused.value.admission_decision is not None
+    assert refused.value.admission_decision.reason_code == preview.reason_code
+
+
+@pytest.mark.asyncio
+async def test_start_preview_and_execution_share_unresolved_recovery_refusal(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+
+    async def no_op() -> None:
+        return None
+
+    async def one_unresolved_intent() -> int:
+        return 1
+
+    await registry.run_boot_recovery(
+        recover=no_op,
+        reconcile=no_op,
+        unresolved_intents_probe=one_unresolved_intent,
+    )
+
+    preview = await registry.preview_start_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    assert preview.allowed is False
+    assert preview.reason_code == "RECOVERY_UNCERTAIN"
+    with pytest.raises(RecoveryUncertainError) as refused:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+        )
+    assert refused.value.admission_decision is not None
+    assert refused.value.admission_decision.reason_code == preview.reason_code
+
+
+@pytest.mark.asyncio
+async def test_start_preview_and_execution_share_restart_intensity_refusal(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(
+        tmp_path,
+        _FakeFeed([], mode="hold"),
+        policy=RestartIntensityPolicy(threshold=1, window_ms=300_000),
+    )
+
+    preview = await registry.preview_start_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    assert preview.allowed is False
+    assert preview.reason_code == "RESTART_INTENSITY_EXCEEDED"
+    with pytest.raises(RestartIntensityRefusedError) as refused:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+        )
+    assert refused.value.admission_decision is not None
+    assert refused.value.admission_decision.reason_code == preview.reason_code
+
+
+@pytest.mark.asyncio
+async def test_start_refuses_cleanly_when_clerk_evidence_never_stabilizes(
+    tmp_path: Path,
+) -> None:
+    registry = BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: _FakeFeed([], mode="hold"),
+        restart_policy=RestartIntensityPolicy(threshold=100),
+        boot_recovery_required=False,
+        start_custody_guard=_changing_start_guard,
+    )
+
+    with pytest.raises(RunAdmissionRefusedError, match="stable Clerk custody"):
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    assert not (tmp_path / "live_state" / _SID / "broker_binding.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_start_timestamps_activation_after_custody_reconciliation(
+    tmp_path: Path,
+) -> None:
+    clock = {"now": _T0}
+
+    @asynccontextmanager
+    async def delayed_custody_guard(sid: str):
+        clock["now"] = _T0 + 10_000
+        yield _flat_custody_snapshot(sid, observed_at_ms=clock["now"])
+
+    registry = BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: _FakeFeed([], mode="hold", observed_at_ms=_T0 + 10_000),
+        restart_policy=RestartIntensityPolicy(threshold=100),
+        now_ms=lambda: clock["now"],
+        boot_recovery_required=False,
+        start_custody_guard=delayed_custody_guard,
+    )
+
+    started = await registry.deploy_with_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    assert started.admission.evaluated_at_ms == _T0 + 10_000
+    assert _binding_json(tmp_path)["created_at_ms"] == started.admission.evaluated_at_ms
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_deployed_bot_consumes_bars_and_logs_decisions(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     feed = _FakeFeed([_bar(_T0), _bar(_T0 + 60_000)], mode="hold")
     registry = _registry(tmp_path, feed)
 
@@ -411,21 +731,25 @@ async def test_restart_intensity_refuses_thresholdth_start(tmp_path: Path) -> No
     feed = _FakeFeed([], mode="hold")
     policy = RestartIntensityPolicy(threshold=3, window_ms=300_000)
     registry = _registry(tmp_path, feed, policy=policy)
+    set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
 
-    # Starts 1 and 2 pass (projected 1, 2 < 3); start 3 projects to the
-    # threshold and is refused — mirrors project_restart_intensity_gate.
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    await registry.stop("alpaca", _SID)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    await registry.stop("alpaca", _SID)
-
-    with pytest.raises(RestartIntensityRefusedError):
+    try:
+        # Starts 1 and 2 pass (projected 1, 2 < 3); start 3 projects to the
+        # threshold and is refused — mirrors project_restart_intensity_gate.
         await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.stop("alpaca", _SID)
+        await registry.resume_existing("alpaca", _SID)
+        await registry.stop("alpaca", _SID)
+
+        with pytest.raises(RestartIntensityRefusedError):
+            await registry.resume_existing("alpaca", _SID)
+    finally:
+        set_alpaca_clerk(None)
 
 
 @pytest.mark.asyncio
 async def test_restart_intensity_window_expiry_allows_restart(tmp_path: Path) -> None:
-    feed = _FakeFeed([], mode="hold")
+    feed = _FakeFeed([], mode="hold", observed_at_ms=_T0)
     policy = RestartIntensityPolicy(threshold=2, window_ms=1_000)
     clock = {"now": _T0}
     registry = BotTaskRegistry(
@@ -434,17 +758,22 @@ async def test_restart_intensity_window_expiry_allows_restart(tmp_path: Path) ->
         restart_policy=policy,
         now_ms=lambda: clock["now"],
         boot_recovery_required=False,
+        start_custody_guard=_fixed_start_guard,
     )
+    set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
 
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    await registry.stop("alpaca", _SID)
-    with pytest.raises(RestartIntensityRefusedError):
+    try:
         await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.stop("alpaca", _SID)
+        with pytest.raises(RestartIntensityRefusedError):
+            await registry.resume_existing("alpaca", _SID)
 
-    clock["now"] = _T0 + 2_000  # window has passed
-    view = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    assert view.running is True
-    await registry.stop("alpaca", _SID)
+        clock["now"] = _T0 + 2_000  # window has passed
+        view = await registry.resume_existing("alpaca", _SID)
+        assert view.running is True
+        await registry.stop("alpaca", _SID)
+    finally:
+        set_alpaca_clerk(None)
 
 
 # ── listing and broker tags ───────────────────────────────────────────
@@ -551,10 +880,7 @@ async def test_approved_carryover_resumes_only_after_exact_fresh_proof(
         stopped = await registry.stop("alpaca", _SID)
 
         assert stopped.duty_outcome is not None
-        assert (
-            stopped.duty_outcome.reason_code
-            == "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE"
-        )
+        assert stopped.duty_outcome.reason_code == "STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE"
         assert stopped.carryover_checkpoint_exposure == {"SPY": 1.0}
         assert stopped.carryover_checkpoint_config_matches is True
         assert _lifecycle_json(tmp_path)["carryover_policy"] == "ALLOW"
@@ -718,10 +1044,7 @@ async def test_account_policy_must_remain_enabled_for_carryover_resume(
         set_alpaca_clerk(None)
 
     assert disabled_registry.status("alpaca", _SID).running is False
-    assert (
-        disabled_registry.status("alpaca", _SID).carryover_account_policy_enabled
-        is False
-    )
+    assert disabled_registry.status("alpaca", _SID).carryover_account_policy_enabled is False
 
 
 # ── shutdown ──────────────────────────────────────────────────────────
@@ -769,9 +1092,7 @@ def test_runner_is_daemon_free_by_construction() -> None:
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
                 imported.append(node.module)
         for name in imported:
-            assert not any(term in name for term in banned), (
-                f"{mod.__name__} imports banned module {name!r}"
-            )
+            assert not any(term in name for term in banned), f"{mod.__name__} imports banned module {name!r}"
 
 
 @pytest.mark.asyncio
@@ -808,10 +1129,10 @@ async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path
 # Verified against the canonical calendar module (session_window_for_date).
 # bar.end_ms is the bar-close boundary per MarketDataBar semantics.
 
-_SESSION_OPEN_MS  = 1_704_205_800_000   # 2024-01-02 09:30 ET (EST = UTC-5)
-_SESSION_CLOSE_MS = 1_704_229_200_000   # 2024-01-02 16:00 ET
-_WIN_START_MS     = _SESSION_OPEN_MS  + 15 * 60 * 1_000   # 09:45 ET = 1_704_206_700_000
-_WIN_END_MS       = _SESSION_CLOSE_MS - 15 * 60 * 1_000   # 15:45 ET = 1_704_228_300_000
+_SESSION_OPEN_MS = 1_704_205_800_000  # 2024-01-02 09:30 ET (EST = UTC-5)
+_SESSION_CLOSE_MS = 1_704_229_200_000  # 2024-01-02 16:00 ET
+_WIN_START_MS = _SESSION_OPEN_MS + 15 * 60 * 1_000  # 09:45 ET = 1_704_206_700_000
+_WIN_END_MS = _SESSION_CLOSE_MS - 15 * 60 * 1_000  # 15:45 ET = 1_704_228_300_000
 
 
 def _trade_bar(
@@ -890,9 +1211,7 @@ class _FakeClerk:
             "action_plan": action_plan,
         }
         self.calls.append(call)
-        return _FakeEffectResult(
-            order_ref=f"learn-ai/{strategy_instance_id}/v1:fake{len(self.calls):02d}"
-        )
+        return _FakeEffectResult(order_ref=f"learn-ai/{strategy_instance_id}/v1:fake{len(self.calls):02d}")
 
 
 def _install_fake_clerk(monkeypatch: pytest.MonkeyPatch, clerk: _FakeClerk) -> None:
@@ -1006,9 +1325,7 @@ async def test_ema_trade_bot_releases_backtest_chart_bars(
 
 
 @pytest.mark.asyncio
-async def test_trade_bot_enters_after_two_green_bars_in_window(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_trade_bot_enters_after_two_green_bars_in_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
 
@@ -1021,9 +1338,7 @@ async def test_trade_bot_enters_after_two_green_bars_in_window(
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=2
-    )
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=2)
     await _wait_for(lambda: feed.bars_consumed == 3)
     await registry.stop("alpaca", _SID)
 
@@ -1039,14 +1354,12 @@ async def test_trade_bot_enters_after_two_green_bars_in_window(
 
 
 @pytest.mark.asyncio
-async def test_trade_bot_no_entry_before_window(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_trade_bot_no_entry_before_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
 
     # Two green bars strictly before the 09:45 ET window start.
-    pre_window_1 = _SESSION_OPEN_MS + 60_000   # 09:31 ET
+    pre_window_1 = _SESSION_OPEN_MS + 60_000  # 09:31 ET
     pre_window_2 = _SESSION_OPEN_MS + 120_000  # 09:32 ET
     bars = [
         _green_bar(pre_window_1),
@@ -1055,9 +1368,7 @@ async def test_trade_bot_no_entry_before_window(
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade"
-    )
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
     await _wait_for(lambda: feed.bars_consumed == 2)
     await registry.stop("alpaca", _SID)
 
@@ -1068,26 +1379,22 @@ async def test_trade_bot_no_entry_before_window(
 
 
 @pytest.mark.asyncio
-async def test_trade_bot_exits_three_bars_after_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_trade_bot_exits_three_bars_after_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
 
     base = _WIN_START_MS + 60_000
     bars = [
         _green_bar(base),
-        _green_bar(base + 60_000),        # entry triggered after this bar
-        _red_bar(base + 120_000),          # in-position bar 1
-        _red_bar(base + 180_000),          # in-position bar 2
-        _green_bar(base + 240_000),        # in-position bar 3 → exit
+        _green_bar(base + 60_000),  # entry triggered after this bar
+        _red_bar(base + 120_000),  # in-position bar 1
+        _red_bar(base + 180_000),  # in-position bar 2
+        _green_bar(base + 240_000),  # in-position bar 3 → exit
     ]
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=3
-    )
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=3)
     await _wait_for(lambda: feed.bars_consumed == 5)
     await registry.stop("alpaca", _SID)
 
@@ -1100,25 +1407,21 @@ async def test_trade_bot_exits_three_bars_after_entry(
 
 
 @pytest.mark.asyncio
-async def test_trade_bot_flattens_at_window_end(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_trade_bot_flattens_at_window_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
 
     base = _WIN_START_MS + 60_000
     bars = [
         _green_bar(base),
-        _green_bar(base + 60_000),                  # triggers BUY
-        _red_bar(base + 120_000),                   # bar 1 in position
-        _green_bar(_WIN_END_MS + 1),                # past window end → FLATTEN
+        _green_bar(base + 60_000),  # triggers BUY
+        _red_bar(base + 120_000),  # bar 1 in position
+        _green_bar(_WIN_END_MS + 1),  # past window end → FLATTEN
     ]
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=1
-    )
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=1)
     await _wait_for(lambda: feed.bars_consumed == 4)
     await registry.stop("alpaca", _SID)
 
@@ -1130,9 +1433,7 @@ async def test_trade_bot_flattens_at_window_end(
 
 
 @pytest.mark.asyncio
-async def test_trade_bot_quantity_plumbed_from_binding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_trade_bot_quantity_plumbed_from_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clerk = _FakeClerk()
     _install_fake_clerk(monkeypatch, clerk)
 
@@ -1141,9 +1442,7 @@ async def test_trade_bot_quantity_plumbed_from_binding(
     feed = _FakeFeed(bars, mode="hold")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=7
-    )
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade", quantity=7)
     await _wait_for(lambda: feed.bars_consumed == 2)
     await registry.stop("alpaca", _SID)
 
@@ -1160,9 +1459,7 @@ async def test_trade_bot_quantity_plumbed_from_binding(
 
 
 @pytest.mark.asyncio
-async def test_trade_bot_submit_exception_crashes_task(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_trade_bot_submit_exception_crashes_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.broker.contract.errors import BrokerError
 
     error = BrokerError("forced failure", detail="test")
@@ -1174,9 +1471,7 @@ async def test_trade_bot_submit_exception_crashes_task(
     feed = _FakeFeed(bars, mode="finite")
     registry = _registry(tmp_path, feed)
 
-    await registry.deploy(
-        broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade"
-    )
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY", mode="trade")
     await _wait_for(lambda: not registry.status("alpaca", _SID).running)
 
     view = registry.status("alpaca", _SID)
@@ -1189,9 +1484,7 @@ async def test_trade_bot_submit_exception_crashes_task(
 
 
 @pytest.mark.asyncio
-async def test_log_only_bot_unchanged_after_trade_mode_added(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_log_only_bot_unchanged_after_trade_mode_added(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """Regression: adding trade mode must not alter log_only behavior."""
     feed = _FakeFeed([_bar(_T0), _bar(_T0 + 60_000)], mode="hold")
     registry = _registry(tmp_path, feed)

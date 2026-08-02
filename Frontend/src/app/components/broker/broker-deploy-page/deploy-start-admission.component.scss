@@ -1,0 +1,36 @@
+.start-admission {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--bull) 45%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bull) 8%, var(--bg-surface));
+}
+
+.start-admission--blocked {
+  border-color: color-mix(in srgb, var(--bear) 45%, var(--border));
+  background: color-mix(in srgb, var(--bear) 8%, var(--bg-surface));
+}
+
+header,
+dl,
+dl div {
+  display: flex;
+  gap: var(--space-2);
+}
+
+header,
+dl div {
+  justify-content: space-between;
+}
+
+dl {
+  flex-direction: column;
+  margin: 0;
+}
+
+dt,
+dd,
+p {
+  margin: 0;
+}

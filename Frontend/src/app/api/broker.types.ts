@@ -1521,6 +1521,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/admission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview the exact Start admission used by execution */
+        post: operations["preview_bot_start_admission_scoped_api_brokers__broker__accounts__account_id__bots_admission_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/catalog": {
         parameters: {
             query?: never;
@@ -8131,6 +8148,7 @@ export interface components {
             /** Account Id */
             account_id: string;
             action_plan: components["schemas"]["ActionPlan-Output"];
+            admission: components["schemas"]["RunAdmissionDecision"];
             bot: components["schemas"]["BotStatusView"];
             /**
              * Carryover Policy
@@ -21879,6 +21897,52 @@ export interface components {
             to_date: string;
         };
         /**
+         * RunAdmissionDecision
+         * @description Backend-authored permission and explanation rendered by every client.
+         */
+        RunAdmissionDecision: {
+            /** Account Id */
+            account_id: string;
+            /** Allowed */
+            allowed: boolean;
+            /** Configuration Hash */
+            configuration_hash: string;
+            /** Evaluated At Ms */
+            evaluated_at_ms: number;
+            /** Evidence Refs */
+            evidence_refs: string[];
+            /** Explanation */
+            explanation: string;
+            fact_ages_ms: components["schemas"]["RunAdmissionFactAges"];
+            /** Next Step */
+            next_step: string | null;
+            /**
+             * Operation
+             * @constant
+             */
+            operation: "START";
+            /** Proposed Run Id */
+            proposed_run_id: string;
+            /** Reason Code */
+            reason_code: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * RunAdmissionFactAges
+         * @description Age of every authority fact at the exact admission evaluation.
+         */
+        RunAdmissionFactAges: {
+            /** Clerk */
+            clerk: number;
+            /** Market Data */
+            market_data: number;
+            /** Process */
+            process: number;
+            /** Runtime */
+            runtime: number;
+        };
+        /**
          * RunBatchOptionsRequest
          * @description Request body for POST /research/run-batch-options.
          */
@@ -28505,6 +28569,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlpacaPaperDeployReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_bot_start_admission_scoped_api_brokers__broker__accounts__account_id__bots_admission_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlpacaPaperDeployRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunAdmissionDecision"];
                 };
             };
             /** @description Validation Error */

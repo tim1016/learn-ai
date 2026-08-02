@@ -5536,6 +5536,9 @@
           "action_plan": {
             "$ref": "#/components/schemas/ActionPlan-Output"
           },
+          "admission": {
+            "$ref": "#/components/schemas/RunAdmissionDecision"
+          },
           "bot": {
             "$ref": "#/components/schemas/BotStatusView"
           },
@@ -5602,6 +5605,7 @@
           "sizing",
           "carryover_policy",
           "action_plan",
+          "admission",
           "bot"
         ],
         "title": "AlpacaPaperDeployReceipt",
@@ -36271,6 +36275,116 @@
         "title": "RuleBasedBacktestJobRequest",
         "type": "object"
       },
+      "RunAdmissionDecision": {
+        "additionalProperties": false,
+        "description": "Backend-authored permission and explanation rendered by every client.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "configuration_hash": {
+            "title": "Configuration Hash",
+            "type": "string"
+          },
+          "evaluated_at_ms": {
+            "minimum": 0.0,
+            "title": "Evaluated At Ms",
+            "type": "integer"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "fact_ages_ms": {
+            "$ref": "#/components/schemas/RunAdmissionFactAges"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "operation": {
+            "const": "START",
+            "title": "Operation"
+          },
+          "proposed_run_id": {
+            "title": "Proposed Run Id",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation",
+          "allowed",
+          "reason_code",
+          "explanation",
+          "next_step",
+          "strategy_instance_id",
+          "proposed_run_id",
+          "configuration_hash",
+          "account_id",
+          "evaluated_at_ms",
+          "fact_ages_ms",
+          "evidence_refs"
+        ],
+        "title": "RunAdmissionDecision",
+        "type": "object"
+      },
+      "RunAdmissionFactAges": {
+        "additionalProperties": false,
+        "description": "Age of every authority fact at the exact admission evaluation.",
+        "properties": {
+          "clerk": {
+            "title": "Clerk",
+            "type": "integer"
+          },
+          "market_data": {
+            "title": "Market Data",
+            "type": "integer"
+          },
+          "process": {
+            "title": "Process",
+            "type": "integer"
+          },
+          "runtime": {
+            "title": "Runtime",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runtime",
+          "process",
+          "market_data",
+          "clerk"
+        ],
+        "title": "RunAdmissionFactAges",
+        "type": "object"
+      },
       "RunBatchOptionsRequest": {
         "description": "Request body for POST /research/run-batch-options.",
         "properties": {
@@ -50022,6 +50136,83 @@
           }
         },
         "summary": "Deploy one Clerk-governed Alpaca paper bot (\u00a75)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/admission": {
+      "post": {
+        "operationId": "preview_bot_start_admission_scoped_api_brokers__broker__accounts__account_id__bots_admission_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlpacaPaperDeployRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAdmissionDecision"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview the exact Start admission used by execution",
         "tags": [
           "broker-v2-panel"
         ]

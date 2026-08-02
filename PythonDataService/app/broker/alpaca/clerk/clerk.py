@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from app.broker.alpaca.clerk import derive, reconcile, recovery
@@ -93,6 +95,10 @@ class InventoryBaselineRefusedError(Exception):
     def __init__(self, message: str, *, detail: str) -> None:
         super().__init__(message)
         self.detail = detail
+
+
+class ClerkAdmissionSnapshotChangedError(Exception):
+    """Clerk evidence changed before the Start admission fence was acquired."""
 
 
 class AlpacaClerk(ClerkEffectOperations):
@@ -876,6 +882,28 @@ class AlpacaClerk(ClerkEffectOperations):
             clerk_generation=self._clerk_generation,
             result=result,
             observed_at_ms=self._clock(),
+        )
+
+    @asynccontextmanager
+    async def start_admission_snapshot(
+        self, strategy_instance_id: str
+    ) -> AsyncIterator[ClerkCustodySnapshot]:
+        """Yield one custody snapshot while its exact journal cut stays fenced."""
+        for _attempt in range(3):
+            snapshot = await self.custody_snapshot(strategy_instance_id)
+            await self._intake_lock.acquire()
+            try:
+                account_id, journal = await self._ensure_journal()
+                if (
+                    account_id == snapshot.account_id
+                    and len(journal.read_entries()) == snapshot.journal_sequence
+                ):
+                    yield snapshot
+                    return
+            finally:
+                self._intake_lock.release()
+        raise ClerkAdmissionSnapshotChangedError(
+            "Clerk custody evidence kept changing before Start could be fenced."
         )
 
     async def _reconcile_with_proof(
