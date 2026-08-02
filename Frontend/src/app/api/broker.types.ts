@@ -1845,6 +1845,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current run without inferring process or terminal state */
+        get: operations["get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one bounded page of previous runs */
+        get: operations["get_run_history_api_brokers__broker__bots__strategy_instance_id__runs_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/bots/{strategy_instance_id}/stop": {
         parameters: {
             query?: never;
@@ -9750,6 +9784,97 @@ export interface components {
              * @default 0
              */
             sick_bay?: number;
+        };
+        /**
+         * BotRunHistoryPage
+         * @description One bounded page of previous runs; current run has its own endpoint.
+         */
+        BotRunHistoryPage: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Runs */
+            runs: components["schemas"]["BotRunView"][];
+        };
+        /**
+         * BotRunHistoryUnprocessableResponse
+         * @description 422 envelope for a runner error or an invalid history query.
+         */
+        BotRunHistoryUnprocessableResponse: {
+            /** Detail */
+            detail: components["schemas"]["BotRunReadRunnerErrorDetail"] | components["schemas"]["BotRunReadValidationIssue"][];
+        };
+        /**
+         * BotRunReadBrokerErrorDetail
+         * @description Broker-registry failure detail returned by a bot-run read.
+         */
+        BotRunReadBrokerErrorDetail: {
+            /** Broker */
+            broker: string;
+            /** Message */
+            message: string;
+            /** Why */
+            why: string | null;
+        };
+        /**
+         * BotRunReadNotFoundResponse
+         * @description 404 envelope for an unknown broker or strategy-instance run.
+         */
+        BotRunReadNotFoundResponse: {
+            /** Detail */
+            detail: components["schemas"]["BotRunReadBrokerErrorDetail"] | components["schemas"]["BotRunReadRunnerErrorDetail"];
+        };
+        /**
+         * BotRunReadRunnerErrorDetail
+         * @description Runner failure detail returned by a bot-run read.
+         */
+        BotRunReadRunnerErrorDetail: {
+            admission: components["schemas"]["RunAdmissionDecision"] | null;
+            /** Message */
+            message: string;
+            /** Why */
+            why: string | null;
+        };
+        /**
+         * BotRunReadRunnerErrorResponse
+         * @description 422 envelope emitted by the bot runner for an invalid run read.
+         */
+        BotRunReadRunnerErrorResponse: {
+            detail: components["schemas"]["BotRunReadRunnerErrorDetail"];
+        };
+        /**
+         * BotRunReadValidationIssue
+         * @description One FastAPI request-validation issue for a run-history query.
+         */
+        BotRunReadValidationIssue: {
+            /** Loc */
+            loc: (string | number)[];
+            /** Msg */
+            msg: string;
+            /** Type */
+            type: string;
+        };
+        /**
+         * BotRunView
+         * @description Read-only launch and terminal evidence for one strategy run.
+         */
+        BotRunView: {
+            /** Configuration Hash */
+            configuration_hash: string;
+            /** Is Current */
+            is_current: boolean;
+            /**
+             * Launch Reason
+             * @enum {string}
+             */
+            launch_reason: "deploy" | "resume" | "legacy";
+            process: components["schemas"]["BotProcessFact"] | null;
+            /** Run Id */
+            run_id: string;
+            /** Started At Ms */
+            started_at_ms: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            terminal_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
         };
         /**
          * BotStatusView
@@ -29303,6 +29428,95 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunView"];
+                };
+            };
+            /** @description The broker or strategy-instance run is unknown. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunReadNotFoundResponse"];
+                };
+            };
+            /** @description The strategy-instance identifier is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunReadRunnerErrorResponse"];
+                };
+            };
+        };
+    };
+    get_run_history_api_brokers__broker__bots__strategy_instance_id__runs_history_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunHistoryPage"];
+                };
+            };
+            /** @description The broker or strategy-instance run is unknown. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunReadNotFoundResponse"];
+                };
+            };
+            /** @description The history cursor, limit, or strategy-instance identifier is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunHistoryUnprocessableResponse"];
                 };
             };
         };

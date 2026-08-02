@@ -166,3 +166,81 @@ async def test_registry_not_installed_is_503(api) -> None:
         response = await client.get("/api/brokers/alpaca/bots")
 
     assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_current_and_previous_runs_are_lazy_read_only_views(api) -> None:
+    app, registry = api
+    async with _client(app) as client:
+        deployed = await client.post(
+            "/api/brokers/alpaca/bots",
+            json={"strategy_instance_id": _SID, "symbol": "SPY"},
+        )
+        first_run_id = deployed.json()["active_run_id"]
+        await client.post(f"/api/brokers/alpaca/bots/{_SID}/stop", json={})
+        resumed = await registry.resume_existing("alpaca", _SID)
+
+        current = await client.get(
+            f"/api/brokers/alpaca/bots/{_SID}/runs/current"
+        )
+        history = await client.get(
+            f"/api/brokers/alpaca/bots/{_SID}/runs/history",
+            params={"limit": 1},
+        )
+
+    assert current.status_code == 200
+    assert current.json()["run_id"] == resumed.active_run_id
+    assert current.json()["is_current"] is True
+    assert current.json()["process"]["state"] == "RUNNING"
+    assert current.json()["terminal_outcome"] is None
+    assert history.status_code == 200
+    assert [run["run_id"] for run in history.json()["runs"]] == [first_run_id]
+    assert history.json()["runs"][0]["terminal_outcome"]["kind"] == "STOPPED"
+    assert history.json()["next_cursor"] is None
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_run_reads_reject_unknown_bot_and_foreign_cursor(api) -> None:
+    app, registry = api
+    async with _client(app) as client:
+        missing = await client.get(
+            "/api/brokers/alpaca/bots/missing/runs/current"
+        )
+        await client.post(
+            "/api/brokers/alpaca/bots",
+            json={"strategy_instance_id": _SID, "symbol": "SPY"},
+        )
+        foreign_cursor = await client.get(
+            f"/api/brokers/alpaca/bots/{_SID}/runs/history",
+            params={"cursor": "another-bot-run"},
+        )
+
+    assert missing.status_code == 404
+    assert foreign_cursor.status_code == 422
+    assert "cursor" in foreign_cursor.json()["detail"]["message"].lower()
+    await registry.stop("alpaca", _SID)
+
+
+def test_run_read_openapi_documents_error_envelopes(api) -> None:
+    app, _registry = api
+    paths = app.openapi()["paths"]
+    current_responses = paths[
+        "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/current"
+    ]["get"]["responses"]
+    history_responses = paths[
+        "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/history"
+    ]["get"]["responses"]
+
+    assert current_responses["404"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/BotRunReadNotFoundResponse"
+    )
+    assert current_responses["422"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/BotRunReadRunnerErrorResponse"
+    )
+    assert history_responses["404"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/BotRunReadNotFoundResponse"
+    )
+    assert history_responses["422"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/BotRunHistoryUnprocessableResponse"
+    )

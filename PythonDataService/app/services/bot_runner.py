@@ -1,27 +1,12 @@
 """In-container bot runner: supervised asyncio tasks + durable lifecycle artifacts.
 
-Alpaca Bot Control v2, S2 (#1260) — principles P1, P4, P9, P10; decision L1.
-
 One :class:`BotTaskRegistry` lives in the polygon-data-service process and
-owns spawn / liveness / reap for every strategy-instance bot task.  There is
-**no host daemon, host socket, or host process anywhere in this path** — the
-guard test asserts this module never imports daemon-client or subprocess
-machinery.
+owns spawn, liveness, and reap for every strategy-instance bot task. This path
+has no host daemon or subprocess; a guard test enforces that boundary.
 
-The registry writes the SAME durable lifecycle artifacts the existing
-operator plane already reads, so artifact-derived surfaces stay truthful
-without modification:
-
-- ``live_state/<sid>/lifecycle_state.json`` — :class:`BotLifecycleStateRepo`
-  (ON_DUTY on start; OFF_DUTY + typed ``duty_outcome`` on any exit).
-- ``live_state/<sid>/desired_state.json`` — :class:`DesiredStateRepo`
-  (durable operator intent; STOPPED is written BEFORE the task is cancelled
-  so the Button-Rule exit survives a crash mid-stop).
-- ``live_state/<sid>/strategy_instance.json`` — create-once broker-tagged
-  strategy configuration.
-- ``live_state/<sid>/runs/<run_id>.json`` — append-only run launch evidence.
-- ``live_state/<sid>/current_run.json`` — the replaceable pointer to the newest
-  run; the runner composes these records behind one aggregate view.
+The registry keeps desired intent, lifecycle, immutable configuration,
+append-only launch/terminal evidence, and the replaceable current-run pointer
+in the existing ``live_state/<sid>/`` operator-plane artifact tree.
 
 Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
 
@@ -34,15 +19,9 @@ Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
 - bar stream ended on its own → ``"EXITED_UNVERIFIED"`` with
   ``BAR_STREAM_ENDED``.
 
-Restart intensity reuses the canonical :class:`RestartIntensityPolicy`
-parameters and the ``project_restart_intensity_gate`` comparison (refuse when
-``prior_starts_in_window + 1 >= threshold``), scoped per bot.  The account
-journal is not written by this walking skeleton — durable cross-restart
-intensity arrives with the S3 account binding.
-
-The log-only mode consumes closed 1-minute bars and records decisions without
-order effects. Trade mode delegates typed ENTER/EXIT decisions to the Alpaca
-Clerk; the runner never authors broker sides or execution truth.
+Restart intensity uses the canonical :class:`RestartIntensityPolicy`. Trade
+mode delegates effects to the Alpaca Clerk; the runner never authors broker
+execution truth.
 
 All temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
 """
@@ -80,6 +59,8 @@ from app.schemas.broker_bots import (
     AlpacaPaperStrategyKey,
     BotDutyOutcomeView,
     BotProcessFact,
+    BotRunHistoryPage,
+    BotRunView,
     BotStatusView,
 )
 from app.schemas.run_admission import (
@@ -98,6 +79,10 @@ from app.services.bot_carryover import (
     checkpoint_status,
     prove_stop_outcome,
     require_resume_custody,
+)
+from app.services.bot_run_evidence import (
+    PROVISIONAL_STOP_REASON_CODE,
+    BotRunEvidenceService,
 )
 from app.services.bot_runner_errors import (
     BootRecoveryIncompleteError,
@@ -226,6 +211,10 @@ class BotTaskRegistry:
             process_fact=self._start_process_fact,
             runtime_fact=self._start_runtime_fact,
             activate=self._activate_start_binding,
+        )
+        self._run_evidence = BotRunEvidenceService(
+            self._bindings,
+            lifecycle_repo_for=self._lifecycle_repo,
         )
 
     # ── deploy / stop ─────────────────────────────────────────────────
@@ -397,11 +386,19 @@ class BotTaskRegistry:
         reason: Literal["deploy", "resume"],
     ) -> None:
         """Write run evidence and install supervision while caller holds its gate."""
+        lifecycle_repo = self._lifecycle_repo(binding.strategy_instance_id)
+        # Preserve the prior immutable outcome before record_launch advances
+        # current_run.json. A crash between these operations must not hide a
+        # previous run's only terminal evidence from the history projection.
+        self._run_evidence.preserve_terminal(
+            binding.strategy_instance_id,
+            lifecycle_repo.read(),
+        )
         self._bindings.record_launch(binding, launch_reason=reason)
         self._desired_repo(binding.strategy_instance_id).set(
             DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )
-        self._lifecycle_repo(binding.strategy_instance_id).set_phase(
+        lifecycle_repo.set_phase(
             BotLifecyclePhase.ON_DUTY,
             now_ms=now,
             updated_by=_UPDATED_BY,
@@ -512,7 +509,7 @@ class BotTaskRegistry:
         # Stop strategy evaluation before any network-bound custody work. The
         # provisional terminal is replaced under this instance's operation lock
         # once the Clerk returns a fresh proof.
-        managed.stop_reason_code = "STOPPED_PENDING_CUSTODY_PROOF"
+        managed.stop_reason_code = PROVISIONAL_STOP_REASON_CODE
         managed.task.cancel()
         await asyncio.wait({managed.task}, timeout=_STOP_TIMEOUT_S)
         # Backstop for a coroutine that never entered supervision (cancelled
@@ -521,19 +518,21 @@ class BotTaskRegistry:
         self._finalize(
             managed.binding,
             kind="STOPPED",
-            reason_code="STOPPED_PENDING_CUSTODY_PROOF",
+            reason_code=PROVISIONAL_STOP_REASON_CODE,
         )
         self._reap(strategy_instance_id, managed.binding.run_id)
         outcome = "OPERATOR_STOP"
         if broker == "alpaca" and managed.binding.mode == "trade":
             outcome = await self._prove_stop_outcome(managed.binding)
-        self._lifecycle_repo(strategy_instance_id).record_terminal_outcome(
-            BotDutyOutcome(
-                kind="STOPPED",
-                reason_code=outcome,
-                recorded_at_ms=self._now_ms(),
-                run_id=managed.binding.run_id,
-            ),
+        terminal_outcome = BotDutyOutcome(
+            kind="STOPPED",
+            reason_code=outcome,
+            recorded_at_ms=self._now_ms(),
+            run_id=managed.binding.run_id,
+        )
+        self._run_evidence.record_terminal(
+            strategy_instance_id,
+            terminal_outcome,
             updated_by=_UPDATED_BY,
             reason=outcome,
         )
@@ -679,6 +678,30 @@ class BotTaskRegistry:
         """All bots whose durable binding carries ``broker``."""
         return [self._compose_status(binding) for binding in self._bindings.list_for_broker(broker)]
 
+    def current_run(self, broker: str, strategy_instance_id: str) -> BotRunView:
+        """Return the backend-owned current-run projection."""
+        binding = self.binding_for_control(broker, strategy_instance_id)
+        return self._run_evidence.current(
+            binding,
+            self.process_fact(broker, strategy_instance_id),
+        )
+
+    def run_history(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        cursor: str | None,
+        limit: int,
+    ) -> BotRunHistoryPage:
+        """Return a bounded page of previous-run projections."""
+        binding = self.binding_for_control(broker, strategy_instance_id)
+        return self._run_evidence.history(
+            binding,
+            cursor=cursor,
+            limit=limit,
+        )
+
     # ── supervision ───────────────────────────────────────────────────
 
     async def _supervise(self, binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
@@ -783,11 +806,13 @@ class BotTaskRegistry:
             recorded_at_ms=now_ms,
             run_id=binding.run_id,
         )
-        self._lifecycle_repo(binding.strategy_instance_id).record_terminal_outcome(
+        self._run_evidence.record_terminal(
+            binding.strategy_instance_id,
             outcome,
             updated_by=_UPDATED_BY,
             reason=reason_code,
             expected_active_run_id=binding.run_id,
+            persist_receipt=reason_code != PROVISIONAL_STOP_REASON_CODE,
         )
 
     def _reap(self, strategy_instance_id: str, run_id: str) -> None:
