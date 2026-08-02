@@ -16,6 +16,12 @@
       <span>Process evidence</span>
       @if (run().process; as process) {
         <strong>{{ process.state | receiptLabel }}</strong>
+        @if (process.process_identity) {
+          <small>Process ID <code>{{ process.process_identity }}</code></small>
+        } @else {
+          <small>Process identity unavailable</small>
+        }
+        <small>Registry <code>{{ process.registry_generation }}</code></small>
         <small>Observed <app-timestamp-display [value]="process.observed_at_ms" mode="local" /></small>
       } @else {
         <strong>Not attached to this historical view</strong>

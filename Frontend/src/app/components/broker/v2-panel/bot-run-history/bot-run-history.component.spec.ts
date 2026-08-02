@@ -48,7 +48,12 @@ describe('BotRunHistoryComponent', () => {
 
     expect(screen.getByText('run-current')).toBeTruthy();
     expect(screen.getByText('Running')).toBeTruthy();
+    expect(screen.getByText('process-7')).toBeTruthy();
+    expect(screen.getByText('registry-2')).toBeTruthy();
     expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Current Run' }).getAttribute('aria-pressed'),
+    ).toBe('true');
   });
 
   it('labels historical evidence and makes the live-control target explicit', async () => {
@@ -91,7 +96,7 @@ describe('BotRunHistoryComponent', () => {
       requests.push(request),
     );
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Previous Runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
 
     expect(requests).toEqual(['history']);
   });

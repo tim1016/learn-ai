@@ -3,7 +3,11 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import type { BotPanelView, PanelProfile } from '../lib/broker-v2-panel.types';
+import type {
+  BotPanelView,
+  BotRunView,
+  PanelProfile,
+} from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
 
 // DualPaneChartComponent -> lightweight-charts: mock for unit tests.
@@ -100,10 +104,8 @@ const PANEL: BotPanelView = {
   open_pnl: null,
 };
 
-const mockService = {
-  getPanelProfile: vi.fn().mockResolvedValue(PROFILE),
-  getPanel: vi.fn().mockResolvedValue(PANEL),
-  getCurrentRun: vi.fn().mockResolvedValue({
+function makeRun(overrides: Partial<BotRunView> = {}): BotRunView {
+  return {
     strategy_instance_id: 'sid-001',
     run_id: 'run-current',
     configuration_hash: 'a'.repeat(64),
@@ -119,13 +121,18 @@ const mockService = {
       observed_at_ms: 1_753_800_005_000,
     },
     terminal_outcome: null,
-  }),
+    ...overrides,
+  };
+}
+
+const mockService = {
+  getPanelProfile: vi.fn().mockResolvedValue(PROFILE),
+  getPanel: vi.fn().mockResolvedValue(PANEL),
+  getCurrentRun: vi.fn().mockResolvedValue(makeRun()),
   getRunHistory: vi.fn().mockResolvedValue({
     runs: [
-      {
-        strategy_instance_id: 'sid-001',
+      makeRun({
         run_id: 'run-previous',
-        configuration_hash: 'a'.repeat(64),
         launch_reason: 'resume',
         started_at_ms: 1_753_700_000_000,
         is_current: false,
@@ -136,7 +143,7 @@ const mockService = {
           recorded_at_ms: 1_753_750_000_000,
           run_id: 'run-previous',
         },
-      },
+      }),
     ],
     next_cursor: null,
   }),
@@ -236,7 +243,7 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('tab', { name: 'Previous Runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -246,6 +253,10 @@ describe('BotPanelShellComponent', () => {
       undefined,
     );
     expect(screen.getByText('run-previous')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
+    await fixture.whenStable();
+    expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
@@ -261,31 +272,24 @@ describe('BotPanelShellComponent', () => {
     mockService.getRunHistory
       .mockResolvedValueOnce({
         runs: [
-          {
-            strategy_instance_id: 'sid-001',
+          makeRun({
             run_id: 'run-newest-previous',
-            configuration_hash: 'a'.repeat(64),
             launch_reason: 'resume',
             started_at_ms: 1_753_700_000_000,
             is_current: false,
             process: null,
-            terminal_outcome: null,
-          },
+          }),
         ],
         next_cursor: 'run-newest-previous',
       })
       .mockResolvedValueOnce({
         runs: [
-          {
-            strategy_instance_id: 'sid-001',
+          makeRun({
             run_id: 'run-older',
-            configuration_hash: 'a'.repeat(64),
-            launch_reason: 'deploy',
             started_at_ms: 1_753_600_000_000,
             is_current: false,
             process: null,
-            terminal_outcome: null,
-          },
+          }),
         ],
         next_cursor: null,
       });
@@ -297,7 +301,7 @@ describe('BotPanelShellComponent', () => {
       ],
     });
     await fixture.whenStable();
-    fireEvent.click(screen.getByRole('tab', { name: 'Previous Runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -338,7 +342,7 @@ describe('BotPanelShellComponent', () => {
       ],
     });
     await fixture.whenStable();
-    fireEvent.click(screen.getByRole('tab', { name: 'Previous Runs' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
 

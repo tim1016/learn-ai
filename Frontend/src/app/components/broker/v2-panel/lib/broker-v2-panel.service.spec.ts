@@ -28,7 +28,16 @@ describe('BrokerV2PanelService run evidence', () => {
       '/api/brokers/alpaca%20paper/bots/sid%2F001/runs/current',
     );
     expect(request.request.method).toBe('GET');
-    request.flush({ run_id: 'run-current' });
+    request.flush({
+      strategy_instance_id: 'sid/001',
+      run_id: 'run-current',
+      configuration_hash: 'a'.repeat(64),
+      launch_reason: 'deploy',
+      started_at_ms: 1_753_800_000_000,
+      is_current: true,
+      process: null,
+      terminal_outcome: null,
+    });
 
     await expect(response).resolves.toMatchObject({ run_id: 'run-current' });
   });

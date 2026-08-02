@@ -55,15 +55,15 @@ button {
 .run-history__notice {
   margin: var(--space-3) 0 0;
   padding: var(--space-2) var(--space-3);
-  border-left: 3px solid var(--warning, #c78817);
-  background: var(--bg-elevated);
+  border-left: 3px solid var(--warn);
+  background: var(--warn-soft);
   color: var(--text-primary);
   font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
 }
 
 .run-history__message { margin: var(--space-3) 0 0; color: var(--text-secondary); font-size: var(--fs-sm); }
-.run-history__message--error { color: var(--danger-text, #a12424); }
+.run-history__message--error { color: var(--bear); }
 
 .run-history__pagination { justify-content: flex-end; margin-top: var(--space-3); }
 .run-history__pagination button { border: 1px solid var(--border-light); }

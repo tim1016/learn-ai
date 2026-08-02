@@ -279,8 +279,9 @@ export class BotPanelShellComponent {
   protected onRunHistoryNavigation(destination: RunHistoryNavigation): void {
     const location = this.runHistoryLocation();
     if (destination === 'current') {
-      if (location.mode === 'current' && this.currentRun.error() !== undefined) {
-        this.currentRun.reload();
+      if (location.mode === 'current') {
+        if (this.currentRun.error() !== undefined) this.currentRun.reload();
+        return;
       }
       this.runHistoryLocation.update((current) => ({
         ...current,
@@ -289,8 +290,9 @@ export class BotPanelShellComponent {
       return;
     }
     if (destination === 'history') {
-      if (location.mode === 'history' && this.previousRun.error() !== undefined) {
-        this.previousRun.reload();
+      if (location.mode === 'history') {
+        if (this.previousRun.error() !== undefined) this.previousRun.reload();
+        return;
       }
       this.runHistoryLocation.update((current) => ({
         ...current,

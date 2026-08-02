@@ -4,19 +4,17 @@
       <span class="eyebrow">Run evidence</span>
       <h2 id="run-history-title">Current and previous runs</h2>
     </div>
-    <div class="run-history__tabs" role="tablist" aria-label="Run evidence period">
+    <div class="run-history__tabs" role="group" aria-label="Run evidence period">
       <button
         type="button"
-        role="tab"
         [class.run-history__tab--active]="state().mode === 'current'"
-        [attr.aria-selected]="state().mode === 'current'"
+        [attr.aria-pressed]="state().mode === 'current'"
         (click)="navigate('current')"
       >Current Run</button>
       <button
         type="button"
-        role="tab"
         [class.run-history__tab--active]="state().mode === 'history'"
-        [attr.aria-selected]="state().mode === 'history'"
+        [attr.aria-pressed]="state().mode === 'history'"
         (click)="navigate('history')"
       >Previous Runs</button>
     </div>
