@@ -384,7 +384,7 @@ async def deploy_alpaca_paper_bot(
             detail=exc.detail,
             next_action="Correct the deployment inputs or bot state, then submit a new command.",
             http_status=exc.http_status,
-            operation_attempted=True,
+            operation_attempted=exc.admission_decision is None,
             admission_decision=exc.admission_decision,
         ) from exc
     return build_alpaca_paper_deploy_receipt(

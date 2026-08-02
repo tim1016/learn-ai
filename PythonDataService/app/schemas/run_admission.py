@@ -27,13 +27,9 @@ class RunProcessAdmissionFact(BaseModel):
 
     @model_validator(mode="after")
     def _identity_matches_state(self) -> RunProcessAdmissionFact:
-        if self.state == "ABSENT" and (
-            self.run_id is not None or self.process_identity is not None
-        ):
+        if self.state == "ABSENT" and (self.run_id is not None or self.process_identity is not None):
             raise ValueError("an absent process cannot carry run identity")
-        if self.state in {"STARTING", "RUNNING", "STOPPING"} and (
-            self.run_id is None or self.process_identity is None
-        ):
+        if self.state in {"STARTING", "RUNNING", "STOPPING"} and (self.run_id is None or self.process_identity is None):
             raise ValueError("a live process fact requires run and process identity")
         return self
 
@@ -50,6 +46,22 @@ class MarketDataAdmissionFact(BaseModel):
     reason: str | None = None
 
 
+class StartRuntimeAdmissionFact(BaseModel):
+    """Runner-owned recovery and restart-intensity evidence for Start."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal[
+        "READY",
+        "BOOT_RECOVERY_INCOMPLETE",
+        "RECOVERY_UNCERTAIN",
+        "RESTART_INTENSITY_EXCEEDED",
+    ]
+    observed_at_ms: int = Field(ge=0)
+    explanation: str
+    next_step: str | None = None
+
+
 class StartRunFacts(BaseModel):
     """Bot-owned immutable and runtime facts for a proposed first run."""
 
@@ -59,8 +71,20 @@ class StartRunFacts(BaseModel):
     strategy_instance_id: str
     proposed_run_id: str
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime: StartRuntimeAdmissionFact
     process: RunProcessAdmissionFact
     market_data: MarketDataAdmissionFact
+
+
+class RunAdmissionFactAges(BaseModel):
+    """Age of every authority fact at the exact admission evaluation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    runtime: int
+    process: int
+    market_data: int
+    clerk: int
 
 
 class RunAdmissionDecision(BaseModel):
@@ -68,7 +92,7 @@ class RunAdmissionDecision(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    operation: Literal["START", "RESUME"]
+    operation: Literal["START"]
     allowed: bool
     reason_code: str
     explanation: str
@@ -78,5 +102,5 @@ class RunAdmissionDecision(BaseModel):
     configuration_hash: str
     account_id: str
     evaluated_at_ms: int = Field(ge=0)
-    fact_ages_ms: dict[str, int]
+    fact_ages_ms: RunAdmissionFactAges
     evidence_refs: tuple[str, ...]

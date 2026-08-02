@@ -85,7 +85,7 @@ class _FakeDeployRegistry:
             configuration_hash="a" * 64,
             account_id=ACCT,
             evaluated_at_ms=_T0,
-            fact_ages_ms={"process": 0, "market_data": 0, "clerk": 0},
+            fact_ages_ms={"runtime": 0, "process": 0, "market_data": 0, "clerk": 0},
             evidence_refs=("test-admission",),
         )
 
@@ -200,9 +200,7 @@ async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
 async def test_start_admission_preview_uses_the_request_specific_policy(deploy_app) -> None:
     fast_app, _registry = deploy_app
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/admission",
             json=_BODY,
@@ -358,12 +356,8 @@ def test_deploy_reverifies_the_accepted_audit_copy_hash() -> None:
     event = entry.current_flag_event
     assert event is not None
     bad_hash = "0" * 64
-    changed_snapshot = event.evidence_snapshot.model_copy(
-        update={"audit_copy_sha256": bad_hash}
-    )
-    changed_event = event.model_copy(
-        update={"evidence_snapshot": changed_snapshot}
-    )
+    changed_snapshot = event.evidence_snapshot.model_copy(update={"audit_copy_sha256": bad_hash})
+    changed_event = event.model_copy(update={"evidence_snapshot": changed_snapshot})
     changed = entry.model_copy(
         update={
             "audit_copy_sha256": bad_hash,
@@ -471,15 +465,14 @@ async def test_start_refusal_returns_the_execution_policy_decision(
         )
 
     monkeypatch.setattr(registry, "deploy_with_admission", refuse)
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=fast_app), base_url="http://test"
-    ) as client:
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         response = await client.post(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots",
             json=_BODY,
         )
 
     assert response.status_code == 500
+    assert response.json()["detail"]["outcome"] == "blocked"
     assert response.json()["detail"]["admission"]["reason_code"] == "MARKET_DATA_STALE"
 
 

@@ -345,17 +345,26 @@ read-only seam does not independently permit or block a command.
 Start projection and Start execution now call the same pure typed
 `evaluate_run_admission(bot, clerk)` policy. The bot argument contains the
 candidate immutable configuration, process-absence proof, and market-data
-health; the Clerk argument is the sole account, reconciliation, exposure,
-order, hold, freeze, and unresolved-effect authority. No account DTO is a
-third policy input, and Angular renders the backend decision rather than
-recreating its gates.
+health. It also carries runner-owned boot-recovery and restart-intensity facts,
+so preview and execution cannot disagree because of a second execution-only
+gate. The Clerk argument is the sole account, reconciliation, exposure, order,
+hold, freeze, and unresolved-effect authority. No account DTO is a third policy
+input, and Angular renders the backend decision rather than recreating its
+gates.
 
-All three observations used by Start—process, market data, and Clerk custody—
-must be no more than 5,000 milliseconds old at evaluation. A fact exactly at
-the boundary remains eligible; a fact one millisecond older blocks with typed
-stale evidence. Future-dated facts, unknown process state, non-flat or unknown
-custody, unresolved effects, holds, freezes, or unready market data all fail
-closed.
+All four observations used by Start—runner recovery, process, market data, and
+Clerk custody—must be no more than 5,000 milliseconds old at evaluation. A fact
+exactly at the boundary remains eligible; a fact one millisecond older blocks
+with typed stale evidence. Future-dated facts, incomplete or uncertain
+recovery, excessive restart intensity, unknown process state, non-flat or
+unknown custody, unresolved effects, holds, freezes, or unready market data all
+fail closed.
+
+A connected feed with no active subscription is ready to establish the
+candidate subscription; an old watermark from a prior consumer does not create
+a permanent Start lockout. Likewise, an RTH-only feed is not called stalled
+while the session authority says no RTH bar is expected. A stale active
+subscription during an expected bar window remains a hard Start refusal.
 
 The projection endpoint is advisory evidence only. Execution evaluates again
 immediately before mutation while holding the Clerk's intake lock over the
@@ -363,7 +372,9 @@ same account and journal sequence. It writes the binding and starts supervision
 before releasing that fence, so no Clerk-submitted effect can invalidate the
 admitted custody cut. If the cut keeps changing, execution returns a typed
 conflict and writes no binding. The successful deployment receipt carries the
-exact execution-time admission decision.
+exact execution-time admission decision. Binding, lifecycle, restart-history,
+and receipt timestamps are captured after the custody round trip, immediately
+before activation, and therefore never predate their own admission evaluation.
 
 This amendment governs first Start only. Resume continues to use its existing
 custody proof until the separate immutable-instance/run-history slice gives

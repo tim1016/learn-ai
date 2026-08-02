@@ -21913,23 +21913,34 @@ export interface components {
             evidence_refs: string[];
             /** Explanation */
             explanation: string;
-            /** Fact Ages Ms */
-            fact_ages_ms: {
-                [key: string]: number;
-            };
+            fact_ages_ms: components["schemas"]["RunAdmissionFactAges"];
             /** Next Step */
             next_step: string | null;
             /**
              * Operation
-             * @enum {string}
+             * @constant
              */
-            operation: "START" | "RESUME";
+            operation: "START";
             /** Proposed Run Id */
             proposed_run_id: string;
             /** Reason Code */
             reason_code: string;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+        };
+        /**
+         * RunAdmissionFactAges
+         * @description Age of every authority fact at the exact admission evaluation.
+         */
+        RunAdmissionFactAges: {
+            /** Clerk */
+            clerk: number;
+            /** Market Data */
+            market_data: number;
+            /** Process */
+            process: number;
+            /** Runtime */
+            runtime: number;
         };
         /**
          * RunBatchOptionsRequest

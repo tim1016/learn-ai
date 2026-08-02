@@ -1,4 +1,4 @@
-"""Pure, typed Start/Resume admission policy for broker bot runs.
+"""Pure, typed first-Start admission policy for broker bot runs.
 
 Projection endpoints and mutation paths must call :func:`evaluate_run_admission`
 with authority-authored facts. The policy does not read files, call a broker,
@@ -11,6 +11,7 @@ from __future__ import annotations
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.run_admission import (
     RunAdmissionDecision,
+    RunAdmissionFactAges,
     StartRunFacts,
 )
 
@@ -22,7 +23,7 @@ def _decision(
     clerk: ClerkCustodySnapshot,
     *,
     evaluated_at_ms: int,
-    fact_ages_ms: dict[str, int],
+    fact_ages_ms: RunAdmissionFactAges,
     allowed: bool,
     reason_code: str,
     explanation: str,
@@ -55,11 +56,13 @@ def evaluate_run_admission(
     evaluated_at_ms: int,
 ) -> RunAdmissionDecision:
     """Decide Start from bot and Clerk facts only; unknown always blocks."""
-    fact_ages_ms = {
-        "process": evaluated_at_ms - bot.process.observed_at_ms,
-        "market_data": evaluated_at_ms - bot.market_data.observed_at_ms,
-        "clerk": evaluated_at_ms - clerk.observed_at_ms,
-    }
+    fact_ages_ms = RunAdmissionFactAges(
+        runtime=evaluated_at_ms - bot.runtime.observed_at_ms,
+        process=evaluated_at_ms - bot.process.observed_at_ms,
+        market_data=evaluated_at_ms - bot.market_data.observed_at_ms,
+        clerk=evaluated_at_ms - clerk.observed_at_ms,
+    )
+
     def decide(
         *,
         allowed: bool,
@@ -78,7 +81,8 @@ def evaluate_run_admission(
             next_step=next_step,
         )
 
-    if any(age < 0 for age in fact_ages_ms.values()):
+    fact_ages = fact_ages_ms.model_dump()
+    if any(age < 0 for age in fact_ages.values()):
         return decide(
             allowed=False,
             reason_code="AUTHORITY_CLOCK_INVALID",
@@ -86,20 +90,14 @@ def evaluate_run_admission(
             next_step="Refresh process, market-data, and Clerk evidence before Start.",
         )
     stale_authority = next(
-        (
-            authority
-            for authority, age_ms in fact_ages_ms.items()
-            if age_ms > AUTHORITY_FACT_MAX_AGE_MS
-        ),
+        (authority for authority, age_ms in fact_ages.items() if age_ms > AUTHORITY_FACT_MAX_AGE_MS),
         None,
     )
     if stale_authority is not None:
         return decide(
             allowed=False,
             reason_code="AUTHORITY_FACT_STALE",
-            explanation=(
-                f"The {stale_authority} fact is older than the 5-second Start boundary."
-            ),
+            explanation=(f"The {stale_authority} fact is older than the 5-second Start boundary."),
             next_step="Refresh process, market-data, and Clerk evidence before Start.",
         )
     if clerk.strategy_instance_id != bot.strategy_instance_id:
@@ -108,6 +106,13 @@ def evaluate_run_admission(
             reason_code="CUSTODY_INSTANCE_MISMATCH",
             explanation="The Clerk custody proof belongs to a different strategy instance.",
             next_step="Refresh the selected instance from the Clerk.",
+        )
+    if bot.runtime.state != "READY":
+        return decide(
+            allowed=False,
+            reason_code=bot.runtime.state,
+            explanation=bot.runtime.explanation,
+            next_step=bot.runtime.next_step,
         )
     if bot.process.state == "UNKNOWN":
         return decide(

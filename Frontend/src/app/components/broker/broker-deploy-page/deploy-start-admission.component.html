@@ -6,6 +6,7 @@
   <p>{{ decision().explanation }}</p>
   @if (decision().next_step; as nextStep) { <p>Next: {{ nextStep }}</p> }
   <dl aria-label="Safety fact ages">
+    <div><dt>Runner safety</dt><dd>{{ decision().fact_ages_ms['runtime'] }} ms old</dd></div>
     <div><dt>Bot process</dt><dd>{{ decision().fact_ages_ms['process'] }} ms old</dd></div>
     <div><dt>Market data</dt><dd>{{ decision().fact_ages_ms['market_data'] }} ms old</dd></div>
     <div><dt>Clerk custody</dt><dd>{{ decision().fact_ages_ms['clerk'] }} ms old</dd></div>

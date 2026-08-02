@@ -107,7 +107,7 @@ const ADMISSION: RunAdmissionDecision = {
   configuration_hash: 'a'.repeat(64),
   account_id: 'PA9',
   evaluated_at_ms: 1_700_000_000_000,
-  fact_ages_ms: { process: 10, market_data: 20, clerk: 30 },
+  fact_ages_ms: { runtime: 5, process: 10, market_data: 20, clerk: 30 },
   evidence_refs: ['test-admission'],
 };
 
@@ -317,6 +317,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     expect(screen.getByText('Start blocked')).toBeTruthy();
     expect(screen.getByText(denied.explanation)).toBeTruthy();
+    expect(screen.getByText('Runner safety')).toBeTruthy();
     expect(screen.getByText('Market data')).toBeTruthy();
     expect(service.deployBot).not.toHaveBeenCalled();
   });
@@ -335,6 +336,27 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fixture.detectChanges();
 
     expect(screen.queryByText('Start blocked')).toBeNull();
+  });
+
+  it('discards a preview response when the deployment ticket changes in flight', async () => {
+    let resolvePreview!: (decision: RunAdmissionDecision) => void;
+    const service = mockService();
+    service.previewStartAdmission.mockReturnValue(new Promise((resolve) => {
+      resolvePreview = resolve;
+    }));
+    const { fixture } = await renderWorkflow(service);
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-race' }));
+
+    const submission = component['submit']();
+    await vi.waitFor(() => expect(service.previewStartAdmission).toHaveBeenCalledOnce());
+    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
+    resolvePreview(ADMISSION);
+    await submission;
+    fixture.detectChanges();
+
+    expect(service.deployBot).not.toHaveBeenCalled();
+    expect(screen.queryByText('Start allowed')).toBeNull();
   });
 
   it('submits bounded custom whole-share sizing', async () => {

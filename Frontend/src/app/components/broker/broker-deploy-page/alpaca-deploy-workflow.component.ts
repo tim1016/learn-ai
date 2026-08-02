@@ -305,6 +305,7 @@ export class AlpacaDeployWorkflowComponent {
         view.account_id,
         body,
       );
+      if (!this.submissionStillCurrent(body)) return;
       this.admissionDecision.set(decision);
       if (!decision.allowed) return;
       this.receipt.set(await this.panelService.deployBot('alpaca', view.account_id, body));
@@ -327,10 +328,22 @@ export class AlpacaDeployWorkflowComponent {
       symbol: ticket.symbol.trim().toUpperCase(),
       sizing: {
         preset: ticket.sizingPreset,
-        quantity: this.effectiveQuantity(),
+        quantity: ticket.sizingPreset === 'safe_canary' ? 1 : ticket.quantity,
       },
       carryover_policy: ticket.allowCarryover ? 'ALLOW' : 'FORBID',
     };
+  }
+
+  private submissionStillCurrent(submitted: DeployBotBody): boolean {
+    const strategy = this.selectedStrategy();
+    if (!strategy) return false;
+    const current = this.deployBody(this.ticket(), strategy);
+    return current.strategy_instance_id === submitted.strategy_instance_id
+      && current.strategy_key === submitted.strategy_key
+      && current.symbol === submitted.symbol
+      && current.sizing?.preset === submitted.sizing?.preset
+      && current.sizing?.quantity === submitted.sizing?.quantity
+      && current.carryover_policy === submitted.carryover_policy;
   }
 
   protected instanceIdError(): string | null {

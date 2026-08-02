@@ -36308,11 +36308,7 @@
             "type": "string"
           },
           "fact_ages_ms": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "title": "Fact Ages Ms",
-            "type": "object"
+            "$ref": "#/components/schemas/RunAdmissionFactAges"
           },
           "next_step": {
             "anyOf": [
@@ -36326,12 +36322,8 @@
             "title": "Next Step"
           },
           "operation": {
-            "enum": [
-              "START",
-              "RESUME"
-            ],
-            "title": "Operation",
-            "type": "string"
+            "const": "START",
+            "title": "Operation"
           },
           "proposed_run_id": {
             "title": "Proposed Run Id",
@@ -36361,6 +36353,36 @@
           "evidence_refs"
         ],
         "title": "RunAdmissionDecision",
+        "type": "object"
+      },
+      "RunAdmissionFactAges": {
+        "additionalProperties": false,
+        "description": "Age of every authority fact at the exact admission evaluation.",
+        "properties": {
+          "clerk": {
+            "title": "Clerk",
+            "type": "integer"
+          },
+          "market_data": {
+            "title": "Market Data",
+            "type": "integer"
+          },
+          "process": {
+            "title": "Process",
+            "type": "integer"
+          },
+          "runtime": {
+            "title": "Runtime",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runtime",
+          "process",
+          "market_data",
+          "clerk"
+        ],
+        "title": "RunAdmissionFactAges",
         "type": "object"
       },
       "RunBatchOptionsRequest": {
