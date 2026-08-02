@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.exposure import project_instance_exposure
 from app.broker.alpaca.clerk.models import (
     UNEXPLAINED_ORDER_HOLD_CODE,
     ClerkEntryKind,
+    EffectPurpose,
     OrderJournalEntry,
 )
 from app.broker.contract.errors import BrokerSubmissionHeld, BrokerUnavailable
@@ -43,6 +44,12 @@ from app.broker.contract.models import (
     OrderSide,
 )
 from app.engine.live.order_identity import build_bot_order_namespace
+from app.schemas.action_plan import (
+    ActionPlan,
+    CloseLegExit,
+    StockEntryLeg,
+    StockInstrument,
+)
 
 _FIXED_MS = 1_700_000_000_000
 
@@ -207,6 +214,20 @@ def _request(operator: str = "inkant") -> BrokerOrderRequest:
     )
 
 
+def _effect_plan() -> ActionPlan:
+    return ActionPlan(
+        on_enter=[
+            StockEntryLeg(
+                leg_id="primary",
+                instrument=StockInstrument(kind="stock", underlying="SPY"),
+                position="long",
+                qty_ratio=1,
+            )
+        ],
+        on_exit=[CloseLegExit(kind="close_leg", entry_leg_id="primary")],
+    )
+
+
 def _kinds(clerk: AlpacaClerk) -> list[ClerkEntryKind]:
     return [entry.kind for entry in clerk._journal.read_entries()]  # type: ignore[union-attr]
 
@@ -313,6 +334,27 @@ async def test_custody_snapshot_proves_known_flat_and_zero_work() -> None:
     assert snapshot.next_step is None
 
 
+async def test_custody_snapshot_keeps_fill_event_race_unknown() -> None:
+    broker = _FakeBroker(positions=[_position()])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    await clerk.submit_for_instance(
+        strategy_instance_id="bot-proof",
+        legs=[BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)],
+    )
+
+    snapshot = await clerk.custody_snapshot("bot-proof")
+
+    assert snapshot.reconciliation_state == "clean"
+    assert snapshot.reconciliation_fresh is True
+    assert snapshot.exposure.state == "unknown"
+    assert snapshot.working_orders.state == "unknown"
+    assert snapshot.pending_orders.state == "unknown"
+    assert snapshot.terminal_orders.state == "unknown"
+    assert snapshot.unresolved_effects.state == "unknown"
+    assert snapshot.reason_code == "CLERK_CUSTODY_UNPROVABLE"
+    assert snapshot.next_step
+
+
 async def test_custody_snapshot_reports_attributed_non_zero_exposure() -> None:
     broker = _FakeBroker()
     clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
@@ -353,6 +395,46 @@ async def test_custody_snapshot_reports_attributed_non_zero_exposure() -> None:
     assert snapshot.working_orders.state == "zero"
     assert snapshot.terminal_orders.state == "non_zero"
     assert snapshot.terminal_orders.count == 1
+
+
+async def test_custody_snapshot_retires_filled_enter_effect() -> None:
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    entered = await clerk.execute_for_instance(
+        strategy_instance_id="bot-proof",
+        run_id="run-1",
+        decision_id="bar-1700000000000-enter",
+        purpose=EffectPurpose.ENTER,
+        action_plan=_effect_plan(),
+        quantity=1,
+    )
+    order_ref = entered.child_order_refs[0]
+    filled_order = _order(client_order_id=order_ref, status="filled").model_copy(
+        update={
+            "filled_quantity": 1.0,
+            "filled_avg_price": 100.0,
+            "filled_at_ms": _FIXED_MS,
+        }
+    )
+    await clerk.record_lifecycle_event(
+        client_order_id=order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill",
+            occurred_at_ms=_FIXED_MS,
+            price=100.0,
+            quantity=1.0,
+        ),
+        event_key="exec:bot-proof-effect-fill",
+        order=filled_order,
+    )
+    broker._orders = [filled_order]
+    broker._positions = [_position()]
+
+    snapshot = await clerk.custody_snapshot("bot-proof")
+
+    assert snapshot.reconciliation_state == "clean"
+    assert snapshot.unresolved_effects.state == "zero"
+    assert snapshot.unresolved_effects.count == 0
 
 
 async def test_reconcile_unexplained_order_journals_and_sets_hold() -> None:
