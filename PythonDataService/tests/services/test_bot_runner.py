@@ -39,9 +39,13 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.engine.execution.portfolio import Portfolio
 from app.engine.live.account_artifacts import RestartIntensityPolicy
+from app.engine.live.bot_lifecycle_state import BotDutyOutcome
+from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
+from app.services.bot_binding_repository import RunOutcomeConflictError
+from app.services.bot_run_evidence import PROVISIONAL_STOP_REASON_CODE
 from app.services.bot_runner import (
     BootRecoveryIncompleteError,
     BotAlreadyRunningError,
@@ -875,8 +879,6 @@ async def test_resume_existing_creates_new_run_and_preserves_action_plan(
     )
     original_run_bytes = original_run_path.read_bytes()
     await registry.stop("alpaca", _SID)
-
-
     resumed = await registry.resume_existing("alpaca", _SID)
     rebound = registry.binding_for_control("alpaca", _SID)
     current = registry.current_run("alpaca", _SID)
@@ -903,6 +905,113 @@ async def test_resume_existing_creates_new_run_and_preserves_action_plan(
     assert history.runs[0].terminal_outcome.kind == "STOPPED"
     assert history.next_cursor is None
     await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_resume_preserves_prior_outcome_before_current_pointer_advances(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    prior_run_id = registry.binding_for_control("alpaca", _SID).run_id
+    await registry.stop("alpaca", _SID)
+
+    original_record_launch = registry._bindings.record_launch
+
+    def crash_after_current_pointer_write(*args: object, **kwargs: object) -> None:
+        original_record_launch(*args, **kwargs)
+        raise RuntimeError("injected crash after current run pointer write")
+
+    monkeypatch.setattr(registry._bindings, "record_launch", crash_after_current_pointer_write)
+    with pytest.raises(RuntimeError, match="injected crash"):
+        await registry.resume_existing("alpaca", _SID)
+
+    restarted_registry = _registry(tmp_path, feed)
+    history = restarted_registry.run_history("alpaca", _SID, cursor=None, limit=1)
+
+    assert history.runs[0].run_id == prior_run_id
+    assert history.runs[0].terminal_outcome is not None
+    assert history.runs[0].terminal_outcome.reason_code == "OPERATOR_STOP"
+
+
+@pytest.mark.asyncio
+async def test_resume_does_not_preserve_provisional_stop_outcome(tmp_path: Path) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    binding = registry.binding_for_control("alpaca", _SID)
+    managed = registry._bots[_SID]
+    managed.finalized = True
+    managed.task.cancel()
+    await asyncio.wait({managed.task})
+    registry._reap(_SID, binding.run_id)
+    registry._desired_repo(_SID).set(
+        DesiredState.STOPPED,
+        updated_by="test",
+        now_ms=_T0,
+        reason="operator_stop",
+    )
+    registry._run_evidence.record_terminal(
+        _SID,
+        BotDutyOutcome(
+            kind="STOPPED",
+            reason_code=PROVISIONAL_STOP_REASON_CODE,
+            recorded_at_ms=_T0,
+            run_id=binding.run_id,
+        ),
+        updated_by="test",
+        reason=PROVISIONAL_STOP_REASON_CODE,
+        expected_active_run_id=binding.run_id,
+        persist_receipt=False,
+    )
+
+    await registry.resume_existing("alpaca", _SID)
+    history = registry.run_history("alpaca", _SID, cursor=None, limit=1)
+
+    assert history.runs[0].run_id == binding.run_id
+    assert history.runs[0].terminal_outcome is None
+    assert not (
+        tmp_path / "live_state" / _SID / "run_outcomes" / f"{binding.run_id}.json"
+    ).exists()
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_conflicting_terminal_outcome_does_not_mutate_lifecycle(tmp_path: Path) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    binding = registry.binding_for_control("alpaca", _SID)
+    managed = registry._bots[_SID]
+    managed.finalized = True
+    managed.task.cancel()
+    await asyncio.wait({managed.task})
+    registry._reap(_SID, binding.run_id)
+    recorded = BotDutyOutcome(
+        kind="STOPPED",
+        reason_code="OPERATOR_STOP",
+        recorded_at_ms=_T0,
+        run_id=binding.run_id,
+    )
+    registry._run_evidence.record_terminal(
+        _SID,
+        recorded,
+        updated_by="test",
+        reason="OPERATOR_STOP",
+    )
+    lifecycle_before = _lifecycle_json(tmp_path)
+
+    with pytest.raises(RunOutcomeConflictError):
+        registry._run_evidence.record_terminal(
+            _SID,
+            recorded.model_copy(update={"kind": "CRASHED", "reason_code": "RuntimeError"}),
+            updated_by="test",
+            reason="RuntimeError",
+        )
+
+    assert _lifecycle_json(tmp_path) == lifecycle_before
 
 
 @pytest.mark.asyncio

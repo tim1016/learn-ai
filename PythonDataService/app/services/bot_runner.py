@@ -80,7 +80,10 @@ from app.services.bot_carryover import (
     prove_stop_outcome,
     require_resume_custody,
 )
-from app.services.bot_run_evidence import BotRunEvidenceService
+from app.services.bot_run_evidence import (
+    PROVISIONAL_STOP_REASON_CODE,
+    BotRunEvidenceService,
+)
 from app.services.bot_runner_errors import (
     BootRecoveryIncompleteError,
     BotAlreadyRunningError,
@@ -383,14 +386,17 @@ class BotTaskRegistry:
         reason: Literal["deploy", "resume"],
     ) -> None:
         """Write run evidence and install supervision while caller holds its gate."""
-        self._bindings.record_launch(binding, launch_reason=reason)
-        self._desired_repo(binding.strategy_instance_id).set(
-            DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
-        )
         lifecycle_repo = self._lifecycle_repo(binding.strategy_instance_id)
+        # Preserve the prior immutable outcome before record_launch advances
+        # current_run.json. A crash between these operations must not hide a
+        # previous run's only terminal evidence from the history projection.
         self._run_evidence.preserve_terminal(
             binding.strategy_instance_id,
             lifecycle_repo.read(),
+        )
+        self._bindings.record_launch(binding, launch_reason=reason)
+        self._desired_repo(binding.strategy_instance_id).set(
+            DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )
         lifecycle_repo.set_phase(
             BotLifecyclePhase.ON_DUTY,
@@ -503,7 +509,7 @@ class BotTaskRegistry:
         # Stop strategy evaluation before any network-bound custody work. The
         # provisional terminal is replaced under this instance's operation lock
         # once the Clerk returns a fresh proof.
-        managed.stop_reason_code = "STOPPED_PENDING_CUSTODY_PROOF"
+        managed.stop_reason_code = PROVISIONAL_STOP_REASON_CODE
         managed.task.cancel()
         await asyncio.wait({managed.task}, timeout=_STOP_TIMEOUT_S)
         # Backstop for a coroutine that never entered supervision (cancelled
@@ -512,7 +518,7 @@ class BotTaskRegistry:
         self._finalize(
             managed.binding,
             kind="STOPPED",
-            reason_code="STOPPED_PENDING_CUSTODY_PROOF",
+            reason_code=PROVISIONAL_STOP_REASON_CODE,
         )
         self._reap(strategy_instance_id, managed.binding.run_id)
         outcome = "OPERATOR_STOP"
@@ -806,7 +812,7 @@ class BotTaskRegistry:
             updated_by=_UPDATED_BY,
             reason=reason_code,
             expected_active_run_id=binding.run_id,
-            persist_receipt=reason_code != "STOPPED_PENDING_CUSTODY_PROOF",
+            persist_receipt=reason_code != PROVISIONAL_STOP_REASON_CODE,
         )
 
     def _reap(self, strategy_instance_id: str, run_id: str) -> None:

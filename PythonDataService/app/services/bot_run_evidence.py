@@ -27,6 +27,7 @@ from app.services.bot_runner_errors import (
 )
 
 LifecycleRepoResolver = Callable[[str], BotLifecycleStateRepo]
+PROVISIONAL_STOP_REASON_CODE = "STOPPED_PENDING_CUSTODY_PROOF"
 
 
 class BotRunEvidenceService:
@@ -47,7 +48,11 @@ class BotRunEvidenceService:
         lifecycle: BotLifecycleStateRecord | None,
     ) -> None:
         """Copy the terminal projection before a new run clears it."""
-        if lifecycle is None or lifecycle.duty_outcome is None:
+        if (
+            lifecycle is None
+            or lifecycle.duty_outcome is None
+            or lifecycle.duty_outcome.reason_code == PROVISIONAL_STOP_REASON_CODE
+        ):
             return
         self._record_terminal_receipt(strategy_instance_id, lifecycle.duty_outcome)
 
@@ -61,15 +66,15 @@ class BotRunEvidenceService:
         expected_active_run_id: str | None = None,
         persist_receipt: bool = True,
     ) -> None:
-        """Write the lifecycle projection, then its immutable run receipt."""
+        """Publish immutable evidence before mutating the lifecycle projection."""
+        if persist_receipt:
+            self._record_terminal_receipt(strategy_instance_id, outcome)
         self._lifecycle_repo_for(strategy_instance_id).record_terminal_outcome(
             outcome,
             updated_by=updated_by,
             reason=reason,
             expected_active_run_id=expected_active_run_id,
         )
-        if persist_receipt:
-            self._record_terminal_receipt(strategy_instance_id, outcome)
 
     def _record_terminal_receipt(
         self,

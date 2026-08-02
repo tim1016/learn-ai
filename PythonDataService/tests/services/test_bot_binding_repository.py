@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import app.engine.live.durable_append_log as durable_append_log
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BotRunOutcomeRecord,
@@ -129,6 +130,37 @@ def test_terminal_outcome_is_create_once_and_run_scoped(tmp_path: Path) -> None:
         repository.record_outcome(
             outcome.model_copy(update={"reason_code": "SERVICE_SHUTDOWN"})
         )
+
+
+def test_terminal_outcome_recovers_after_interrupted_atomic_publication(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    binding = _binding()
+    repository.record_launch(binding, launch_reason="deploy")
+    outcome = BotRunOutcomeRecord(
+        strategy_instance_id=_SID,
+        run_id=binding.run_id,
+        kind="STOPPED",
+        reason_code="OPERATOR_STOP",
+        recorded_at_ms=2_000,
+    )
+    outcome_path = tmp_path / "live_state" / _SID / "run_outcomes" / f"{binding.run_id}.json"
+    def fail_publication(*args: object, **kwargs: object) -> None:
+        raise OSError("injected outcome publication failure")
+
+    with monkeypatch.context() as publication_failure:
+        publication_failure.setattr(durable_append_log.os, "link", fail_publication)
+        with pytest.raises(OSError, match="injected outcome publication failure"):
+            repository.record_outcome(outcome)
+
+    assert not outcome_path.exists()
+    assert not list(outcome_path.parent.glob(f".{outcome_path.name}.*.tmp"))
+
+    repository.record_outcome(outcome)
+
+    assert repository.read_outcome(_SID, binding.run_id) == outcome
 
 
 def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(

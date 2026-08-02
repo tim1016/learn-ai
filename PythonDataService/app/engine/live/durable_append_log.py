@@ -186,6 +186,33 @@ def create_exclusive_durable_file(
     _create_exclusive_with_directory_fd(path, serialized_record, trusted_root, mode)
 
 
+def create_atomic_exclusive_durable_file(
+    path: Path,
+    serialized_record: str,
+    *,
+    trusted_root: Path,
+    mode: int = 0o600,
+) -> None:
+    """Publish one complete confined file or raise when another writer owns it.
+
+    A receipt is the effect itself, so its final path must never name a
+    partially-written record.  This writes and syncs an exclusive sibling,
+    then publishes it with an exclusive hard-link operation.
+    """
+
+    if "\x00" in serialized_record:
+        raise ValueError("durable record must not contain a NUL byte")
+    if not _supports_descriptor_relative_writes():
+        _create_atomic_exclusive_on_service_owned_filesystem(
+            path,
+            serialized_record,
+            trusted_root,
+            mode,
+        )
+        return
+    _create_atomic_exclusive_with_directory_fd(path, serialized_record, trusted_root, mode)
+
+
 def _create_exclusive_with_directory_fd(
     path: Path,
     serialized_record: str,
@@ -209,6 +236,34 @@ def _create_exclusive_with_directory_fd(
             # permit a retry to repeat an effect that escaped before the crash.
             raise
         _fsync_directory(directory_fd)
+
+
+def _create_atomic_exclusive_with_directory_fd(
+    path: Path,
+    serialized_record: str,
+    trusted_root: Path,
+    mode: int,
+) -> None:
+    with _confined_parent_directory(path, trusted_root) as (directory_fd, filename):
+        temporary_name, file_descriptor = _create_exclusive_temporary_file(directory_fd, filename)
+        try:
+            with os.fdopen(file_descriptor, "w", encoding="utf-8") as file_handle:
+                file_handle.write(serialized_record)
+                file_handle.flush()
+                os.fsync(file_handle.fileno())
+            # link(2) atomically fails if the final name already exists. It
+            # never exposes the still-being-written temporary file as a receipt.
+            os.link(
+                temporary_name,
+                filename,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            _fsync_directory(directory_fd)
+        finally:
+            with suppress(FileNotFoundError):
+                os.unlink(temporary_name, dir_fd=directory_fd)
 
 
 def _create_exclusive_on_service_owned_filesystem(
@@ -241,6 +296,45 @@ def _create_exclusive_on_service_owned_filesystem(
         # permit a retry to repeat an effect that escaped before the crash.
         raise
     _fsync_parent_dir(path)
+
+
+def _create_atomic_exclusive_on_service_owned_filesystem(
+    path: Path,
+    serialized_record: str,
+    trusted_root: Path,
+    mode: int,
+) -> None:
+    """Windows-compatible atomic publication under the service-owned-root contract."""
+
+    root_real = os.path.realpath(os.fspath(trusted_root))
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+    candidate = os.path.realpath(os.fspath(path))
+    if not candidate.startswith(root_prefix):
+        raise ValueError(f"durable append log path {candidate} escapes root {root_real}")
+    path = Path(candidate)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    candidate = os.path.realpath(os.fspath(path))
+    if not candidate.startswith(root_prefix):
+        raise ValueError(f"durable append log path {candidate} escapes root {root_real}")
+    path = Path(candidate)
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        os.chmod(temporary_path, mode)
+        with os.fdopen(file_descriptor, "w", encoding="utf-8") as file_handle:
+            file_handle.write(serialized_record)
+            file_handle.flush()
+            os.fsync(file_handle.fileno())
+        os.link(temporary_path, path)
+        _fsync_parent_dir(path)
+    finally:
+        with suppress(FileNotFoundError):
+            temporary_path.unlink()
 
 
 def _require_single_jsonl_record(serialized_record: str) -> None:
@@ -338,6 +432,7 @@ def _fsync_directory(directory_fd: int) -> None:
 
 __all__ = [
     "append_jsonl_record",
+    "create_atomic_exclusive_durable_file",
     "create_exclusive_durable_file",
     "rewrite_jsonl_records",
 ]

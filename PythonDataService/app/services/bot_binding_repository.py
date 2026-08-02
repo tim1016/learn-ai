@@ -17,7 +17,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.engine.live.durable_append_log import create_exclusive_durable_file
+from app.engine.live.durable_append_log import (
+    create_atomic_exclusive_durable_file,
+    create_exclusive_durable_file,
+)
 from app.engine.live.run_status import _atomic_write_json
 from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
@@ -299,7 +302,7 @@ class BotBindingRepository:
         outcomes_dir.mkdir(parents=True, exist_ok=True)
         path = outcomes_dir / f"{candidate.run_id}.json"
         try:
-            self._create_once(path, candidate)
+            self._create_atomic_once(path, candidate)
             return
         except FileExistsError:
             existing = BotRunOutcomeRecord.model_validate_json(
@@ -429,6 +432,18 @@ class BotBindingRepository:
             separators=(",", ":"),
         )
         create_exclusive_durable_file(
+            path,
+            serialized,
+            trusted_root=self._live_state_root,
+        )
+
+    def _create_atomic_once(self, path: Path, record: BaseModel) -> None:
+        serialized = json.dumps(
+            record.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        create_atomic_exclusive_durable_file(
             path,
             serialized,
             trusted_root=self._live_state_root,
