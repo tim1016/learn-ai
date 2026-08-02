@@ -1,0 +1,65 @@
+<section class="run-history" aria-labelledby="run-history-title">
+  <div class="run-history__heading">
+    <div>
+      <span class="eyebrow">Run evidence</span>
+      <h2 id="run-history-title">Current and previous runs</h2>
+    </div>
+    <div class="run-history__tabs" role="tablist" aria-label="Run evidence period">
+      <button
+        type="button"
+        role="tab"
+        [class.run-history__tab--active]="state().mode === 'current'"
+        [attr.aria-selected]="state().mode === 'current'"
+        (click)="navigate('current')"
+      >Current Run</button>
+      <button
+        type="button"
+        role="tab"
+        [class.run-history__tab--active]="state().mode === 'history'"
+        [attr.aria-selected]="state().mode === 'history'"
+        (click)="navigate('history')"
+      >Previous Runs</button>
+    </div>
+  </div>
+
+  @if (state().mode === 'history') {
+    <p class="run-history__notice" role="status">
+      Viewing history — controls apply to the current run.
+    </p>
+  }
+
+  @if (
+    (state().mode === 'current' && state().currentLoading) ||
+    (state().mode === 'history' && state().historyLoading)
+  ) {
+    <p class="run-history__message" role="status">Loading run evidence…</p>
+  } @else if (
+    (state().mode === 'current' && state().currentFailed) ||
+    (state().mode === 'history' && state().historyFailed)
+  ) {
+    <p class="run-history__message run-history__message--error" role="alert">
+      Run evidence is unavailable. Live controls still apply only to the current run.
+    </p>
+  } @else if (displayedRun(); as run) {
+    <app-bot-run-evidence-card [run]="run" [mode]="state().mode" />
+  } @else {
+    <p class="run-history__message">
+      {{ state().mode === 'history' ? 'No previous runs recorded.' : 'No current run evidence recorded.' }}
+    </p>
+  }
+
+  @if (state().mode === 'history' && !state().historyLoading && !state().historyFailed) {
+    <nav class="run-history__pagination" aria-label="Previous run pages">
+      <button
+        type="button"
+        [disabled]="!state().canViewNewer"
+        (click)="navigate('newer')"
+      >Newer run</button>
+      <button
+        type="button"
+        [disabled]="!state().history?.next_cursor"
+        (click)="navigate('older')"
+      >Older run</button>
+    </nav>
+  }
+</section>
