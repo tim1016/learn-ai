@@ -24,8 +24,8 @@ unresolved effects, and custody state.
 
 This PRD delivers five connected outcomes:
 
-1. Start and Resume decisions use one backend-owned admission function with two
-   typed inputs: bot facts and Clerk truth.
+1. Start and Resume decisions use one backend-owned run-admission function with
+   two typed inputs: bot facts and Clerk truth.
 2. Strategy instances remain immutable while every execution is an append-only
    run that can be inspected later.
 3. Commands remain safe through browser refreshes and network retries because
@@ -61,7 +61,7 @@ though the Clerk already reconciles account truth.
 The intended boundary is:
 
 ```python
-decision = evaluate_start_admission(bot, clerk)
+decision = evaluate_run_admission(bot, clerk)
 ```
 
 The account still exists, but its positions, orders, reconciliation, holds, and
@@ -251,22 +251,28 @@ The Clerk must provide one typed snapshot containing at least:
 The snapshot must distinguish `zero`, `non-zero`, and `unknown`. Missing data may
 never be converted to zero.
 
-### R3 — One Start admission function
+### R3 — One Start/Resume run-admission function
 
-Start capability projection and Start execution must call the same pure typed
-function:
+Start and Resume capability projection and execution must call the same pure
+typed function:
 
 ```python
-decision = evaluate_start_admission(bot, clerk)
+decision = evaluate_run_admission(bot, clerk)
 ```
 
-- `bot` supplies immutable instance facts, proposed/current run facts, process
-  registry evidence, required market-data freshness, and lifecycle intent.
+- `bot` is a typed `StartRunFacts | ResumeRunFacts` input. Both variants supply
+  immutable instance facts, proposed/current run facts, process-registry
+  evidence, required market-data freshness, and lifecycle intent. Resume also
+  supplies the stopped `previous_run_id`, proposed new `run_id`, and immutable
+  configuration hash.
 - `clerk` supplies all custody and reconciled account meaning.
-- The function returns `allowed`, a stable reason code, explanation, next step,
-  evaluated time, fact ages, and evidence references.
-- Execution reruns the same function under the Clerk admission lock immediately
-  before mutation.
+- The function returns a typed `RunAdmissionDecision` containing the operation,
+  `allowed`, stable reason code, explanation, next step, evaluated time, fact
+  ages, and evidence references.
+- Execution reruns that exact function under the Clerk admission lock
+  immediately before mutation. Resume may bind the proposed new run only while
+  that lock is held and only after the decision admits the same immutable
+  instance configuration and fresh Clerk custody snapshot.
 - Angular renders the result without rebuilding the rule.
 
 ### R4 — Honest terminal state
@@ -482,7 +488,7 @@ duplicate-effect count.
 
 - Typed bot process fact.
 - Clerk custody snapshot.
-- `evaluate_start_admission(bot, clerk)` shared by projection and execution.
+- `evaluate_run_admission(bot, clerk)` shared by Start/Resume projection and execution.
 - Run-generation fence and honest Stop/unknown outcomes.
 - Reason-specific hold clearance.
 

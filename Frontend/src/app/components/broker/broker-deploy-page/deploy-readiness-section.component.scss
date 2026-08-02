@@ -84,6 +84,8 @@ article {
   grid-column: 1 / -1;
   color: var(--text-muted);
   font-size: var(--fs-xs);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .readiness__authority,
@@ -98,6 +100,13 @@ article {
   display: flex;
   justify-content: space-between;
   gap: var(--space-3);
+  min-width: 0;
+}
+
+.readiness__authority dd,
+.readiness__evidence dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 dd {

@@ -27,39 +27,39 @@
     <section class="deploy-context" [class.deploy-context--blocked]="!view.eligibility.eligible">
       <div><span>{{ view.eligibility.eligible ? 'Ready' : 'Blocked' }}</span><strong>{{ view.account_label }}</strong></div>
       <div><span>Execution</span><strong>{{ executionLabel() }}</strong></div>
-      <div><span>Checked</span><strong>@if (view.evaluated_at_ms) { <app-timestamp-display [value]="view.evaluated_at_ms" mode="local" /> } @else { Current }</strong></div>
+      <div><span>Checked</span><strong><app-timestamp-display [value]="view.evaluated_at_ms" mode="local" /></strong></div>
     </section>
-
-    <div class="lens-toggle" role="tablist" aria-label="Deploy perspective">
-      <button
-        id="deploy-trader-tab"
-        data-lens="trader"
-        type="button"
-        role="tab"
-        [class.lens-toggle__tab--active]="activeLens() === 'trader'"
-        [attr.aria-selected]="activeLens() === 'trader'"
-        [attr.tabindex]="activeLens() === 'trader' ? 0 : -1"
-        aria-controls="deploy-trader-panel"
-        (click)="selectLens('trader')"
-        (keydown)="onLensKeydown($event)"
-      >Trader</button>
-      <button
-        id="deploy-operator-tab"
-        data-lens="operator"
-        type="button"
-        role="tab"
-        [class.lens-toggle__tab--active]="activeLens() === 'operator'"
-        [attr.aria-selected]="activeLens() === 'operator'"
-        [attr.tabindex]="activeLens() === 'operator' ? 0 : -1"
-        aria-controls="deploy-operator-panel"
-        (click)="selectLens('operator')"
-        (keydown)="onLensKeydown($event)"
-      >Operator</button>
-    </div>
 
     @if (receipt(); as deployReceipt) {
       <app-deploy-launch-receipt [receipt]="deployReceipt" />
     } @else {
+      <div class="lens-toggle" role="tablist" aria-label="Deploy perspective">
+        <button
+          id="deploy-trader-tab"
+          data-lens="trader"
+          type="button"
+          role="tab"
+          [class.lens-toggle__tab--active]="activeLens() === 'trader'"
+          [attr.aria-selected]="activeLens() === 'trader'"
+          [attr.tabindex]="activeLens() === 'trader' ? 0 : -1"
+          aria-controls="deploy-trader-panel"
+          (click)="selectLens('trader')"
+          (keydown)="onLensKeydown($event)"
+        >Trader</button>
+        <button
+          id="deploy-operator-tab"
+          data-lens="operator"
+          type="button"
+          role="tab"
+          [class.lens-toggle__tab--active]="activeLens() === 'operator'"
+          [attr.aria-selected]="activeLens() === 'operator'"
+          [attr.tabindex]="activeLens() === 'operator' ? 0 : -1"
+          aria-controls="deploy-operator-panel"
+          (click)="selectLens('operator')"
+          (keydown)="onLensKeydown($event)"
+        >Operator</button>
+      </div>
+
       <form class="deploy-form" novalidate (submit)="$event.preventDefault(); submit()">
         <app-deploy-binding-strip
           [strategies]="view.strategies"
@@ -97,22 +97,29 @@
               (carryoverAllowedChange)="setCarryover($event)"
             />
 
-            @if (activeLens() === 'trader') {
-              <section id="deploy-trader-panel" role="tabpanel" aria-labelledby="deploy-trader-tab">
-                <app-deploy-trader-summary
-                  [view]="view"
-                  [strategy]="selectedStrategy()"
-                  [symbol]="ticket().symbol"
-                  [quantity]="effectiveQuantity()"
-                  [carryoverAllowed]="ticket().allowCarryover"
-                  (operatorRequested)="selectLens('operator')"
-                />
-              </section>
-            } @else {
-              <section id="deploy-operator-panel" role="tabpanel" aria-labelledby="deploy-operator-tab">
-                <app-deploy-readiness-section [checks]="view.readiness_checks" />
-              </section>
-            }
+            <section
+              id="deploy-trader-panel"
+              role="tabpanel"
+              aria-labelledby="deploy-trader-tab"
+              [hidden]="activeLens() !== 'trader'"
+            >
+              <app-deploy-trader-summary
+                [view]="view"
+                [strategy]="selectedStrategy()"
+                [symbol]="ticket().symbol"
+                [quantity]="effectiveQuantity()"
+                [carryoverAllowed]="ticket().allowCarryover"
+                (operatorRequested)="selectLens('operator')"
+              />
+            </section>
+            <section
+              id="deploy-operator-panel"
+              role="tabpanel"
+              aria-labelledby="deploy-operator-tab"
+              [hidden]="activeLens() !== 'operator'"
+            >
+              <app-deploy-readiness-section [checks]="view.readiness_checks" />
+            </section>
           </div>
 
           <aside class="deploy-layout__review">

@@ -22,11 +22,12 @@
         @if (check.recovery) {
           <p class="readiness__recovery"><strong>Next:</strong> {{ check.recovery }}</p>
         }
-        @if (evidenceEntries(check).length > 0) {
+        @let entries = evidenceEntries(check);
+        @if (entries.length !== 0) {
           <details>
             <summary>Structured gate evidence</summary>
             <dl class="readiness__evidence">
-              @for (entry of evidenceEntries(check); track entry[0]) {
+              @for (entry of entries; track entry[0]) {
                 <div><dt>{{ entry[0] | receiptLabel }}</dt><dd>{{ entry[1] }}</dd></div>
               }
             </dl>

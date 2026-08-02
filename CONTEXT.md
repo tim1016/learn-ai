@@ -411,9 +411,11 @@ will gate next start."
 
 **One-shot command channel** is reserved for true one-shot operations:
 `FLATTEN_NOW`, `RECONCILE_NOW`, `MARK_POISONED` (and maybe `DUMP_STATUS` later).
-`PAUSE`/`CONTINUE`/`STOP` are **removed as first-class UI controls** (legacy
-`resume` remains a backend-compatible wire verb for the same-run Continue path
-only until the vocabulary migration is complete).
+`PAUSE`/`CONTINUE`/`STOP` are removed from that one-shot channel. They are
+first-class Bot Cockpit controls only when the backend's capability projection
+renders them as available; the UI never invents availability. Legacy `resume`
+remains a backend-compatible wire verb for the same-run Continue control only
+until the vocabulary migration is complete.
 
 **Command lifecycle** (operator vocabulary; one row per command, not
 pending-files-plus-ack-files): `reserved` → `accepted` / `in_progress` →
@@ -827,6 +829,13 @@ once-per-request by `ResumeGuardState` and shared across:
 - the CLI `cmd_resume` (no bypass — the `--force` flag was deleted in
   PRD #616)
 
+The legacy `operator_surface.actions.resume / pause / stop` fields are
+renderable Bot Cockpit capability fields, not one-shot commands. A present and
+allowed field renders the matching Continue, Pause, or Stop control; a blocked
+field renders that control disabled with its backend-authored reason. The
+`actions.resume` name means Continue during migration and never means creating
+a new run.
+
 `ResumeGuardState`, `actions.resume`, and `cmd_resume` are legacy code/wire
 names for continuing an existing paused live run. They do not define the domain
 meaning of **Resume**, which creates a new run and requires separate new-run
@@ -982,6 +991,9 @@ there are never two halt-on-transition mechanisms.
   (ADR-0010 §A3, PRD #616): recovery feeds its reconciliation-receipt guard; the
   safety-verdict and uncertain-intent-WAL guards stay independent, so a mid-submit
   drop stays blocked even after a clean reconnect.
+- **Pause and Stop are also first-class Bot Cockpit controls.** Their rendered
+  enabled/disabled state comes from `operator_surface.actions.pause / stop`;
+  they do not enter the one-shot command channel.
 - **Gate state is server-authored and reflected in the UI.** `BLOCKED →
   CLEARABLE (clean reconcile) → CLEARED/RUNNING (after the click)` via
   `operator_surface.actions.resume` wire field. The Bot Cockpit renders the

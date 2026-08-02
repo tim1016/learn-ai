@@ -117,6 +117,10 @@ async def _ema_crossover_intents(
             consolidator.update(bar)
         intents = tuple(context.signal_intents)
         context.signal_intents.clear()
+        # StrategyContext retains consolidated bars for finite backtest
+        # charting. This adapter is long-lived and has no chart consumer, so
+        # release each emitted bar after the strategy has processed it.
+        context.consolidated_bars.clear()
         for intent in intents:
             yield intent
 

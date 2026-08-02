@@ -23,13 +23,17 @@
     <span class="binding-arrow" aria-hidden="true">→</span>
 
     <div class="binding-node binding-node--strategy">
-      <label for="deploy-strategy">Validated strategy</label>
       @if (strategies().length === 1) {
+        <span>Validated strategy</span>
         <strong>{{ selectedStrategy()?.label }}</strong>
       } @else {
-        <select id="deploy-strategy" [value]="strategyKey()" (change)="changeStrategy($event)">
+        <label for="deploy-strategy">Validated strategy</label>
+        <select id="deploy-strategy" (change)="changeStrategy($event)">
           @for (strategy of strategies(); track strategy.strategy_key) {
-            <option [value]="strategy.strategy_key">{{ strategy.label }}</option>
+            <option
+              [value]="strategy.strategy_key"
+              [selected]="strategy.strategy_key === strategyKey()"
+            >{{ strategy.label }}</option>
           }
         </select>
       }

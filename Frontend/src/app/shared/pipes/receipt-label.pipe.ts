@@ -74,10 +74,11 @@ export function isOpaqueReceiptValueLabel(label: string | null | undefined): boo
 
 export function formatReceiptValue(
   label: string | null | undefined,
-  value: string | null | undefined,
+  value: string | number | boolean | null | undefined,
 ): string {
   if (value === null || value === undefined) return '';
-  return isOpaqueReceiptValueLabel(label) ? value : formatReceiptLabel(value);
+  const text = String(value);
+  return isOpaqueReceiptValueLabel(label) ? text : formatReceiptLabel(text);
 }
 
 @Pipe({

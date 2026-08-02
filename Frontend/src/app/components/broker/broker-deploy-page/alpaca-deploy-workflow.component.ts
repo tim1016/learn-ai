@@ -220,14 +220,18 @@ export class AlpacaDeployWorkflowComponent {
     this.ticket.update((current) => ({ ...current, instanceId: value.trim() }));
   }
 
-  protected setStrategyKey(value: string): void {
+  protected setStrategyKey(value: DeployBotStrategy['strategy_key']): void {
     const strategy = this.currentView()?.strategies.find((candidate) => candidate.strategy_key === value);
     if (!strategy) return;
-    this.ticket.update((current) => ({
-      ...current,
-      strategyKey: strategy.strategy_key,
-      symbol: strategy.validation_case_symbol,
-    }));
+    this.ticket.update((current) => {
+      const previous = this.currentView()?.strategies.find(
+        (candidate) => candidate.strategy_key === current.strategyKey,
+      );
+      const symbol = current.symbol && current.symbol !== previous?.validation_case_symbol
+        ? current.symbol
+        : strategy.validation_case_symbol;
+      return { ...current, strategyKey: strategy.strategy_key, symbol };
+    });
   }
 
   protected setSymbol(value: string): void {

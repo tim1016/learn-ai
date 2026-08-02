@@ -42,10 +42,11 @@ Apply these in order:
 
 These are requirements, not unresolved option questions:
 
-1. **Start depends on bot facts and Clerk truth only.** The target contract is
-   `evaluate_start_admission(bot, clerk)`. `bot` is a typed process/lifecycle
-   fact whose liveness is owned by the process registry. `clerk` is a typed
-   custody snapshot that already incorporates and reconciles broker-account
+1. **Start and Resume depend on bot facts and Clerk truth only.** The target
+   contract is `evaluate_run_admission(bot, clerk)`. `bot` is a typed
+   Start/Resume process/lifecycle fact whose liveness is owned by the process
+   registry. `clerk` is a typed custody snapshot that already incorporates and
+   reconciles broker-account
    positions, working orders, unresolved effects, holds, and freshness. There
    is no third `account` policy input and no second account interpretation in
    the router or Angular.
@@ -90,7 +91,7 @@ Current-code gaps to verify with regression tests:
 - `StartAdmissionService` currently reads account freeze, observation, and
   fleet checks as separate dependencies. The research must fold those answers
   behind a Clerk-authored custody snapshot before approving the target
-  `evaluate_start_admission(bot, clerk)` boundary.
+  `evaluate_run_admission(bot, clerk)` boundary.
 - The legacy Bot Control surface already uses a versioned SSE snapshot stream,
   while the V2 panel still polls and the V2 chart replaces its complete candle
   set. Reuse the proven stream primitives where their contracts fit; do not
@@ -292,29 +293,33 @@ Do not derive control TTLs from the 24-hour historical-display threshold. The se
 Spike pure typed decisions:
 
 - `DeployAdmissionDecision`
-- `StartAdmissionDecision`
+- `RunAdmissionDecision` over typed `StartRunFacts | ResumeRunFacts`
 - `HoldClearAdmissionDecision`
 - `FlattenAdmissionDecision`
 
 Each result should contain `allowed`, stable reason code, scope, evidence references, evaluated-at time, fact ages, and recovery copy. The exact same function must author the presented action and be rerun under the execution lock immediately before mutation.
 
-The Start decision has exactly two typed inputs:
+The Start/Resume decision has exactly two typed inputs:
 
 ```python
-decision = evaluate_start_admission(bot, clerk)
+decision = evaluate_run_admission(bot, clerk)
 ```
 
 - `bot` contains immutable instance identity plus process-registry/lifecycle
   evidence for the current or proposed run, including backend-authored
-  market-data freshness required by that run.
+  market-data freshness required by that run. The Resume variant also carries
+  the stopped previous-run ID, proposed new-run ID, and immutable configuration
+  hash.
 - `clerk` contains the Clerk-authored custody snapshot, including reconciled
   account identity, instance-attributed exposure, working/open-order state,
   unresolved effects, holds, freshness, and evidence references.
 
 The Clerk may internally consume raw broker-account observations; those facts
-must not reappear as an independent `account` argument to Start policy. The
-same function authors the displayed capability and is rerun under the Clerk's
-execution/admission lock. Angular renders its reason codes and operator copy
+must not reappear as an independent `account` argument to run admission. The
+same function authors the displayed Start or Resume capability and is rerun
+under the Clerk's execution/admission lock. Resume binds its new run only under
+that lock after the same decision admits the unchanged instance configuration
+and fresh custody snapshot. Angular renders its reason codes and operator copy
 without recreating the rule.
 
 ### B3. Define a command state machine
@@ -631,7 +636,7 @@ For Retire, targeted Cancel Order, and open P&L, produce one-page mini-designs c
 | --- | --- | --- |
 | 1 | Convert P0 reproductions into deterministic tests; map instance/run/effect identities and crash cuts | Failing test pack, identity diagram, candidate matrix |
 | 2 | Prototype instance/run split, new-run Resume, Dry Run, Stop fencing, and reason-specific hold clearance | Spike results, run-history contract, race table, draft lifecycle ADR |
-| 3 | Prototype `evaluate_start_admission(bot, clerk)`, command ledger, browser recovery, and causal evidence links | API schemas, transport-loss proof, draft command/evidence ADRs |
+| 3 | Prototype `evaluate_run_admission(bot, clerk)`, command ledger, browser recovery, and causal evidence links | API schemas, transport-loss proof, draft command/evidence ADRs |
 | 4 | Run scale benchmarks; copy and prune the proven IBKR SSE path into V2; verify projection owner, fallback, and stable Angular/chart updates | Benchmark report, SSE parity/deletion map, UI stability tests, persistence matrix |
 | 5 | Resolve cross-workstream conflicts; specify migration, rollout, observability, and vertical slices | Final ADR set, implementation issue pack, acceptance matrix |
 | Review | Engineering/product safety review | Approve, revise, or explicitly reject each decision |
@@ -689,7 +694,7 @@ Each resulting issue must be a vertical tracer bullet containing:
 Recommended first implementation order after decisions are approved:
 
 1. run fence and honest Stop terminal state;
-2. Clerk custody snapshot and `evaluate_start_admission(bot, clerk)`;
+2. Clerk custody snapshot and `evaluate_run_admission(bot, clerk)`;
 3. immutable instance configuration, append-only run records, and lazy history;
 4. new-run Resume plus same-run Continue vocabulary and behavior;
 5. first-class Dry Run through the verified no-submit path;

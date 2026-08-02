@@ -178,6 +178,7 @@ async def require_resume_custody(
     checkpoint_path: Path,
     desired_state: str,
     phase: str,
+    exposure_carryover_supported: bool = True,
 ) -> None:
     """Admit Resume only after a fresh exact Clerk proof."""
     if phase == "RETIRED":
@@ -214,6 +215,14 @@ async def require_resume_custody(
         )
     if not proof.exposure:
         return
+    if not exposure_carryover_supported:
+        raise CarryoverResumeRefusedError(
+            "Resume is refused because the strategy cannot safely restore carried exposure.",
+            detail=(
+                "This runtime does not persist the strategy's open-position lifecycle. "
+                "Flatten the exact Clerk-attributed exposure before Resume."
+            ),
+        )
     if binding.carryover_policy != "ALLOW":
         raise CarryoverResumeRefusedError(
             "Resume is refused because stopped exposure was not approved for carryover.",

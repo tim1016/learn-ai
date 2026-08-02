@@ -1,6 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen } from '@testing-library/angular';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
+import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -167,19 +168,33 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByText('✓ Validated')).toBeTruthy();
     expect(screen.getByText('Live Alpaca execution is planned.')).toBeTruthy();
     expect(screen.queryByText('Strategy provenance')).toBeNull();
-    expect(screen.queryByText('Every deployment gate')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Every deployment gate' })).toBeNull();
     expect(screen.getAllByText('One long stock ENTER and one matching close-leg EXIT.').length)
       .toBeGreaterThanOrEqual(1);
   });
 
   it('reveals every admission gate in the operator lens', async () => {
-    await renderWorkflow();
+    const { fixture } = await renderWorkflow();
+    const router = fixture.debugElement.injector.get(Router);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
 
     expect(screen.getByText('Every deployment gate')).toBeTruthy();
     expect(screen.getByText('Current accepted evidence is present.')).toBeTruthy();
     expect(screen.getByText('Accepted at the current manifest revision.')).toBeTruthy();
+    await vi.waitFor(() => expect(router.url).toContain('lens=operator'));
+  });
+
+  it('moves lens focus with the tablist keyboard controls', async () => {
+    await renderWorkflow();
+    const traderTab = screen.getByRole('tab', { name: 'Trader' });
+    const operatorTab = screen.getByRole('tab', { name: 'Operator' });
+
+    traderTab.focus();
+    fireEvent.keyDown(traderTab, { key: 'ArrowRight' });
+
+    expect(document.activeElement).toBe(operatorTab);
+    expect(operatorTab.getAttribute('aria-selected')).toBe('true');
   });
 
   it('changes the validated strategy and submits the selected strategy key', async () => {
@@ -204,14 +219,49 @@ describe('AlpacaDeployWorkflowComponent', () => {
       .toBe('ema_crossover_signal');
   });
 
+  it('initializes the validated strategy from the strategy-key deep link', async () => {
+    const queryParamMap = convertToParamMap({ strategy_key: 'ema_crossover_signal' });
+    await render(AlpacaDeployWorkflowComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap: of(queryParamMap), snapshot: { queryParamMap } },
+        },
+        { provide: BrokerV2PanelService, useValue: mockService() },
+      ],
+      componentInputs: { accountId: 'PA9' },
+    });
+    await screen.findByText(DEPLOY_VIEW.eligibility.headline);
+
+    expect((screen.getByLabelText('Validated strategy') as HTMLSelectElement).value)
+      .toBe('ema_crossover_signal');
+    expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
+      .toBe('/strategy-validation?strategy=ema_crossover_signal');
+  });
+
+  it('preserves a trader-edited symbol when the validated strategy changes', async () => {
+    await renderWorkflow();
+
+    fireEvent.input(screen.getByPlaceholderText('SPY'), {
+      target: { value: 'QQQ' },
+    });
+    fireEvent.change(screen.getByLabelText('Validated strategy'), {
+      target: { value: 'ema_crossover_signal' },
+    });
+
+    expect((screen.getByPlaceholderText('SPY') as HTMLInputElement).value).toBe('QQQ');
+  });
+
   it('submits only the closed paper canary command and renders its durable receipt', async () => {
     const service = mockService();
-    const { fixture } = await renderWorkflow(service);
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+    await renderWorkflow(service);
 
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-test-01' }));
-    await component['submit']();
-    fixture.detectChanges();
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'spy-test-01' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
+    await screen.findByText(RECEIPT.receipt_id);
 
     const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
     expect(body).toEqual({
@@ -225,6 +275,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByText(RECEIPT.receipt_id)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open bot control' }).getAttribute('href'))
       .toBe(RECEIPT.panel_path);
+    expect(screen.queryByRole('tab')).toBeNull();
   });
 
   it('submits bounded custom whole-share sizing', async () => {
@@ -251,17 +302,25 @@ describe('AlpacaDeployWorkflowComponent', () => {
       carryover_explanation: 'Keep exactly attributed exposure only after a durable Clerk checkpoint.',
     };
     const service = mockService(RECEIPT, carryoverView);
-    const { fixture } = await renderWorkflow(service);
-    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+    await renderWorkflow(service);
 
     fireEvent.click(screen.getByRole('checkbox', {
       name: /Allow Clerk-proven exposure carryover on STOP/i,
     }));
-    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-carryover' }));
-    await component['submit']();
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'spy-carryover' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
 
     expect((service.deployBot.mock.calls[0][2] as DeployBotBody).carryover_policy)
       .toBe('ALLOW');
+  });
+
+  it('renders only the backend-authored readiness time', async () => {
+    await renderWorkflow();
+
+    expect(screen.queryByText('now')).toBeNull();
   });
 
   it('normalizes text fields before Signal Form validation and submission gating', async () => {

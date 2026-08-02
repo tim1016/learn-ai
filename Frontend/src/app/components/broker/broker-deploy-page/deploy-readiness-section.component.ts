@@ -21,7 +21,7 @@ export class DeployReadinessSectionComponent {
   ): [string, string][] {
     return Object.entries(check.evidence ?? {}).map(([label, value]) => [
       label,
-      formatReceiptValue(label, value === null ? 'Not recorded' : String(value)),
+      formatReceiptValue(label, value === null ? 'Not recorded' : value),
     ]);
   }
 }
