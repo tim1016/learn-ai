@@ -242,6 +242,38 @@ async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
 
 
+async def test_boot_sweep_skips_corrupt_binding_without_aborting(
+    tmp_path: Path,
+) -> None:
+    """A malformed foreign binding must not fence recovery of the whole fleet."""
+    feed = _FakeFeed([], mode="hold")
+    registry = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+    )
+    await registry.run_boot_recovery()
+    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    registry._bots[_SID].finalized = True
+    registry._bots[_SID].task.cancel()
+    await asyncio.sleep(0)
+
+    binding_path = (
+        _artifacts_root(tmp_path) / "live_state" / _SID / "broker_binding.json"
+    )
+    binding_path.write_text("{not-json", encoding="utf-8")
+
+    rebooted = BotTaskRegistry(
+        _artifacts_root(tmp_path),
+        feed_resolver=lambda: feed,
+        supported_broker_ids=frozenset({"alpaca"}),
+    )
+    report = await rebooted.run_boot_recovery()
+
+    assert report.interrupted_instances == ()
+    assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
+
+
 # ── AC2: identity resolution branches, no duplicate submission ─────────
 
 
