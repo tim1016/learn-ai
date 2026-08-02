@@ -276,6 +276,15 @@ never branch on those strings. This retires `recovery-flatten-*`,
   answer for one strategy instance. Exposure, working orders, pending orders,
   terminal orders, and unresolved effects each remain explicitly `unknown`
   when the Clerk cannot prove them; unknown is never presented as zero.
+- **Start admission decision** — the backend-authored answer to whether a new
+  run may start for one immutable strategy instance. It is a pure function of
+  the bot process fact and Clerk custody snapshot; market-data readiness is
+  carried inside the bot-side facts. Preview and execution call the same typed
+  policy, and Angular renders its explanation without recreating safety logic.
+- **Start custody fence** — the Clerk intake lock held across the final Start
+  decision and run activation. The fence proves that no new Clerk effect can
+  change the exact custody journal cut between admission and activation. If the
+  cut cannot stabilize, Start is refused without writing a bot binding.
 - **Clean strategy exit** — a terminal Clerk effect proving that working entry
   and exit orders are resolved and the instance-attributed account exposure is
   zero. An exit that deliberately leaves exposure open is a carryover stop, not

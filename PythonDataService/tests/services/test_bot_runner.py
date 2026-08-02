@@ -16,18 +16,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk import (
+    ClerkAdmissionSnapshotChangedError,
+    set_alpaca_clerk,
+)
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
+    ClerkCustodySnapshot,
+    CustodyCountFact,
+    CustodyExposureFact,
+    HoldState,
     InstanceCustodyProof,
 )
 from app.engine.live.account_artifacts import RestartIntensityPolicy
-from app.marketdata.feed import MarketDataBar, MarketDataFeedError
+from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.services.bot_runner import (
     BotAlreadyRunningError,
     BotTaskRegistry,
@@ -36,8 +44,10 @@ from app.services.bot_runner import (
     MarketDataFeedUnavailableError,
     RecoveryUncertainError,
     RestartIntensityRefusedError,
+    RunAdmissionRefusedError,
     UnknownBotError,
 )
+from app.utils.timestamps import now_ms_utc
 
 _SID = "alpaca-skeleton-1"
 _T0 = 1_700_000_000_000
@@ -70,11 +80,19 @@ class _FakeFeed:
 
     feed_id = "fake"
 
-    def __init__(self, bars: list[MarketDataBar], *, mode: str = "hold", error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        bars: list[MarketDataBar],
+        *,
+        mode: str = "hold",
+        error: Exception | None = None,
+        observed_at_ms: int | None = None,
+    ) -> None:
         self._bars = bars
         self._mode = mode
         self._error = error
         self.bars_consumed = 0
+        self._observed_at_ms = observed_at_ms
 
     async def stream_bars(self, symbol: str, *, use_rth: bool = True):
         for bar in self._bars:
@@ -86,8 +104,22 @@ class _FakeFeed:
         if self._mode == "hold":
             await asyncio.Event().wait()
 
-    def health(self):  # pragma: no cover - not exercised by the runner
-        raise NotImplementedError
+    def health(self) -> FeedHealth:
+        return FeedHealth(
+            connected=True,
+            stale=False,
+            last_bar_ms=self._bars[-1].start_ms if self._bars else None,
+            reason="",
+            active_subscription_count=0,
+            observed_at_ms=self._observed_at_ms or now_ms_utc(),
+        )
+
+
+class _StaleFeed(_FakeFeed):
+    def health(self) -> FeedHealth:
+        return super().health().model_copy(
+            update={"stale": True, "reason": "No recent closed bar."}
+        )
 
 
 class _CustodyClerk:
@@ -120,6 +152,51 @@ def _custody_proof(
     )
 
 
+def _flat_custody_snapshot(
+    sid: str,
+    *,
+    observed_at_ms: int | None = None,
+) -> ClerkCustodySnapshot:
+    observed_at_ms = observed_at_ms or now_ms_utc()
+    zero = CustodyCountFact(state="zero", count=0)
+    return ClerkCustodySnapshot(
+        broker="alpaca",
+        account_id="paper-account",
+        strategy_instance_id=sid,
+        clerk_generation="test-clerk",
+        journal_sequence=0,
+        reconciliation_state="clean",
+        reconciliation_fresh=True,
+        reconciled_at_ms=observed_at_ms,
+        exposure=CustodyExposureFact(state="zero", positions={}),
+        working_orders=zero,
+        pending_orders=zero,
+        terminal_orders=zero,
+        unresolved_effects=zero,
+        hold=HoldState(active=False),
+        freeze=AccountFreezeState(),
+        reason_code="CLERK_CUSTODY_PROVEN",
+        evidence_refs=("test-clerk:0",),
+        observed_at_ms=observed_at_ms,
+    )
+
+
+@asynccontextmanager
+async def _flat_start_guard(sid: str):
+    yield _flat_custody_snapshot(sid)
+
+
+@asynccontextmanager
+async def _fixed_start_guard(sid: str):
+    yield _flat_custody_snapshot(sid, observed_at_ms=_T0)
+
+
+@asynccontextmanager
+async def _changing_start_guard(_sid: str):
+    raise ClerkAdmissionSnapshotChangedError("test evidence race")
+    yield  # pragma: no cover - required to type this as an async context manager
+
+
 def _registry(
     tmp_path: Path,
     feed: _FakeFeed | None,
@@ -134,6 +211,7 @@ def _registry(
         # Boot recovery has its own suite (test_boot_recovery.py).
         boot_recovery_required=False,
         carryover_allowed=carryover_allowed,
+        start_custody_guard=_flat_start_guard,
     )
 
 
@@ -224,6 +302,49 @@ async def test_process_fact_requires_current_registry_liveness_proof(tmp_path: P
     assert exited.run_id == view.active_run_id
     assert exited.process_identity is None
     assert exited.state == "EXITED"
+
+
+@pytest.mark.asyncio
+async def test_start_preview_and_execution_share_the_same_admission_policy(
+    tmp_path: Path,
+) -> None:
+    registry = _registry(tmp_path, _StaleFeed([], mode="hold"))
+
+    preview = await registry.preview_start_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    assert preview.allowed is False
+    assert preview.reason_code == "MARKET_DATA_STALE"
+    with pytest.raises(MarketDataFeedUnavailableError) as refused:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+        )
+    assert refused.value.admission_decision is not None
+    assert refused.value.admission_decision.reason_code == preview.reason_code
+    assert not (tmp_path / "live_state" / _SID / "broker_binding.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_start_refuses_cleanly_when_clerk_evidence_never_stabilizes(
+    tmp_path: Path,
+) -> None:
+    registry = BotTaskRegistry(
+        tmp_path,
+        feed_resolver=lambda: _FakeFeed([], mode="hold"),
+        restart_policy=RestartIntensityPolicy(threshold=100),
+        boot_recovery_required=False,
+        start_custody_guard=_changing_start_guard,
+    )
+
+    with pytest.raises(RunAdmissionRefusedError, match="stable Clerk custody"):
+        await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+
+    assert not (tmp_path / "live_state" / _SID / "broker_binding.json").exists()
 
 
 @pytest.mark.asyncio
@@ -389,21 +510,25 @@ async def test_restart_intensity_refuses_thresholdth_start(tmp_path: Path) -> No
     feed = _FakeFeed([], mode="hold")
     policy = RestartIntensityPolicy(threshold=3, window_ms=300_000)
     registry = _registry(tmp_path, feed, policy=policy)
+    set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
 
-    # Starts 1 and 2 pass (projected 1, 2 < 3); start 3 projects to the
-    # threshold and is refused — mirrors project_restart_intensity_gate.
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    await registry.stop("alpaca", _SID)
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    await registry.stop("alpaca", _SID)
-
-    with pytest.raises(RestartIntensityRefusedError):
+    try:
+        # Starts 1 and 2 pass (projected 1, 2 < 3); start 3 projects to the
+        # threshold and is refused — mirrors project_restart_intensity_gate.
         await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.stop("alpaca", _SID)
+        await registry.resume_existing("alpaca", _SID)
+        await registry.stop("alpaca", _SID)
+
+        with pytest.raises(RestartIntensityRefusedError):
+            await registry.resume_existing("alpaca", _SID)
+    finally:
+        set_alpaca_clerk(None)
 
 
 @pytest.mark.asyncio
 async def test_restart_intensity_window_expiry_allows_restart(tmp_path: Path) -> None:
-    feed = _FakeFeed([], mode="hold")
+    feed = _FakeFeed([], mode="hold", observed_at_ms=_T0)
     policy = RestartIntensityPolicy(threshold=2, window_ms=1_000)
     clock = {"now": _T0}
     registry = BotTaskRegistry(
@@ -412,17 +537,22 @@ async def test_restart_intensity_window_expiry_allows_restart(tmp_path: Path) ->
         restart_policy=policy,
         now_ms=lambda: clock["now"],
         boot_recovery_required=False,
+        start_custody_guard=_fixed_start_guard,
     )
+    set_alpaca_clerk(_CustodyClerk(_custody_proof(exposure={})))
 
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    await registry.stop("alpaca", _SID)
-    with pytest.raises(RestartIntensityRefusedError):
+    try:
         await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+        await registry.stop("alpaca", _SID)
+        with pytest.raises(RestartIntensityRefusedError):
+            await registry.resume_existing("alpaca", _SID)
 
-    clock["now"] = _T0 + 2_000  # window has passed
-    view = await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-    assert view.running is True
-    await registry.stop("alpaca", _SID)
+        clock["now"] = _T0 + 2_000  # window has passed
+        view = await registry.resume_existing("alpaca", _SID)
+        assert view.running is True
+        await registry.stop("alpaca", _SID)
+    finally:
+        set_alpaca_clerk(None)
 
 
 # ── listing and broker tags ───────────────────────────────────────────

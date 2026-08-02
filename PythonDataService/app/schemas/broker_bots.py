@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.action_plan import ActionPlan
 from app.schemas.live_runs import BotDutyOutcomeView
+from app.schemas.run_admission import RunAdmissionDecision
 
 
 def _validated_strategy_instance_id(value: str) -> str:
@@ -274,4 +275,5 @@ class AlpacaPaperDeployReceipt(BaseModel):
     sizing: AlpacaPaperSizingSelection
     carryover_policy: Literal["FORBID", "ALLOW"]
     action_plan: ActionPlan
+    admission: RunAdmissionDecision
     bot: BotStatusView

@@ -20,9 +20,11 @@ from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
 )
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.routers.broker_bots import router
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+from app.utils.timestamps import now_ms_utc
+from tests.services.test_bot_runner import _flat_start_guard
 
 _SID = "alpaca-api-bot-1"
 _T0 = 1_700_000_000_000
@@ -54,8 +56,15 @@ class _HoldFeed:
         )
         await asyncio.Event().wait()
 
-    def health(self):  # pragma: no cover
-        raise NotImplementedError
+    def health(self) -> FeedHealth:
+        return FeedHealth(
+            connected=True,
+            stale=False,
+            last_bar_ms=_T0,
+            reason="",
+            active_subscription_count=0,
+            observed_at_ms=now_ms_utc(),
+        )
 
 
 @pytest.fixture
@@ -63,7 +72,10 @@ def api(tmp_path: Path):
     reset_broker_registry_for_testing()
     get_broker_registry().register(_FakeReadPort())
     registry = BotTaskRegistry(
-        tmp_path, feed_resolver=lambda: _HoldFeed(), boot_recovery_required=False
+        tmp_path,
+        feed_resolver=lambda: _HoldFeed(),
+        boot_recovery_required=False,
+        start_custody_guard=_flat_start_guard,
     )
     set_bot_task_registry(registry)
     app = FastAPI()

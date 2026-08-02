@@ -67,7 +67,7 @@
 
               <label class="field">
                 <span>Accepted strategy</span>
-                <select [formField]="ticketForm.strategyKey">
+                <select [formField]="ticketForm.strategyKey" (change)="clearAdmission()">
                   @for (strategy of view.strategies; track strategy.strategy_key) {
                     <option [value]="strategy.strategy_key">{{ strategy.label }}</option>
                   }
@@ -135,6 +135,7 @@
                   step="1"
                   [formField]="ticketForm.quantity"
                   [attr.aria-invalid]="quantityError() !== null"
+                  (input)="clearAdmission()"
                 />
                 <small>Bounded to {{ selectedSizing()?.min_quantity }}–{{ selectedSizing()?.max_quantity }} whole shares.</small>
                 @if (quantityError(); as error) { <em role="alert">{{ error }}</em> }
@@ -177,6 +178,10 @@
                 <small>Recorded <app-timestamp-display [value]="error.recordedAtMs" mode="local" /></small>
               }
             </section>
+          }
+
+          @if (admissionDecision(); as decision) {
+            <app-deploy-start-admission [decision]="decision" />
           }
 
           <div class="launch-command">

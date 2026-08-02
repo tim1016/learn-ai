@@ -8,6 +8,7 @@ execution (revision 409 + idempotency), and chart history preset validation.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
 
@@ -35,12 +36,13 @@ from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
 )
-from app.marketdata.feed import MarketDataBar
+from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.routers.broker_v2_panel import router
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
+from app.utils.timestamps import now_ms_utc
 from tests.broker.v2panel.fixtures import (
     ACCT,
     SID,
@@ -88,8 +90,16 @@ class _HoldFeed:
         )
         await asyncio.Event().wait()
 
-    def health(self):  # pragma: no cover
-        raise NotImplementedError
+    def health(self) -> FeedHealth:
+        observed_at_ms = now_ms_utc()
+        return FeedHealth(
+            connected=True,
+            stale=False,
+            last_bar_ms=_T0,
+            reason="",
+            active_subscription_count=0,
+            observed_at_ms=observed_at_ms,
+        )
 
 
 class _FakeClerk:
@@ -113,6 +123,7 @@ class _FakeClerk:
         )
 
     async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
+        observed_at_ms = now_ms_utc()
         return ClerkCustodySnapshot(
             broker="alpaca",
             account_id=_ACCOUNT_ID,
@@ -121,7 +132,7 @@ class _FakeClerk:
             journal_sequence=7,
             reconciliation_state="clean",
             reconciliation_fresh=True,
-            reconciled_at_ms=_T0,
+            reconciled_at_ms=observed_at_ms,
             exposure=CustodyExposureFact(state="zero", positions={}),
             working_orders=CustodyCountFact(state="zero", count=0),
             pending_orders=CustodyCountFact(state="zero", count=0),
@@ -131,8 +142,12 @@ class _FakeClerk:
             freeze=AccountFreezeState(),
             reason_code="CLERK_CUSTODY_PROVEN",
             evidence_refs=("alpaca-clerk-journal:PA-TEST:7",),
-            observed_at_ms=_T0,
+            observed_at_ms=observed_at_ms,
         )
+
+    @asynccontextmanager
+    async def start_admission_snapshot(self, strategy_instance_id: str):
+        yield await self.custody_snapshot(strategy_instance_id)
 
     async def reconcile_once(self) -> str:
         self.reconciled = True

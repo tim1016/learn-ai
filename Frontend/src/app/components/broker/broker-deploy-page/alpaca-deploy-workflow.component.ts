@@ -25,10 +25,12 @@ import {
   BrokerV2PanelService,
   type DeployBotBody,
   type DeployBotReceipt,
+  type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
 import { DeployReviewSectionComponent } from './deploy-review-section.component';
+import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
 import { DeployValidationEvidenceComponent } from './deploy-validation-evidence.component';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -63,6 +65,7 @@ interface DeployError {
     DeployLaunchReceiptComponent,
     DeployReadinessSectionComponent,
     DeployReviewSectionComponent,
+    DeployStartAdmissionComponent,
     DeployValidationEvidenceComponent,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
@@ -76,6 +79,7 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly submitting = signal(false);
   protected readonly submitError = signal<DeployError | null>(null);
   protected readonly receipt = signal<DeployBotReceipt | null>(null);
+  protected readonly admissionDecision = signal<RunAdmissionDecision | null>(null);
 
   protected readonly deployView = resource({
     params: () => this.accountId().trim(),
@@ -161,6 +165,7 @@ export class AlpacaDeployWorkflowComponent {
   protected setSizingPreset(event: Event): void {
     const value = (event.target as HTMLInputElement).value;
     if (value !== 'safe_canary' && value !== 'custom') return;
+    this.clearAdmission();
     this.ticket.update((current) => ({
       ...current,
       sizingPreset: value,
@@ -170,6 +175,7 @@ export class AlpacaDeployWorkflowComponent {
 
   protected setCarryover(event: Event): void {
     if (!this.currentView()?.carryover_available) return;
+    this.clearAdmission();
     const checked = (event.target as HTMLInputElement).checked;
     this.ticket.update((current) => ({ ...current, allowCarryover: checked }));
   }
@@ -184,7 +190,12 @@ export class AlpacaDeployWorkflowComponent {
 
   protected reload(): void {
     this.submitError.set(null);
+    this.admissionDecision.set(null);
     this.deployView.reload();
+  }
+
+  protected clearAdmission(): void {
+    this.admissionDecision.set(null);
   }
 
   protected async submit(): Promise<void> {
@@ -194,8 +205,30 @@ export class AlpacaDeployWorkflowComponent {
 
     this.submitting.set(true);
     this.submitError.set(null);
+    this.admissionDecision.set(null);
     const ticket = this.ticket();
-    const body = {
+    const body = this.deployBody(ticket);
+
+    try {
+      const decision = await this.panelService.previewStartAdmission(
+        'alpaca',
+        view.account_id,
+        body,
+      );
+      this.admissionDecision.set(decision);
+      if (!decision.allowed) return;
+      this.receipt.set(await this.panelService.deployBot('alpaca', view.account_id, body));
+    } catch (error) {
+      const decision = this.admissionFromError(error);
+      if (decision) this.admissionDecision.set(decision);
+      this.submitError.set(this.toDeployError(error));
+    } finally {
+      this.submitting.set(false);
+    }
+  }
+
+  private deployBody(ticket: AlpacaDeployTicket): DeployBotBody {
+    return {
       strategy_instance_id: ticket.instanceId.trim(),
       strategy_key: 'deployment_validation',
       symbol: ticket.symbol.trim().toUpperCase(),
@@ -204,15 +237,7 @@ export class AlpacaDeployWorkflowComponent {
         quantity: this.effectiveQuantity(),
       },
       carryover_policy: ticket.allowCarryover ? 'ALLOW' : 'FORBID',
-    } satisfies DeployBotBody;
-
-    try {
-      this.receipt.set(await this.panelService.deployBot('alpaca', view.account_id, body));
-    } catch (error) {
-      this.submitError.set(this.toDeployError(error));
-    } finally {
-      this.submitting.set(false);
-    }
+    };
   }
 
   protected instanceIdError(): string | null {
@@ -240,7 +265,14 @@ export class AlpacaDeployWorkflowComponent {
     const input = event.target as HTMLInputElement;
     const normalized = normalize(input.value);
     input.value = normalized;
+    this.clearAdmission();
     this.ticket.update((current) => ({ ...current, [field]: normalized }));
+  }
+
+  private admissionFromError(error: unknown): RunAdmissionDecision | null {
+    if (!(error instanceof HttpErrorResponse)) return null;
+    const admission = error.error?.detail?.admission as RunAdmissionDecision | undefined;
+    return admission ?? null;
   }
 
   private markFormTouched(): void {

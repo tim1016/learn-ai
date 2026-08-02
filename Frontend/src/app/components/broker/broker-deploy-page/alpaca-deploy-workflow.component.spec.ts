@@ -8,6 +8,7 @@ import {
   type DeployBotBody,
   type DeployBotReceipt,
   type DeployBotView,
+  type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { AlpacaDeployWorkflowComponent } from './alpaca-deploy-workflow.component';
 
@@ -102,6 +103,21 @@ const DEPLOY_VIEW: DeployBotView = {
   allowed_actions: ['deploy'],
 };
 
+const ADMISSION: RunAdmissionDecision = {
+  operation: 'START',
+  allowed: true,
+  reason_code: 'START_ADMITTED',
+  explanation: 'The process slot is absent, market data is ready, and the Clerk proves flat custody.',
+  next_step: null,
+  strategy_instance_id: 'spy-test-01',
+  proposed_run_id: 'run-1',
+  configuration_hash: 'a'.repeat(64),
+  account_id: 'PA9',
+  evaluated_at_ms: 1_700_000_000_000,
+  fact_ages_ms: { process: 10, market_data: 20, clerk: 30 },
+  evidence_refs: ['test-admission'],
+};
+
 const RECEIPT: DeployBotReceipt = {
   outcome: 'success',
   status: 'deployed',
@@ -124,6 +140,7 @@ const RECEIPT: DeployBotReceipt = {
     }],
     on_exit: [{ kind: 'close_leg', entry_leg_id: 'primary' }],
   },
+  admission: ADMISSION,
   bot: {
     strategy_instance_id: 'spy-test-01',
     broker: 'alpaca',
@@ -146,6 +163,7 @@ const RECEIPT: DeployBotReceipt = {
 function mockService(result: DeployBotReceipt | HttpErrorResponse = RECEIPT) {
   return {
     getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW),
+    previewStartAdmission: vi.fn().mockResolvedValue(ADMISSION),
     deployBot: result instanceof HttpErrorResponse
       ? vi.fn().mockRejectedValue(result)
       : vi.fn().mockResolvedValue(result),
@@ -187,6 +205,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     fixture.detectChanges();
 
     const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
+    expect(service.previewStartAdmission).toHaveBeenCalledWith('alpaca', 'PA9', body);
     expect(body).toEqual({
       strategy_instance_id: 'spy-test-01',
       strategy_key: 'deployment_validation',
@@ -198,6 +217,45 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByText(RECEIPT.receipt_id)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open bot control' }).getAttribute('href'))
       .toBe(RECEIPT.panel_path);
+  });
+
+  it('renders a backend-authored Start refusal without dispatching deployment', async () => {
+    const denied = {
+      ...ADMISSION,
+      allowed: false,
+      reason_code: 'MARKET_DATA_STALE',
+      explanation: 'The required market-data feed is not proven ready for this run.',
+      next_step: 'Restore fresh market data before Start.',
+    } satisfies RunAdmissionDecision;
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue(denied);
+    const { fixture } = await renderWorkflow(service);
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-stale' }));
+
+    await component['submit']();
+    fixture.detectChanges();
+
+    expect(screen.getByText('Start blocked')).toBeTruthy();
+    expect(screen.getByText(denied.explanation)).toBeTruthy();
+    expect(screen.getByText('Market data')).toBeTruthy();
+    expect(service.deployBot).not.toHaveBeenCalled();
+  });
+
+  it('removes an obsolete Start decision when the deployment ticket changes', async () => {
+    const denied = { ...ADMISSION, allowed: false } satisfies RunAdmissionDecision;
+    const service = mockService();
+    service.previewStartAdmission.mockResolvedValue(denied);
+    const { fixture } = await renderWorkflow(service);
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-stale' }));
+    await component['submit']();
+    fixture.detectChanges();
+
+    fireEvent.input(screen.getByPlaceholderText('SPY'), { target: { value: 'QQQ' } });
+    fixture.detectChanges();
+
+    expect(screen.queryByText('Start blocked')).toBeNull();
   });
 
   it('submits bounded custom whole-share sizing', async () => {
@@ -239,6 +297,13 @@ describe('AlpacaDeployWorkflowComponent', () => {
   });
 
   it('distinguishes a stale-state conflict from an unknown outcome', async () => {
+    const refusedAdmission = {
+      ...ADMISSION,
+      allowed: false,
+      reason_code: 'CUSTODY_HOLD_ACTIVE',
+      explanation: 'The Clerk entered a hold after the preview.',
+      next_step: 'Resolve the Clerk hold before Start.',
+    } satisfies RunAdmissionDecision;
     const error = new HttpErrorResponse({
       status: 409,
       error: {
@@ -249,6 +314,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
           message: 'Deployment readiness changed.',
           why: 'The Clerk entered a hold after the page loaded.',
           next_action: 'Reload readiness and resolve the hold.',
+          admission: refusedAdmission,
         },
       },
     });
@@ -262,5 +328,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByText('State changed before launch')).toBeTruthy();
     expect(screen.getByText('The Clerk entered a hold after the page loaded.')).toBeTruthy();
     expect(screen.getByText('deploy-conflict-1')).toBeTruthy();
+    expect(screen.getByText('Start blocked')).toBeTruthy();
+    expect(screen.getByText(refusedAdmission.explanation)).toBeTruthy();
   });
 });

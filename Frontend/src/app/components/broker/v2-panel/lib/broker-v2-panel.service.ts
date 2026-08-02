@@ -21,6 +21,7 @@ export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt']
 export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
 export type DeployBotStrategy = components['schemas']['AlpacaPaperDeployStrategy'];
 export type DeployReadinessCheck = components['schemas']['AlpacaPaperDeployReadinessCheck'];
+export type RunAdmissionDecision = components['schemas']['RunAdmissionDecision'];
 
 /**
  * HTTP client for the broker-v2 panel surface.
@@ -51,6 +52,19 @@ export class BrokerV2PanelService {
     return firstValueFrom(
       this.http.post<DeployBotReceipt>(
         `${this.base(broker, accountId)}/bots`,
+        body,
+      ),
+    );
+  }
+
+  previewStartAdmission(
+    broker: string,
+    accountId: string,
+    body: DeployBotBody,
+  ): Promise<RunAdmissionDecision> {
+    return firstValueFrom(
+      this.http.post<RunAdmissionDecision>(
+        `${this.base(broker, accountId)}/bots/admission`,
         body,
       ),
     );
