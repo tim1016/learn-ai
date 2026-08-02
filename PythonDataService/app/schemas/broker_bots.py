@@ -151,7 +151,6 @@ class AlpacaPaperExecutionMode(BaseModel):
 
     mode: Literal["paper", "live"]
     label: str
-    available: bool
     availability: Literal["available", "planned"]
     explanation: str
 

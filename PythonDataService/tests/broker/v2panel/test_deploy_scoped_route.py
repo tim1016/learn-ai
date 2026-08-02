@@ -254,14 +254,12 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
         {
             "mode": "paper",
             "label": "Paper",
-            "available": True,
             "availability": "available",
             "explanation": "Orders route only to the selected Alpaca paper account through the Clerk.",
         },
         {
             "mode": "live",
             "label": "Live",
-            "available": False,
             "availability": "planned",
             "explanation": "Live Alpaca execution is planned but is not connected to an admission or execution path.",
         },

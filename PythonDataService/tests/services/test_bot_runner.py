@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.marketdata.feed import MarketDataBar, MarketDataFeedError
+from app.schemas.broker_bots import AlpacaPaperStrategyKey
 from app.services.bot_runner import (
     BotAlreadyRunningError,
     BotTaskRegistry,
@@ -39,9 +40,14 @@ from app.services.bot_runner import (
     RestartIntensityRefusedError,
     UnknownBotError,
 )
+from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 
 _SID = "alpaca-skeleton-1"
 _T0 = 1_700_000_000_000
+
+
+def test_every_admitted_alpaca_paper_strategy_has_a_runtime() -> None:
+    assert supported_alpaca_paper_strategy_keys() == frozenset(AlpacaPaperStrategyKey)
 
 
 def _bar(start_ms: int, symbol: str = "SPY") -> MarketDataBar:

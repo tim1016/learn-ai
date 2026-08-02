@@ -40,8 +40,8 @@ const DEPLOY_VIEW: DeployBotView = {
   },
   strategies: [VALIDATION_STRATEGY, EMA_STRATEGY],
   execution_modes: [
-    { mode: 'paper', label: 'Paper', available: true, availability: 'available', explanation: 'Available through the Alpaca Clerk.' },
-    { mode: 'live', label: 'Live', available: false, availability: 'planned', explanation: 'Live Alpaca execution is planned.' },
+    { mode: 'paper', label: 'Paper', availability: 'available', explanation: 'Available through the Alpaca Clerk.' },
+    { mode: 'live', label: 'Live', availability: 'planned', explanation: 'Live Alpaca execution is planned.' },
   ],
   readiness_checks: [
     {

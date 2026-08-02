@@ -10,7 +10,7 @@
         class="mode-card"
         [class.mode-card--selected]="mode.mode === accountMode()"
         [class.mode-card--planned]="isPlanned(mode)"
-        [attr.aria-disabled]="!mode.available"
+        [attr.aria-disabled]="mode.availability !== 'available'"
       >
         <div><strong>{{ mode.label }}</strong><span>{{ capabilityStatus(mode) }}</span></div>
         <p>{{ mode.explanation }}</p>

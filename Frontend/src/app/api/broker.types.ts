@@ -8233,8 +8233,6 @@ export interface components {
              * @enum {string}
              */
             availability: "available" | "planned";
-            /** Available */
-            available: boolean;
             /** Explanation */
             explanation: string;
             /** Label */

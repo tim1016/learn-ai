@@ -8,7 +8,7 @@ stream, and routes only its semantic ENTER/EXIT intents to the Clerk.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -125,15 +125,28 @@ async def _strategy_intents(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
 ) -> AsyncIterator[SignalIntent]:
-    if binding.strategy_key == AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION:
-        async for intent in _deployment_validation_intents(binding, feed):
-            yield intent
-        return
-    if binding.strategy_key == AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL:
-        async for intent in _ema_crossover_intents(binding, feed):
-            yield intent
-        return
-    raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
+    try:
+        strategy_key = AlpacaPaperStrategyKey(binding.strategy_key)
+    except ValueError as exc:
+        raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}") from exc
+    intent_stream = _STRATEGY_INTENT_STREAMS[strategy_key]
+    async for intent in intent_stream(binding, feed):
+        yield intent
+
+
+_StrategyIntentStream = Callable[
+    ["BrokerBotBinding", MarketDataFeed],
+    AsyncIterator[SignalIntent],
+]
+_STRATEGY_INTENT_STREAMS: dict[AlpacaPaperStrategyKey, _StrategyIntentStream] = {
+    AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION: _deployment_validation_intents,
+    AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: _ema_crossover_intents,
+}
+
+
+def supported_alpaca_paper_strategy_keys() -> frozenset[AlpacaPaperStrategyKey]:
+    """Return the strategies backed by an executable Clerk intent stream."""
+    return frozenset(_STRATEGY_INTENT_STREAMS)
 
 
 async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None:

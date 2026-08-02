@@ -19,6 +19,7 @@ from app.schemas.broker_bots import (
 )
 from app.schemas.strategy_validation import StrategyValidationEntry
 from app.services.bot_runner import alpaca_v1_action_plan
+from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.services.broker_v2_panel.panel_projection_service import evaluate_channel_health
 from app.services.strategy_validation_manifest import strategy_audit_copy_is_current
 from app.utils.timestamps import now_ms_utc
@@ -49,13 +50,14 @@ def _strategy_views(
     entries: list[StrategyValidationEntry],
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
     """Project only runtime-supported strategies with current accepted evidence."""
+    supported_strategy_keys = supported_alpaca_paper_strategy_keys()
     strategies: list[AlpacaPaperDeployStrategy] = []
     for entry in entries:
         event = entry.current_flag_event
         snapshot = event.evidence_snapshot if event is not None else None
         diagnostics = snapshot.diagnostics if snapshot is not None else None
         if (
-            entry.strategy_key not in AlpacaPaperStrategyKey
+            entry.strategy_key not in supported_strategy_keys
             or entry.validation_state != "validated"
             or not entry.deployable
             or event is None
@@ -330,14 +332,12 @@ def build_alpaca_paper_deploy_view(
             AlpacaPaperExecutionMode(
                 mode="paper",
                 label="Paper",
-                available=True,
                 availability="available",
                 explanation="Orders route only to the selected Alpaca paper account through the Clerk.",
             ),
             AlpacaPaperExecutionMode(
                 mode="live",
                 label="Live",
-                available=False,
                 availability="planned",
                 explanation="Live Alpaca execution is planned but is not connected to an admission or execution path.",
             ),

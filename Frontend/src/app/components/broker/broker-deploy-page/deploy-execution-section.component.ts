@@ -37,11 +37,11 @@ export class DeployExecutionSectionComponent {
   readonly carryoverAllowedChange = output<boolean>();
 
   protected capabilityStatus(mode: DeployExecutionMode): string {
-    return mode.availability === 'available' || mode.available ? 'Available' : 'Planned';
+    return mode.availability === 'available' ? 'Available' : 'Planned';
   }
 
   protected isPlanned(mode: DeployExecutionMode): boolean {
-    return mode.availability === 'planned' || (!mode.availability && !mode.available);
+    return mode.availability === 'planned';
   }
 
   protected changeSymbol(event: Event): void {

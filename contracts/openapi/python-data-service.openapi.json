@@ -5788,10 +5788,6 @@
             "title": "Availability",
             "type": "string"
           },
-          "available": {
-            "title": "Available",
-            "type": "boolean"
-          },
           "explanation": {
             "title": "Explanation",
             "type": "string"
@@ -5812,7 +5808,6 @@
         "required": [
           "mode",
           "label",
-          "available",
           "availability",
           "explanation"
         ],
