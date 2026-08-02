@@ -8725,7 +8725,6 @@
           },
           "state": {
             "enum": [
-              "STARTING",
               "RUNNING",
               "STOPPING",
               "EXITED",
@@ -12691,6 +12690,7 @@
             "title": "Next Step"
           },
           "observed_at_ms": {
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Observed At Ms",
             "type": "integer"
@@ -12703,6 +12703,7 @@
             "type": "string"
           },
           "reconciled_at_ms": {
+            "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Reconciled At Ms",
             "type": "integer"

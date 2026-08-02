@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk import derive
 from app.broker.alpaca.clerk import journal as journal_module
@@ -353,6 +354,28 @@ async def test_custody_snapshot_keeps_fill_event_race_unknown() -> None:
     assert snapshot.unresolved_effects.state == "unknown"
     assert snapshot.reason_code == "CLERK_CUSTODY_UNPROVABLE"
     assert snapshot.next_step
+
+
+async def test_custody_snapshot_marks_missing_intent_unattributable() -> None:
+    broker = _FakeBroker(positions=[_position()])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+
+    snapshot = await clerk.custody_snapshot("bot-proof")
+
+    assert snapshot.reconciliation_state == "missing_intent"
+    assert snapshot.reason_code == "CLERK_CUSTODY_UNATTRIBUTABLE"
+
+
+async def test_custody_snapshot_rejects_timestamps_above_int64_max() -> None:
+    clerk = AlpacaClerk(read=_FakeBroker(), trade=_FakeBroker(), clock=_fixed_clock)
+    snapshot = await clerk.custody_snapshot("bot-proof")
+    payload = snapshot.model_dump()
+
+    for field in ("reconciled_at_ms", "observed_at_ms"):
+        with pytest.raises(ValidationError):
+            snapshot.__class__.model_validate(
+                payload | {field: 9_223_372_036_854_775_808}
+            )
 
 
 async def test_custody_snapshot_reports_attributed_non_zero_exposure() -> None:

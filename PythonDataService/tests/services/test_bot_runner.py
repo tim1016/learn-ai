@@ -21,6 +21,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import (
@@ -31,7 +32,7 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import MarketDataBar, MarketDataFeedError
-from app.schemas.broker_bots import AlpacaPaperStrategyKey
+from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
 from app.services.bot_runner import (
     BotAlreadyRunningError,
     BotTaskRegistry,
@@ -233,6 +234,18 @@ async def test_process_fact_requires_current_registry_liveness_proof(tmp_path: P
     assert exited.run_id == view.active_run_id
     assert exited.process_identity is None
     assert exited.state == "EXITED"
+
+
+def test_process_fact_rejects_unemittable_starting_state() -> None:
+    with pytest.raises(ValidationError):
+        BotProcessFact(
+            strategy_instance_id=_SID,
+            run_id="run-1",
+            process_identity="in-process-task:run-1",
+            state="STARTING",
+            registry_generation="registry-1",
+            observed_at_ms=_T0,
+        )
 
 
 @pytest.mark.asyncio

@@ -14,13 +14,16 @@ never speculatively.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal, TypeAlias
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.engine.live.account_clerk_journal_models import AccountClerkBrokerEvidenceBaseline
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
+
+MAX_EPOCH_MS = 9_223_372_036_854_775_807
+EpochMs = Annotated[int, Field(ge=0, le=MAX_EPOCH_MS)]
 
 
 class EffectPurpose(StrEnum):
@@ -592,7 +595,7 @@ class ClerkCustodySnapshot(BaseModel):
     journal_sequence: int = Field(ge=0)
     reconciliation_state: ReconciliationVerdict
     reconciliation_fresh: bool
-    reconciled_at_ms: int = Field(ge=0)
+    reconciled_at_ms: EpochMs
     exposure: CustodyExposureFact
     working_orders: CustodyCountFact
     pending_orders: CustodyCountFact
@@ -603,7 +606,7 @@ class ClerkCustodySnapshot(BaseModel):
     reason_code: str
     evidence_refs: tuple[str, ...] = ()
     next_step: str | None = None
-    observed_at_ms: int = Field(ge=0)
+    observed_at_ms: EpochMs
 
 
 class InstanceCustodyProof(BaseModel):
@@ -618,7 +621,7 @@ class InstanceCustodyProof(BaseModel):
     exposure: dict[str, float]
     working_order_refs: tuple[str, ...] = ()
     unresolved_intent_refs: tuple[str, ...] = ()
-    observed_at_ms: int
+    observed_at_ms: EpochMs
 
 
 class OrderCancelResult(BaseModel):
