@@ -19,6 +19,9 @@ from app.broker.contract.registry import get_broker_registry
 from app.routers.brokers import _raise_http
 from app.schemas.broker_bots import (
     BotRunHistoryPage,
+    BotRunHistoryUnprocessableResponse,
+    BotRunReadNotFoundResponse,
+    BotRunReadRunnerErrorResponse,
     BotRunView,
     BotStatusView,
     DeployBotRequest,
@@ -123,6 +126,16 @@ async def get_bot_status(broker: str, strategy_instance_id: str) -> BotStatusVie
     "/{broker}/bots/{strategy_instance_id}/runs/current",
     response_model=BotRunView,
     summary="Read the current run without inferring process or terminal state",
+    responses={
+        404: {
+            "model": BotRunReadNotFoundResponse,
+            "description": "The broker or strategy-instance run is unknown.",
+        },
+        422: {
+            "model": BotRunReadRunnerErrorResponse,
+            "description": "The strategy-instance identifier is invalid.",
+        },
+    },
 )
 async def get_current_run(broker: str, strategy_instance_id: str) -> BotRunView:
     _resolve_broker(broker)
@@ -137,6 +150,16 @@ async def get_current_run(broker: str, strategy_instance_id: str) -> BotRunView:
     "/{broker}/bots/{strategy_instance_id}/runs/history",
     response_model=BotRunHistoryPage,
     summary="Read one bounded page of previous runs",
+    responses={
+        404: {
+            "model": BotRunReadNotFoundResponse,
+            "description": "The broker or strategy-instance run is unknown.",
+        },
+        422: {
+            "model": BotRunHistoryUnprocessableResponse,
+            "description": "The history cursor, limit, or strategy-instance identifier is invalid.",
+        },
+    },
 )
 async def get_run_history(
     broker: str,

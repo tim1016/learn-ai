@@ -220,3 +220,27 @@ async def test_run_reads_reject_unknown_bot_and_foreign_cursor(api) -> None:
     assert foreign_cursor.status_code == 422
     assert "cursor" in foreign_cursor.json()["detail"]["message"].lower()
     await registry.stop("alpaca", _SID)
+
+
+def test_run_read_openapi_documents_error_envelopes(api) -> None:
+    app, _registry = api
+    paths = app.openapi()["paths"]
+    current_responses = paths[
+        "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/current"
+    ]["get"]["responses"]
+    history_responses = paths[
+        "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/history"
+    ]["get"]["responses"]
+
+    assert current_responses["404"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/BotRunReadNotFoundResponse"
+    )
+    assert current_responses["422"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/BotRunReadRunnerErrorResponse"
+    )
+    assert history_responses["404"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/BotRunReadNotFoundResponse"
+    )
+    assert history_responses["422"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "/BotRunHistoryUnprocessableResponse"
+    )

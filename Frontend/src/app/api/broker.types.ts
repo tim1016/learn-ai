@@ -9796,6 +9796,64 @@ export interface components {
             runs: components["schemas"]["BotRunView"][];
         };
         /**
+         * BotRunHistoryUnprocessableResponse
+         * @description 422 envelope for a runner error or an invalid history query.
+         */
+        BotRunHistoryUnprocessableResponse: {
+            /** Detail */
+            detail: components["schemas"]["BotRunReadRunnerErrorDetail"] | components["schemas"]["BotRunReadValidationIssue"][];
+        };
+        /**
+         * BotRunReadBrokerErrorDetail
+         * @description Broker-registry failure detail returned by a bot-run read.
+         */
+        BotRunReadBrokerErrorDetail: {
+            /** Broker */
+            broker: string;
+            /** Message */
+            message: string;
+            /** Why */
+            why: string | null;
+        };
+        /**
+         * BotRunReadNotFoundResponse
+         * @description 404 envelope for an unknown broker or strategy-instance run.
+         */
+        BotRunReadNotFoundResponse: {
+            /** Detail */
+            detail: components["schemas"]["BotRunReadBrokerErrorDetail"] | components["schemas"]["BotRunReadRunnerErrorDetail"];
+        };
+        /**
+         * BotRunReadRunnerErrorDetail
+         * @description Runner failure detail returned by a bot-run read.
+         */
+        BotRunReadRunnerErrorDetail: {
+            admission: components["schemas"]["RunAdmissionDecision"] | null;
+            /** Message */
+            message: string;
+            /** Why */
+            why: string | null;
+        };
+        /**
+         * BotRunReadRunnerErrorResponse
+         * @description 422 envelope emitted by the bot runner for an invalid run read.
+         */
+        BotRunReadRunnerErrorResponse: {
+            detail: components["schemas"]["BotRunReadRunnerErrorDetail"];
+        };
+        /**
+         * BotRunReadValidationIssue
+         * @description One FastAPI request-validation issue for a run-history query.
+         */
+        BotRunReadValidationIssue: {
+            /** Loc */
+            loc: (string | number)[];
+            /** Msg */
+            msg: string;
+            /** Type */
+            type: string;
+        };
+        /**
          * BotRunView
          * @description Read-only launch and terminal evidence for one strategy run.
          */
@@ -29397,13 +29455,22 @@ export interface operations {
                     "application/json": components["schemas"]["BotRunView"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The broker or strategy-instance run is unknown. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunReadNotFoundResponse"];
+                };
+            };
+            /** @description The strategy-instance identifier is invalid. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["BotRunReadRunnerErrorResponse"];
                 };
             };
         };
@@ -29434,13 +29501,22 @@ export interface operations {
                     "application/json": components["schemas"]["BotRunHistoryPage"];
                 };
             };
-            /** @description Validation Error */
+            /** @description The broker or strategy-instance run is unknown. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunReadNotFoundResponse"];
+                };
+            };
+            /** @description The history cursor, limit, or strategy-instance identifier is invalid. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["BotRunHistoryUnprocessableResponse"];
                 };
             };
         };

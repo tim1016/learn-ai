@@ -1047,8 +1047,18 @@ async def test_run_history_pages_previous_runs_without_changing_current_target(
     assert [run.run_id for run in second_page.runs] == [first.active_run_id]
     assert second_page.next_cursor is None
     assert registry.current_run("alpaca", _SID).run_id == third.active_run_id
+    other_sid = "alpaca-skeleton-2"
+    await registry.deploy(broker="alpaca", strategy_instance_id=other_sid, symbol="SPY")
+    await registry.stop("alpaca", other_sid)
+    await registry.resume_existing("alpaca", other_sid)
+    await registry.stop("alpaca", other_sid)
+    await registry.resume_existing("alpaca", other_sid)
+    foreign_page = registry.run_history("alpaca", other_sid, cursor=None, limit=1)
+
+    assert foreign_page.next_cursor is not None
     with pytest.raises(InvalidRunHistoryCursorError):
-        registry.run_history("alpaca", _SID, cursor="another-bot-run", limit=1)
+        registry.run_history("alpaca", _SID, cursor=foreign_page.next_cursor, limit=1)
+    await registry.stop("alpaca", other_sid)
     await registry.stop("alpaca", _SID)
 
 

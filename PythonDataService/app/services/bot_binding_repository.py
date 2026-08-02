@@ -296,7 +296,10 @@ class BotBindingRepository:
         run = BotRunRecord.model_validate_json(
             self._run_path(instance_dir, candidate.run_id).read_text(encoding="utf-8")
         )
-        if run.strategy_instance_id != candidate.strategy_instance_id:
+        if (
+            run.strategy_instance_id != candidate.strategy_instance_id
+            or run.run_id != candidate.run_id
+        ):
             raise ValueError("terminal outcome belongs to another strategy instance")
         outcomes_dir = instance_dir / RUN_OUTCOMES_DIRECTORY
         outcomes_dir.mkdir(parents=True, exist_ok=True)

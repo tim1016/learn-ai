@@ -8951,6 +8951,172 @@
         "title": "BotRunHistoryPage",
         "type": "object"
       },
+      "BotRunHistoryUnprocessableResponse": {
+        "additionalProperties": false,
+        "description": "422 envelope for a runner error or an invalid history query.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotRunReadRunnerErrorDetail"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BotRunReadValidationIssue"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "BotRunHistoryUnprocessableResponse",
+        "type": "object"
+      },
+      "BotRunReadBrokerErrorDetail": {
+        "additionalProperties": false,
+        "description": "Broker-registry failure detail returned by a bot-run read.",
+        "properties": {
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "required": [
+          "broker",
+          "message",
+          "why"
+        ],
+        "title": "BotRunReadBrokerErrorDetail",
+        "type": "object"
+      },
+      "BotRunReadNotFoundResponse": {
+        "additionalProperties": false,
+        "description": "404 envelope for an unknown broker or strategy-instance run.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotRunReadBrokerErrorDetail"
+              },
+              {
+                "$ref": "#/components/schemas/BotRunReadRunnerErrorDetail"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "BotRunReadNotFoundResponse",
+        "type": "object"
+      },
+      "BotRunReadRunnerErrorDetail": {
+        "additionalProperties": false,
+        "description": "Runner failure detail returned by a bot-run read.",
+        "properties": {
+          "admission": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunAdmissionDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "required": [
+          "message",
+          "why",
+          "admission"
+        ],
+        "title": "BotRunReadRunnerErrorDetail",
+        "type": "object"
+      },
+      "BotRunReadRunnerErrorResponse": {
+        "additionalProperties": false,
+        "description": "422 envelope emitted by the bot runner for an invalid run read.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/BotRunReadRunnerErrorDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "BotRunReadRunnerErrorResponse",
+        "type": "object"
+      },
+      "BotRunReadValidationIssue": {
+        "additionalProperties": false,
+        "description": "One FastAPI request-validation issue for a run-history query.",
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Loc",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Msg",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "BotRunReadValidationIssue",
+        "type": "object"
+      },
       "BotRunView": {
         "additionalProperties": false,
         "description": "Read-only launch and terminal evidence for one strategy run.",
@@ -51965,15 +52131,25 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRunReadNotFoundResponse"
+                }
+              }
+            },
+            "description": "The broker or strategy-instance run is unknown."
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/BotRunReadRunnerErrorResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The strategy-instance identifier is invalid."
           }
         },
         "summary": "Read the current run without inferring process or terminal state",
@@ -52060,15 +52236,25 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRunReadNotFoundResponse"
+                }
+              }
+            },
+            "description": "The broker or strategy-instance run is unknown."
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/BotRunHistoryUnprocessableResponse"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The history cursor, limit, or strategy-instance identifier is invalid."
           }
         },
         "summary": "Read one bounded page of previous runs",

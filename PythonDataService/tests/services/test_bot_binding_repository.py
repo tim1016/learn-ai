@@ -163,6 +163,32 @@ def test_terminal_outcome_recovers_after_interrupted_atomic_publication(
     assert repository.read_outcome(_SID, binding.run_id) == outcome
 
 
+def test_terminal_outcome_rejects_a_run_record_with_a_mismatched_run_id(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    binding = _binding()
+    repository.record_launch(binding, launch_reason="deploy")
+    run_path = tmp_path / "live_state" / _SID / "runs" / f"{binding.run_id}.json"
+    corrupt_run = json.loads(run_path.read_text(encoding="utf-8"))
+    corrupt_run["run_id"] = "run-other"
+    run_path.write_text(json.dumps(corrupt_run), encoding="utf-8")
+    outcome = BotRunOutcomeRecord(
+        strategy_instance_id=_SID,
+        run_id=binding.run_id,
+        kind="STOPPED",
+        reason_code="OPERATOR_STOP",
+        recorded_at_ms=2_000,
+    )
+
+    with pytest.raises(ValueError, match="terminal outcome belongs"):
+        repository.record_outcome(outcome)
+
+    assert not (
+        tmp_path / "live_state" / _SID / "run_outcomes" / f"{binding.run_id}.json"
+    ).exists()
+
+
 def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(
     tmp_path: Path,
 ) -> None:

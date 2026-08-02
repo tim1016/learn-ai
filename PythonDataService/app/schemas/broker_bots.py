@@ -274,6 +274,60 @@ class BotRunHistoryPage(BaseModel):
     next_cursor: str | None
 
 
+class BotRunReadBrokerErrorDetail(BaseModel):
+    """Broker-registry failure detail returned by a bot-run read."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    broker: str
+    message: str
+    why: str | None
+
+
+class BotRunReadRunnerErrorDetail(BaseModel):
+    """Runner failure detail returned by a bot-run read."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    message: str
+    why: str | None
+    admission: RunAdmissionDecision | None
+
+
+class BotRunReadNotFoundResponse(BaseModel):
+    """404 envelope for an unknown broker or strategy-instance run."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    detail: BotRunReadBrokerErrorDetail | BotRunReadRunnerErrorDetail
+
+
+class BotRunReadRunnerErrorResponse(BaseModel):
+    """422 envelope emitted by the bot runner for an invalid run read."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    detail: BotRunReadRunnerErrorDetail
+
+
+class BotRunReadValidationIssue(BaseModel):
+    """One FastAPI request-validation issue for a run-history query."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    loc: tuple[str | int, ...]
+    msg: str
+    type: str
+
+
+class BotRunHistoryUnprocessableResponse(BaseModel):
+    """422 envelope for a runner error or an invalid history query."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    detail: BotRunReadRunnerErrorDetail | tuple[BotRunReadValidationIssue, ...]
+
+
 class AlpacaPaperDeployReceipt(BaseModel):
     """Backend-authored terminal receipt for one accepted deployment."""
 
