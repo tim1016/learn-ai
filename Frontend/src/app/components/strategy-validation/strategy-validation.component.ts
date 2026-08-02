@@ -100,13 +100,7 @@ export class StrategyValidationComponent {
   }
 
   protected deployQueryParams(strategy: StrategyValidationDetail): Record<string, string> {
-    return {
-      strategy_key: strategy.strategy_key,
-      spec_path: strategy.settings_file_ref ?? '',
-      signal_stream: strategy.validation_case_symbol ?? '',
-      qc_backtest_id: strategy.qc_cloud_backtest_id ?? '',
-      qc_audit_copy_path: strategy.audit_copy_ref ?? '',
-    };
+    return { strategy: strategy.strategy_key };
   }
 
   protected engineLabQueryParams(strategy: StrategyValidationDetail): Record<string, string> {

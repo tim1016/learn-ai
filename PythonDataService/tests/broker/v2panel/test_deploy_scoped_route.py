@@ -72,6 +72,7 @@ class _FakeDeployRegistry:
         self.deploy_calls.append(kwargs)
         return BotStatusView(
             strategy_instance_id=kwargs["strategy_instance_id"],
+            strategy_key=kwargs["strategy_key"],
             broker=kwargs["broker"],
             symbol=kwargs["symbol"],
             mode=kwargs["mode"],
@@ -185,6 +186,25 @@ async def test_deploy_accepts_dotted_equity_symbol_supported_by_form(deploy_app)
 
 
 @pytest.mark.asyncio
+async def test_deploy_submits_selected_validated_strategy(deploy_app) -> None:
+    fast_app, registry = deploy_app
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={
+                **_BODY,
+                "strategy_instance_id": "ema-paper-01",
+                "strategy_key": "ema_crossover_signal",
+            },
+        )
+
+    assert response.status_code == 201
+    assert response.json()["bot"]["strategy_key"] == "ema_crossover_signal"
+    assert registry.deploy_calls[0]["strategy_key"] == "ema_crossover_signal"
+
+
+@pytest.mark.asyncio
 async def test_deploy_scoped_account_mismatch_404(deploy_app) -> None:
     fast_app, registry = deploy_app
 
@@ -208,15 +228,19 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
     body = resp.json()
     assert body["account_mode"] == "paper"
     assert body["allowed_actions"] == ["deploy"]
-    assert [row["strategy_key"] for row in body["strategies"]] == ["deployment_validation"]
+    assert [row["strategy_key"] for row in body["strategies"]] == [
+        "deployment_validation",
+        "ema_crossover_signal",
+    ]
     strategy = body["strategies"][0]
-    assert strategy["behavioral_equivalence_verdict"] == "accepted_for_deploy"
+    assert set(strategy) == {
+        "strategy_key",
+        "label",
+        "explanation",
+        "validation_case_symbol",
+    }
     assert strategy["validation_case_symbol"] == "SPY"
-    assert strategy["validated_at_ms"] > 0
-    assert strategy["qc_cloud_backtest_id"]
-    assert strategy["settings_file_sha256"]
-    assert strategy["audit_copy_sha256"]
-    assert strategy["trades_matched"] == strategy["trades_validated"]
+    assert body["evaluated_at_ms"] > 0
     assert {check["gate_id"] for check in body["readiness_checks"]} == {
         "strategy.validation_accepted",
         "broker.account_posture",
@@ -231,13 +255,15 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
             "mode": "paper",
             "label": "Paper",
             "available": True,
+            "availability": "available",
             "explanation": "Orders route only to the selected Alpaca paper account through the Clerk.",
         },
         {
             "mode": "live",
             "label": "Live",
             "available": False,
-            "explanation": "Live Alpaca execution is not wired and is rejected at the server boundary.",
+            "availability": "planned",
+            "explanation": "Live Alpaca execution is planned but is not connected to an admission or execution path.",
         },
     ]
     assert [row["preset"] for row in body["sizing_options"]] == [

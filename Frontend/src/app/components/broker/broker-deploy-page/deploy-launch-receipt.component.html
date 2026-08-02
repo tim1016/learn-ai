@@ -11,7 +11,7 @@
     <div><dt>Bot</dt><dd><code>{{ receipt().bot.strategy_instance_id }}</code></dd></div>
     <div><dt>Run</dt><dd><code>{{ receipt().bot.active_run_id ?? 'Pending runtime receipt' }}</code></dd></div>
     <div><dt>Account</dt><dd>{{ receipt().account_id }}</dd></div>
-    <div><dt>Execution</dt><dd>Paper · {{ receipt().sizing.quantity }} share(s) · carryover {{ receipt().carryover_policy === 'ALLOW' ? 'allowed' : 'forbidden' }}</dd></div>
+    <div><dt>Execution</dt><dd>{{ receipt().execution_mode | receiptLabel }} · {{ receipt().sizing.quantity }} share(s) · carryover {{ receipt().carryover_policy === 'ALLOW' ? 'allowed' : 'forbidden' }}</dd></div>
   </dl>
   <div class="launch-receipt__next">
     <p>{{ receipt().next_action }}</p>

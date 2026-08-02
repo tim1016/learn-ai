@@ -14,6 +14,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployView,
     AlpacaPaperExecutionMode,
     AlpacaPaperSizingOption,
+    AlpacaPaperStrategyKey,
     BotStatusView,
 )
 from app.schemas.strategy_validation import StrategyValidationEntry
@@ -54,7 +55,7 @@ def _strategy_views(
         snapshot = event.evidence_snapshot if event is not None else None
         diagnostics = snapshot.diagnostics if snapshot is not None else None
         if (
-            entry.strategy_key != "deployment_validation"
+            entry.strategy_key not in AlpacaPaperStrategyKey
             or entry.validation_state != "validated"
             or not entry.deployable
             or event is None
@@ -76,26 +77,10 @@ def _strategy_views(
             continue
         strategies.append(
             AlpacaPaperDeployStrategy(
-                strategy_key="deployment_validation",
+                strategy_key=AlpacaPaperStrategyKey(entry.strategy_key),
                 label=entry.display_name,
                 explanation=entry.description,
                 validation_case_symbol=snapshot.validation_case_symbol,
-                validated_at_ms=event.flagged_at_ms,
-                validated_by=event.flagged_by,
-                validation_reason=event.reason,
-                behavioral_equivalence_verdict="accepted_for_deploy",
-                behavioral_equivalence_detail=event.behavioral_equivalence.detail,
-                tolerance=event.behavioral_equivalence.tolerance,
-                qc_cloud_backtest_id=snapshot.qc_cloud_backtest_id,
-                settings_file_ref=snapshot.settings_file_ref,
-                settings_file_sha256=snapshot.settings_file_sha256,
-                audit_copy_ref=snapshot.audit_copy_ref,
-                audit_copy_sha256=snapshot.audit_copy_sha256,
-                reconciliation_ref=snapshot.reconciliation_ref,
-                trades_matched=diagnostics.trades_matched,
-                trades_validated=diagnostics.trades_validated,
-                pnl_max_abs_diff=diagnostics.pnl_max_abs_diff,
-                divergence_counts=dict(diagnostics.divergence_counts),
             )
         )
     return tuple(strategies)
@@ -134,7 +119,7 @@ def _readiness_checks(
             scope="strategy",
             authority="Strategy validation current-state projection",
             headline=(
-                "Deployment Validation is accepted for deployment."
+                "Validated strategies are accepted for deployment."
                 if strategies
                 else "No runtime-supported strategy has current accepted validation evidence."
             ),
@@ -144,13 +129,15 @@ def _readiness_checks(
                 else "The selector excludes missing, superseded, invalidated, evidence-only, and rejected validation events."
             ),
             evidence_summary=(
-                f"{strategies[0].label} has a current accepted validation event."
+                "Current accepted evidence: "
+                + ", ".join(strategy.label for strategy in strategies)
+                + "."
                 if strategies
-                else "No accepted Deployment Validation event is available."
+                else "No accepted strategy validation event is available."
             ),
             evidence={
-                "strategy_key": strategies[0].strategy_key if strategies else None,
-                "verdict": strategies[0].behavioral_equivalence_verdict if strategies else None,
+                "strategy_keys": ", ".join(strategy.strategy_key for strategy in strategies),
+                "verdict": "accepted_for_deploy" if strategies else None,
             },
             recovery=(
                 None
@@ -322,12 +309,13 @@ def build_alpaca_paper_deploy_view(
     validation_entries: list[StrategyValidationEntry],
 ) -> AlpacaPaperDeployView:
     """Author the closed form choices and current launch verdict."""
+    evaluated_at_ms = now_ms_utc()
     strategies = _strategy_views(validation_entries)
     readiness_checks = _readiness_checks(
         account,
         clerk_status,
         strategies,
-        now_ms=now_ms_utc(),
+        now_ms=evaluated_at_ms,
     )
     eligibility = _eligibility(readiness_checks)
     return AlpacaPaperDeployView(
@@ -335,6 +323,7 @@ def build_alpaca_paper_deploy_view(
         account_id=account.account_id,
         account_mode="paper",
         account_label=f"Alpaca paper · {account.account_id}",
+        evaluated_at_ms=evaluated_at_ms,
         eligibility=eligibility,
         readiness_checks=readiness_checks,
         execution_modes=(
@@ -342,13 +331,15 @@ def build_alpaca_paper_deploy_view(
                 mode="paper",
                 label="Paper",
                 available=True,
+                availability="available",
                 explanation="Orders route only to the selected Alpaca paper account through the Clerk.",
             ),
             AlpacaPaperExecutionMode(
                 mode="live",
                 label="Live",
                 available=False,
-                explanation="Live Alpaca execution is not wired and is rejected at the server boundary.",
+                availability="planned",
+                explanation="Live Alpaca execution is planned but is not connected to an admission or execution path.",
             ),
         ),
         strategies=strategies,

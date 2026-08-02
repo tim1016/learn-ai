@@ -21,6 +21,12 @@ h2 {
   font-size: var(--fs-lg);
 }
 
+h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+}
+
 header p,
 article p,
 article small {
@@ -52,8 +58,9 @@ article {
 }
 
 .readiness__check-head {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
   gap: var(--space-3);
 }
 
@@ -73,13 +80,21 @@ article {
   color: var(--text-primary);
 }
 
-dl {
+.readiness__check-head code {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.readiness__authority,
+.readiness__evidence {
   display: grid;
   gap: var(--space-2);
   margin: 0;
 }
 
-dl div {
+.readiness__authority div,
+.readiness__evidence div {
   display: flex;
   justify-content: space-between;
   gap: var(--space-3);
@@ -93,6 +108,24 @@ dd {
 
 .readiness__recovery {
   font-weight: var(--fw-medium);
+}
+
+details {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+summary {
+  color: var(--accent-text);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+}
+
+.readiness__evidence {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg-sunken);
+  border-radius: var(--radius-sm);
 }
 
 @media (max-width: 760px) {

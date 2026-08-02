@@ -16,22 +16,13 @@ const VALIDATION_STRATEGY: DeployBotView['strategies'][number] = {
   label: 'Deployment Validation',
   explanation: 'Validated canonical decision kernel.',
   validation_case_symbol: 'SPY',
-  validated_at_ms: 1_700_000_000_000,
-  validated_by: 'operator@example.test',
-  validation_reason: 'QC and local LEAN trades reconcile within the accepted tolerance.',
-  behavioral_equivalence_verdict: 'accepted_for_deploy',
-  behavioral_equivalence_detail: 'Every entry, exit, and P&L value matched.',
-  tolerance: '1e-8',
-  qc_cloud_backtest_id: 'qc-backtest-123',
-  settings_file_ref: 'specs/deployment-validation.json',
-  settings_file_sha256: 'settings-sha',
-  audit_copy_ref: 'audit/deployment-validation.py',
-  audit_copy_sha256: 'audit-sha',
-  reconciliation_ref: 'docs/references/deployment-validation.md',
-  trades_matched: 4,
-  trades_validated: 4,
-  pnl_max_abs_diff: '0.00000000',
-  divergence_counts: {},
+};
+
+const EMA_STRATEGY: DeployBotView['strategies'][number] = {
+  strategy_key: 'ema_crossover_signal',
+  label: 'EMA Crossover Signal',
+  explanation: 'Validated EMA(5), EMA(10), and RSI(14) crossover signal.',
+  validation_case_symbol: 'SPY',
 };
 
 const DEPLOY_VIEW: DeployBotView = {
@@ -39,6 +30,7 @@ const DEPLOY_VIEW: DeployBotView = {
   account_id: 'PA9',
   account_mode: 'paper',
   account_label: 'Alpaca paper · PA9',
+  evaluated_at_ms: 1_700_000_000_000,
   eligibility: {
     eligible: true,
     reason_code: 'ALPACA_PAPER_DEPLOY_READY',
@@ -46,10 +38,10 @@ const DEPLOY_VIEW: DeployBotView = {
     explanation: 'Every ENTER and EXIT is executed through the Alpaca Clerk.',
     next_action: 'Review the ticket and deploy the paper bot.',
   },
-  strategies: [VALIDATION_STRATEGY],
+  strategies: [VALIDATION_STRATEGY, EMA_STRATEGY],
   execution_modes: [
-    { mode: 'paper', label: 'Paper orders', available: true, explanation: 'Available through the Alpaca Clerk.' },
-    { mode: 'live', label: 'Live orders', available: false, explanation: 'Live Alpaca deployment is not available.' },
+    { mode: 'paper', label: 'Paper', available: true, availability: 'available', explanation: 'Available through the Alpaca Clerk.' },
+    { mode: 'live', label: 'Live', available: false, availability: 'planned', explanation: 'Live Alpaca execution is planned.' },
   ],
   readiness_checks: [
     {
@@ -143,9 +135,12 @@ const RECEIPT: DeployBotReceipt = {
   },
 };
 
-function mockService(result: DeployBotReceipt | HttpErrorResponse = RECEIPT) {
+function mockService(
+  result: DeployBotReceipt | HttpErrorResponse = RECEIPT,
+  view: DeployBotView = DEPLOY_VIEW,
+) {
   return {
-    getDeployView: vi.fn().mockResolvedValue(DEPLOY_VIEW),
+    getDeployView: vi.fn().mockResolvedValue(view),
     deployBot: result instanceof HttpErrorResponse
       ? vi.fn().mockRejectedValue(result)
       : vi.fn().mockResolvedValue(result),
@@ -165,16 +160,48 @@ async function renderWorkflow(service = mockService()) {
 }
 
 describe('AlpacaDeployWorkflowComponent', () => {
-  it('renders real validation provenance, admission checks, and broker capability', async () => {
+  it('defaults to a concise trader view without duplicating strategy provenance', async () => {
     await renderWorkflow();
 
     expect(screen.getAllByText('Deployment Validation').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('qc-backtest-123')).toBeTruthy();
-    expect(screen.getByText('Current accepted evidence is present.')).toBeTruthy();
-    expect(screen.getByText('Paper orders')).toBeTruthy();
-    expect(screen.getByText('Live Alpaca deployment is not available.')).toBeTruthy();
+    expect(screen.getByText('✓ Validated')).toBeTruthy();
+    expect(screen.getByText('Live Alpaca execution is planned.')).toBeTruthy();
+    expect(screen.queryByText('Strategy provenance')).toBeNull();
+    expect(screen.queryByText('Every deployment gate')).toBeNull();
     expect(screen.getAllByText('One long stock ENTER and one matching close-leg EXIT.').length)
       .toBeGreaterThanOrEqual(1);
+  });
+
+  it('reveals every admission gate in the operator lens', async () => {
+    await renderWorkflow();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+
+    expect(screen.getByText('Every deployment gate')).toBeTruthy();
+    expect(screen.getByText('Current accepted evidence is present.')).toBeTruthy();
+    expect(screen.getByText('Accepted at the current manifest revision.')).toBeTruthy();
+  });
+
+  it('changes the validated strategy and submits the selected strategy key', async () => {
+    const service = mockService();
+    await renderWorkflow(service);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'ema-paper-01' },
+    });
+    fireEvent.change(screen.getByLabelText('Validated strategy'), {
+      target: { value: 'ema_crossover_signal' },
+    });
+
+    expect(screen.getAllByText('EMA Crossover Signal').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(EMA_STRATEGY.explanation)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
+      .toBe('/strategy-validation?strategy=ema_crossover_signal');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy paper bot' }));
+
+    expect((service.deployBot.mock.calls[0][2] as DeployBotBody).strategy_key)
+      .toBe('ema_crossover_signal');
   });
 
   it('submits only the closed paper canary command and renders its durable receipt', async () => {
@@ -217,11 +244,31 @@ describe('AlpacaDeployWorkflowComponent', () => {
       .toEqual({ preset: 'custom', quantity: 7 });
   });
 
+  it('exposes available Clerk-proven carryover to the trader and submits the opt-in', async () => {
+    const carryoverView: DeployBotView = {
+      ...DEPLOY_VIEW,
+      carryover_available: true,
+      carryover_explanation: 'Keep exactly attributed exposure only after a durable Clerk checkpoint.',
+    };
+    const service = mockService(RECEIPT, carryoverView);
+    const { fixture } = await renderWorkflow(service);
+    const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
+
+    fireEvent.click(screen.getByRole('checkbox', {
+      name: /Allow Clerk-proven exposure carryover on STOP/i,
+    }));
+    component['ticket'].update((ticket) => ({ ...ticket, instanceId: 'spy-carryover' }));
+    await component['submit']();
+
+    expect((service.deployBot.mock.calls[0][2] as DeployBotBody).carryover_policy)
+      .toBe('ALLOW');
+  });
+
   it('normalizes text fields before Signal Form validation and submission gating', async () => {
     const { fixture } = await renderWorkflow();
     const component = fixture.componentInstance as AlpacaDeployWorkflowComponent;
 
-    fireEvent.input(screen.getByPlaceholderText('alpaca-spy-validation-01'), {
+    fireEvent.input(screen.getByPlaceholderText('alpaca-spy-01'), {
       target: { value: ' spy-validation-01 ' },
     });
     fireEvent.input(screen.getByPlaceholderText('SPY'), {

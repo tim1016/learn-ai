@@ -1,0 +1,19 @@
+<section class="trader-summary" [class.trader-summary--blocked]="!view().eligibility.eligible">
+  <header>
+    <span>{{ view().eligibility.eligible ? 'Ready to deploy' : 'Deployment blocked' }}</span>
+    <h2>{{ view().eligibility.headline }}</h2>
+    <p>{{ view().eligibility.explanation }}</p>
+  </header>
+  <dl>
+    <div><dt>Strategy</dt><dd>{{ strategy()?.label ?? 'Choose a strategy' }}</dd></div>
+    <div><dt>Trade</dt><dd>{{ symbol() || 'Choose symbol' }} · {{ quantity() }} share(s)</dd></div>
+    <div><dt>Target</dt><dd>{{ view().account_label }}</dd></div>
+    <div><dt>When stopped</dt><dd>{{ carryoverAllowed() ? 'Keep proven exposure' : 'Carryover forbidden' }}</dd></div>
+  </dl>
+  <footer>
+    <small>Checked @if (view().evaluated_at_ms) { <app-timestamp-display [value]="view().evaluated_at_ms" mode="local" /> } @else { now }</small>
+    @if (!view().eligibility.eligible) {
+      <button type="button" (click)="operatorRequested.emit()">Review operator gates</button>
+    }
+  </footer>
+</section>

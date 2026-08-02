@@ -15,6 +15,7 @@ Covers issue #1260 acceptance criteria:
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -788,6 +789,70 @@ def _install_fake_clerk(monkeypatch: pytest.MonkeyPatch, clerk: _FakeClerk) -> N
     import app.broker.alpaca.clerk.clerk as clerk_mod
 
     monkeypatch.setattr(clerk_mod, "_clerk", clerk)
+
+
+_EMA_FIRST_ENTER_MS = 1_770_389_100_000
+_EMA_FIRST_EXIT_MS = 1_770_393_600_000
+
+
+def _ema_parity_bars_through_first_exit() -> list[MarketDataBar]:
+    """Load the retained LEAN input stream through its first EMA round-trip."""
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures/golden/cross-engine-studies/cells"
+        / "SPY_W3mo_2026-02-02_to_2026-04-30/lean/observations.csv"
+    )
+    bars: list[MarketDataBar] = []
+    with fixture.open(encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            end_ms = int(row["ms_utc"])
+            bars.append(
+                MarketDataBar(
+                    symbol="SPY",
+                    start_ms=end_ms - 60_000,
+                    end_ms=end_ms,
+                    open=Decimal(row["open"]),
+                    high=Decimal(row["high"]),
+                    low=Decimal(row["low"]),
+                    close=Decimal(row["close"]),
+                    volume=int(Decimal(row["volume"])),
+                    fetched_at_ms=end_ms + 100,
+                    feed_id="lean-golden",
+                    session_phase="RTH",
+                )
+            )
+            if end_ms > _EMA_FIRST_EXIT_MS:
+                break
+    return bars
+
+
+@pytest.mark.asyncio
+async def test_ema_trade_bot_matches_first_lean_round_trip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+    bars = _ema_parity_bars_through_first_exit()
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="ema_crossover_signal",
+        symbol="SPY",
+        mode="trade",
+        quantity=3,
+    )
+    await _wait_for(lambda: feed.bars_consumed == len(bars))
+    await _wait_for(lambda: len(clerk.calls) >= 2)
+    await registry.stop("alpaca", _SID)
+
+    assert [(call["decision_id"], call["purpose"], call["quantity"]) for call in clerk.calls[:2]] == [
+        (f"{_EMA_FIRST_ENTER_MS}:ENTER", "ENTER", 3),
+        (f"{_EMA_FIRST_EXIT_MS}:EXIT", "EXIT", 3),
+    ]
 
 
 # ── entry after exactly 2 green bars in-window ────────────────────────────────
