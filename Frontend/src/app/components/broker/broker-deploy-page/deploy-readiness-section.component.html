@@ -1,8 +1,8 @@
 <section class="readiness" aria-labelledby="deploy-readiness-title">
   <header>
-    <span>Admission authority</span>
-    <h2 id="deploy-readiness-title">Current deployment readiness</h2>
-    <p>Every check below is evaluated by the same server path that admits this deployment.</p>
+    <span>Operator view · admission authority</span>
+    <h2 id="deploy-readiness-title">Every deployment gate</h2>
+    <p>These checks come from the same server path that admits or rejects launch.</p>
   </header>
   <div class="readiness__grid">
     @for (check of checks(); track check.gate_id) {
@@ -10,15 +10,28 @@
         <div class="readiness__check-head">
           <span>{{ check.ready ? 'Ready' : 'Blocked' }}</span>
           <strong>{{ check.label }}</strong>
+          <code>{{ check.gate_id | receiptLabel }}</code>
         </div>
-        <p>{{ check.headline }}</p>
-        <small>{{ check.evidence_summary }}</small>
-        <dl>
-          <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
+        <h3>{{ check.headline }}</h3>
+        <p>{{ check.explanation }}</p>
+        <dl class="readiness__authority">
           <div><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
+          <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
+          <div><dt>Evidence</dt><dd>{{ check.evidence_summary }}</dd></div>
         </dl>
         @if (check.recovery) {
-          <p class="readiness__recovery">Next: {{ check.recovery }}</p>
+          <p class="readiness__recovery"><strong>Next:</strong> {{ check.recovery }}</p>
+        }
+        @let entries = evidenceEntries(check);
+        @if (entries.length !== 0) {
+          <details>
+            <summary>Structured gate evidence</summary>
+            <dl class="readiness__evidence">
+              @for (entry of entries; track entry[0]) {
+                <div><dt>{{ entry[0] | receiptLabel }}</dt><dd>{{ entry[1] }}</dd></div>
+              }
+            </dl>
+          </details>
         }
       </article>
     }

@@ -1,0 +1,59 @@
+<section class="binding-strip" aria-labelledby="deploy-binding-title">
+  <header>
+    <span>Bot binding</span>
+    <h2 id="deploy-binding-title">Name the bot and bind its strategy</h2>
+  </header>
+
+  <div class="binding-strip__rail">
+    <label class="binding-node binding-node--identity">
+      <span>Bot name</span>
+      <input
+        type="text"
+        [value]="instanceId()"
+        placeholder="alpaca-spy-01"
+        autocomplete="off"
+        spellcheck="false"
+        [attr.aria-invalid]="instanceIdError() !== null"
+        (input)="changeInstanceId($event)"
+        (blur)="instanceIdBlur.emit()"
+      />
+      @if (instanceIdError(); as error) { <em role="alert">{{ error }}</em> }
+    </label>
+
+    <span class="binding-arrow" aria-hidden="true">→</span>
+
+    <div class="binding-node binding-node--strategy">
+      @if (strategies().length === 1) {
+        <span>Validated strategy</span>
+        <strong>{{ selectedStrategy()?.label }}</strong>
+      } @else {
+        <label for="deploy-strategy">Validated strategy</label>
+        <select id="deploy-strategy" (change)="changeStrategy($event)">
+          @for (strategy of strategies(); track strategy.strategy_key) {
+            <option
+              [value]="strategy.strategy_key"
+              [selected]="strategy.strategy_key === strategyKey()"
+            >{{ strategy.label }}</option>
+          }
+        </select>
+      }
+      <div class="binding-node__trust">
+        <span>✓ Validated</span>
+        @if (selectedStrategy(); as selected) {
+          <a routerLink="/strategy-validation" [queryParams]="{ strategy: selected.strategy_key }">
+            View validation
+          </a>
+        }
+      </div>
+      <small>{{ selectedStrategy()?.explanation ?? 'No validated strategy is available.' }}</small>
+    </div>
+
+    <span class="binding-arrow" aria-hidden="true">→</span>
+
+    <div class="binding-node binding-node--target">
+      <span>Broker target</span>
+      <strong>{{ accountLabel() }}</strong>
+      <small>{{ executionLabel() }} execution</small>
+    </div>
+  </div>
+</section>

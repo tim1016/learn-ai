@@ -1,9 +1,9 @@
 <main class="alpaca-deploy" aria-labelledby="alpaca-deploy-title">
   <header class="deploy-head">
     <div>
-      <span class="deploy-head__eyebrow">Alpaca · broker deploy</span>
-      <h1 id="alpaca-deploy-title">Deploy an accepted strategy</h1>
-      <p>Turn one validated decision kernel into a Clerk-governed paper bot.</p>
+      <span>Alpaca · broker deploy</span>
+      <h1 id="alpaca-deploy-title">Deploy a bot</h1>
+      <p>Bind a validated strategy to a broker account and put it on duty.</p>
     </div>
     <nav aria-label="Alpaca Deploy links">
       <a routerLink="/strategy-validation">Strategy validation</a>
@@ -24,168 +24,143 @@
       <button type="button" (click)="reload()">Try again</button>
     </section>
   } @else if (deployView.value(); as view) {
-    <section class="deploy-posture" [class.deploy-posture--blocked]="!view.eligibility.eligible">
-      <div>
-        <span>{{ view.eligibility.eligible ? 'Ready to configure' : 'Admission blocked' }}</span>
-        <h2>{{ view.eligibility.headline }}</h2>
-        <p>{{ view.eligibility.explanation }}</p>
-      </div>
-      <div class="deploy-posture__account">
-        <small>Target account</small>
-        <strong>{{ view.account_label }}</strong>
-        <em>Paper only</em>
-      </div>
+    <section class="deploy-context" [class.deploy-context--blocked]="!view.eligibility.eligible">
+      <div><span>{{ view.eligibility.eligible ? 'Ready' : 'Blocked' }}</span><strong>{{ view.account_label }}</strong></div>
+      <div><span>Execution</span><strong>{{ executionLabel() }}</strong></div>
+      <div><span>Checked</span><strong><app-timestamp-display [value]="view.evaluated_at_ms" mode="local" /></strong></div>
     </section>
 
     @if (receipt(); as deployReceipt) {
       <app-deploy-launch-receipt [receipt]="deployReceipt" />
     } @else {
-      <form class="deploy-layout" novalidate (submit)="$event.preventDefault(); submit()">
-        <div class="deploy-layout__main">
-          <section class="ticket-card" aria-labelledby="deploy-ticket-title">
-            <header class="section-head">
-              <span>01 · Deployment ticket</span>
-              <h2 id="deploy-ticket-title">Name the bot and bind its evidence</h2>
-              <p>The accepted strategy receipt remains the authority for what can launch.</p>
-            </header>
+      <div class="lens-toggle" role="tablist" aria-label="Deploy perspective">
+        <button
+          id="deploy-trader-tab"
+          data-lens="trader"
+          type="button"
+          role="tab"
+          [class.lens-toggle__tab--active]="activeLens() === 'trader'"
+          [attr.aria-selected]="activeLens() === 'trader'"
+          [attr.tabindex]="activeLens() === 'trader' ? 0 : -1"
+          aria-controls="deploy-trader-panel"
+          (click)="selectLens('trader')"
+          (keydown)="onLensKeydown($event)"
+        >Trader</button>
+        <button
+          id="deploy-operator-tab"
+          data-lens="operator"
+          type="button"
+          role="tab"
+          [class.lens-toggle__tab--active]="activeLens() === 'operator'"
+          [attr.aria-selected]="activeLens() === 'operator'"
+          [attr.tabindex]="activeLens() === 'operator' ? 0 : -1"
+          aria-controls="deploy-operator-panel"
+          (click)="selectLens('operator')"
+          (keydown)="onLensKeydown($event)"
+        >Operator</button>
+      </div>
 
-            <div class="field-grid">
-              <label class="field">
-                <span>Deployment name</span>
-                <input
-                  type="text"
-                  [formField]="ticketForm.instanceId"
-                  placeholder="alpaca-spy-validation-01"
-                  autocomplete="off"
-                  spellcheck="false"
-                  [attr.aria-invalid]="instanceIdError() !== null"
-                  (input)="normalizeInstanceId($event)"
-                />
-                <small>Letters, numbers, periods, underscores, and hyphens.</small>
-                @if (instanceIdError(); as error) { <em role="alert">{{ error }}</em> }
-              </label>
+      <form class="deploy-form" novalidate (submit)="$event.preventDefault(); submit()">
+        <app-deploy-binding-strip
+          [strategies]="view.strategies"
+          [instanceId]="ticket().instanceId"
+          [strategyKey]="ticket().strategyKey"
+          [accountLabel]="view.account_label"
+          [executionLabel]="executionLabel()"
+          [instanceIdError]="instanceIdError()"
+          (instanceIdChange)="setInstanceId($event)"
+          (instanceIdBlur)="touchInstanceId()"
+          (strategyKeyChange)="setStrategyKey($event)"
+        />
 
-              <label class="field">
-                <span>Accepted strategy</span>
-                <select [formField]="ticketForm.strategyKey">
-                  @for (strategy of view.strategies; track strategy.strategy_key) {
-                    <option [value]="strategy.strategy_key">{{ strategy.label }}</option>
-                  }
-                </select>
-                <small>{{ selectedStrategy()?.explanation ?? 'No accepted strategy is currently available.' }}</small>
-              </label>
-            </div>
-          </section>
+        <div class="deploy-layout">
+          <div class="deploy-layout__main">
+            <app-deploy-execution-section
+              [executionModes]="view.execution_modes"
+              [accountMode]="view.account_mode"
+              [actionPlanExplanation]="view.action_plan_explanation"
+              [symbol]="ticket().symbol"
+              [symbolError]="symbolError()"
+              [sizingOptions]="view.sizing_options"
+              [sizingPreset]="ticket().sizingPreset"
+              [quantity]="ticket().quantity"
+              [quantityError]="quantityError()"
+              [carryoverAvailable]="view.carryover_available"
+              [carryoverLabel]="view.carryover_label"
+              [carryoverExplanation]="view.carryover_explanation"
+              [carryoverAllowed]="ticket().allowCarryover"
+              (symbolChange)="setSymbol($event)"
+              (symbolBlur)="touchSymbol()"
+              (sizingPresetChange)="setSizingPreset($event)"
+              (quantityChange)="setQuantity($event)"
+              (quantityBlur)="touchQuantity()"
+              (carryoverAllowedChange)="setCarryover($event)"
+            />
 
-          <app-deploy-validation-evidence [strategy]="selectedStrategy()" />
-
-          <section class="ticket-card" aria-labelledby="deploy-execution-title">
-            <header class="section-head">
-              <span>02 · Execution contract</span>
-              <h2 id="deploy-execution-title">Choose within broker capability</h2>
-              <p>The server declares which modes, signal plan, and sizing bounds are available.</p>
-            </header>
-
-            <div class="mode-grid" role="list" aria-label="Execution modes">
-              @for (mode of view.execution_modes; track mode.mode) {
-                <article [class.mode-card--available]="mode.available" [attr.aria-disabled]="!mode.available">
-                  <div><strong>{{ mode.label }}</strong><span>{{ mode.available ? 'Available' : 'Unavailable' }}</span></div>
-                  <p>{{ mode.explanation }}</p>
-                </article>
-              }
-            </div>
-
-            <label class="field field--signal">
-              <span>Signal symbol</span>
-              <input
-                type="text"
-                [formField]="ticketForm.symbol"
-                placeholder="SPY"
-                autocomplete="off"
-                spellcheck="false"
-                [attr.aria-invalid]="symbolError() !== null"
-                (input)="normalizeSymbol($event)"
+            <section
+              id="deploy-trader-panel"
+              role="tabpanel"
+              aria-labelledby="deploy-trader-tab"
+              [hidden]="activeLens() !== 'trader'"
+            >
+              <app-deploy-trader-summary
+                [view]="view"
+                [strategy]="selectedStrategy()"
+                [symbol]="ticket().symbol"
+                [quantity]="effectiveQuantity()"
+                [carryoverAllowed]="ticket().allowCarryover"
+                (operatorRequested)="selectLens('operator')"
               />
-              <small>{{ view.action_plan_explanation }}</small>
-              @if (symbolError(); as error) { <em role="alert">{{ error }}</em> }
-            </label>
+            </section>
+            <section
+              id="deploy-operator-panel"
+              role="tabpanel"
+              aria-labelledby="deploy-operator-tab"
+              [hidden]="activeLens() !== 'operator'"
+            >
+              <app-deploy-readiness-section [checks]="view.readiness_checks" />
+            </section>
+          </div>
 
-            <fieldset class="sizing-options">
-              <legend>Sizing</legend>
-              @for (option of view.sizing_options; track option.preset) {
-                <label [class.sizing-option--selected]="ticket().sizingPreset === option.preset">
-                  <input
-                    type="radio"
-                    name="alpaca-sizing"
-                    [value]="option.preset"
-                    [checked]="ticket().sizingPreset === option.preset"
-                    (change)="setSizingPreset($event)"
-                  />
-                  <span><strong>{{ option.label }}</strong><small>{{ option.explanation }}</small></span>
-                </label>
-              }
-            </fieldset>
-
-            @if (ticket().sizingPreset === 'custom') {
-              <label class="field field--quantity">
-                <span>Whole shares per ENTER</span>
-                <input
-                  type="number"
-                  inputmode="numeric"
-                  step="1"
-                  [formField]="ticketForm.quantity"
-                  [attr.aria-invalid]="quantityError() !== null"
-                />
-                <small>Bounded to {{ selectedSizing()?.min_quantity }}–{{ selectedSizing()?.max_quantity }} whole shares.</small>
-                @if (quantityError(); as error) { <em role="alert">{{ error }}</em> }
-              </label>
+          <aside class="deploy-layout__review">
+            @if (activeLens() === 'operator') {
+              <app-deploy-review-section
+                [view]="view"
+                [strategy]="selectedStrategy()"
+                [instanceId]="ticket().instanceId"
+                [symbol]="ticket().symbol"
+                [sizingLabel]="sizingLabel()"
+                [quantity]="effectiveQuantity()"
+                [carryoverAllowed]="ticket().allowCarryover"
+              />
             }
 
-            <label class="carryover" [class.carryover--disabled]="!view.carryover_available">
-              <input
-                type="checkbox"
-                [checked]="ticket().allowCarryover"
-                [disabled]="!view.carryover_available"
-                (change)="setCarryover($event)"
-              />
-              <span><strong>{{ view.carryover_label }}</strong><small>{{ view.carryover_explanation }}</small></span>
-            </label>
-          </section>
+            @if (submitError(); as error) {
+              <section class="deploy-error" [class.deploy-error--unknown]="error.outcome === 'unknown'" role="alert">
+                <span>{{ error.title }}</span>
+                <strong>{{ error.message }}</strong>
+                @if (error.explanation) { <p>{{ error.explanation }}</p> }
+                @if (error.nextAction) { <p>Next: {{ error.nextAction }}</p> }
+                @if (error.receiptId) { <code>{{ error.receiptId }}</code> }
+                @if (error.recordedAtMs) {
+                  <small>Recorded <app-timestamp-display [value]="error.recordedAtMs" mode="local" /></small>
+                }
+              </section>
+            }
 
-          <app-deploy-readiness-section [checks]="view.readiness_checks" />
+            <div class="launch-command">
+              <dl>
+                <div><dt>Bot</dt><dd>{{ ticket().instanceId || 'Name required' }}</dd></div>
+                <div><dt>Strategy</dt><dd>{{ selectedStrategy()?.label ?? 'Unavailable' }}</dd></div>
+                <div><dt>Trade</dt><dd>{{ ticket().symbol || 'Symbol required' }} · {{ effectiveQuantity() }} share(s)</dd></div>
+              </dl>
+              <button type="submit" [disabled]="!canSubmit()" [attr.aria-busy]="submitting()">
+                {{ submitting() ? 'Deploying…' : 'Deploy ' + executionLabel().toLowerCase() + ' bot' }}
+              </button>
+              <small>{{ view.eligibility.eligible ? view.eligibility.next_action : 'Resolve the current blocker before launch.' }}</small>
+            </div>
+          </aside>
         </div>
-
-        <aside class="deploy-layout__review">
-          <app-deploy-review-section
-            [view]="view"
-            [strategy]="selectedStrategy()"
-            [instanceId]="ticket().instanceId"
-            [symbol]="ticket().symbol"
-            [sizingLabel]="sizingLabel()"
-            [quantity]="effectiveQuantity()"
-            [carryoverAllowed]="ticket().allowCarryover"
-          />
-
-          @if (submitError(); as error) {
-            <section class="deploy-error" [class.deploy-error--unknown]="error.outcome === 'unknown'" role="alert">
-              <span>{{ error.title }}</span>
-              <strong>{{ error.message }}</strong>
-              @if (error.explanation) { <p>{{ error.explanation }}</p> }
-              @if (error.nextAction) { <p>Next: {{ error.nextAction }}</p> }
-              @if (error.receiptId) { <code>{{ error.receiptId }}</code> }
-              @if (error.recordedAtMs) {
-                <small>Recorded <app-timestamp-display [value]="error.recordedAtMs" mode="local" /></small>
-              }
-            </section>
-          }
-
-          <div class="launch-command">
-            <button type="submit" [disabled]="!canSubmit()" [attr.aria-busy]="submitting()">
-              {{ submitting() ? 'Deploying…' : 'Deploy paper bot' }}
-            </button>
-            <small>{{ view.eligibility.eligible ? view.eligibility.next_action : 'Resolve every blocked readiness check before launch.' }}</small>
-          </div>
-        </aside>
       </form>
     }
   }

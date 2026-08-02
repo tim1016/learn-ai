@@ -16,6 +16,30 @@ vocabulary that grilling sharpened and cross-references that list.
   instance → many runs over time.
 - **run_id** — a single execution (one process lifetime) of an instance. An
   artifact-storage key, **not** the operator's handle.
+- **Bot process fact** — the process registry's observation of the process bound
+  to one `run_id`: process identity, lifecycle state, and observation time. The
+  process registry, not the browser and not run files, owns this liveness fact.
+- **Current run** — the newest run currently bound to a strategy instance. It is
+  shown first in the Bot Cockpit but does not replace the instance as the
+  operator's durable identity.
+- **Run history** — the append-only sequence of current and previous runs for
+  one strategy instance. A historical run remains inspectable but cannot become
+  a command target merely because an operator selects it for viewing.
+- **Continue** — allow an existing paused, still-live run to proceed. It keeps
+  the same `run_id`.
+- **Resume** — create and bind a new run of the same immutable strategy
+  instance after its prior run stopped. Resume never edits the instance
+  configuration. Any legacy use of “Resume” to mean continuing a paused live
+  process should be renamed to **Continue**.
+- **Dry run** — an explicitly non-submitting strategy run that consumes real
+  market data and produces simulated decisions/fills without sending broker
+  orders. Submission mode is part of immutable instance configuration, so
+  changing an existing live-paper instance into a dry-run instance creates a
+  new `strategy_instance_id`.
+- **Command intent identity** — the durable identifier for one operator command
+  intent across transport retries. Reusing it with the same action and payload
+  asks for the original outcome; reusing it with a different action or payload
+  is a conflict.
 
 ## Broker-facing identity (sharpened 2026-06-04)
 
@@ -194,6 +218,11 @@ never branch on those strings. This retires `recovery-flatten-*`,
   the U.S. market clock the bot trades. Canonical `int64 ms UTC` remains the
   storage and wire format, and may appear in expandable technical/audit details
   when exact forensic evidence is needed.
+- **Market Pulse** — the persistent Bot Cockpit header summary of required
+  market-data availability and freshness. It shows a backend-authored
+  `LIVE`/`STALE`/`MISSING` state, the latest market-data time in ET, and its age;
+  it never turns transport reachability alone into proof that usable data is
+  current.
 - **Backend-authored folding** — repeated Bot Cockpit rows or panels are folded
   only when the backend supplies a stable fold identity and count. The frontend
   must not infer sameness by comparing rendered text, raw JSON, timestamps, or
@@ -272,10 +301,13 @@ never branch on those strings. This retires `recovery-flatten-*`,
   one bound run has a currently owned process (`STARTING`, `RUNNING`,
   `STOPPING`, `EXITED`, or `UNKNOWN`). It proves process presence only; it does
   not prove broker custody, order state, exposure, or permission to trade.
-- **Clerk custody snapshot** — the Account Clerk's typed, freshly reconciled
-  answer for one strategy instance. Exposure, working orders, pending orders,
-  terminal orders, and unresolved effects each remain explicitly `unknown`
-  when the Clerk cannot prove them; unknown is never presented as zero.
+- **Clerk custody snapshot** — the Account Clerk's typed, fresh-or-explicitly-
+  stale answer for one strategy instance about reconciled broker positions,
+  working orders, pending orders, terminal orders, unresolved effects, holds,
+  and attribution. Every count and exposure remains explicitly `unknown` when
+  the Clerk cannot prove it; unknown is never presented as zero. Account facts
+  may feed the Clerk internally, but callers do not combine a second independent
+  account interpretation with this snapshot.
 - **Clean strategy exit** — a terminal Clerk effect proving that working entry
   and exit orders are resolved and the instance-attributed account exposure is
   zero. An exit that deliberately leaves exposure open is a carryover stop, not
@@ -377,7 +409,7 @@ will gate next start."
   controls. They persist intent as **reconciliation, not primary ownership**;
   same-value/idempotent writes are acceptable (version churn, not semantic
   drift).
-- **Invariant** — any live actuation of PAUSE/RESUME/STOP must leave
+- **Invariant** — any live actuation of PAUSE/CONTINUE/STOP must leave
   `desired_state.json` at the same semantic state as the action it executed.
   This makes "paused-but-still-trading" structurally hard: durable state changes
   first, live actuation is queued, the UI shows pending/acked actuation against
@@ -385,14 +417,17 @@ will gate next start."
 
 **One-shot command channel** is reserved for true one-shot operations:
 `FLATTEN_NOW`, `RECONCILE_NOW`, `MARK_POISONED` (and maybe `DUMP_STATUS` later).
-`PAUSE`/`RESUME`/`STOP` are **removed as first-class UI controls** (kept as
-backend-compatible verbs for CLI/panic/older run-addressed paths only).
+`PAUSE`/`CONTINUE`/`STOP` are removed from that one-shot channel. They are
+first-class Bot Cockpit controls only when the backend's capability projection
+renders them as available; the UI never invents availability. Legacy `resume`
+remains a backend-compatible wire verb for the same-run Continue control only
+until the vocabulary migration is complete.
 
 **Command lifecycle** (operator vocabulary; one row per command, not
-pending-files-plus-ack-files): `queued` (pending, no ack) → `acknowledged` (ack
-with success outcome) | `failed` (ack with error outcome). Staleness is judged
-against the **server-provided** poll interval (the dispatcher owns its poll
-cadence), not a client-side constant.
+pending-files-plus-ack-files): `reserved` → `accepted` / `in_progress` →
+`succeeded` | `failed` | `rejected`, with `unknown` retained when the effect
+cannot yet be proved and may later reconcile to a terminal result. Staleness is
+judged against backend-authored freshness evidence, not a client-side constant.
 
 ## Readiness gate (resolved 2026-05-30)
 
@@ -788,9 +823,9 @@ stable formula:
 impossible-with-clean so future policy semantics do not require an
 Angular change.
 
-## Resume / Pause / Stop guards — shared resolver (resolved 2026-06-20)
+## Continue / Pause / Stop guards — shared resolver (legacy Resume naming)
 
-ADR 0010 §A3 and PRD #616 — the three Resume guards (broker safety
+ADR 0010 §A3 and PRD #616 — the three Continue guards (broker safety
 verdict, reconciliation receipt, uncertain-intent WAL) are resolved
 once-per-request by `ResumeGuardState` and shared across:
 
@@ -799,6 +834,18 @@ once-per-request by `ResumeGuardState` and shared across:
   write)
 - the CLI `cmd_resume` (no bypass — the `--force` flag was deleted in
   PRD #616)
+
+The legacy `operator_surface.actions.resume / pause / stop` fields are
+renderable Bot Cockpit capability fields, not one-shot commands. A present and
+allowed field renders the matching Continue, Pause, or Stop control; a blocked
+field renders that control disabled with its backend-authored reason. The
+`actions.resume` name means Continue during migration and never means creating
+a new run.
+
+`ResumeGuardState`, `actions.resume`, and `cmd_resume` are legacy code/wire
+names for continuing an existing paused live run. They do not define the domain
+meaning of **Resume**, which creates a new run and requires separate new-run
+admission before those identifiers may be retired or renamed.
 
 The closed reason-code vocabulary, the priority order for the
 single-line tooltip, and the structured `disabled_reasons` list are
@@ -942,20 +989,24 @@ there are never two halt-on-transition mechanisms.
   `expected_position_by_symbol`, no owned-orphan ambiguity, no outside-mutation,
   no in-flight `ACK_FAILED_UNCERTAIN` at the drop) produces a passing
   reconciliation receipt; **any** ambiguity stays hard-blocked.
-- **Resume is operator-only, from the Bot Cockpit.** A clean reconcile *clears
-  the connectivity/reconciliation gate* but **never auto-resumes trading**. The
-  bot resumes only when the operator clicks Resume on the bot control panel (sets
-  `desired_state = RUNNING`). This wires into the existing **ResumeGuardState**
+- **Continue is operator-only, from the Bot Cockpit.** A clean reconcile *clears
+  the connectivity/reconciliation gate* but **never auto-continues trading**. The
+  existing paused run continues only when the operator clicks Continue on the
+  bot control panel (sets `desired_state = RUNNING`). During migration this
+  wires into the legacy **ResumeGuardState**
   (ADR-0010 §A3, PRD #616): recovery feeds its reconciliation-receipt guard; the
   safety-verdict and uncertain-intent-WAL guards stay independent, so a mid-submit
   drop stays blocked even after a clean reconnect.
+- **Pause and Stop are also first-class Bot Cockpit controls.** Their rendered
+  enabled/disabled state comes from `operator_surface.actions.pause / stop`;
+  they do not enter the one-shot command channel.
 - **Gate state is server-authored and reflected in the UI.** `BLOCKED →
   CLEARABLE (clean reconcile) → CLEARED/RUNNING (after the click)` via
-  `operator_surface.actions.resume`. The Bot Cockpit renders the verdict; it never
-  re-derives it.
+  `operator_surface.actions.resume` wire field. The Bot Cockpit renders the
+  verdict; it never re-derives it.
 - **The broker session mirror stays read-only.** It *visualizes* the reconnect
   and gate-cleared events (and may deep-link to the Bot Cockpit) but carries **no
-  Resume control** — the resume action's render site remains the Bot Cockpit.
+  Continue control** — the action's render site remains the Bot Cockpit.
 
 ## Daemon diagnostics — control-plane health (resolved 2026-07-04)
 
