@@ -18,7 +18,9 @@ The artifact layout is:
 - `live_state/<strategy_instance_id>/strategy_instance.json` for immutable
   broker-tagged configuration and its configuration hash;
 - `live_state/<strategy_instance_id>/runs/<run_id>.json` for append-only launch
-  evidence; and
+  evidence;
+- `live_state/<strategy_instance_id>/run_outcomes/<run_id>.json` for the first
+  proven terminal outcome of that run; and
 - `live_state/<strategy_instance_id>/current_run.json` for the current binding.
 
 The repository composes these records into the existing runner-facing binding
@@ -55,3 +57,18 @@ The current-run binding is not liveness or terminal proof. Process ownership
 and lifecycle evidence retain those authorities. Historical-run APIs and UI may
 read the append-only records later, but selecting a historical run cannot
 retarget a lifecycle command.
+
+## Amendment: bounded run reads and immutable terminal receipts (2026-08-02)
+
+The Python control plane exposes the current run separately from bounded,
+cursor-paged previous-run history. Current-run responses may include a fresh
+process-registry fact. Historical responses never synthesize process liveness.
+Both surfaces return terminal language only when a run-scoped immutable receipt
+or the matching current lifecycle record proves it.
+
+Writing the same terminal fact again is an idempotent retry and preserves the
+first receipt timestamp. A different terminal kind or reason for the same
+`run_id` is a conflict. Request-time reads enumerate only the small per-instance
+run directory and return at most 25 records; they never replay the account or
+bot journals. A history cursor controls viewing only and cannot change the
+current binding or any command target.

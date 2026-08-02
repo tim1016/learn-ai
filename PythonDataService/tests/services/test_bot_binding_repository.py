@@ -9,9 +9,11 @@ import pytest
 
 from app.services.bot_binding_repository import (
     BotBindingRepository,
+    BotRunOutcomeRecord,
     BrokerBotBinding,
     CurrentRunBinding,
     RunIdentityConflictError,
+    RunOutcomeConflictError,
     StrategyInstanceConfigurationConflictError,
     StrategyInstanceRecord,
     alpaca_v1_action_plan,
@@ -63,6 +65,8 @@ def test_launch_keeps_instance_immutable_and_appends_run_records(
     assert json.loads(run_paths[0].read_text())["launch_reason"] == "deploy"
     assert json.loads(run_paths[1].read_text())["launch_reason"] == "resume"
     assert repository.read(_SID) == second
+    assert repository.read_run(_SID, "run-002") is not None
+    assert repository.read_run(_SID, "missing") is None
     assert [run.run_id for run in repository.list_runs(_SID)] == [
         "run-002",
         "run-001",
@@ -101,6 +105,29 @@ def test_duplicate_run_is_idempotent_but_changed_run_payload_conflicts(
         repository.record_launch(
             binding.model_copy(update={"created_at_ms": 2_000}),
             launch_reason="deploy",
+        )
+
+
+def test_terminal_outcome_is_create_once_and_run_scoped(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    binding = _binding()
+    repository.record_launch(binding, launch_reason="deploy")
+    outcome = BotRunOutcomeRecord(
+        strategy_instance_id=_SID,
+        run_id=binding.run_id,
+        kind="STOPPED",
+        reason_code="OPERATOR_STOP",
+        recorded_at_ms=2_000,
+    )
+
+    repository.record_outcome(outcome)
+    repository.record_outcome(outcome)
+    repository.record_outcome(outcome.model_copy(update={"recorded_at_ms": 999}))
+
+    assert repository.read_outcome(_SID, binding.run_id) == outcome
+    with pytest.raises(RunOutcomeConflictError):
+        repository.record_outcome(
+            outcome.model_copy(update={"reason_code": "SERVICE_SHUTDOWN"})
         )
 
 

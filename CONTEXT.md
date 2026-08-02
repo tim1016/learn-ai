@@ -27,6 +27,11 @@ vocabulary that grilling sharpened and cross-references that list.
 - **Run history** — the append-only sequence of current and previous runs for
   one strategy instance. A historical run remains inspectable but cannot become
   a command target merely because an operator selects it for viewing.
+- **Run terminal receipt** — create-once evidence from the owning backend that
+  a specific run stopped, crashed, or exited without verification. Repeating
+  the same write preserves the original receipt; conflicting terminal evidence
+  is rejected. The UI may not invent terminal wording when this evidence is
+  absent.
 - **Continue** — allow an existing paused, still-live run to proceed. It keeps
   the same `run_id`.
 - **Resume** — create and bind a new run of the same immutable strategy

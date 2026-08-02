@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
@@ -53,6 +54,7 @@ from app.services.bot_runner import (
     RunAdmissionRefusedError,
     UnknownBotError,
 )
+from app.services.bot_runner_errors import InvalidRunHistoryCursorError
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.utils.timestamps import now_ms_utc
 
@@ -229,6 +231,7 @@ def _registry(
     *,
     policy: RestartIntensityPolicy | None = None,
     carryover_allowed: bool = False,
+    now_ms: Callable[[], int] = now_ms_utc,
 ) -> BotTaskRegistry:
     return BotTaskRegistry(
         tmp_path,
@@ -238,6 +241,7 @@ def _registry(
         boot_recovery_required=False,
         carryover_allowed=carryover_allowed,
         start_custody_guard=_flat_start_guard,
+        now_ms=now_ms,
     )
 
 
@@ -872,8 +876,11 @@ async def test_resume_existing_creates_new_run_and_preserves_action_plan(
     original_run_bytes = original_run_path.read_bytes()
     await registry.stop("alpaca", _SID)
 
+
     resumed = await registry.resume_existing("alpaca", _SID)
     rebound = registry.binding_for_control("alpaca", _SID)
+    current = registry.current_run("alpaca", _SID)
+    history = registry.run_history("alpaca", _SID, cursor=None, limit=1)
 
     assert resumed.running is True
     assert resumed.active_run_id != deployed.active_run_id
@@ -885,6 +892,54 @@ async def test_resume_existing_creates_new_run_and_preserves_action_plan(
     assert sorted(
         path.stem for path in (tmp_path / "live_state" / _SID / "runs").glob("*.json")
     ) == sorted([original.run_id, rebound.run_id])
+    assert current.run_id == rebound.run_id
+    assert current.is_current is True
+    assert current.process is not None
+    assert current.process.state == "RUNNING"
+    assert [run.run_id for run in history.runs] == [original.run_id]
+    assert history.runs[0].is_current is False
+    assert history.runs[0].process is None
+    assert history.runs[0].terminal_outcome is not None
+    assert history.runs[0].terminal_outcome.kind == "STOPPED"
+    assert history.next_cursor is None
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_run_history_pages_previous_runs_without_changing_current_target(
+    tmp_path: Path,
+) -> None:
+    ticks = iter(range(10_000))
+    registry = _registry(
+        tmp_path,
+        _FakeFeed([], mode="hold"),
+        now_ms=lambda: now_ms_utc() + next(ticks),
+    )
+    first = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+    await registry.stop("alpaca", _SID)
+    second = await registry.resume_existing("alpaca", _SID)
+    await registry.stop("alpaca", _SID)
+    third = await registry.resume_existing("alpaca", _SID)
+
+    first_page = registry.run_history("alpaca", _SID, cursor=None, limit=1)
+    second_page = registry.run_history(
+        "alpaca",
+        _SID,
+        cursor=first_page.next_cursor,
+        limit=1,
+    )
+
+    assert [run.run_id for run in first_page.runs] == [second.active_run_id]
+    assert first_page.next_cursor == second.active_run_id
+    assert [run.run_id for run in second_page.runs] == [first.active_run_id]
+    assert second_page.next_cursor is None
+    assert registry.current_run("alpaca", _SID).run_id == third.active_run_id
+    with pytest.raises(InvalidRunHistoryCursorError):
+        registry.run_history("alpaca", _SID, cursor="another-bot-run", limit=1)
     await registry.stop("alpaca", _SID)
 
 
@@ -1139,6 +1194,7 @@ async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path
         f"live_state/{_SID}/current_run.json",
         f"live_state/{_SID}/desired_state.json",
         f"live_state/{_SID}/lifecycle_state.json",
+        f"live_state/{_SID}/run_outcomes/{registry.binding_for_control('alpaca', _SID).run_id}.json",
         f"live_state/{_SID}/runs/{registry.binding_for_control('alpaca', _SID).run_id}.json",
         f"live_state/{_SID}/strategy_instance.json",
     ]

@@ -12,12 +12,18 @@ from __future__ import annotations
 import logging
 from typing import NoReturn
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.routers.brokers import _raise_http
-from app.schemas.broker_bots import BotStatusView, DeployBotRequest, StopBotRequest
+from app.schemas.broker_bots import (
+    BotRunHistoryPage,
+    BotRunView,
+    BotStatusView,
+    DeployBotRequest,
+    StopBotRequest,
+)
 from app.services.bot_runner import (
     BotRunnerError,
     BotTaskRegistry,
@@ -109,6 +115,44 @@ async def get_bot_status(broker: str, strategy_instance_id: str) -> BotStatusVie
     registry = _require_registry()
     try:
         return registry.status(broker, strategy_instance_id)
+    except BotRunnerError as error:
+        _raise_runner_error(error)
+
+
+@router.get(
+    "/{broker}/bots/{strategy_instance_id}/runs/current",
+    response_model=BotRunView,
+    summary="Read the current run without inferring process or terminal state",
+)
+async def get_current_run(broker: str, strategy_instance_id: str) -> BotRunView:
+    _resolve_broker(broker)
+    registry = _require_registry()
+    try:
+        return registry.current_run(broker, strategy_instance_id)
+    except BotRunnerError as error:
+        _raise_runner_error(error)
+
+
+@router.get(
+    "/{broker}/bots/{strategy_instance_id}/runs/history",
+    response_model=BotRunHistoryPage,
+    summary="Read one bounded page of previous runs",
+)
+async def get_run_history(
+    broker: str,
+    strategy_instance_id: str,
+    cursor: str | None = None,
+    limit: int = Query(default=1, ge=1, le=25),
+) -> BotRunHistoryPage:
+    _resolve_broker(broker)
+    registry = _require_registry()
+    try:
+        return registry.run_history(
+            broker,
+            strategy_instance_id,
+            cursor=cursor,
+            limit=limit,
+        )
     except BotRunnerError as error:
         _raise_runner_error(error)
 

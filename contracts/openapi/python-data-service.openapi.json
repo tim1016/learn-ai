@@ -8921,6 +8921,105 @@
         "title": "BotRollCallSummary",
         "type": "object"
       },
+      "BotRunHistoryPage": {
+        "additionalProperties": false,
+        "description": "One bounded page of previous runs; current run has its own endpoint.",
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/BotRunView"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "next_cursor"
+        ],
+        "title": "BotRunHistoryPage",
+        "type": "object"
+      },
+      "BotRunView": {
+        "additionalProperties": false,
+        "description": "Read-only launch and terminal evidence for one strategy run.",
+        "properties": {
+          "configuration_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Configuration Hash",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "launch_reason": {
+            "enum": [
+              "deploy",
+              "resume",
+              "legacy"
+            ],
+            "title": "Launch Reason",
+            "type": "string"
+          },
+          "process": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotProcessFact"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at_ms": {
+            "minimum": 0.0,
+            "title": "Started At Ms",
+            "type": "integer"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "terminal_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotDutyOutcomeView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "run_id",
+          "configuration_hash",
+          "launch_reason",
+          "started_at_ms",
+          "is_current",
+          "process",
+          "terminal_outcome"
+        ],
+        "title": "BotRunView",
+        "type": "object"
+      },
       "BotStatusView": {
         "description": "One bot's roster row: broker-tagged binding + artifact-derived state.",
         "properties": {
@@ -51811,6 +51910,168 @@
           }
         },
         "summary": "One bot's roster row (artifact-derived state + registry liveness)",
+        "tags": [
+          "broker-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/current": {
+      "get": {
+        "operationId": "get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRunView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read the current run without inferring process or terminal state",
+        "tags": [
+          "broker-bots"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/history": {
+      "get": {
+        "operationId": "get_run_history_api_brokers__broker__bots__strategy_instance_id__runs_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 25,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotRunHistoryPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read one bounded page of previous runs",
         "tags": [
           "broker-bots"
         ]

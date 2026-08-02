@@ -250,6 +250,30 @@ class BotStatusView(BaseModel):
     last_transition_at_ms: int | None
 
 
+class BotRunView(BaseModel):
+    """Read-only launch and terminal evidence for one strategy run."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str
+    run_id: str
+    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    launch_reason: Literal["deploy", "resume", "legacy"]
+    started_at_ms: int = Field(ge=0)
+    is_current: bool
+    process: BotProcessFact | None
+    terminal_outcome: BotDutyOutcomeView | None
+
+
+class BotRunHistoryPage(BaseModel):
+    """One bounded page of previous runs; current run has its own endpoint."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    runs: tuple[BotRunView, ...]
+    next_cursor: str | None
+
+
 class AlpacaPaperDeployReceipt(BaseModel):
     """Backend-authored terminal receipt for one accepted deployment."""
 

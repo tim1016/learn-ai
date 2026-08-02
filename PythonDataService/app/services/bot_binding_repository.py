@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -19,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.engine.live.durable_append_log import create_exclusive_durable_file
 from app.engine.live.run_status import _atomic_write_json
 from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
+from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.services.bot_carryover import configuration_hash
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ BINDING_FILENAME = "broker_binding.json"
 STRATEGY_INSTANCE_FILENAME = "strategy_instance.json"
 CURRENT_RUN_FILENAME = "current_run.json"
 RUNS_DIRECTORY = "runs"
+RUN_OUTCOMES_DIRECTORY = "run_outcomes"
 _RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 
 
@@ -36,6 +39,10 @@ class StrategyInstanceConfigurationConflictError(ValueError):
 
 class RunIdentityConflictError(ValueError):
     """One run identity was reused with a different durable payload."""
+
+
+class RunOutcomeConflictError(ValueError):
+    """One run received conflicting terminal evidence."""
 
 
 def alpaca_v1_action_plan(symbol: str) -> ActionPlan:
@@ -133,6 +140,19 @@ class CurrentRunBinding(BaseModel):
     bound_at_ms: int
 
 
+class BotRunOutcomeRecord(BaseModel):
+    """Create-once process-owner terminal evidence for one run."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    strategy_instance_id: str
+    run_id: str = Field(pattern=_RUN_ID_PATTERN)
+    kind: BotDutyOutcomeKind
+    reason_code: str = Field(min_length=1, max_length=128)
+    recorded_at_ms: int = Field(ge=0)
+
+
 class BotBindingRepository:
     """Persist immutable strategy instances and append-only run identities."""
 
@@ -219,6 +239,8 @@ class BotBindingRepository:
                 else []
             )
         instance = StrategyInstanceRecord.model_validate_json(instance_path.read_text(encoding="utf-8"))
+        if instance.strategy_instance_id != strategy_instance_id:
+            raise ValueError("strategy-instance evidence belongs to another identity")
         runs_dir = instance_dir / RUNS_DIRECTORY
         if not runs_dir.is_dir():
             return []
@@ -234,6 +256,89 @@ class BotBindingRepository:
             key=lambda run: (run.started_at_ms, run.run_id),
             reverse=True,
         )
+
+    def read_run(
+        self,
+        strategy_instance_id: str,
+        run_id: str,
+    ) -> BotRunRecord | None:
+        """Read one run directly; current-run polling never scans history."""
+        instance_dir = self._instance_dir_for(strategy_instance_id)
+        path = self._run_path(instance_dir, run_id)
+        if not path.is_file():
+            legacy = self._read_legacy_binding(instance_dir)
+            return (
+                self._run_from_binding(legacy, launch_reason="legacy")
+                if legacy is not None and legacy.run_id == run_id
+                else None
+            )
+        run = BotRunRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        if run.strategy_instance_id != strategy_instance_id or run.run_id != run_id:
+            raise ValueError("run history evidence belongs to another identity")
+        instance_path = instance_dir / STRATEGY_INSTANCE_FILENAME
+        if instance_path.is_file():
+            instance = StrategyInstanceRecord.model_validate_json(
+                instance_path.read_text(encoding="utf-8")
+            )
+            if (
+                instance.strategy_instance_id != strategy_instance_id
+                or run.configuration_hash != instance.configuration_hash
+            ):
+                raise ValueError("run history evidence does not match its strategy instance")
+        return run
+
+    def record_outcome(self, candidate: BotRunOutcomeRecord) -> None:
+        """Durably attach one terminal receipt to an existing run."""
+        instance_dir = self._instance_dir_for(candidate.strategy_instance_id)
+        run = BotRunRecord.model_validate_json(
+            self._run_path(instance_dir, candidate.run_id).read_text(encoding="utf-8")
+        )
+        if run.strategy_instance_id != candidate.strategy_instance_id:
+            raise ValueError("terminal outcome belongs to another strategy instance")
+        outcomes_dir = instance_dir / RUN_OUTCOMES_DIRECTORY
+        outcomes_dir.mkdir(parents=True, exist_ok=True)
+        path = outcomes_dir / f"{candidate.run_id}.json"
+        try:
+            self._create_once(path, candidate)
+            return
+        except FileExistsError:
+            existing = BotRunOutcomeRecord.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        same_terminal_fact = (
+            existing.strategy_instance_id == candidate.strategy_instance_id
+            and existing.run_id == candidate.run_id
+            and existing.kind == candidate.kind
+            and existing.reason_code == candidate.reason_code
+        )
+        if not same_terminal_fact:
+            raise RunOutcomeConflictError(
+                f"Run '{candidate.run_id}' already has different terminal evidence."
+            )
+
+    def read_outcome(
+        self,
+        strategy_instance_id: str,
+        run_id: str,
+    ) -> BotRunOutcomeRecord | None:
+        """Return proven terminal evidence for one run when it exists."""
+        instance_dir = self._instance_dir_for(strategy_instance_id)
+        path = (
+            instance_dir
+            / RUN_OUTCOMES_DIRECTORY
+            / f"{self._validate_run_id(run_id)}.json"
+        )
+        if not path.is_file():
+            return None
+        outcome = BotRunOutcomeRecord.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+        if (
+            outcome.strategy_instance_id != strategy_instance_id
+            or outcome.run_id != run_id
+        ):
+            raise ValueError("terminal outcome belongs to another run identity")
+        return outcome
 
     def _migrate_legacy_binding(self, instance_dir: Path) -> None:
         """Replay-safe normalization when a later launch needs legacy history."""
@@ -298,7 +403,7 @@ class BotBindingRepository:
     def _ensure_run(self, instance_dir: Path, candidate: BotRunRecord) -> None:
         runs_dir = instance_dir / RUNS_DIRECTORY
         runs_dir.mkdir(parents=True, exist_ok=True)
-        path = runs_dir / f"{candidate.run_id}.json"
+        path = self._run_path(instance_dir, candidate.run_id)
         try:
             self._create_once(path, candidate)
             return
@@ -306,6 +411,16 @@ class BotBindingRepository:
             existing = BotRunRecord.model_validate_json(path.read_text(encoding="utf-8"))
         if existing != candidate:
             raise RunIdentityConflictError(f"Run '{candidate.run_id}' already has different durable launch evidence.")
+
+    @classmethod
+    def _run_path(cls, instance_dir: Path, run_id: str) -> Path:
+        return instance_dir / RUNS_DIRECTORY / f"{cls._validate_run_id(run_id)}.json"
+
+    @staticmethod
+    def _validate_run_id(run_id: str) -> str:
+        if re.fullmatch(_RUN_ID_PATTERN, run_id) is None:
+            raise ValueError("run_id is not a valid artifact identity")
+        return run_id
 
     def _create_once(self, path: Path, record: BaseModel) -> None:
         serialized = json.dumps(

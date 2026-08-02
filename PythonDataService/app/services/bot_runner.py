@@ -1,27 +1,12 @@
 """In-container bot runner: supervised asyncio tasks + durable lifecycle artifacts.
 
-Alpaca Bot Control v2, S2 (#1260) — principles P1, P4, P9, P10; decision L1.
-
 One :class:`BotTaskRegistry` lives in the polygon-data-service process and
-owns spawn / liveness / reap for every strategy-instance bot task.  There is
-**no host daemon, host socket, or host process anywhere in this path** — the
-guard test asserts this module never imports daemon-client or subprocess
-machinery.
+owns spawn, liveness, and reap for every strategy-instance bot task. This path
+has no host daemon or subprocess; a guard test enforces that boundary.
 
-The registry writes the SAME durable lifecycle artifacts the existing
-operator plane already reads, so artifact-derived surfaces stay truthful
-without modification:
-
-- ``live_state/<sid>/lifecycle_state.json`` — :class:`BotLifecycleStateRepo`
-  (ON_DUTY on start; OFF_DUTY + typed ``duty_outcome`` on any exit).
-- ``live_state/<sid>/desired_state.json`` — :class:`DesiredStateRepo`
-  (durable operator intent; STOPPED is written BEFORE the task is cancelled
-  so the Button-Rule exit survives a crash mid-stop).
-- ``live_state/<sid>/strategy_instance.json`` — create-once broker-tagged
-  strategy configuration.
-- ``live_state/<sid>/runs/<run_id>.json`` — append-only run launch evidence.
-- ``live_state/<sid>/current_run.json`` — the replaceable pointer to the newest
-  run; the runner composes these records behind one aggregate view.
+The registry keeps desired intent, lifecycle, immutable configuration,
+append-only launch/terminal evidence, and the replaceable current-run pointer
+in the existing ``live_state/<sid>/`` operator-plane artifact tree.
 
 Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
 
@@ -34,15 +19,9 @@ Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
 - bar stream ended on its own → ``"EXITED_UNVERIFIED"`` with
   ``BAR_STREAM_ENDED``.
 
-Restart intensity reuses the canonical :class:`RestartIntensityPolicy`
-parameters and the ``project_restart_intensity_gate`` comparison (refuse when
-``prior_starts_in_window + 1 >= threshold``), scoped per bot.  The account
-journal is not written by this walking skeleton — durable cross-restart
-intensity arrives with the S3 account binding.
-
-The log-only mode consumes closed 1-minute bars and records decisions without
-order effects. Trade mode delegates typed ENTER/EXIT decisions to the Alpaca
-Clerk; the runner never authors broker sides or execution truth.
+Restart intensity uses the canonical :class:`RestartIntensityPolicy`. Trade
+mode delegates effects to the Alpaca Clerk; the runner never authors broker
+execution truth.
 
 All temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
 """
@@ -80,6 +59,8 @@ from app.schemas.broker_bots import (
     AlpacaPaperStrategyKey,
     BotDutyOutcomeView,
     BotProcessFact,
+    BotRunHistoryPage,
+    BotRunView,
     BotStatusView,
 )
 from app.schemas.run_admission import (
@@ -99,6 +80,7 @@ from app.services.bot_carryover import (
     prove_stop_outcome,
     require_resume_custody,
 )
+from app.services.bot_run_history import BotRunHistoryService
 from app.services.bot_runner_errors import (
     BootRecoveryIncompleteError,
     BotAlreadyRunningError,
@@ -226,6 +208,12 @@ class BotTaskRegistry:
             process_fact=self._start_process_fact,
             runtime_fact=self._start_runtime_fact,
             activate=self._activate_start_binding,
+        )
+        self._run_history_reads = BotRunHistoryService(
+            self._bindings,
+            binding_for_control=self.binding_for_control,
+            lifecycle_repo_for=self._lifecycle_repo,
+            process_fact=self.process_fact,
         )
 
     # ── deploy / stop ─────────────────────────────────────────────────
@@ -401,7 +389,12 @@ class BotTaskRegistry:
         self._desired_repo(binding.strategy_instance_id).set(
             DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )
-        self._lifecycle_repo(binding.strategy_instance_id).set_phase(
+        lifecycle_repo = self._lifecycle_repo(binding.strategy_instance_id)
+        self._run_history_reads.preserve_terminal(
+            binding.strategy_instance_id,
+            lifecycle_repo.read(),
+        )
+        lifecycle_repo.set_phase(
             BotLifecyclePhase.ON_DUTY,
             now_ms=now,
             updated_by=_UPDATED_BY,
@@ -527,16 +520,18 @@ class BotTaskRegistry:
         outcome = "OPERATOR_STOP"
         if broker == "alpaca" and managed.binding.mode == "trade":
             outcome = await self._prove_stop_outcome(managed.binding)
+        terminal_outcome = BotDutyOutcome(
+            kind="STOPPED",
+            reason_code=outcome,
+            recorded_at_ms=self._now_ms(),
+            run_id=managed.binding.run_id,
+        )
         self._lifecycle_repo(strategy_instance_id).record_terminal_outcome(
-            BotDutyOutcome(
-                kind="STOPPED",
-                reason_code=outcome,
-                recorded_at_ms=self._now_ms(),
-                run_id=managed.binding.run_id,
-            ),
+            terminal_outcome,
             updated_by=_UPDATED_BY,
             reason=outcome,
         )
+        self._run_history_reads.record_terminal(strategy_instance_id, terminal_outcome)
         return self.status(broker, strategy_instance_id)
 
     async def stop_all(self) -> None:
@@ -679,6 +674,26 @@ class BotTaskRegistry:
         """All bots whose durable binding carries ``broker``."""
         return [self._compose_status(binding) for binding in self._bindings.list_for_broker(broker)]
 
+    def current_run(self, broker: str, strategy_instance_id: str) -> BotRunView:
+        """Return the backend-owned current-run projection."""
+        return self._run_history_reads.current(broker, strategy_instance_id)
+
+    def run_history(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        cursor: str | None,
+        limit: int,
+    ) -> BotRunHistoryPage:
+        """Return a bounded page of previous-run projections."""
+        return self._run_history_reads.history(
+            broker,
+            strategy_instance_id,
+            cursor=cursor,
+            limit=limit,
+        )
+
     # ── supervision ───────────────────────────────────────────────────
 
     async def _supervise(self, binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
@@ -789,6 +804,11 @@ class BotTaskRegistry:
             reason=reason_code,
             expected_active_run_id=binding.run_id,
         )
+        if reason_code != "STOPPED_PENDING_CUSTODY_PROOF":
+            self._run_history_reads.record_terminal(
+                binding.strategy_instance_id,
+                outcome,
+            )
 
     def _reap(self, strategy_instance_id: str, run_id: str) -> None:
         managed = self._bots.get(strategy_instance_id)

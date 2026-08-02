@@ -1845,6 +1845,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current run without inferring process or terminal state */
+        get: operations["get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one bounded page of previous runs */
+        get: operations["get_run_history_api_brokers__broker__bots__strategy_instance_id__runs_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/bots/{strategy_instance_id}/stop": {
         parameters: {
             query?: never;
@@ -9750,6 +9784,39 @@ export interface components {
              * @default 0
              */
             sick_bay?: number;
+        };
+        /**
+         * BotRunHistoryPage
+         * @description One bounded page of previous runs; current run has its own endpoint.
+         */
+        BotRunHistoryPage: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Runs */
+            runs: components["schemas"]["BotRunView"][];
+        };
+        /**
+         * BotRunView
+         * @description Read-only launch and terminal evidence for one strategy run.
+         */
+        BotRunView: {
+            /** Configuration Hash */
+            configuration_hash: string;
+            /** Is Current */
+            is_current: boolean;
+            /**
+             * Launch Reason
+             * @enum {string}
+             */
+            launch_reason: "deploy" | "resume" | "legacy";
+            process: components["schemas"]["BotProcessFact"] | null;
+            /** Run Id */
+            run_id: string;
+            /** Started At Ms */
+            started_at_ms: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            terminal_outcome: components["schemas"]["BotDutyOutcomeView"] | null;
         };
         /**
          * BotStatusView
@@ -29294,6 +29361,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotStatusView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_history_api_brokers__broker__bots__strategy_instance_id__runs_history_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotRunHistoryPage"];
                 };
             };
             /** @description Validation Error */
