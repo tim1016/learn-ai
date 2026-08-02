@@ -12,6 +12,7 @@ from app.services.bot_binding_repository import (
     BrokerBotBinding,
     RunIdentityConflictError,
     StrategyInstanceConfigurationConflictError,
+    StrategyInstanceRecord,
     alpaca_v1_action_plan,
 )
 
@@ -116,9 +117,17 @@ def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(
     legacy_path.write_text(legacy_bytes, encoding="utf-8")
 
     assert repository.read(_SID) == _binding()
+    assert [run.run_id for run in repository.list_runs(_SID)] == ["run-001"]
     assert legacy_path.read_text(encoding="utf-8") == legacy_bytes
     assert not (instance_dir / "strategy_instance.json").exists()
 
+    # A crash may leave only the normalized instance record. Migration must
+    # replay safely and retain the legacy run on the next Resume.
+    instance_path = instance_dir / "strategy_instance.json"
+    instance_path.write_text(
+        StrategyInstanceRecord.from_binding(_binding()).model_dump_json(),
+        encoding="utf-8",
+    )
     resumed = _binding(run_id="run-002", created_at_ms=2_000)
     repository.record_launch(resumed, launch_reason="resume")
 

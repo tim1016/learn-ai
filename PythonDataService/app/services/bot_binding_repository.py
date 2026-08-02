@@ -159,13 +159,7 @@ class BotBindingRepository:
 
         instance = StrategyInstanceRecord.from_binding(binding)
         self._ensure_instance(instance_dir, instance)
-        run = BotRunRecord(
-            run_id=binding.run_id,
-            strategy_instance_id=binding.strategy_instance_id,
-            configuration_hash=instance.configuration_hash,
-            launch_reason=launch_reason,
-            started_at_ms=binding.created_at_ms,
-        )
+        run = self._run_from_binding(binding, launch_reason=launch_reason)
         self._ensure_run(instance_dir, run)
         _atomic_write_json(
             instance_dir / CURRENT_RUN_FILENAME,
@@ -182,10 +176,7 @@ class BotBindingRepository:
         instance_path = instance_dir / STRATEGY_INSTANCE_FILENAME
         if instance_path.is_file():
             return self._read_normalized(instance_dir)
-        legacy_path = instance_dir / BINDING_FILENAME
-        if legacy_path.is_file():
-            return self.decode(legacy_path.read_text(encoding="utf-8"))
-        return None
+        return self._read_legacy_binding(instance_dir)
 
     def list_for_broker(self, broker: str) -> list[BrokerBotBinding]:
         """Return all valid bindings for a broker without hiding corrupt rows."""
@@ -219,7 +210,12 @@ class BotBindingRepository:
         instance_dir = self._instance_dir_for(strategy_instance_id)
         instance_path = instance_dir / STRATEGY_INSTANCE_FILENAME
         if not instance_path.is_file():
-            return []
+            legacy = self._read_legacy_binding(instance_dir)
+            return (
+                [self._run_from_binding(legacy, launch_reason="legacy")]
+                if legacy is not None
+                else []
+            )
         instance = StrategyInstanceRecord.model_validate_json(instance_path.read_text(encoding="utf-8"))
         runs_dir = instance_dir / RUNS_DIRECTORY
         if not runs_dir.is_dir():
@@ -238,31 +234,45 @@ class BotBindingRepository:
         )
 
     def _migrate_legacy_binding(self, instance_dir: Path) -> None:
-        """Materialize normalized history only when a later launch needs it."""
-        instance_path = instance_dir / STRATEGY_INSTANCE_FILENAME
-        legacy_path = instance_dir / BINDING_FILENAME
-        if instance_path.exists() or not legacy_path.is_file():
+        """Replay-safe normalization when a later launch needs legacy history."""
+        legacy = self._read_legacy_binding(instance_dir)
+        if legacy is None:
             return
-        legacy = self.decode(legacy_path.read_text(encoding="utf-8"))
         instance = StrategyInstanceRecord.from_binding(legacy)
         self._ensure_instance(instance_dir, instance)
         self._ensure_run(
             instance_dir,
-            BotRunRecord(
-                run_id=legacy.run_id,
-                strategy_instance_id=legacy.strategy_instance_id,
-                configuration_hash=instance.configuration_hash,
-                launch_reason="legacy",
-                started_at_ms=legacy.created_at_ms,
-            ),
+            self._run_from_binding(legacy, launch_reason="legacy"),
         )
-        _atomic_write_json(
-            instance_dir / CURRENT_RUN_FILENAME,
-            CurrentRunBinding(
-                strategy_instance_id=legacy.strategy_instance_id,
-                run_id=legacy.run_id,
-                bound_at_ms=legacy.created_at_ms,
-            ).model_dump(mode="json"),
+        current_path = instance_dir / CURRENT_RUN_FILENAME
+        if not current_path.exists():
+            _atomic_write_json(
+                current_path,
+                CurrentRunBinding(
+                    strategy_instance_id=legacy.strategy_instance_id,
+                    run_id=legacy.run_id,
+                    bound_at_ms=legacy.created_at_ms,
+                ).model_dump(mode="json"),
+            )
+
+    def _read_legacy_binding(self, instance_dir: Path) -> BrokerBotBinding | None:
+        legacy_path = instance_dir / BINDING_FILENAME
+        if not legacy_path.is_file():
+            return None
+        return self.decode(legacy_path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _run_from_binding(
+        binding: BrokerBotBinding,
+        *,
+        launch_reason: Literal["deploy", "resume", "legacy"],
+    ) -> BotRunRecord:
+        return BotRunRecord(
+            run_id=binding.run_id,
+            strategy_instance_id=binding.strategy_instance_id,
+            configuration_hash=configuration_hash(binding),
+            launch_reason=launch_reason,
+            started_at_ms=binding.created_at_ms,
         )
 
     def _ensure_instance(
