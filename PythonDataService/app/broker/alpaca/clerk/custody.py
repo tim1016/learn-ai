@@ -169,10 +169,10 @@ def project_custody_snapshot(
         pending_orders = CustodyCountFact(state="unknown")
         terminal_orders = CustodyCountFact(state="unknown")
         unresolved_effects = CustodyCountFact(state="unknown")
-        if result.verdict == "stale" or not result.broker_facts_complete:
-            reason_code = "CLERK_CUSTODY_UNPROVABLE"
-        else:
+        if result.verdict in ("unexplained_order", "missing_intent"):
             reason_code = "CLERK_CUSTODY_UNATTRIBUTABLE"
+        else:
+            reason_code = "CLERK_CUSTODY_UNPROVABLE"
         next_step = proof.freeze.next_step or (
             "Await lifecycle evidence, then reconcile the account before starting new exposure."
         )

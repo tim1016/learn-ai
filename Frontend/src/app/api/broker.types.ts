@@ -9652,7 +9652,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "STARTING" | "RUNNING" | "STOPPING" | "EXITED" | "UNKNOWN";
+            state: "RUNNING" | "STOPPING" | "EXITED" | "UNKNOWN";
             /** Strategy Instance Id */
             strategy_instance_id: string;
         };

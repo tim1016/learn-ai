@@ -40,7 +40,7 @@ class BotProcessFact(BaseModel):
     strategy_instance_id: str
     run_id: str
     process_identity: str | None
-    state: Literal["STARTING", "RUNNING", "STOPPING", "EXITED", "UNKNOWN"]
+    state: Literal["RUNNING", "STOPPING", "EXITED", "UNKNOWN"]
     registry_generation: str
     observed_at_ms: int = Field(ge=0)
 
