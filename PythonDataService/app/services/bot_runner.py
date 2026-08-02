@@ -80,7 +80,7 @@ from app.services.bot_carryover import (
     prove_stop_outcome,
     require_resume_custody,
 )
-from app.services.bot_run_history import BotRunHistoryService
+from app.services.bot_run_evidence import BotRunEvidenceService
 from app.services.bot_runner_errors import (
     BootRecoveryIncompleteError,
     BotAlreadyRunningError,
@@ -209,11 +209,9 @@ class BotTaskRegistry:
             runtime_fact=self._start_runtime_fact,
             activate=self._activate_start_binding,
         )
-        self._run_history_reads = BotRunHistoryService(
+        self._run_evidence = BotRunEvidenceService(
             self._bindings,
-            binding_for_control=self.binding_for_control,
             lifecycle_repo_for=self._lifecycle_repo,
-            process_fact=self.process_fact,
         )
 
     # ── deploy / stop ─────────────────────────────────────────────────
@@ -390,7 +388,7 @@ class BotTaskRegistry:
             DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )
         lifecycle_repo = self._lifecycle_repo(binding.strategy_instance_id)
-        self._run_history_reads.preserve_terminal(
+        self._run_evidence.preserve_terminal(
             binding.strategy_instance_id,
             lifecycle_repo.read(),
         )
@@ -526,12 +524,12 @@ class BotTaskRegistry:
             recorded_at_ms=self._now_ms(),
             run_id=managed.binding.run_id,
         )
-        self._lifecycle_repo(strategy_instance_id).record_terminal_outcome(
+        self._run_evidence.record_terminal(
+            strategy_instance_id,
             terminal_outcome,
             updated_by=_UPDATED_BY,
             reason=outcome,
         )
-        self._run_history_reads.record_terminal(strategy_instance_id, terminal_outcome)
         return self.status(broker, strategy_instance_id)
 
     async def stop_all(self) -> None:
@@ -676,7 +674,11 @@ class BotTaskRegistry:
 
     def current_run(self, broker: str, strategy_instance_id: str) -> BotRunView:
         """Return the backend-owned current-run projection."""
-        return self._run_history_reads.current(broker, strategy_instance_id)
+        binding = self.binding_for_control(broker, strategy_instance_id)
+        return self._run_evidence.current(
+            binding,
+            self.process_fact(broker, strategy_instance_id),
+        )
 
     def run_history(
         self,
@@ -687,9 +689,9 @@ class BotTaskRegistry:
         limit: int,
     ) -> BotRunHistoryPage:
         """Return a bounded page of previous-run projections."""
-        return self._run_history_reads.history(
-            broker,
-            strategy_instance_id,
+        binding = self.binding_for_control(broker, strategy_instance_id)
+        return self._run_evidence.history(
+            binding,
             cursor=cursor,
             limit=limit,
         )
@@ -798,17 +800,14 @@ class BotTaskRegistry:
             recorded_at_ms=now_ms,
             run_id=binding.run_id,
         )
-        self._lifecycle_repo(binding.strategy_instance_id).record_terminal_outcome(
+        self._run_evidence.record_terminal(
+            binding.strategy_instance_id,
             outcome,
             updated_by=_UPDATED_BY,
             reason=reason_code,
             expected_active_run_id=binding.run_id,
+            persist_receipt=reason_code != "STOPPED_PENDING_CUSTODY_PROOF",
         )
-        if reason_code != "STOPPED_PENDING_CUSTODY_PROOF":
-            self._run_history_reads.record_terminal(
-                binding.strategy_instance_id,
-                outcome,
-            )
 
     def _reap(self, strategy_instance_id: str, run_id: str) -> None:
         managed = self._bots.get(strategy_instance_id)

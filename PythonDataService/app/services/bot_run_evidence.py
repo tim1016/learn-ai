@@ -1,4 +1,4 @@
-"""Read-only current and previous bot-run projection service."""
+"""Durable terminal evidence plus current and previous bot-run projections."""
 
 from __future__ import annotations
 
@@ -26,26 +26,20 @@ from app.services.bot_runner_errors import (
     UnknownBotError,
 )
 
-BindingResolver = Callable[[str, str], BrokerBotBinding]
 LifecycleRepoResolver = Callable[[str], BotLifecycleStateRepo]
-ProcessFactResolver = Callable[[str, str], BotProcessFact]
 
 
-class BotRunHistoryService:
-    """Compose bounded run reads without changing command targets or state."""
+class BotRunEvidenceService:
+    """Own run terminal receipts and compose command-neutral run views."""
 
     def __init__(
         self,
         repository: BotBindingRepository,
         *,
-        binding_for_control: BindingResolver,
         lifecycle_repo_for: LifecycleRepoResolver,
-        process_fact: ProcessFactResolver,
     ) -> None:
         self._repository = repository
-        self._binding_for_control = binding_for_control
         self._lifecycle_repo_for = lifecycle_repo_for
-        self._process_fact = process_fact
 
     def preserve_terminal(
         self,
@@ -55,14 +49,33 @@ class BotRunHistoryService:
         """Copy the terminal projection before a new run clears it."""
         if lifecycle is None or lifecycle.duty_outcome is None:
             return
-        self.record_terminal(strategy_instance_id, lifecycle.duty_outcome)
+        self._record_terminal_receipt(strategy_instance_id, lifecycle.duty_outcome)
 
     def record_terminal(
         self,
         strategy_instance_id: str,
         outcome: BotDutyOutcome,
+        *,
+        updated_by: str,
+        reason: str,
+        expected_active_run_id: str | None = None,
+        persist_receipt: bool = True,
     ) -> None:
-        """Persist one create-once run terminal receipt when it is run-scoped."""
+        """Write the lifecycle projection, then its immutable run receipt."""
+        self._lifecycle_repo_for(strategy_instance_id).record_terminal_outcome(
+            outcome,
+            updated_by=updated_by,
+            reason=reason,
+            expected_active_run_id=expected_active_run_id,
+        )
+        if persist_receipt:
+            self._record_terminal_receipt(strategy_instance_id, outcome)
+
+    def _record_terminal_receipt(
+        self,
+        strategy_instance_id: str,
+        outcome: BotDutyOutcome,
+    ) -> None:
         if outcome.run_id is None:
             return
         self._repository.record_outcome(
@@ -75,10 +88,16 @@ class BotRunHistoryService:
             )
         )
 
-    def current(self, broker: str, strategy_instance_id: str) -> BotRunView:
+    def current(
+        self,
+        binding: BrokerBotBinding,
+        process: BotProcessFact,
+    ) -> BotRunView:
         """Return the current run with process and terminal authorities intact."""
-        binding = self._binding_for_control(broker, strategy_instance_id)
-        record = self._repository.read_run(strategy_instance_id, binding.run_id)
+        record = self._repository.read_run(
+            binding.strategy_instance_id,
+            binding.run_id,
+        )
         if record is None:
             raise UnknownBotError(
                 f"Current run '{binding.run_id}' has no launch evidence.",
@@ -87,13 +106,12 @@ class BotRunHistoryService:
         return self._compose(
             record,
             is_current=True,
-            process=self._process_fact(broker, strategy_instance_id),
+            process=process,
         )
 
     def history(
         self,
-        broker: str,
-        strategy_instance_id: str,
+        binding: BrokerBotBinding,
         *,
         cursor: str | None,
         limit: int,
@@ -104,10 +122,9 @@ class BotRunHistoryService:
                 "Run-history limit must be between 1 and 25.",
                 detail="Request a bounded page of previous runs.",
             )
-        binding = self._binding_for_control(broker, strategy_instance_id)
         previous = [
             run
-            for run in self._repository.list_runs(strategy_instance_id)
+            for run in self._repository.list_runs(binding.strategy_instance_id)
             if run.run_id != binding.run_id
         ]
         start = self._page_start(previous, cursor)
