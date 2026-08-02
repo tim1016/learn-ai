@@ -17,8 +17,11 @@ without modification:
 - ``live_state/<sid>/desired_state.json`` — :class:`DesiredStateRepo`
   (durable operator intent; STOPPED is written BEFORE the task is cancelled
   so the Button-Rule exit survives a crash mid-stop).
-- ``live_state/<sid>/broker_binding.json`` — the broker-tagged run binding
-  (P9: bindings carry their broker tag from day one).
+- ``live_state/<sid>/strategy_instance.json`` — create-once broker-tagged
+  strategy configuration.
+- ``live_state/<sid>/runs/<run_id>.json`` — append-only run launch evidence.
+- ``live_state/<sid>/current_run.json`` — the replaceable pointer to the newest
+  run; the runner composes these records behind one aggregate view.
 
 Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
 
@@ -394,7 +397,7 @@ class BotTaskRegistry:
         reason: Literal["deploy", "resume"],
     ) -> None:
         """Write run evidence and install supervision while caller holds its gate."""
-        self._bindings.write(binding)
+        self._bindings.record_launch(binding, launch_reason=reason)
         self._desired_repo(binding.strategy_instance_id).set(
             DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )

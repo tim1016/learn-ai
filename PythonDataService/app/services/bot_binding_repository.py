@@ -1,9 +1,9 @@
-"""Durable broker-tagged bot binding codec and repository.
+"""Immutable strategy-instance and append-only bot-run repository.
 
 The in-container runner owns task liveness, while this module owns the
-versioned binding artifact used to restore immutable deployment configuration.
-Reads may lift the Alpaca v1 shape in memory, but never rewrite historical
-artifacts, which preserves their byte-level audit evidence.
+versioned records used to restore immutable deployment configuration and the
+current run. Reads may lift the Alpaca v1 shape in memory, but never rewrite
+historical artifacts, which preserves their byte-level audit evidence.
 """
 
 from __future__ import annotations
@@ -14,14 +14,28 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.engine.live.durable_append_log import create_exclusive_durable_file
 from app.engine.live.run_status import _atomic_write_json
 from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
+from app.services.bot_carryover import configuration_hash
 
 logger = logging.getLogger(__name__)
 
 BINDING_FILENAME = "broker_binding.json"
+STRATEGY_INSTANCE_FILENAME = "strategy_instance.json"
+CURRENT_RUN_FILENAME = "current_run.json"
+RUNS_DIRECTORY = "runs"
+_RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
+
+class StrategyInstanceConfigurationConflictError(ValueError):
+    """One immutable instance identity was reused with different semantics."""
+
+
+class RunIdentityConflictError(ValueError):
+    """One run identity was reused with a different durable payload."""
 
 
 def alpaca_v1_action_plan(symbol: str) -> ActionPlan:
@@ -40,7 +54,7 @@ def alpaca_v1_action_plan(symbol: str) -> ActionPlan:
 
 
 class BrokerBotBinding(BaseModel):
-    """Durable broker-tagged run binding (P9)."""
+    """Runner-facing aggregate of immutable instance and current run records."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -56,12 +70,71 @@ class BrokerBotBinding(BaseModel):
     quantity: int = 1
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     action_plan: ActionPlan
-    run_id: str
+    run_id: str = Field(pattern=_RUN_ID_PATTERN)
     created_at_ms: int
 
 
+class StrategyInstanceRecord(BaseModel):
+    """Create-once strategy configuration shared by every run of an instance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    strategy_instance_id: str
+    strategy_key: str
+    broker: str
+    symbol: str
+    use_rth: bool
+    mode: Literal["log_only", "trade"]
+    quantity: int
+    carryover_policy: Literal["FORBID", "ALLOW"]
+    action_plan: ActionPlan
+    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at_ms: int
+
+    @classmethod
+    def from_binding(cls, binding: BrokerBotBinding) -> StrategyInstanceRecord:
+        return cls(
+            strategy_instance_id=binding.strategy_instance_id,
+            strategy_key=binding.strategy_key,
+            broker=binding.broker,
+            symbol=binding.symbol,
+            use_rth=binding.use_rth,
+            mode=binding.mode,
+            quantity=binding.quantity,
+            carryover_policy=binding.carryover_policy,
+            action_plan=binding.action_plan,
+            configuration_hash=configuration_hash(binding),
+            created_at_ms=binding.created_at_ms,
+        )
+
+
+class BotRunRecord(BaseModel):
+    """Create-once evidence that one run identity was launched."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    run_id: str = Field(pattern=_RUN_ID_PATTERN)
+    strategy_instance_id: str
+    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    launch_reason: Literal["deploy", "resume", "legacy"]
+    started_at_ms: int
+
+
+class CurrentRunBinding(BaseModel):
+    """Replaceable pointer to the newest run bound to one instance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    strategy_instance_id: str
+    run_id: str = Field(pattern=_RUN_ID_PATTERN)
+    bound_at_ms: int
+
+
 class BotBindingRepository:
-    """Read and write immutable deployment bindings beneath ``live_state``."""
+    """Persist immutable strategy instances and append-only run identities."""
 
     def __init__(
         self,
@@ -72,18 +145,40 @@ class BotBindingRepository:
         self._live_state_root = Path(artifacts_root) / "live_state"
         self._instance_dir_for = instance_dir_for
 
-    def write(self, binding: BrokerBotBinding) -> None:
-        """Persist the current v2 binding atomically."""
+    def record_launch(
+        self,
+        binding: BrokerBotBinding,
+        *,
+        launch_reason: Literal["deploy", "resume"],
+    ) -> None:
+        """Durably append one run, then make it the instance's current run."""
         instance_dir = self._instance_dir_for(binding.strategy_instance_id)
         instance_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_write_json(instance_dir / BINDING_FILENAME, binding.model_dump())
+        self._live_state_root.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_binding(instance_dir)
+
+        instance = StrategyInstanceRecord.from_binding(binding)
+        self._ensure_instance(instance_dir, instance)
+        run = self._run_from_binding(binding, launch_reason=launch_reason)
+        self._ensure_run(instance_dir, run)
+        _atomic_write_json(
+            instance_dir / CURRENT_RUN_FILENAME,
+            CurrentRunBinding(
+                strategy_instance_id=binding.strategy_instance_id,
+                run_id=binding.run_id,
+                bound_at_ms=binding.created_at_ms,
+            ).model_dump(mode="json"),
+        )
 
     def read(self, strategy_instance_id: str) -> BrokerBotBinding | None:
-        """Return one binding, lifting v1 Alpaca records in memory only."""
-        path = self._instance_dir_for(strategy_instance_id) / BINDING_FILENAME
-        if not path.is_file():
-            return None
-        return self.decode(path.read_text(encoding="utf-8"))
+        """Return the current runner aggregate, with read-only legacy lifting."""
+        instance_dir = self._instance_dir_for(strategy_instance_id)
+        instance_path = instance_dir / STRATEGY_INSTANCE_FILENAME
+        if instance_path.is_file():
+            normalized = self._read_normalized(instance_dir)
+            if normalized is not None:
+                return normalized
+        return self._read_legacy_binding(instance_dir)
 
     def list_for_broker(self, broker: str) -> list[BrokerBotBinding]:
         """Return all valid bindings for a broker without hiding corrupt rows."""
@@ -92,24 +187,178 @@ class BotBindingRepository:
 
         bindings: list[BrokerBotBinding] = []
         for child in sorted(self._live_state_root.iterdir()):
-            path = child / BINDING_FILENAME
-            if not path.is_file():
+            if not child.is_dir() or not (
+                (child / STRATEGY_INSTANCE_FILENAME).is_file() or (child / BINDING_FILENAME).is_file()
+            ):
                 continue
             try:
-                binding = self.decode(path.read_text(encoding="utf-8"))
+                binding = self.read(child.name)
             except (OSError, ValidationError, ValueError) as exc:
                 logger.warning(
                     "Skipping corrupt broker binding",
                     extra={
                         "action": "corrupt_broker_binding_skipped",
-                        "path": str(path),
+                        "path": str(child),
                         "error": str(exc),
                     },
                 )
                 continue
-            if binding.broker == broker:
+            if binding is not None and binding.broker == broker:
                 bindings.append(binding)
         return bindings
+
+    def list_runs(self, strategy_instance_id: str) -> list[BotRunRecord]:
+        """Return newest-first append-only launch evidence for one instance."""
+        instance_dir = self._instance_dir_for(strategy_instance_id)
+        instance_path = instance_dir / STRATEGY_INSTANCE_FILENAME
+        if not instance_path.is_file():
+            legacy = self._read_legacy_binding(instance_dir)
+            return (
+                [self._run_from_binding(legacy, launch_reason="legacy")]
+                if legacy is not None
+                else []
+            )
+        instance = StrategyInstanceRecord.model_validate_json(instance_path.read_text(encoding="utf-8"))
+        runs_dir = instance_dir / RUNS_DIRECTORY
+        if not runs_dir.is_dir():
+            return []
+        runs = [BotRunRecord.model_validate_json(path.read_text(encoding="utf-8")) for path in runs_dir.glob("*.json")]
+        for run in runs:
+            if (
+                run.strategy_instance_id != instance.strategy_instance_id
+                or run.configuration_hash != instance.configuration_hash
+            ):
+                raise ValueError("run history evidence does not match its strategy instance")
+        return sorted(
+            runs,
+            key=lambda run: (run.started_at_ms, run.run_id),
+            reverse=True,
+        )
+
+    def _migrate_legacy_binding(self, instance_dir: Path) -> None:
+        """Replay-safe normalization when a later launch needs legacy history."""
+        legacy = self._read_legacy_binding(instance_dir)
+        if legacy is None:
+            return
+        instance = StrategyInstanceRecord.from_binding(legacy)
+        self._ensure_instance(instance_dir, instance)
+        self._ensure_run(
+            instance_dir,
+            self._run_from_binding(legacy, launch_reason="legacy"),
+        )
+        current_path = instance_dir / CURRENT_RUN_FILENAME
+        if not current_path.exists():
+            _atomic_write_json(
+                current_path,
+                CurrentRunBinding(
+                    strategy_instance_id=legacy.strategy_instance_id,
+                    run_id=legacy.run_id,
+                    bound_at_ms=legacy.created_at_ms,
+                ).model_dump(mode="json"),
+            )
+
+    def _read_legacy_binding(self, instance_dir: Path) -> BrokerBotBinding | None:
+        legacy_path = instance_dir / BINDING_FILENAME
+        if not legacy_path.is_file():
+            return None
+        return self.decode(legacy_path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _run_from_binding(
+        binding: BrokerBotBinding,
+        *,
+        launch_reason: Literal["deploy", "resume", "legacy"],
+    ) -> BotRunRecord:
+        return BotRunRecord(
+            run_id=binding.run_id,
+            strategy_instance_id=binding.strategy_instance_id,
+            configuration_hash=configuration_hash(binding),
+            launch_reason=launch_reason,
+            started_at_ms=binding.created_at_ms,
+        )
+
+    def _ensure_instance(
+        self,
+        instance_dir: Path,
+        candidate: StrategyInstanceRecord,
+    ) -> None:
+        path = instance_dir / STRATEGY_INSTANCE_FILENAME
+        try:
+            self._create_once(path, candidate)
+            return
+        except FileExistsError:
+            existing = StrategyInstanceRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        immutable_existing = existing.model_dump(exclude={"created_at_ms"})
+        immutable_candidate = candidate.model_dump(exclude={"created_at_ms"})
+        if immutable_existing != immutable_candidate:
+            raise StrategyInstanceConfigurationConflictError(
+                f"Strategy instance '{candidate.strategy_instance_id}' already has different immutable configuration."
+            )
+
+    def _ensure_run(self, instance_dir: Path, candidate: BotRunRecord) -> None:
+        runs_dir = instance_dir / RUNS_DIRECTORY
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        path = runs_dir / f"{candidate.run_id}.json"
+        try:
+            self._create_once(path, candidate)
+            return
+        except FileExistsError:
+            existing = BotRunRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        if existing != candidate:
+            raise RunIdentityConflictError(f"Run '{candidate.run_id}' already has different durable launch evidence.")
+
+    def _create_once(self, path: Path, record: BaseModel) -> None:
+        serialized = json.dumps(
+            record.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        create_exclusive_durable_file(
+            path,
+            serialized,
+            trusted_root=self._live_state_root,
+        )
+
+    @staticmethod
+    def _read_normalized(instance_dir: Path) -> BrokerBotBinding | None:
+        instance = StrategyInstanceRecord.model_validate_json(
+            (instance_dir / STRATEGY_INSTANCE_FILENAME).read_text(encoding="utf-8")
+        )
+        current_path = instance_dir / CURRENT_RUN_FILENAME
+        if not current_path.exists():
+            return None
+        current = CurrentRunBinding.model_validate_json(
+            current_path.read_text(encoding="utf-8")
+        )
+        if current.strategy_instance_id != instance.strategy_instance_id:
+            raise ValueError("current run pointer belongs to another strategy instance")
+        run_path = instance_dir / RUNS_DIRECTORY / f"{current.run_id}.json"
+        if not run_path.exists():
+            return None
+        run = BotRunRecord.model_validate_json(
+            run_path.read_text(encoding="utf-8")
+        )
+        if (
+            run.strategy_instance_id != instance.strategy_instance_id
+            or run.configuration_hash != instance.configuration_hash
+        ):
+            raise ValueError("current run evidence does not match its strategy instance")
+        binding = BrokerBotBinding(
+            strategy_instance_id=instance.strategy_instance_id,
+            strategy_key=instance.strategy_key,
+            broker=instance.broker,
+            symbol=instance.symbol,
+            use_rth=instance.use_rth,
+            mode=instance.mode,
+            quantity=instance.quantity,
+            carryover_policy=instance.carryover_policy,
+            action_plan=instance.action_plan,
+            run_id=run.run_id,
+            created_at_ms=run.started_at_ms,
+        )
+        if configuration_hash(binding) != instance.configuration_hash:
+            raise ValueError("strategy instance configuration hash is invalid")
+        return binding
 
     @staticmethod
     def decode(raw: str) -> BrokerBotBinding:

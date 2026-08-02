@@ -223,22 +223,11 @@ async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
         start_custody_guard=_flat_start_guard,
     )
     await registry.run_boot_recovery()
-    await registry.deploy(broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
+    await registry.deploy(broker="ibkr", strategy_instance_id=_SID, symbol="SPY")
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
     registry._bots[_SID].finalized = True
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
-
-    # Manually patch the binding file to claim broker="ibkr" — simulating an
-    # IBKR-daemon-owned bot whose lifecycle state lives in the same artifacts_root.
-    binding_path = (
-        _artifacts_root(tmp_path) / "live_state" / _SID / "broker_binding.json"
-    )
-    import json
-
-    raw = json.loads(binding_path.read_text())
-    raw["broker"] = "ibkr"
-    binding_path.write_text(json.dumps(raw))
 
     rebooted = BotTaskRegistry(
         _artifacts_root(tmp_path),
@@ -246,6 +235,8 @@ async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
         supported_broker_ids=frozenset({"alpaca"}),
         start_custody_guard=_flat_start_guard,
     )
+    assert rebooted.binding_for_control("ibkr", _SID).broker == "ibkr"
+    assert rebooted._manages_boot_recovery(_SID) is False
     report = await rebooted.run_boot_recovery()
 
     # Sweep must skip the ibkr-tagged bot: no interrupted evidence, lifecycle
@@ -271,9 +262,7 @@ async def test_boot_sweep_skips_corrupt_binding_without_aborting(
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
 
-    binding_path = (
-        _artifacts_root(tmp_path) / "live_state" / _SID / "broker_binding.json"
-    )
+    binding_path = _artifacts_root(tmp_path) / "live_state" / _SID / "strategy_instance.json"
     binding_path.write_text("{not-json", encoding="utf-8")
 
     rebooted = BotTaskRegistry(

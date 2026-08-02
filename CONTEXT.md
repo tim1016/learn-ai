@@ -13,7 +13,8 @@ vocabulary that grilling sharpened and cross-references that list.
   unit the operator actually governs. Owns the `ib_client_id`,
   `bot_order_namespace`, durable desired-state sidecar, and (after PR-A) the
   managed-process registry slot. One strategy_key → many instances; one
-  instance → many runs over time.
+  instance → many runs over time. Its configuration is immutable: changing
+  strategy semantics creates a new strategy-instance identity.
 - **run_id** — a single execution (one process lifetime) of an instance. An
   artifact-storage key, **not** the operator's handle.
 - **Bot process fact** — the process registry's observation of the process bound
@@ -21,7 +22,8 @@ vocabulary that grilling sharpened and cross-references that list.
   process registry, not the browser and not run files, owns this liveness fact.
 - **Current run** — the newest run currently bound to a strategy instance. It is
   shown first in the Bot Cockpit but does not replace the instance as the
-  operator's durable identity.
+  operator's durable identity. Advancing this binding never rewrites an older
+  run.
 - **Run history** — the append-only sequence of current and previous runs for
   one strategy instance. A historical run remains inspectable but cannot become
   a command target merely because an operator selects it for viewing.
