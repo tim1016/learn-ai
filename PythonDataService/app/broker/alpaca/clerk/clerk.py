@@ -22,9 +22,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from uuid import uuid4
 
 from app.broker.alpaca.clerk import derive, reconcile, recovery
 from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
+from app.broker.alpaca.clerk.custody import (
+    CustodyReconciliationResult,
+    project_custody_snapshot,
+    project_instance_custody_proof,
+)
 from app.broker.alpaca.clerk.effects import ClerkEffectOperations
 from app.broker.alpaca.clerk.exposure import (
     project_expected_account_exposure,
@@ -38,6 +44,7 @@ from app.broker.alpaca.clerk.models import (
     STREAM_HEALTH_HOLD_CODE,
     UNEXPLAINED_ORDER_HOLD_CODE,
     AlpacaEffectOperation,
+    ClerkCustodySnapshot,
     ClerkEntryKind,
     ClerkStatus,
     EffectOperationReceipt,
@@ -105,11 +112,13 @@ class AlpacaClerk(ClerkEffectOperations):
         trade: BrokerTradePort,
         clock: Clock = default_clock,
         stream_health: StreamHealthGate | None = None,
+        clerk_generation: str | None = None,
     ) -> None:
         self._read = read
         self._trade = trade
         self._clock = clock
         self._stream_health = stream_health
+        self._clerk_generation = clerk_generation or uuid4().hex
         self._intake_lock = asyncio.Lock()
         self.activity_recovery = AlpacaActivityRecovery(
             intake_lock=self._intake_lock, ensure_journal=self._ensure_journal, clock=clock
@@ -843,22 +852,35 @@ class AlpacaClerk(ClerkEffectOperations):
         sweep, and reacquire only to derive and append the latest durable
         reconciliation result.
         """
-        verdict, _proof = await self._reconcile_with_proof()
-        return verdict
+        return (await self._reconcile_with_proof()).verdict
 
     async def prove_instance_custody(
         self, strategy_instance_id: str
     ) -> InstanceCustodyProof:
         """Read fresh broker truth and return an exact instance custody proof."""
-        _verdict, proof = await self._reconcile_with_proof(
+        proof = (await self._reconcile_with_proof(
             strategy_instance_id=strategy_instance_id
-        )
+        )).proof
         assert proof is not None
         return proof
 
+    async def custody_snapshot(
+        self, strategy_instance_id: str
+    ) -> ClerkCustodySnapshot:
+        """Return one fresh, typed Clerk custody answer for an instance."""
+        result = await self._reconcile_with_proof(
+            strategy_instance_id=strategy_instance_id
+        )
+        return project_custody_snapshot(
+            broker=self.broker_id,
+            clerk_generation=self._clerk_generation,
+            result=result,
+            observed_at_ms=self._clock(),
+        )
+
     async def _reconcile_with_proof(
         self, *, strategy_instance_id: str | None = None
-    ) -> tuple[ReconciliationVerdict, InstanceCustodyProof | None]:
+    ) -> CustodyReconciliationResult:
         """Shared fresh reconciliation pass with an optional instance proof."""
         await self.recover()
 
@@ -890,15 +912,21 @@ class AlpacaClerk(ClerkEffectOperations):
                     now_ms=observed_at_ms,
                 )
                 verdict = await self._apply_reconcile_plan(journal, account_id, plan)
-                proof = self._instance_custody_proof(
+                final_entries = journal.read_entries()
+                proof = project_instance_custody_proof(
                     strategy_instance_id,
                     account_id=account_id,
-                    entries=journal.read_entries(),
+                    entries=final_entries,
                     working_orders=[],
                     verdict=verdict,
                     observed_at_ms=observed_at_ms,
                 )
-                return verdict, proof
+                return CustodyReconciliationResult(
+                    verdict=verdict,
+                    proof=proof,
+                    entries=tuple(final_entries),
+                    broker_facts_complete=False,
+                )
 
         working_orders = [
             order
@@ -932,56 +960,26 @@ class AlpacaClerk(ClerkEffectOperations):
                 },
             )
             verdict = await self._apply_reconcile_plan(journal, account_id, plan)
-            proof = self._instance_custody_proof(
+            final_entries = journal.read_entries()
+            proof = project_instance_custody_proof(
                 strategy_instance_id,
                 account_id=account_id,
-                entries=journal.read_entries(),
+                entries=final_entries,
                 working_orders=working_orders,
                 verdict=verdict,
                 observed_at_ms=observed_at_ms,
             )
-            return verdict, proof
-
-    def _instance_custody_proof(
-        self,
-        strategy_instance_id: str | None,
-        *,
-        account_id: str,
-        entries: list[OrderJournalEntry],
-        working_orders: list[BrokerOrder],
-        verdict: ReconciliationVerdict,
-        observed_at_ms: int,
-    ) -> InstanceCustodyProof | None:
-        if strategy_instance_id is None:
-            return None
-        namespace = build_bot_order_namespace(strategy_instance_id)
-        exposure = {
-            row.symbol: row.quantity
-            for row in project_instance_exposure(entries, namespace=namespace)
-        }
-        unresolved = tuple(
-            entry.order_ref
-            for entry in derive.unresolved_intents(entries)
-            if order_ref_namespace_matches(entry.order_ref, frozenset({namespace}))
-        )
-        working_refs = tuple(
-            order.client_order_id
-            for order in working_orders
-            if order.client_order_id
-            and order_ref_namespace_matches(
-                order.client_order_id, frozenset({namespace})
+            return CustodyReconciliationResult(
+                verdict=verdict,
+                proof=proof,
+                entries=tuple(final_entries),
+                broker_facts_complete=(
+                    verdict == "clean"
+                    and not derive.has_inflight_position_evidence(
+                        current_entries, positions
+                    )
+                ),
             )
-        )
-        return InstanceCustodyProof(
-            account_id=account_id,
-            strategy_instance_id=strategy_instance_id,
-            reconciliation_verdict=verdict,
-            freeze=derive.account_freeze_state(entries),
-            exposure=exposure,
-            working_order_refs=working_refs,
-            unresolved_intent_refs=unresolved,
-            observed_at_ms=observed_at_ms,
-        )
 
     async def _apply_reconcile_plan(
         self, journal: OrderJournal, account_id: str, plan: reconcile.ReconcilePlan

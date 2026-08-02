@@ -1572,6 +1572,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/authority-facts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Independent process and Clerk custody facts for one bot */
+        get: operations["get_authority_facts_scoped_api_brokers__broker__accounts__account_id__bots__sid__authority_facts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/history": {
         parameters: {
             query?: never;
@@ -9126,6 +9143,14 @@ export interface components {
             symbol: string;
         };
         /**
+         * BotControlAuthorityFacts
+         * @description Independent process and Clerk facts for one bot control decision.
+         */
+        BotControlAuthorityFacts: {
+            clerk: components["schemas"]["ClerkCustodySnapshot"];
+            process: components["schemas"]["BotProcessFact"];
+        };
+        /**
          * BotDailyLifecycleProjection
          * @description Rev-3 daily lifecycle projection for one bot.
          *
@@ -9588,6 +9613,30 @@ export interface components {
             updated_at_ms: number;
             /** Working Orders */
             working_orders: components["schemas"]["WorkingOrderView"][];
+        };
+        /**
+         * BotProcessFact
+         * @description Process-registry observation for one strategy run.
+         *
+         *     This fact reports only process presence. It never implies broker custody,
+         *     exposure, order state, or permission to trade.
+         */
+        BotProcessFact: {
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Process Identity */
+            process_identity: string | null;
+            /** Registry Generation */
+            registry_generation: string;
+            /** Run Id */
+            run_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "RUNNING" | "STOPPING" | "EXITED" | "UNKNOWN";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
         };
         /**
          * BotRetireReplaceRequest
@@ -11193,6 +11242,49 @@ export interface components {
             terminal_age_ms?: number | null;
         };
         /**
+         * ClerkCustodySnapshot
+         * @description Clerk-authored account and instance custody answer for control policy.
+         */
+        ClerkCustodySnapshot: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            /** Clerk Generation */
+            clerk_generation: string;
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: string[];
+            exposure: components["schemas"]["CustodyExposureFact"];
+            freeze: components["schemas"]["AccountFreezeState"];
+            hold: components["schemas"]["HoldState"];
+            /** Journal Sequence */
+            journal_sequence: number;
+            /** Next Step */
+            next_step?: string | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            pending_orders: components["schemas"]["CustodyCountFact"];
+            /** Reason Code */
+            reason_code: string;
+            /** Reconciled At Ms */
+            reconciled_at_ms: number;
+            /** Reconciliation Fresh */
+            reconciliation_fresh: boolean;
+            /**
+             * Reconciliation State
+             * @enum {string}
+             */
+            reconciliation_state: "clean" | "unexplained_order" | "missing_intent" | "stale";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            terminal_orders: components["schemas"]["CustodyCountFact"];
+            unresolved_effects: components["schemas"]["CustodyCountFact"];
+            working_orders: components["schemas"]["CustodyCountFact"];
+        };
+        /**
          * ClerkCustodyTimeline
          * @description Distinct source, arrival, and durable clocks for one intent lifecycle.
          */
@@ -11993,6 +12085,34 @@ export interface components {
              * @description Theoretical strategy value per share, at today's vol
              */
             theoretical_value: number;
+        };
+        /**
+         * CustodyCountFact
+         * @description Count whose zero/non-zero/unknown meaning is explicit.
+         */
+        CustodyCountFact: {
+            /** Count */
+            count?: number | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "zero" | "non_zero" | "unknown";
+        };
+        /**
+         * CustodyExposureFact
+         * @description Instance exposure with unknown kept distinct from known flat.
+         */
+        CustodyExposureFact: {
+            /** Positions */
+            positions?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "zero" | "non_zero" | "unknown";
         };
         /**
          * CustodySpineStep
@@ -28492,6 +28612,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PanelActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_authority_facts_scoped_api_brokers__broker__accounts__account_id__bots__sid__authority_facts_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotControlAuthorityFacts"];
                 };
             };
             /** @description Validation Error */

@@ -318,3 +318,24 @@ client and accepts no self-authored paper receipt. A future promotion path must
 be a trusted IBKR adapter that validates immutable broker-originated evidence;
 until then, the distinction between repeatable fault proof and an
 environment-specific broker observation remains explicit.
+
+## Bot-control authority-facts amendment (2026-08-02)
+
+The bot-control read model keeps process liveness and broker custody as
+independent facts. A bot runner generation may report `RUNNING` or `STOPPING`
+only for a task that it currently owns and whose active run agrees with the
+durable lifecycle record. A replacement generation that sees an inherited
+`ON_DUTY` artifact has no process proof and reports `UNKNOWN`; it cannot infer
+liveness from a file written by the prior process. A matching durable terminal
+outcome may be reported as `EXITED`.
+
+The Account Clerk alone authors the custody snapshot. Every exposure and order
+count has an explicit `zero`, `non_zero`, or `unknown` state. A stale or
+unattributable reconciliation therefore remains visibly unknown instead of
+being collapsed into an empty account. Journal sequence is an evidence cursor,
+not a causality claim or a substitute for reconciliation.
+
+The account-scoped authority-facts endpoint composes these two owner-authored
+facts without turning them into permission. Start admission and execution will
+consume the same typed policy decision in the next control-plane slice; this
+read-only seam does not independently permit or block a command.

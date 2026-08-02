@@ -21,6 +21,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.models import (
@@ -31,7 +32,7 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import MarketDataBar, MarketDataFeedError
-from app.schemas.broker_bots import AlpacaPaperStrategyKey
+from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
 from app.services.bot_runner import (
     BotAlreadyRunningError,
     BotTaskRegistry,
@@ -199,6 +200,52 @@ async def test_deploy_produces_running_task_and_durable_on_duty_evidence(tmp_pat
     assert isinstance(binding["created_at_ms"], int)
 
     await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_process_fact_requires_current_registry_liveness_proof(tmp_path: Path) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    view = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    running = registry.process_fact("alpaca", _SID)
+
+    assert running.strategy_instance_id == _SID
+    assert running.run_id == view.active_run_id
+    assert running.process_identity == f"in-process-task:{view.active_run_id}"
+    assert running.state == "RUNNING"
+    assert running.registry_generation
+    assert running.observed_at_ms > 0
+
+    replacement_registry = _registry(tmp_path, feed)
+    unknown = replacement_registry.process_fact("alpaca", _SID)
+
+    assert unknown.run_id == view.active_run_id
+    assert unknown.process_identity is None
+    assert unknown.state == "UNKNOWN"
+    assert unknown.registry_generation != running.registry_generation
+
+    await registry.stop("alpaca", _SID)
+    exited = replacement_registry.process_fact("alpaca", _SID)
+    assert exited.run_id == view.active_run_id
+    assert exited.process_identity is None
+    assert exited.state == "EXITED"
+
+
+def test_process_fact_rejects_unemittable_starting_state() -> None:
+    with pytest.raises(ValidationError):
+        BotProcessFact(
+            strategy_instance_id=_SID,
+            run_id="run-1",
+            process_identity="in-process-task:run-1",
+            state="STARTING",
+            registry_generation="registry-1",
+            observed_at_ms=_T0,
+        )
 
 
 @pytest.mark.asyncio

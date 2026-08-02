@@ -14,13 +14,16 @@ never speculatively.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal, TypeAlias
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.engine.live.account_clerk_journal_models import AccountClerkBrokerEvidenceBaseline
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
+
+MAX_EPOCH_MS = 9_223_372_036_854_775_807
+EpochMs = Annotated[int, Field(ge=0, le=MAX_EPOCH_MS)]
 
 
 class EffectPurpose(StrEnum):
@@ -533,6 +536,79 @@ class ClerkStatus(BaseModel):
     channel_healths: list[ChannelHealth] | None = None
 
 
+class CustodyCountFact(BaseModel):
+    """Count whose zero/non-zero/unknown meaning is explicit."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["zero", "non_zero", "unknown"]
+    count: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _count_matches_state(self) -> CustodyCountFact:
+        if self.state == "unknown" and self.count is not None:
+            raise ValueError("unknown custody count cannot carry a numeric count")
+        if self.state == "zero" and self.count != 0:
+            raise ValueError("zero custody count requires count=0")
+        if self.state == "non_zero" and (self.count is None or self.count == 0):
+            raise ValueError("non-zero custody count requires a positive count")
+        return self
+
+
+class CustodyExposureFact(BaseModel):
+    """Instance exposure with unknown kept distinct from known flat."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["zero", "non_zero", "unknown"]
+    positions: dict[str, float] | None = None
+
+    @model_validator(mode="after")
+    def _positions_match_state(self) -> CustodyExposureFact:
+        non_zero = (
+            None
+            if self.positions is None
+            else {
+                symbol: quantity
+                for symbol, quantity in self.positions.items()
+                if quantity != 0
+            }
+        )
+        if self.state == "unknown" and self.positions is not None:
+            raise ValueError("unknown custody exposure cannot carry positions")
+        if self.state == "zero" and non_zero != {}:
+            raise ValueError("zero custody exposure requires known empty positions")
+        if self.state == "non_zero" and not non_zero:
+            raise ValueError("non-zero custody exposure requires a position")
+        return self
+
+
+class ClerkCustodySnapshot(BaseModel):
+    """Clerk-authored account and instance custody answer for control policy."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    broker: str
+    account_id: str
+    strategy_instance_id: str
+    clerk_generation: str
+    journal_sequence: int = Field(ge=0)
+    reconciliation_state: ReconciliationVerdict
+    reconciliation_fresh: bool
+    reconciled_at_ms: EpochMs
+    exposure: CustodyExposureFact
+    working_orders: CustodyCountFact
+    pending_orders: CustodyCountFact
+    terminal_orders: CustodyCountFact
+    unresolved_effects: CustodyCountFact
+    hold: HoldState
+    freeze: AccountFreezeState
+    reason_code: str
+    evidence_refs: tuple[str, ...] = ()
+    next_step: str | None = None
+    observed_at_ms: EpochMs
+
+
 class InstanceCustodyProof(BaseModel):
     """Fresh Clerk proof used by STOP/Resume lifecycle custody."""
 
@@ -545,7 +621,7 @@ class InstanceCustodyProof(BaseModel):
     exposure: dict[str, float]
     working_order_refs: tuple[str, ...] = ()
     unresolved_intent_refs: tuple[str, ...] = ()
-    observed_at_ms: int
+    observed_at_ms: EpochMs
 
 
 class OrderCancelResult(BaseModel):
