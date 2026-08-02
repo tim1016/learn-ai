@@ -229,11 +229,9 @@ async def test_boot_sweep_skips_bots_bound_to_unsupported_broker(
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
 
-    # Manually patch the binding file to claim broker="ibkr" — simulating an
+    # Manually patch the instance record to claim broker="ibkr" — simulating an
     # IBKR-daemon-owned bot whose lifecycle state lives in the same artifacts_root.
-    binding_path = (
-        _artifacts_root(tmp_path) / "live_state" / _SID / "broker_binding.json"
-    )
+    binding_path = _artifacts_root(tmp_path) / "live_state" / _SID / "strategy_instance.json"
     import json
 
     raw = json.loads(binding_path.read_text())
@@ -271,9 +269,7 @@ async def test_boot_sweep_skips_corrupt_binding_without_aborting(
     registry._bots[_SID].task.cancel()
     await asyncio.sleep(0)
 
-    binding_path = (
-        _artifacts_root(tmp_path) / "live_state" / _SID / "broker_binding.json"
-    )
+    binding_path = _artifacts_root(tmp_path) / "live_state" / _SID / "strategy_instance.json"
     binding_path.write_text("{not-json", encoding="utf-8")
 
     rebooted = BotTaskRegistry(

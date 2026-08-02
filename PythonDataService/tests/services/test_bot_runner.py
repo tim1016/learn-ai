@@ -251,8 +251,18 @@ def _desired_json(tmp_path: Path, sid: str = _SID) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _binding_json(tmp_path: Path, sid: str = _SID) -> dict:
-    path = tmp_path / "live_state" / sid / "broker_binding.json"
+def _strategy_instance_json(tmp_path: Path, sid: str = _SID) -> dict:
+    path = tmp_path / "live_state" / sid / "strategy_instance.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _current_run_json(tmp_path: Path, sid: str = _SID) -> dict:
+    path = tmp_path / "live_state" / sid / "current_run.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _run_json(tmp_path: Path, run_id: str, sid: str = _SID) -> dict:
+    path = tmp_path / "live_state" / sid / "runs" / f"{run_id}.json"
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -286,12 +296,14 @@ async def test_deploy_produces_running_task_and_durable_on_duty_evidence(tmp_pat
     assert lifecycle["active_run_id"] == view.active_run_id
     desired = _desired_json(tmp_path)
     assert desired["desired_state"] == "RUNNING"
-    binding = _binding_json(tmp_path)
-    assert binding["broker"] == "alpaca"
-    assert binding["symbol"] == "SPY"
-    assert binding["mode"] == "log_only"
-    assert binding["quantity"] == 1
-    assert isinstance(binding["created_at_ms"], int)
+    instance = _strategy_instance_json(tmp_path)
+    assert instance["broker"] == "alpaca"
+    assert instance["symbol"] == "SPY"
+    assert instance["mode"] == "log_only"
+    assert instance["quantity"] == 1
+    current = _current_run_json(tmp_path)
+    assert current["run_id"] == view.active_run_id
+    assert isinstance(_run_json(tmp_path, current["run_id"])["started_at_ms"], int)
 
     await registry.stop("alpaca", _SID)
 
@@ -566,7 +578,8 @@ async def test_start_timestamps_activation_after_custody_reconciliation(
     )
 
     assert started.admission.evaluated_at_ms == _T0 + 10_000
-    assert _binding_json(tmp_path)["created_at_ms"] == started.admission.evaluated_at_ms
+    run_id = _current_run_json(tmp_path)["run_id"]
+    assert _run_json(tmp_path, run_id)["started_at_ms"] == started.admission.evaluated_at_ms
     await registry.stop("alpaca", _SID)
 
 
@@ -805,10 +818,16 @@ async def test_version_one_alpaca_binding_is_read_without_rewriting_audit_artifa
     await registry.stop("alpaca", _SID)
 
     binding_path = tmp_path / "live_state" / _SID / "broker_binding.json"
-    legacy = _binding_json(tmp_path)
+    legacy = registry.binding_for_control("alpaca", _SID).model_dump(mode="json")
     legacy["schema_version"] = 1
     legacy.pop("action_plan")
     original = json.dumps(legacy, separators=(",", ":"), sort_keys=True)
+    instance_dir = tmp_path / "live_state" / _SID
+    run_id = _current_run_json(tmp_path)["run_id"]
+    (instance_dir / "strategy_instance.json").unlink()
+    (instance_dir / "current_run.json").unlink()
+    (instance_dir / "runs" / f"{run_id}.json").unlink()
+    (instance_dir / "runs").rmdir()
     binding_path.write_text(original, encoding="utf-8")
 
     restarted = _registry(tmp_path, feed)
@@ -847,6 +866,10 @@ async def test_resume_existing_creates_new_run_and_preserves_action_plan(
         quantity=3,
     )
     original = registry.binding_for_control("alpaca", _SID)
+    original_run_path = (
+        tmp_path / "live_state" / _SID / "runs" / f"{original.run_id}.json"
+    )
+    original_run_bytes = original_run_path.read_bytes()
     await registry.stop("alpaca", _SID)
 
     resumed = await registry.resume_existing("alpaca", _SID)
@@ -858,6 +881,10 @@ async def test_resume_existing_creates_new_run_and_preserves_action_plan(
     assert rebound.mode == "log_only"
     assert rebound.quantity == 3
     assert rebound.action_plan == original.action_plan
+    assert original_run_path.read_bytes() == original_run_bytes
+    assert sorted(
+        path.stem for path in (tmp_path / "live_state" / _SID / "runs").glob("*.json")
+    ) == sorted([original.run_id, rebound.run_id])
     await registry.stop("alpaca", _SID)
 
 
@@ -1109,9 +1136,11 @@ async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path
         if p.is_file() and p.suffix != ".lock"
     )
     assert written == [
-        f"live_state/{_SID}/broker_binding.json",
+        f"live_state/{_SID}/current_run.json",
         f"live_state/{_SID}/desired_state.json",
         f"live_state/{_SID}/lifecycle_state.json",
+        f"live_state/{_SID}/runs/{registry.binding_for_control('alpaca', _SID).run_id}.json",
+        f"live_state/{_SID}/strategy_instance.json",
     ]
 
 
@@ -1448,11 +1477,11 @@ async def test_trade_bot_quantity_plumbed_from_binding(tmp_path: Path, monkeypat
 
     assert clerk.calls[0]["quantity"] == 7
 
-    # Binding artifact also carries quantity.
-    binding = _binding_json(tmp_path)
-    assert binding["quantity"] == 7
-    assert binding["mode"] == "trade"
-    assert binding["action_plan"]["on_enter"][0]["position"] == "long"
+    # Immutable instance artifact carries deployment semantics.
+    instance = _strategy_instance_json(tmp_path)
+    assert instance["quantity"] == 7
+    assert instance["mode"] == "trade"
+    assert instance["action_plan"]["on_enter"][0]["position"] == "long"
 
 
 # ── submit exception → task errors (no silent handler) ───────────────────────
@@ -1503,5 +1532,5 @@ async def test_log_only_bot_unchanged_after_trade_mode_added(tmp_path: Path, cap
     assert len(decisions) == 2
     assert all(d.decision == "HOLD" for d in decisions)
 
-    binding = _binding_json(tmp_path)
-    assert binding["mode"] == "log_only"
+    instance = _strategy_instance_json(tmp_path)
+    assert instance["mode"] == "log_only"
