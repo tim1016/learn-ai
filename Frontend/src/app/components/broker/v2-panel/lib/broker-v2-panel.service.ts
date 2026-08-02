@@ -21,6 +21,8 @@ export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt']
 export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
 export type DeployBotStrategy = components['schemas']['AlpacaPaperDeployStrategy'];
 export type DeployReadinessCheck = components['schemas']['AlpacaPaperDeployReadinessCheck'];
+export type DeployExecutionMode = components['schemas']['AlpacaPaperExecutionMode'];
+export type DeploySizingOption = components['schemas']['AlpacaPaperSizingOption'];
 
 /**
  * HTTP client for the broker-v2 panel surface.

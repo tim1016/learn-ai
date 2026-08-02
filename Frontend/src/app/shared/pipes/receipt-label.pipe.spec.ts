@@ -47,6 +47,8 @@ describe('formatReceiptLabel', () => {
   it('formats code-like receipt values when the label is not opaque', () => {
     expect(formatReceiptValue('state', 'NO_LIVE_BINDING')).toBe('No Live Binding');
     expect(formatReceiptValue('source', 'readiness')).toBe('Readiness');
+    expect(formatReceiptValue('attempt_count', 3)).toBe('3');
+    expect(formatReceiptValue('available', true)).toBe('True');
   });
 
   it('supports the Angular pipe wrapper', () => {

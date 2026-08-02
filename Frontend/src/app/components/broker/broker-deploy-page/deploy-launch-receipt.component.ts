@@ -1,13 +1,14 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import type { DeployBotReceipt } from '../v2-panel/lib/broker-v2-panel.service';
 
 @Component({
   selector: 'app-deploy-launch-receipt',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterLink, TimestampDisplayComponent],
+  imports: [ReceiptLabelPipe, RouterLink, TimestampDisplayComponent],
   templateUrl: './deploy-launch-receipt.component.html',
   styleUrl: './deploy-launch-receipt.component.scss',
 })

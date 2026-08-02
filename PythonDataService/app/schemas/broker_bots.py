@@ -8,6 +8,7 @@ derives state that is not artifact- or registry-backed.
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -23,6 +24,13 @@ def _validated_strategy_instance_id(value: str) -> str:
 
 
 _SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
+
+
+class AlpacaPaperStrategyKey(StrEnum):
+    """Strategies supported by the Clerk-governed Alpaca paper runner."""
+
+    DEPLOYMENT_VALIDATION = "deployment_validation"
+    EMA_CROSSOVER_SIGNAL = "ema_crossover_signal"
 
 
 def _normalized_symbol(value: str) -> str:
@@ -80,7 +88,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategy_instance_id: str = Field(min_length=1, max_length=128)
-    strategy_key: Literal["deployment_validation"]
+    strategy_key: AlpacaPaperStrategyKey
     symbol: str = Field(min_length=1, max_length=12)
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
@@ -109,30 +117,14 @@ class AlpacaPaperDeployEligibility(BaseModel):
 
 
 class AlpacaPaperDeployStrategy(BaseModel):
-    """One currently accepted strategy from the validation catalog."""
+    """Trader-facing option for one currently accepted deploy strategy."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    strategy_key: Literal["deployment_validation"]
+    strategy_key: AlpacaPaperStrategyKey
     label: str
     explanation: str
     validation_case_symbol: str
-    validated_at_ms: int = Field(ge=0)
-    validated_by: str
-    validation_reason: str
-    behavioral_equivalence_verdict: Literal["accepted_for_deploy"]
-    behavioral_equivalence_detail: str
-    tolerance: str | None
-    qc_cloud_backtest_id: str
-    settings_file_ref: str
-    settings_file_sha256: str
-    audit_copy_ref: str
-    audit_copy_sha256: str
-    reconciliation_ref: str
-    trades_matched: int = Field(ge=0)
-    trades_validated: int = Field(ge=0)
-    pnl_max_abs_diff: str
-    divergence_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class AlpacaPaperDeployReadinessCheck(BaseModel):
@@ -159,7 +151,7 @@ class AlpacaPaperExecutionMode(BaseModel):
 
     mode: Literal["paper", "live"]
     label: str
-    available: bool
+    availability: Literal["available", "planned"]
     explanation: str
 
 
@@ -185,6 +177,7 @@ class AlpacaPaperDeployView(BaseModel):
     account_id: str
     account_mode: Literal["paper"]
     account_label: str
+    evaluated_at_ms: int = Field(ge=0)
     eligibility: AlpacaPaperDeployEligibility
     readiness_checks: tuple[AlpacaPaperDeployReadinessCheck, ...]
     execution_modes: tuple[AlpacaPaperExecutionMode, ...]

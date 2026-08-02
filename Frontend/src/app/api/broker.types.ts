@@ -8165,67 +8165,22 @@ export interface components {
             sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
             /** Strategy Instance Id */
             strategy_instance_id: string;
-            /**
-             * Strategy Key
-             * @constant
-             */
-            strategy_key: "deployment_validation";
+            strategy_key: components["schemas"]["AlpacaPaperStrategyKey"];
             /** Symbol */
             symbol: string;
         };
         /**
          * AlpacaPaperDeployStrategy
-         * @description One currently accepted strategy from the validation catalog.
+         * @description Trader-facing option for one currently accepted deploy strategy.
          */
         AlpacaPaperDeployStrategy: {
-            /** Audit Copy Ref */
-            audit_copy_ref: string;
-            /** Audit Copy Sha256 */
-            audit_copy_sha256: string;
-            /** Behavioral Equivalence Detail */
-            behavioral_equivalence_detail: string;
-            /**
-             * Behavioral Equivalence Verdict
-             * @constant
-             */
-            behavioral_equivalence_verdict: "accepted_for_deploy";
-            /** Divergence Counts */
-            divergence_counts?: {
-                [key: string]: number;
-            };
             /** Explanation */
             explanation: string;
             /** Label */
             label: string;
-            /** Pnl Max Abs Diff */
-            pnl_max_abs_diff: string;
-            /** Qc Cloud Backtest Id */
-            qc_cloud_backtest_id: string;
-            /** Reconciliation Ref */
-            reconciliation_ref: string;
-            /** Settings File Ref */
-            settings_file_ref: string;
-            /** Settings File Sha256 */
-            settings_file_sha256: string;
-            /**
-             * Strategy Key
-             * @constant
-             */
-            strategy_key: "deployment_validation";
-            /** Tolerance */
-            tolerance: string | null;
-            /** Trades Matched */
-            trades_matched: number;
-            /** Trades Validated */
-            trades_validated: number;
-            /** Validated At Ms */
-            validated_at_ms: number;
-            /** Validated By */
-            validated_by: string;
+            strategy_key: components["schemas"]["AlpacaPaperStrategyKey"];
             /** Validation Case Symbol */
             validation_case_symbol: string;
-            /** Validation Reason */
-            validation_reason: string;
         };
         /**
          * AlpacaPaperDeployView
@@ -8257,6 +8212,8 @@ export interface components {
             /** Carryover Label */
             carryover_label: string;
             eligibility: components["schemas"]["AlpacaPaperDeployEligibility"];
+            /** Evaluated At Ms */
+            evaluated_at_ms: number;
             /** Execution Modes */
             execution_modes: components["schemas"]["AlpacaPaperExecutionMode"][];
             /** Readiness Checks */
@@ -8271,8 +8228,11 @@ export interface components {
          * @description Broker-authored execution capability for the shared Deploy page.
          */
         AlpacaPaperExecutionMode: {
-            /** Available */
-            available: boolean;
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "available" | "planned";
             /** Explanation */
             explanation: string;
             /** Label */
@@ -8321,6 +8281,12 @@ export interface components {
              */
             quantity?: number;
         };
+        /**
+         * AlpacaPaperStrategyKey
+         * @description Strategies supported by the Clerk-governed Alpaca paper runner.
+         * @enum {string}
+         */
+        AlpacaPaperStrategyKey: "deployment_validation" | "ema_crossover_signal";
         /**
          * AlphaDecayStatsResponse
          * @description Alpha decay regression statistics with power-guard flags.
