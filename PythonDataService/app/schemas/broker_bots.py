@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.action_plan import ActionPlan
 from app.schemas.live_runs import BotDutyOutcomeView
 
@@ -23,6 +24,40 @@ def _validated_strategy_instance_id(value: str) -> str:
 
 
 _SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
+
+
+class BotProcessFact(BaseModel):
+    """Process-registry observation for one strategy run.
+
+    This fact reports only process presence. It never implies broker custody,
+    exposure, order state, or permission to trade.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str
+    run_id: str
+    process_identity: str | None
+    state: Literal["STARTING", "RUNNING", "STOPPING", "EXITED", "UNKNOWN"]
+    registry_generation: str
+    observed_at_ms: int = Field(ge=0)
+
+
+class BotControlAuthorityFacts(BaseModel):
+    """Independent process and Clerk facts for one bot control decision."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    process: BotProcessFact
+    clerk: ClerkCustodySnapshot
+
+    @classmethod
+    def from_authorities(
+        cls,
+        process: BotProcessFact,
+        clerk: ClerkCustodySnapshot,
+    ) -> BotControlAuthorityFacts:
+        return cls(process=process, clerk=clerk)
 
 
 def _normalized_symbol(value: str) -> str:

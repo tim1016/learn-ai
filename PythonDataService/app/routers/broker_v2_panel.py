@@ -28,6 +28,7 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployView,
+    BotControlAuthorityFacts,
 )
 from app.schemas.broker_v2_evidence import EvidencePage
 from app.schemas.broker_v2_panel import (
@@ -202,6 +203,22 @@ async def deploy_bot_scoped(
 
 
 # ── §7 Panel projection (account-scoped + unscoped alias) ────────────────────
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/{sid}/authority-facts",
+    response_model=BotControlAuthorityFacts,
+    summary="Independent process and Clerk custody facts for one bot",
+)
+async def get_authority_facts_scoped(
+    broker: str,
+    account_id: str,
+    sid: str,
+) -> BotControlAuthorityFacts:
+    try:
+        return await ds.get_authority_facts(broker, account_id, sid)
+    except ds.PanelDataError as error:
+        _raise_panel_error(error)
 
 
 async def _panel(broker: str, account_id: str, sid: str, transaction_ref: str | None) -> BotPanelView:

@@ -268,6 +268,14 @@ never branch on those strings. This retires `recovery-flatten-*`,
 - **Instance-attributed account exposure** — the Account Clerk's projection of
   the portion of account exposure supported by exact order and fill identity
   for one `strategy_instance_id`. _Avoid_: bot exposure, bot-owned position.
+- **Bot process fact** — the bot runner registry's typed observation of whether
+  one bound run has a currently owned process (`STARTING`, `RUNNING`,
+  `STOPPING`, `EXITED`, or `UNKNOWN`). It proves process presence only; it does
+  not prove broker custody, order state, exposure, or permission to trade.
+- **Clerk custody snapshot** — the Account Clerk's typed, freshly reconciled
+  answer for one strategy instance. Exposure, working orders, pending orders,
+  terminal orders, and unresolved effects each remain explicitly `unknown`
+  when the Clerk cannot prove them; unknown is never presented as zero.
 - **Clean strategy exit** — a terminal Clerk effect proving that working entry
   and exit orders are resolved and the instance-attributed account exposure is
   zero. An exit that deliberately leaves exposure open is a carryover stop, not

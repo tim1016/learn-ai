@@ -23,7 +23,11 @@ from app.broker.alpaca.clerk.journal import (
     reset_clerk_settings_for_testing,
 )
 from app.broker.alpaca.clerk.models import (
+    AccountFreezeState,
+    ClerkCustodySnapshot,
     ClerkStatus,
+    CustodyCountFact,
+    CustodyExposureFact,
     HoldState,
     ReconciliationSummary,
 )
@@ -108,6 +112,28 @@ class _FakeClerk:
             channel_healths=None,
         )
 
+    async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
+        return ClerkCustodySnapshot(
+            broker="alpaca",
+            account_id=_ACCOUNT_ID,
+            strategy_instance_id=strategy_instance_id,
+            clerk_generation="clerk-test-generation",
+            journal_sequence=7,
+            reconciliation_state="clean",
+            reconciliation_fresh=True,
+            reconciled_at_ms=_T0,
+            exposure=CustodyExposureFact(state="zero", positions={}),
+            working_orders=CustodyCountFact(state="zero", count=0),
+            pending_orders=CustodyCountFact(state="zero", count=0),
+            terminal_orders=CustodyCountFact(state="zero", count=0),
+            unresolved_effects=CustodyCountFact(state="zero", count=0),
+            hold=HoldState(active=False),
+            freeze=AccountFreezeState(),
+            reason_code="CLERK_CUSTODY_PROVEN",
+            evidence_refs=("alpaca-clerk-journal:PA-TEST:7",),
+            observed_at_ms=_T0,
+        )
+
     async def reconcile_once(self) -> str:
         self.reconciled = True
         return "clean"
@@ -176,6 +202,26 @@ async def test_panel_profile_endpoint(api) -> None:
     assert body["broker"] == "alpaca"
     assert body["fee_fidelity"] == "none"
     assert len(body["stations"]) == 6
+
+
+async def test_authority_facts_endpoint_keeps_process_and_custody_separate(api) -> None:
+    app, _clerk, registry = api
+    await _deploy_bot(registry)
+
+    async with _client(app) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/authority-facts"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["process"]["strategy_instance_id"] == SID
+    assert body["process"]["state"] == "RUNNING"
+    assert body["clerk"]["strategy_instance_id"] == SID
+    assert body["clerk"]["exposure"] == {"state": "zero", "positions": {}}
+    assert body["clerk"]["reason_code"] == "CLERK_CUSTODY_PROVEN"
+
+    await registry.stop("alpaca", SID)
 
 
 async def test_panel_profile_unknown_broker_is_404(api) -> None:

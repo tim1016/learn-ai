@@ -7602,6 +7602,24 @@
         "title": "BotCatalogView",
         "type": "object"
       },
+      "BotControlAuthorityFacts": {
+        "additionalProperties": false,
+        "description": "Independent process and Clerk facts for one bot control decision.",
+        "properties": {
+          "clerk": {
+            "$ref": "#/components/schemas/ClerkCustodySnapshot"
+          },
+          "process": {
+            "$ref": "#/components/schemas/BotProcessFact"
+          }
+        },
+        "required": [
+          "process",
+          "clerk"
+        ],
+        "title": "BotControlAuthorityFacts",
+        "type": "object"
+      },
       "BotDailyLifecycleProjection": {
         "additionalProperties": false,
         "description": "Rev-3 daily lifecycle projection for one bot.\n\n``phase`` tracks presence only. Health is derived by the evaluator from\nreceipts and open conditions; the display status is the closed vocabulary the\nUI renders.",
@@ -8750,6 +8768,61 @@
           "open_pnl"
         ],
         "title": "BotPanelView",
+        "type": "object"
+      },
+      "BotProcessFact": {
+        "additionalProperties": false,
+        "description": "Process-registry observation for one strategy run.\n\nThis fact reports only process presence. It never implies broker custody,\nexposure, order state, or permission to trade.",
+        "properties": {
+          "observed_at_ms": {
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "process_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Process Identity"
+          },
+          "registry_generation": {
+            "title": "Registry Generation",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "STARTING",
+              "RUNNING",
+              "STOPPING",
+              "EXITED",
+              "UNKNOWN"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "run_id",
+          "process_identity",
+          "state",
+          "registry_generation",
+          "observed_at_ms"
+        ],
+        "title": "BotProcessFact",
         "type": "object"
       },
       "BotRetireReplaceRequest": {
@@ -12643,6 +12716,122 @@
         "title": "ClerkCustodyDurations",
         "type": "object"
       },
+      "ClerkCustodySnapshot": {
+        "additionalProperties": false,
+        "description": "Clerk-authored account and instance custody answer for control policy.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "clerk_generation": {
+            "title": "Clerk Generation",
+            "type": "string"
+          },
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "exposure": {
+            "$ref": "#/components/schemas/CustodyExposureFact"
+          },
+          "freeze": {
+            "$ref": "#/components/schemas/AccountFreezeState"
+          },
+          "hold": {
+            "$ref": "#/components/schemas/HoldState"
+          },
+          "journal_sequence": {
+            "minimum": 0.0,
+            "title": "Journal Sequence",
+            "type": "integer"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "observed_at_ms": {
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "pending_orders": {
+            "$ref": "#/components/schemas/CustodyCountFact"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reconciled_at_ms": {
+            "minimum": 0.0,
+            "title": "Reconciled At Ms",
+            "type": "integer"
+          },
+          "reconciliation_fresh": {
+            "title": "Reconciliation Fresh",
+            "type": "boolean"
+          },
+          "reconciliation_state": {
+            "enum": [
+              "clean",
+              "unexplained_order",
+              "missing_intent",
+              "stale"
+            ],
+            "title": "Reconciliation State",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "terminal_orders": {
+            "$ref": "#/components/schemas/CustodyCountFact"
+          },
+          "unresolved_effects": {
+            "$ref": "#/components/schemas/CustodyCountFact"
+          },
+          "working_orders": {
+            "$ref": "#/components/schemas/CustodyCountFact"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "strategy_instance_id",
+          "clerk_generation",
+          "journal_sequence",
+          "reconciliation_state",
+          "reconciliation_fresh",
+          "reconciled_at_ms",
+          "exposure",
+          "working_orders",
+          "pending_orders",
+          "terminal_orders",
+          "unresolved_effects",
+          "hold",
+          "freeze",
+          "reason_code",
+          "observed_at_ms"
+        ],
+        "title": "ClerkCustodySnapshot",
+        "type": "object"
+      },
       "ClerkCustodyTimeline": {
         "additionalProperties": false,
         "description": "Distinct source, arrival, and durable clocks for one intent lifecycle.",
@@ -14586,6 +14775,72 @@
           "theoretical_pnl"
         ],
         "title": "CurrentCurvePoint",
+        "type": "object"
+      },
+      "CustodyCountFact": {
+        "additionalProperties": false,
+        "description": "Count whose zero/non-zero/unknown meaning is explicit.",
+        "properties": {
+          "count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          },
+          "state": {
+            "enum": [
+              "zero",
+              "non_zero",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "CustodyCountFact",
+        "type": "object"
+      },
+      "CustodyExposureFact": {
+        "additionalProperties": false,
+        "description": "Instance exposure with unknown kept distinct from known flat.",
+        "properties": {
+          "positions": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Positions"
+          },
+          "state": {
+            "enum": [
+              "zero",
+              "non_zero",
+              "unknown"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "CustodyExposureFact",
         "type": "object"
       },
       "CustodySpineStep": {
@@ -50065,6 +50320,82 @@
           }
         },
         "summary": "Execute one presented action (revision-guarded, idempotent) (\u00a711)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/authority-facts": {
+      "get": {
+        "operationId": "get_authority_facts_scoped_api_brokers__broker__accounts__account_id__bots__sid__authority_facts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotControlAuthorityFacts"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Independent process and Clerk custody facts for one bot",
         "tags": [
           "broker-v2-panel"
         ]

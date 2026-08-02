@@ -34,6 +34,8 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployView,
+    BotControlAuthorityFacts,
+    BotProcessFact,
     BotStatusView,
     DeployBotRequest,
 )
@@ -221,6 +223,21 @@ def _bot_status(broker: str, sid: str) -> BotStatusView:
         raise PanelUnavailableError(str(exc), detail=exc.detail) from exc
 
 
+def _bot_process_fact(broker: str, sid: str) -> BotProcessFact:
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+        )
+    try:
+        return registry.process_fact(broker, sid)
+    except BotRunnerError as exc:
+        if exc.http_status == 404:
+            raise UnknownBotError(str(exc), detail=exc.detail) from exc
+        raise PanelUnavailableError(str(exc), detail=exc.detail) from exc
+
+
 async def _clerk_status() -> ClerkStatus:
     clerk = get_alpaca_clerk()
     if clerk is None:
@@ -242,6 +259,29 @@ async def _validate_account(broker: str, account_id: str) -> str:
             detail=f"The broker's account is '{real_account_id}'.",
         )
     return real_account_id
+
+
+async def get_authority_facts(
+    broker: str,
+    account_id: str,
+    sid: str,
+) -> BotControlAuthorityFacts:
+    """Compose owner-authored facts without deriving a control decision."""
+    resolved_account_id = await _validate_account(broker, account_id)
+    process = _bot_process_fact(broker, sid)
+    clerk = get_alpaca_clerk()
+    if clerk is None:
+        raise PanelUnavailableError(
+            "Alpaca order management is not configured.",
+            detail="The Clerk cannot author current custody facts.",
+        )
+    custody = await clerk.custody_snapshot(sid)
+    if custody.account_id != resolved_account_id:
+        raise PanelUnavailableError(
+            "The Clerk custody account does not match the panel account.",
+            detail="Recover the account-scoped Clerk before using control actions.",
+        )
+    return BotControlAuthorityFacts.from_authorities(process, custody)
 
 
 async def deploy_bot(

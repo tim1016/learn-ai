@@ -193,6 +193,40 @@ async def test_deploy_produces_running_task_and_durable_on_duty_evidence(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_process_fact_requires_current_registry_liveness_proof(tmp_path: Path) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    view = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    running = registry.process_fact("alpaca", _SID)
+
+    assert running.strategy_instance_id == _SID
+    assert running.run_id == view.active_run_id
+    assert running.process_identity == f"in-process-task:{view.active_run_id}"
+    assert running.state == "RUNNING"
+    assert running.registry_generation
+    assert running.observed_at_ms > 0
+
+    replacement_registry = _registry(tmp_path, feed)
+    unknown = replacement_registry.process_fact("alpaca", _SID)
+
+    assert unknown.run_id == view.active_run_id
+    assert unknown.process_identity is None
+    assert unknown.state == "UNKNOWN"
+    assert unknown.registry_generation != running.registry_generation
+
+    await registry.stop("alpaca", _SID)
+    exited = replacement_registry.process_fact("alpaca", _SID)
+    assert exited.run_id == view.active_run_id
+    assert exited.process_identity is None
+    assert exited.state == "EXITED"
+
+
+@pytest.mark.asyncio
 async def test_deployed_bot_consumes_bars_and_logs_decisions(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

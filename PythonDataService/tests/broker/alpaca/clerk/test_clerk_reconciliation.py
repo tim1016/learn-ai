@@ -251,6 +251,110 @@ async def test_instance_custody_proof_includes_fresh_working_refs() -> None:
     assert proof.observed_at_ms == _FIXED_MS
 
 
+async def test_custody_snapshot_keeps_unprovable_broker_facts_unknown() -> None:
+    broker = _FakeBroker(
+        list_error=BrokerUnavailable("broker unavailable", broker="alpaca")
+    )
+    clerk = AlpacaClerk(
+        read=broker,
+        trade=broker,
+        clock=_fixed_clock,
+        clerk_generation="clerk-test-generation",
+    )
+
+    snapshot = await clerk.custody_snapshot("bot-proof")
+
+    assert snapshot.account_id == "PA-TEST"
+    assert snapshot.strategy_instance_id == "bot-proof"
+    assert snapshot.clerk_generation == "clerk-test-generation"
+    assert snapshot.reconciliation_state == "stale"
+    assert snapshot.reconciliation_fresh is False
+    assert snapshot.reconciled_at_ms == _FIXED_MS
+    assert snapshot.journal_sequence > 0
+    assert snapshot.exposure.state == "unknown"
+    assert snapshot.exposure.positions is None
+    assert snapshot.working_orders.state == "unknown"
+    assert snapshot.working_orders.count is None
+    assert snapshot.pending_orders.state == "unknown"
+    assert snapshot.terminal_orders.state == "unknown"
+    assert snapshot.unresolved_effects.state == "unknown"
+    assert snapshot.freeze.active is True
+    assert snapshot.reason_code == "CLERK_CUSTODY_UNPROVABLE"
+    assert snapshot.next_step
+    assert snapshot.observed_at_ms == _FIXED_MS
+
+
+async def test_custody_snapshot_proves_known_flat_and_zero_work() -> None:
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(
+        read=broker,
+        trade=broker,
+        clock=_fixed_clock,
+        clerk_generation="clerk-test-generation",
+    )
+
+    snapshot = await clerk.custody_snapshot("bot-proof")
+
+    assert snapshot.reconciliation_state == "clean"
+    assert snapshot.reconciliation_fresh is True
+    assert snapshot.exposure.state == "zero"
+    assert snapshot.exposure.positions == {}
+    assert snapshot.working_orders.state == "zero"
+    assert snapshot.working_orders.count == 0
+    assert snapshot.pending_orders.state == "zero"
+    assert snapshot.pending_orders.count == 0
+    assert snapshot.terminal_orders.state == "zero"
+    assert snapshot.terminal_orders.count == 0
+    assert snapshot.unresolved_effects.state == "zero"
+    assert snapshot.unresolved_effects.count == 0
+    assert snapshot.hold.active is False
+    assert snapshot.freeze.active is False
+    assert snapshot.reason_code == "CLERK_CUSTODY_PROVEN"
+    assert snapshot.next_step is None
+
+
+async def test_custody_snapshot_reports_attributed_non_zero_exposure() -> None:
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    submit = await clerk.submit_for_instance(
+        strategy_instance_id="bot-proof",
+        legs=[BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)],
+    )
+    order_ref = submit.results[0].order_ref
+    filled_order = _order(
+        client_order_id=order_ref,
+        status="filled",
+    ).model_copy(
+        update={
+            "filled_quantity": 1.0,
+            "filled_avg_price": 100.0,
+            "filled_at_ms": _FIXED_MS,
+        }
+    )
+    await clerk.record_lifecycle_event(
+        client_order_id=order_ref,
+        event=BrokerOrderEvent(
+            event_type="fill",
+            occurred_at_ms=_FIXED_MS,
+            price=100.0,
+            quantity=1.0,
+        ),
+        event_key="exec:bot-proof-fill",
+        order=filled_order,
+    )
+    broker._orders = [filled_order]
+    broker._positions = [_position()]
+
+    snapshot = await clerk.custody_snapshot("bot-proof")
+
+    assert snapshot.reconciliation_state == "clean"
+    assert snapshot.exposure.state == "non_zero"
+    assert snapshot.exposure.positions == {"SPY": 1.0}
+    assert snapshot.working_orders.state == "zero"
+    assert snapshot.terminal_orders.state == "non_zero"
+    assert snapshot.terminal_orders.count == 1
+
+
 async def test_reconcile_unexplained_order_journals_and_sets_hold() -> None:
     # An order at Alpaca whose client_order_id is foreign → unexplained + hold.
     broker = _FakeBroker(orders=[_order(client_order_id="someone-elses-order")])

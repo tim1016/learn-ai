@@ -72,7 +72,7 @@ from app.engine.live.desired_state import (
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
 from app.schemas.action_plan import ActionPlan
-from app.schemas.broker_bots import BotDutyOutcomeView, BotStatusView
+from app.schemas.broker_bots import BotDutyOutcomeView, BotProcessFact, BotStatusView
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
@@ -172,6 +172,7 @@ class BotTaskRegistry:
         self._feed_resolver = feed_resolver
         self._restart_policy = restart_policy or RestartIntensityPolicy()
         self._now_ms = now_ms
+        self._registry_generation = uuid4().hex
         self._bots: dict[str, _ManagedBot] = {}
         self._operation_locks: dict[str, asyncio.Lock] = {}
         self._start_history: dict[str, list[int]] = {}
@@ -503,6 +504,47 @@ class BotTaskRegistry:
                 detail="Deploy the bot first; bindings are broker-tagged.",
             )
         return self._compose_status(binding)
+
+    def process_fact(self, broker: str, strategy_instance_id: str) -> BotProcessFact:
+        """Return process-owner evidence without inferring broker custody."""
+        self._confined_instance_dir(strategy_instance_id)
+        binding = self._read_binding(strategy_instance_id)
+        if binding is None or binding.broker != broker:
+            raise UnknownBotError(
+                f"No bot '{strategy_instance_id}' is bound to broker '{broker}'.",
+                detail="Deploy the bot first; bindings are broker-tagged.",
+            )
+
+        lifecycle = self._lifecycle_repo(strategy_instance_id).read()
+        managed = self._bots.get(strategy_instance_id)
+        process_identity: str | None = None
+        state: Literal["STARTING", "RUNNING", "STOPPING", "EXITED", "UNKNOWN"] = "UNKNOWN"
+        if managed is not None and managed.binding.run_id == binding.run_id:
+            process_identity = f"in-process-task:{binding.run_id}"
+            lifecycle_matches = (
+                lifecycle is not None
+                and lifecycle.phase is BotLifecyclePhase.ON_DUTY
+                and lifecycle.active_run_id == binding.run_id
+            )
+            if lifecycle_matches and not managed.task.done():
+                state = "STOPPING" if managed.stop_reason_code is not None else "RUNNING"
+        elif (
+            lifecycle is not None
+            and lifecycle.phase is BotLifecyclePhase.OFF_DUTY
+            and lifecycle.active_run_id is None
+            and lifecycle.duty_outcome is not None
+            and lifecycle.duty_outcome.run_id == binding.run_id
+        ):
+            state = "EXITED"
+
+        return BotProcessFact(
+            strategy_instance_id=strategy_instance_id,
+            run_id=binding.run_id,
+            process_identity=process_identity,
+            state=state,
+            registry_generation=self._registry_generation,
+            observed_at_ms=self._now_ms(),
+        )
 
     def panel_action_receipt_path(self, strategy_instance_id: str) -> Path:
         """Return this instance's durable panel-command receipt location.
