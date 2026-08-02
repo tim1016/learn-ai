@@ -29,6 +29,22 @@ from app.engine.live.order_identity import build_bot_order_namespace, order_ref_
 from app.schemas.action_plan import ActionPlan
 
 
+def project_effect_receipts_for_instance(
+    entries: tuple[OrderJournalEntry, ...] | list[OrderJournalEntry],
+    strategy_instance_id: str,
+) -> tuple[EffectOperationReceipt, ...]:
+    """Fold each decision to its latest Clerk-authored receipt."""
+    latest: dict[str, EffectOperationReceipt] = {}
+    for entry in entries:
+        receipt = entry.effect_receipt
+        if (
+            receipt is not None
+            and receipt.operation.strategy_instance_id == strategy_instance_id
+        ):
+            latest[receipt.operation.decision_id] = receipt
+    return tuple(latest.values())
+
+
 class ClerkEffectOperations:
     """Effect-operation behavior supplied to the account-rooted Clerk.
 
@@ -508,15 +524,7 @@ class ClerkEffectOperations:
         manufacture safety copy.
         """
         entries = await self.read_journal_entries()
-        latest: dict[str, EffectOperationReceipt] = {}
-        for entry in entries:
-            receipt = entry.effect_receipt
-            if (
-                receipt is not None
-                and receipt.operation.strategy_instance_id == strategy_instance_id
-            ):
-                latest[receipt.operation.decision_id] = receipt
-        return tuple(latest.values())
+        return project_effect_receipts_for_instance(entries, strategy_instance_id)
 
     async def cancel_working_entries_for_instance(
         self, strategy_instance_id: str

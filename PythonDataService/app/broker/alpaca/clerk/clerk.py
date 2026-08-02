@@ -26,6 +26,11 @@ from uuid import uuid4
 
 from app.broker.alpaca.clerk import derive, reconcile, recovery
 from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
+from app.broker.alpaca.clerk.custody import (
+    CustodyReconciliationResult,
+    project_custody_snapshot,
+    project_instance_custody_proof,
+)
 from app.broker.alpaca.clerk.effects import ClerkEffectOperations
 from app.broker.alpaca.clerk.exposure import (
     project_expected_account_exposure,
@@ -42,10 +47,7 @@ from app.broker.alpaca.clerk.models import (
     ClerkCustodySnapshot,
     ClerkEntryKind,
     ClerkStatus,
-    CustodyCountFact,
-    CustodyExposureFact,
     EffectOperationReceipt,
-    EffectOperationState,
     EffectPurpose,
     InstanceCustodyProof,
     OrderCancelResult,
@@ -850,130 +852,35 @@ class AlpacaClerk(ClerkEffectOperations):
         sweep, and reacquire only to derive and append the latest durable
         reconciliation result.
         """
-        verdict, _proof = await self._reconcile_with_proof()
-        return verdict
+        return (await self._reconcile_with_proof()).verdict
 
     async def prove_instance_custody(
         self, strategy_instance_id: str
     ) -> InstanceCustodyProof:
         """Read fresh broker truth and return an exact instance custody proof."""
-        _verdict, proof = await self._reconcile_with_proof(
+        proof = (await self._reconcile_with_proof(
             strategy_instance_id=strategy_instance_id
-        )
+        )).proof
         assert proof is not None
         return proof
 
-    async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
+    async def custody_snapshot(
+        self, strategy_instance_id: str
+    ) -> ClerkCustodySnapshot:
         """Return one fresh, typed Clerk custody answer for an instance."""
-        proof = await self.prove_instance_custody(strategy_instance_id)
-        async with self._intake_lock:
-            account_id, journal = await self._ensure_journal()
-            entries = journal.read_entries()
-
-        if proof.reconciliation_verdict == "clean":
-            namespace = build_bot_order_namespace(strategy_instance_id)
-            positions = {
-                symbol: quantity
-                for symbol, quantity in proof.exposure.items()
-                if quantity != 0
-            }
-            exposure = CustodyExposureFact(
-                state="non_zero" if positions else "zero",
-                positions=positions,
-            )
-            working_orders = CustodyCountFact(
-                state="non_zero" if proof.working_order_refs else "zero",
-                count=len(proof.working_order_refs),
-            )
-            pending_orders = CustodyCountFact(
-                state="non_zero" if proof.unresolved_intent_refs else "zero",
-                count=len(proof.unresolved_intent_refs),
-            )
-            latest_order_by_ref: dict[str, BrokerOrder] = {}
-            latest_effect_by_decision: dict[str, EffectOperationState] = {}
-            for entry in entries:
-                if (
-                    entry.order_ref
-                    and entry.order is not None
-                    and order_ref_namespace_matches(
-                        entry.order_ref,
-                        frozenset({namespace}),
-                    )
-                ):
-                    latest_order_by_ref[entry.order_ref] = entry.order
-                receipt = entry.effect_receipt
-                if (
-                    receipt is not None
-                    and receipt.operation.strategy_instance_id == strategy_instance_id
-                ):
-                    latest_effect_by_decision[receipt.operation.decision_id] = receipt.state
-            terminal_count = sum(
-                order.status.lower()
-                in reconcile.RECONCILIATION_TERMINAL_ORDER_STATUSES
-                for order in latest_order_by_ref.values()
-            )
-            unresolved_effect_count = sum(
-                state
-                not in {
-                    EffectOperationState.NOOP,
-                    EffectOperationState.REJECTED,
-                    EffectOperationState.FLAT,
-                }
-                for state in latest_effect_by_decision.values()
-            )
-            terminal_orders = CustodyCountFact(
-                state="non_zero" if terminal_count else "zero",
-                count=terminal_count,
-            )
-            unresolved_effects = CustodyCountFact(
-                state="non_zero" if unresolved_effect_count else "zero",
-                count=unresolved_effect_count,
-            )
-            reason_code = "CLERK_CUSTODY_PROVEN"
-            next_step = None
-        else:
-            exposure = CustodyExposureFact(state="unknown")
-            working_orders = CustodyCountFact(state="unknown")
-            pending_orders = CustodyCountFact(state="unknown")
-            terminal_orders = CustodyCountFact(state="unknown")
-            unresolved_effects = CustodyCountFact(state="unknown")
-            reason_code = (
-                "CLERK_CUSTODY_UNPROVABLE"
-                if proof.reconciliation_verdict == "stale"
-                else "CLERK_CUSTODY_UNATTRIBUTABLE"
-            )
-            next_step = proof.freeze.next_step or (
-                "Reconcile the account before starting new exposure."
-            )
-
-        return ClerkCustodySnapshot(
+        result = await self._reconcile_with_proof(
+            strategy_instance_id=strategy_instance_id
+        )
+        return project_custody_snapshot(
             broker=self.broker_id,
-            account_id=account_id,
-            strategy_instance_id=strategy_instance_id,
             clerk_generation=self._clerk_generation,
-            journal_sequence=len(entries),
-            reconciliation_state=proof.reconciliation_verdict,
-            reconciliation_fresh=proof.reconciliation_verdict != "stale",
-            reconciled_at_ms=proof.observed_at_ms,
-            exposure=exposure,
-            working_orders=working_orders,
-            pending_orders=pending_orders,
-            terminal_orders=terminal_orders,
-            unresolved_effects=unresolved_effects,
-            hold=derive.hold_state(entries),
-            freeze=proof.freeze,
-            reason_code=reason_code,
-            evidence_refs=(
-                f"alpaca-clerk-journal:{account_id}:{len(entries)}",
-                f"alpaca-reconciliation:{proof.observed_at_ms}",
-            ),
-            next_step=next_step,
+            result=result,
             observed_at_ms=self._clock(),
         )
 
     async def _reconcile_with_proof(
         self, *, strategy_instance_id: str | None = None
-    ) -> tuple[ReconciliationVerdict, InstanceCustodyProof | None]:
+    ) -> CustodyReconciliationResult:
         """Shared fresh reconciliation pass with an optional instance proof."""
         await self.recover()
 
@@ -1005,15 +912,20 @@ class AlpacaClerk(ClerkEffectOperations):
                     now_ms=observed_at_ms,
                 )
                 verdict = await self._apply_reconcile_plan(journal, account_id, plan)
-                proof = self._instance_custody_proof(
+                final_entries = journal.read_entries()
+                proof = project_instance_custody_proof(
                     strategy_instance_id,
                     account_id=account_id,
-                    entries=journal.read_entries(),
+                    entries=final_entries,
                     working_orders=[],
                     verdict=verdict,
                     observed_at_ms=observed_at_ms,
                 )
-                return verdict, proof
+                return CustodyReconciliationResult(
+                    verdict=verdict,
+                    proof=proof,
+                    entries=tuple(final_entries),
+                )
 
         working_orders = [
             order
@@ -1047,56 +959,20 @@ class AlpacaClerk(ClerkEffectOperations):
                 },
             )
             verdict = await self._apply_reconcile_plan(journal, account_id, plan)
-            proof = self._instance_custody_proof(
+            final_entries = journal.read_entries()
+            proof = project_instance_custody_proof(
                 strategy_instance_id,
                 account_id=account_id,
-                entries=journal.read_entries(),
+                entries=final_entries,
                 working_orders=working_orders,
                 verdict=verdict,
                 observed_at_ms=observed_at_ms,
             )
-            return verdict, proof
-
-    def _instance_custody_proof(
-        self,
-        strategy_instance_id: str | None,
-        *,
-        account_id: str,
-        entries: list[OrderJournalEntry],
-        working_orders: list[BrokerOrder],
-        verdict: ReconciliationVerdict,
-        observed_at_ms: int,
-    ) -> InstanceCustodyProof | None:
-        if strategy_instance_id is None:
-            return None
-        namespace = build_bot_order_namespace(strategy_instance_id)
-        exposure = {
-            row.symbol: row.quantity
-            for row in project_instance_exposure(entries, namespace=namespace)
-        }
-        unresolved = tuple(
-            entry.order_ref
-            for entry in derive.unresolved_intents(entries)
-            if order_ref_namespace_matches(entry.order_ref, frozenset({namespace}))
-        )
-        working_refs = tuple(
-            order.client_order_id
-            for order in working_orders
-            if order.client_order_id
-            and order_ref_namespace_matches(
-                order.client_order_id, frozenset({namespace})
+            return CustodyReconciliationResult(
+                verdict=verdict,
+                proof=proof,
+                entries=tuple(final_entries),
             )
-        )
-        return InstanceCustodyProof(
-            account_id=account_id,
-            strategy_instance_id=strategy_instance_id,
-            reconciliation_verdict=verdict,
-            freeze=derive.account_freeze_state(entries),
-            exposure=exposure,
-            working_order_refs=working_refs,
-            unresolved_intent_refs=unresolved,
-            observed_at_ms=observed_at_ms,
-        )
 
     async def _apply_reconcile_plan(
         self, journal: OrderJournal, account_id: str, plan: reconcile.ReconcilePlan

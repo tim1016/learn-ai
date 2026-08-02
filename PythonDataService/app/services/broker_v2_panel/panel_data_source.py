@@ -281,7 +281,7 @@ async def get_authority_facts(
             "The Clerk custody account does not match the panel account.",
             detail="Recover the account-scoped Clerk before using control actions.",
         )
-    return BotControlAuthorityFacts.from_authorities(process, custody)
+    return BotControlAuthorityFacts(process=process, clerk=custody)
 
 
 async def deploy_bot(

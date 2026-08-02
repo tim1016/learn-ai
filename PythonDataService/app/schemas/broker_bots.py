@@ -51,14 +51,6 @@ class BotControlAuthorityFacts(BaseModel):
     process: BotProcessFact
     clerk: ClerkCustodySnapshot
 
-    @classmethod
-    def from_authorities(
-        cls,
-        process: BotProcessFact,
-        clerk: ClerkCustodySnapshot,
-    ) -> BotControlAuthorityFacts:
-        return cls(process=process, clerk=clerk)
-
 
 def _normalized_symbol(value: str) -> str:
     normalized = value.strip().upper()
