@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular';
+import { render, screen, waitFor } from '@testing-library/angular';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   DualPaneChartComponent,
@@ -151,6 +151,7 @@ describe('DualPaneChartComponent', () => {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
     await fixture.whenStable();
+    await waitFor(() => expect(chartMocks.setData).toHaveBeenCalled());
     chartMocks.setData.mockClear();
 
     fixture.componentRef.setInput('liveBars', [
@@ -168,15 +169,17 @@ describe('DualPaneChartComponent', () => {
     fixture.detectChanges();
     await fixture.whenStable();
 
-    expect(chartMocks.setData).toHaveBeenLastCalledWith([
-      {
-        time: 1_700_000_000,
-        open: 100,
-        high: 102,
-        low: 99,
-        close: 101,
-      },
-    ]);
+    await waitFor(() => {
+      expect(chartMocks.setData).toHaveBeenLastCalledWith([
+        {
+          time: 1_700_000_000,
+          open: 100,
+          high: 102,
+          low: 99,
+          close: 101,
+        },
+      ]);
+    });
   });
 
   it('preserves a manual zoom while fresh bars append to the same view', async () => {
