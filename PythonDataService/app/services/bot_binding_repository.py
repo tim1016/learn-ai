@@ -175,7 +175,9 @@ class BotBindingRepository:
         instance_dir = self._instance_dir_for(strategy_instance_id)
         instance_path = instance_dir / STRATEGY_INSTANCE_FILENAME
         if instance_path.is_file():
-            return self._read_normalized(instance_dir)
+            normalized = self._read_normalized(instance_dir)
+            if normalized is not None:
+                return normalized
         return self._read_legacy_binding(instance_dir)
 
     def list_for_broker(self, broker: str) -> list[BrokerBotBinding]:
@@ -318,17 +320,23 @@ class BotBindingRepository:
         )
 
     @staticmethod
-    def _read_normalized(instance_dir: Path) -> BrokerBotBinding:
+    def _read_normalized(instance_dir: Path) -> BrokerBotBinding | None:
         instance = StrategyInstanceRecord.model_validate_json(
             (instance_dir / STRATEGY_INSTANCE_FILENAME).read_text(encoding="utf-8")
         )
+        current_path = instance_dir / CURRENT_RUN_FILENAME
+        if not current_path.exists():
+            return None
         current = CurrentRunBinding.model_validate_json(
-            (instance_dir / CURRENT_RUN_FILENAME).read_text(encoding="utf-8")
+            current_path.read_text(encoding="utf-8")
         )
         if current.strategy_instance_id != instance.strategy_instance_id:
             raise ValueError("current run pointer belongs to another strategy instance")
+        run_path = instance_dir / RUNS_DIRECTORY / f"{current.run_id}.json"
+        if not run_path.exists():
+            return None
         run = BotRunRecord.model_validate_json(
-            (instance_dir / RUNS_DIRECTORY / f"{current.run_id}.json").read_text(encoding="utf-8")
+            run_path.read_text(encoding="utf-8")
         )
         if (
             run.strategy_instance_id != instance.strategy_instance_id

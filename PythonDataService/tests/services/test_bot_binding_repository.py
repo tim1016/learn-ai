@@ -10,6 +10,7 @@ import pytest
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
+    CurrentRunBinding,
     RunIdentityConflictError,
     StrategyInstanceConfigurationConflictError,
     StrategyInstanceRecord,
@@ -138,3 +139,42 @@ def test_legacy_binding_is_lifted_without_rewrite_then_migrated_on_resume(
     ]
     assert json.loads((instance_dir / "runs" / "run-001.json").read_text())["launch_reason"] == "legacy"
     assert repository.read(_SID) == resumed
+
+
+def test_read_returns_none_for_instance_without_current_run(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    instance_dir = tmp_path / "live_state" / _SID
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "strategy_instance.json").write_text(
+        StrategyInstanceRecord.from_binding(_binding()).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    assert repository.read(_SID) is None
+
+
+def test_read_lifts_legacy_binding_when_current_run_evidence_is_missing(
+    tmp_path: Path,
+) -> None:
+    repository = _repository(tmp_path)
+    binding = _binding()
+    instance_dir = tmp_path / "live_state" / _SID
+    instance_dir.mkdir(parents=True)
+    (instance_dir / "strategy_instance.json").write_text(
+        StrategyInstanceRecord.from_binding(binding).model_dump_json(),
+        encoding="utf-8",
+    )
+    (instance_dir / "current_run.json").write_text(
+        CurrentRunBinding(
+            strategy_instance_id=_SID,
+            run_id=binding.run_id,
+            bound_at_ms=binding.created_at_ms,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    (instance_dir / "broker_binding.json").write_text(
+        binding.model_dump_json(),
+        encoding="utf-8",
+    )
+
+    assert repository.read(_SID) == binding
