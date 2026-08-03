@@ -9,12 +9,12 @@ from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from tests.broker.alpaca.clerk.test_clerk_reconciliation import (
+    _FIXED_MS,
+    _clerk_root,  # noqa: F401 -- autouse fixture, imported for its side effect
     _FakeBroker,
     _fixed_clock,
     _position,
 )
-
-_MS = 1_700_000_000_000
 
 
 def _intent(order_ref: str) -> OrderJournalEntry:
@@ -26,7 +26,7 @@ def _intent(order_ref: str) -> OrderJournalEntry:
         order_ref=order_ref,
         client_order_id=order_ref,
         leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
-        recorded_at_ms=_MS,
+        recorded_at_ms=_FIXED_MS,
     )
 
 
@@ -102,6 +102,39 @@ async def test_custody_diagnosis_reports_missing_intent_mismatch() -> None:
     assert result.snapshot_version  # non-empty guard token
 
 
+async def test_custody_diagnosis_needs_review_when_unresolved_intent_has_no_delta() -> None:
+    # The false-all-clear gap (Task 3.3, Part A) exercised end-to-end through
+    # custody_diagnosis(): a journaled intent that never reached
+    # submit_acked/submit_failed, with a broker that is flat and has no
+    # working orders (no attribution delta to fold into). `resolvable` and
+    # `in_sync` must come back False/False off the actual CustodyDiagnosis —
+    # not inferred from the intermediate resolution_plan() call.
+    broker = _FakeBroker(orders=[], positions=[])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    account_id, journal = await clerk._ensure_journal()  # type: ignore[attr-defined]
+    journal.append(
+        OrderJournalEntry(
+            kind=ClerkEntryKind.INTENT_RECORDED,
+            account_id=account_id,
+            operator="ops",
+            intent_id="i1",
+            order_ref="manual/ops/v1:i1",
+            client_order_id="manual/ops/v1:i1",
+            leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+            recorded_at_ms=_FIXED_MS,
+        )
+    )
+
+    result = await clerk.custody_diagnosis()
+
+    assert result.in_sync is False
+    assert result.resolvable is False
+    assert len(result.divergences) == 1
+    assert result.divergences[0].kind == "needs_review"
+    assert result.divergences[0].evidence_refs == ("manual/ops/v1:i1",)
+    assert result.resolution_plan == ()
+
+
 async def test_custody_diagnosis_flat_account_is_in_sync() -> None:
     broker = _FakeBroker(orders=[], positions=[])
     clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
@@ -127,7 +160,11 @@ async def test_custody_diagnosis_stale_reconciliation_when_broker_unavailable() 
     assert result.in_sync is False
     assert result.resolvable is True
     assert len(result.divergences) == 1
-    assert result.divergences[0].kind == "stale_reconciliation"
+    d = result.divergences[0]
+    assert d.kind == "stale_reconciliation"
+    assert d.resolution_step == "reconcile_now"
+    assert d.possible_causes
+    assert d.explanation
     assert [s.action_id for s in result.resolution_plan] == ["reconcile_now"]
     assert result.resolution_plan[0].mutates is False
 
