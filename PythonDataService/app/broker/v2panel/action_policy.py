@@ -105,6 +105,22 @@ def _disabled(*blockers: OperatorBlocker) -> tuple[bool, list[OperatorBlocker]]:
     return False, list(blockers)
 
 
+def _stable_admission_evidence_refs(evidence_refs: tuple[str, ...]) -> tuple[str, ...]:
+    """Drop observation-only suffixes from the optimistic-concurrency input.
+
+    The complete evidence reference remains on the admission receipt for audit.
+    A fresh health observation is not, by itself, a changed safety decision, so
+    its timestamp must not make an already presented Resume action stale.
+    """
+    stable: list[str] = []
+    for ref in evidence_refs:
+        if ref.startswith("market-data-feed:"):
+            stable.append(":".join(ref.split(":")[:2]))
+        else:
+            stable.append(ref)
+    return tuple(stable)
+
+
 def _guard_deploy(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
     # deploy is a list-page action; the per-bot panel always presents it disabled.
     return _disabled()
@@ -317,7 +333,11 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
             ctx.resume_admission.allowed if ctx.resume_admission is not None else None,
             ctx.resume_admission.reason_code if ctx.resume_admission is not None else None,
             ctx.resume_admission.configuration_hash if ctx.resume_admission is not None else None,
-            ctx.resume_admission.evidence_refs if ctx.resume_admission is not None else (),
+            (
+                _stable_admission_evidence_refs(ctx.resume_admission.evidence_refs)
+                if ctx.resume_admission is not None
+                else ()
+            ),
         ),
     ),
     "pause": ActionPolicy(

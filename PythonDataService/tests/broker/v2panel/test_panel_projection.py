@@ -109,6 +109,7 @@ def _panel(
     exposure: dict[str, float] | None = None,
     resume_allowed: bool | None = None,
     dry_run_activity: list[DryRunActivity] | None = None,
+    admission_evidence_refs: tuple[str, ...] = ("test:resume-admission",),
 ):
     resolved_exposure = {"SPY": 100.0} if exposure is None else exposure
     if resume_allowed is None:
@@ -147,7 +148,7 @@ def _panel(
             market_data=0,
             clerk=0,
         ),
-        evidence_refs=("test:resume-admission",),
+        evidence_refs=admission_evidence_refs,
     )
     return build_panel(
         status,
@@ -496,6 +497,28 @@ def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
     assert panel.recent_decisions[0].reason_code == "SIMULATED_ENTER"
     assert panel.recent_fills[0].simulated is True
     assert panel.recent_fills[0].order_ref.startswith("simulated:")
+    assert panel.health.last_decision_at_ms == _NOW - 100
+    assert panel.health.last_bar_at_ms == 1_699_999_999_900
+
+
+def test_resume_token_ignores_market_data_observation_timestamp() -> None:
+    common = ("bot-process-registry:registry-1",)
+    first = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(*common, "market-data-feed:alpaca:1700000000000"),
+    )
+    second = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(*common, "market-data-feed:alpaca:1700000000001"),
+    )
+
+    assert _action(first, "resume").concurrency_token == _action(second, "resume").concurrency_token
 
 
 def test_clear_hold_gated_on_healthy_and_fresh() -> None:

@@ -151,16 +151,11 @@ describe('BotsListPageComponent', () => {
     expect(attentionEl).toBeTruthy();
   });
 
-  it('renders Resume button for OFF_DUTY bot when resume is supported', async () => {
-    const bot = fakeBot({
-      phase: 'OFF_DUTY',
-      running: false,
-      status_label: 'Off duty',
-      row_action: fakeRowAction('resume'),
-    });
+  it('renders a server-presented Stop button for an on-duty bot', async () => {
+    const bot = fakeBot({ row_action: fakeRowAction('stop') });
     await renderPage([bot]);
 
-    expect(await screen.findByRole('button', { name: /Resume spy-momentum-01/i })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Stop spy-momentum-01/i })).toBeTruthy();
   });
 
   it('renders "Fees not reported" note', async () => {

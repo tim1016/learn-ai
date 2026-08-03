@@ -303,9 +303,9 @@ def market_data_admission_fact(
         health = feed.health()
     except Exception as exc:
         logger.warning(
-            "market-data health could not author Start admission",
+            "market-data health could not author run admission",
             extra={
-                "action": "start_admission_market_data_unknown",
+                "action": "run_admission_market_data_unknown",
                 "feed_id": feed.feed_id,
                 "error": str(exc),
             },

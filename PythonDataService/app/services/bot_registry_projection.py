@@ -9,7 +9,7 @@ from app.engine.live.bot_lifecycle_state import BotLifecyclePhase, BotLifecycleS
 from app.engine.live.desired_state import DesiredState
 from app.schemas.broker_bots import BotDutyOutcomeView, BotProcessFact, BotStatusView
 from app.services.bot_binding_repository import BrokerBotBinding
-from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
+from app.services.bot_dry_run import MAX_DRY_RUN_TAIL, DryRunActivity, DryRunActivityJournal
 from app.services.bot_runtime import ManagedBot
 
 
@@ -103,4 +103,5 @@ def read_dry_run_activity(
     """Read a bounded, explicitly simulated activity suffix for a dry run."""
     if binding.mode != "dry_run":
         return []
-    return DryRunActivityJournal(instance_dir).tail(limit)
+    activity = DryRunActivityJournal(instance_dir).tail(MAX_DRY_RUN_TAIL)
+    return [row for row in activity if row.run_id == binding.run_id][-limit:]

@@ -520,23 +520,31 @@ async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: 
     """Build the 5s-poll panel projection for one bot (§7)."""
     resolved = await _validate_account(broker, account_id)
     status = _bot_status(broker, sid)
-    entries = _read_order_journal(resolved)
-    clerk_status = await _clerk_status()
     registry = get_bot_task_registry()
     if registry is None:
         raise PanelUnavailableError(
             "The bot runner is not available.",
             detail="The service is still starting or has shut down.",
         )
-    try:
-        resume_admission = await registry.preview_resume_admission(broker, sid)
-    except BotRunnerError as exc:
-        resume_admission = exc.admission_decision
-        if resume_admission is None:
-            logger.warning(
-                "broker panel Resume admission is unavailable",
-                extra={"broker": broker, "account_id": account_id, "sid": sid, "detail": exc.detail},
-            )
+    resume_admission: RunAdmissionDecision | None = None
+    if not status.running:
+        try:
+            # Resume alone needs a fresh Clerk custody fence. Do not perform a
+            # broker reconciliation every five seconds for a live run where
+            # Resume is inapplicable.
+            resume_admission = await registry.preview_resume_admission(broker, sid)
+        except BotRunnerError as exc:
+            resume_admission = exc.admission_decision
+            if resume_admission is None:
+                logger.warning(
+                    "broker panel Resume admission is unavailable",
+                    extra={"broker": broker, "account_id": account_id, "sid": sid, "detail": exc.detail},
+                )
+        # Preview can reconcile and advance Clerk evidence. Read all projection
+        # inputs afterwards so this response is one post-admission evidence cut.
+        status = _bot_status(broker, sid)
+    entries = _read_order_journal(resolved)
+    clerk_status = await _clerk_status()
     decisions = _recent_decisions(resolved, sid)
     decision = decisions[-1] if decisions else None
 
@@ -669,7 +677,13 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         registry = get_bot_task_registry()
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
-        admitted = await registry.resume_existing_with_admission(broker, sid)
+        try:
+            admitted = await registry.resume_existing_with_admission(broker, sid)
+        except BotRunnerError as exc:
+            raise ActionNotAvailableError(
+                "Resume is no longer available for this bot.",
+                detail=exc.detail or str(exc),
+            ) from exc
         return (
             f"Bot resumed as new run {admitted.bot.active_run_id} from its immutable configuration. "
             "The Clerk remains the only owner of broker order effects."

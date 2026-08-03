@@ -15,6 +15,8 @@ import pytest
 
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
+from app.services.bot_runner_errors import RunAdmissionRefusedError
+from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
@@ -330,6 +332,71 @@ async def test_resume_performer_creates_new_run_from_durable_binding(monkeypatch
         "Bot resumed as new run run-2 from its immutable configuration. "
         "The Clerk remains the only owner of broker order effects."
     )
+
+
+async def test_resume_performer_returns_known_refusal_when_fresh_admission_changes(monkeypatch) -> None:
+    class _Registry:
+        async def resume_existing_with_admission(self, _broker: str, _sid: str):
+            raise RunAdmissionRefusedError(
+                "Resume admission was refused.",
+                detail="The Clerk evidence changed before activation.",
+            )
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
+        lambda: _Registry(),
+    )
+
+    with pytest.raises(ActionNotAvailableError) as exc:
+        await _action_performers("alpaca", _SID, idempotency_key="resume-2")["resume"](
+            "desk-operator"
+        )
+
+    assert exc.value.http_status == 409
+    assert exc.value.detail == "The Clerk evidence changed before activation."
+
+
+async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> None:
+    calls = 0
+
+    class _Registry:
+        async def preview_resume_admission(self, _broker: str, _sid: str):
+            nonlocal calls
+            calls += 1
+            raise AssertionError("live panel must not preview Resume")
+
+        def dry_run_activity(self, _broker: str, _sid: str):
+            return []
+
+    class _Owner:
+        def sync(self, *_args, **_kwargs) -> None:
+            return
+
+        def get_rollup(self, _sid: str):
+            return SimpleNamespace(exposure={}, fills_today=0, realized_pnl_today=0.0, open_pnl=None, last_activity_at_ms=None)
+
+    async def _account(*_args) -> str:
+        return "account-1"
+
+    async def _clerk():
+        return SimpleNamespace()
+
+    status = SimpleNamespace(running=True)
+    sentinel = SimpleNamespace()
+    monkeypatch.setattr(panel_data_source, "_validate_account", _account)
+    monkeypatch.setattr(panel_data_source, "_bot_status", lambda *_args: status)
+    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
+    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda _account_id: [])
+    monkeypatch.setattr(panel_data_source, "_clerk_status", _clerk)
+    monkeypatch.setattr(panel_data_source, "_recent_decisions", lambda *_args: [])
+    monkeypatch.setattr(panel_data_source, "get_or_create_owner", lambda *_args: _Owner())
+    monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
+    monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: sentinel)
+
+    panel = await panel_data_source.get_panel("alpaca", "account-1", _SID)
+
+    assert panel is sentinel
+    assert calls == 0
 
 
 async def test_pause_and_continue_performers_preserve_run_identity(monkeypatch) -> None:

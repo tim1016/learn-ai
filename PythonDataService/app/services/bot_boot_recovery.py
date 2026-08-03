@@ -120,13 +120,13 @@ class BotBootRecovery:
             if (
                 record.phase is BotLifecyclePhase.OFF_DUTY
                 and record.duty_outcome is not None
-                and desired_repo.read_state() is DesiredState.RUNNING
+                and desired_repo.read_state() in {DesiredState.RUNNING, DesiredState.PAUSED}
             ):
                 desired_repo.set(
                     DesiredState.STOPPED,
                     updated_by="bot_runner_boot_sweep",
                     now_ms=self._now_ms(),
-                    reason="repair_terminal_running_intent",
+                    reason="repair_terminal_nonstopped_intent",
                 )
                 logger.warning(
                     "Boot sweep repaired terminal bot desired state",

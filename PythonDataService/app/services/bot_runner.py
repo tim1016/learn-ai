@@ -446,12 +446,17 @@ class BotTaskRegistry:
             carryover_policy=binding.carryover_policy,
             reason=f"{reason}_{binding.mode}_bot",
         )
-        task = asyncio.create_task(self._supervise(binding, feed), name=f"bot:{binding.strategy_instance_id}")
+        run_gate = asyncio.Event()
+        run_gate.set()
+        task = asyncio.create_task(
+            self._supervise(binding, feed, run_gate),
+            name=f"bot:{binding.strategy_instance_id}",
+        )
         managed = ManagedBot(
             binding=binding,
             task=task,
+            run_gate=run_gate,
         )
-        managed.run_gate.set()
         self._bots[binding.strategy_instance_id] = managed
         self._start_history[binding.strategy_instance_id] = [
             *self._starts_in_window(binding.strategy_instance_id, now),
@@ -567,6 +572,9 @@ class BotTaskRegistry:
                     "The current run is already paused.",
                     detail="Use Continue to let this same run evaluate bars again.",
                 )
+            # Pause conservatively stops bar evaluation before the durable
+            # write. Unlike Stop's intent-first ordering, this prevents one
+            # more strategy decision while the PAUSED transition is recorded.
             managed.run_gate.clear()
             try:
                 self._desired_repo(strategy_instance_id).set(
@@ -830,15 +838,14 @@ class BotTaskRegistry:
 
     # ── supervision ───────────────────────────────────────────────────
 
-    async def _supervise(self, binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
+    async def _supervise(
+        self,
+        binding: BrokerBotBinding,
+        feed: MarketDataFeed,
+        run_gate: asyncio.Event,
+    ) -> None:
         """Run the bot; on ANY exit record a typed durable duty outcome, then reap."""
         sid = binding.strategy_instance_id
-        managed = self._bots.get(sid)
-        run_gate = (
-            managed.run_gate
-            if managed is not None and managed.binding.run_id == binding.run_id
-            else None
-        )
         try:
             await execute_bot_run(
                 binding,

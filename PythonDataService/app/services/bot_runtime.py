@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,8 +13,16 @@ from app.services.bot_binding_repository import BrokerBotBinding
 from app.services.bot_dry_run import DryRunActivityJournal
 from app.services.bot_runner_errors import RunAdmissionRefusedError, UnknownBotError
 from app.services.bot_trade_strategy import run_dry_run_bot, run_trade_bot
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+
+def _open_run_gate() -> asyncio.Event:
+    """Create the gate for a newly evaluating run."""
+    gate = asyncio.Event()
+    gate.set()
+    return gate
 
 
 @dataclass
@@ -25,15 +33,25 @@ class ManagedBot:
     task: asyncio.Task[None] = field(repr=False)
     stop_reason_code: str | None = None
     finalized: bool = False
-    run_gate: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    # A new managed run evaluates immediately; Pause is the only transition
+    # that closes this gate.
+    run_gate: asyncio.Event = field(default_factory=_open_run_gate, repr=False)
 
 
 class PauseAwareFeed:
     """Hold bar delivery while one live run is durably paused."""
 
-    def __init__(self, source: MarketDataFeed, gate: asyncio.Event) -> None:
+    def __init__(
+        self,
+        source: MarketDataFeed,
+        gate: asyncio.Event,
+        *,
+        now_ms: Callable[[], int] = now_ms_utc,
+    ) -> None:
         self._source = source
         self._gate = gate
+        self._now_ms = now_ms
+        self._discard_before_ms = 0
         self.feed_id = source.feed_id
 
     async def stream_bars(
@@ -43,7 +61,15 @@ class PauseAwareFeed:
         use_rth: bool = True,
     ) -> AsyncIterator[MarketDataBar]:
         async for bar in self._source.stream_bars(symbol, use_rth=use_rth):
+            blocked = not self._gate.is_set()
             await self._gate.wait()
+            if blocked:
+                # The source can buffer bars while an operator has paused this
+                # run. Resume from a current cut instead of replaying that
+                # backlog into late trading decisions.
+                self._discard_before_ms = self._now_ms()
+            if bar.end_ms <= self._discard_before_ms:
+                continue
             yield bar
 
     def health(self) -> FeedHealth:

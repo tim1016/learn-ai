@@ -44,7 +44,13 @@ from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
-from app.services.bot_binding_repository import RunOutcomeConflictError
+from app.services.bot_binding_repository import (
+    BrokerBotBinding,
+    RunOutcomeConflictError,
+    alpaca_v1_action_plan,
+)
+from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
+from app.services.bot_registry_projection import read_dry_run_activity
 from app.services.bot_run_evidence import PROVISIONAL_STOP_REASON_CODE
 from app.services.bot_runner import (
     BootRecoveryIncompleteError,
@@ -59,6 +65,7 @@ from app.services.bot_runner import (
     UnknownBotError,
 )
 from app.services.bot_runner_errors import InvalidRunHistoryCursorError
+from app.services.bot_runtime import PauseAwareFeed
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.utils.timestamps import now_ms_utc
 
@@ -1138,7 +1145,78 @@ async def test_continue_refuses_a_live_run_that_is_not_paused(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_approved_carryover_resumes_only_after_exact_fresh_proof(
+async def test_pause_aware_feed_discards_bars_buffered_during_pause() -> None:
+    class _QueueFeed:
+        feed_id = "queue"
+
+        def __init__(self) -> None:
+            self.queue: asyncio.Queue[MarketDataBar] = asyncio.Queue()
+
+        async def stream_bars(self, _symbol: str, *, use_rth: bool = True):
+            while True:
+                yield await self.queue.get()
+
+    source = _QueueFeed()
+    gate = asyncio.Event()
+    gate.set()
+    clock = [100]
+    feed = PauseAwareFeed(source, gate, now_ms=lambda: clock[0])
+    stream = feed.stream_bars("SPY")
+
+    await source.queue.put(_bar(0))
+    assert (await anext(stream)).end_ms == 60_000
+
+    gate.clear()
+    await source.queue.put(_bar(100))
+    next_bar = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    assert not next_bar.done()
+
+    clock[0] = 200_000
+    gate.set()
+    await source.queue.put(_bar(300_000))
+    assert (await next_bar).end_ms == 360_000
+
+
+def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> None:
+    journal = DryRunActivityJournal(tmp_path)
+    for run_id, seq in (("run-prior", 1), ("run-current", 2)):
+        journal.append(
+            DryRunActivity(
+                seq=seq,
+                strategy_instance_id=_SID,
+                run_id=run_id,
+                recorded_at_ms=seq * 1_000,
+                bar_ref=f"SPY@{seq * 1_000}",
+                intent="ENTER",
+                order_ref=f"simulated:{run_id}",
+                symbol="SPY",
+                side="buy",
+                quantity=1,
+                fill_price=400,
+            )
+        )
+    binding = BrokerBotBinding(
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        broker="alpaca",
+        symbol="SPY",
+        use_rth=True,
+        mode="dry_run",
+        quantity=1,
+        carryover_policy="FORBID",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-current",
+        created_at_ms=_T0,
+    )
+
+    activity = read_dry_run_activity(binding, tmp_path, limit=8)
+
+    assert [row.run_id for row in activity] == ["run-current"]
+
+
+@pytest.mark.asyncio
+async def test_approved_carryover_resumes_for_the_explicitly_supported_strategy(
     tmp_path: Path,
 ) -> None:
     feed = _FakeFeed([], mode="hold")

@@ -196,7 +196,6 @@ async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
     assert call["use_rth"] is True
 
 
-@pytest.mark.asyncio
 async def test_dry_run_deploy_selects_zero_broker_write_runner_mode(deploy_app) -> None:
     fast_app, registry = deploy_app
     request = {**_BODY, "execution_mode": "dry_run"}
@@ -216,7 +215,6 @@ async def test_dry_run_deploy_selects_zero_broker_write_runner_mode(deploy_app) 
     assert registry.deploy_calls[-1]["mode"] == "dry_run"
 
 
-@pytest.mark.asyncio
 async def test_dry_run_refuses_broker_exposure_carryover(deploy_app) -> None:
     fast_app, registry = deploy_app
 

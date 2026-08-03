@@ -8,6 +8,9 @@ gate.
 
 from __future__ import annotations
 
+import logging
+import math
+
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.run_admission import (
     ResumeRunFacts,
@@ -17,6 +20,36 @@ from app.schemas.run_admission import (
 )
 
 AUTHORITY_FACT_MAX_AGE_MS = 5_000
+_QTY_TOLERANCE_ULPS = 4
+
+logger = logging.getLogger(__name__)
+
+
+def _exposure_matches(
+    checkpoint: dict[str, float],
+    observed: dict[str, float] | None,
+) -> bool:
+    """Compare custody quantities without rejecting JSON float round-off.
+
+    Custody contracts currently do not carry a broker minimum-increment field,
+    so the narrow safe tolerance is four IEEE-754 ULPs at each quantity. This
+    accepts serialization noise only; it cannot hide a tradable quantity move.
+    """
+    if observed is None or checkpoint.keys() != observed.keys():
+        return False
+    return all(
+        math.isclose(
+            checkpoint[symbol],
+            observed[symbol],
+            rel_tol=0.0,
+            abs_tol=max(
+                math.ulp(checkpoint[symbol]),
+                math.ulp(observed[symbol]),
+            )
+            * _QTY_TOLERANCE_ULPS,
+        )
+        for symbol in checkpoint
+    )
 
 
 def _decision(
@@ -211,7 +244,7 @@ def evaluate_run_admission(
             allowed=False,
             reason_code="CLERK_EXPOSURE_UNKNOWN",
             explanation="The Clerk cannot prove the instance exposure state.",
-            next_step="Reconcile exposure through the Clerk before Start.",
+            next_step=f"Reconcile exposure through the Clerk before {bot.operation.title()}.",
         )
     if clerk.exposure.state == "non_zero" and bot.operation == "START":
         return decide(
@@ -232,7 +265,7 @@ def evaluate_run_admission(
             allowed=False,
             reason_code="CLERK_WORK_STATE_UNKNOWN",
             explanation=f"The Clerk cannot prove the state of {unknown}.",
-            next_step="Reconcile all order and effect work before Start.",
+            next_step=f"Reconcile all order and effect work before {bot.operation.title()}.",
         )
     remaining = next((label for label, fact in unresolved if fact.state == "non_zero"), None)
     if remaining is not None:
@@ -240,7 +273,7 @@ def evaluate_run_admission(
             allowed=False,
             reason_code="CLERK_WORK_REMAINS",
             explanation=f"The Clerk proves that unresolved {remaining} remain.",
-            next_step="Resolve the remaining Clerk work before Start.",
+            next_step=f"Resolve the remaining Clerk work before {bot.operation.title()}.",
         )
     if isinstance(bot, ResumeRunFacts) and clerk.exposure.state == "non_zero":
         if not bot.exposure_carryover_supported:
@@ -269,9 +302,18 @@ def evaluate_run_admission(
             checkpoint.account_id == clerk.account_id
             and checkpoint.stopped_run_id == bot.prior_run_id
             and checkpoint.configuration_hash == bot.configuration_hash
-            and checkpoint.exposure == clerk.exposure.positions
+            and _exposure_matches(checkpoint.exposure, clerk.exposure.positions)
         )
         if not matches:
+            logger.warning(
+                "Resume checkpoint custody does not match current Clerk exposure",
+                extra={
+                    "action": "resume_checkpoint_mismatch",
+                    "strategy_instance_id": bot.strategy_instance_id,
+                    "checkpoint_exposure": checkpoint.exposure,
+                    "clerk_exposure": clerk.exposure.positions,
+                },
+            )
             return decide(
                 allowed=False,
                 reason_code="RESUME_CHECKPOINT_MISMATCH",

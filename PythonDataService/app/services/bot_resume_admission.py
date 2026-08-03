@@ -26,6 +26,7 @@ from app.services.bot_start_admission import (
     market_data_admission_fact,
     new_run_binding,
 )
+from app.services.bot_trade_strategy import EXPOSURE_CARRYOVER_STRATEGY_KEYS
 from app.services.run_admission import evaluate_run_admission
 
 CustodyGuard = Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]]
@@ -126,7 +127,7 @@ class BotResumeAdmission:
                         self._carryover_account_policy_enabled
                     ),
                     exposure_carryover_supported=(
-                        prior.strategy_key != "ema_crossover_signal"
+                        prior.strategy_key in EXPOSURE_CARRYOVER_STRATEGY_KEYS
                     ),
                     checkpoint=self._checkpoint(prior),
                 )

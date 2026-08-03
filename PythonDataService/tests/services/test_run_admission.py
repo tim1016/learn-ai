@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import math
+
+import pytest
+
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -233,13 +237,30 @@ def test_resume_admission_allows_terminal_flat_instance_and_mints_proposed_run()
 
 def test_resume_admission_blocks_without_terminal_prior_process() -> None:
     decision = evaluate_run_admission(
-        _resume_bot(process_state="UNKNOWN", process_run_id="run-prior"),
+        _resume_bot(process_state="EXITED", process_run_id="run-other"),
         _clerk(),
         evaluated_at_ms=_NOW,
     )
 
     assert decision.allowed is False
-    assert decision.reason_code == "PROCESS_STATE_UNKNOWN"
+    assert decision.reason_code == "RESUME_PROCESS_NOT_TERMINAL"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "reason_code"),
+    [
+        ({"phase": "RETIRED"}, "BOT_RETIRED"),
+        ({"desired_state": "PAUSED"}, "RESUME_REQUIRES_STOPPED_INSTANCE"),
+    ],
+)
+def test_resume_admission_refuses_invalid_instance_lifecycle(
+    kwargs: dict[str, str],
+    reason_code: str,
+) -> None:
+    decision = evaluate_run_admission(_resume_bot(**kwargs), _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == reason_code
 
 
 def test_resume_admission_requires_exact_approved_carryover_checkpoint() -> None:
@@ -277,3 +298,99 @@ def test_resume_admission_requires_exact_approved_carryover_checkpoint() -> None
     assert "carryover-checkpoint:run-prior" in allowed.evidence_refs
     assert changed.allowed is False
     assert changed.reason_code == "RESUME_CHECKPOINT_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    ("carryover_supported", "carryover_policy", "account_policy", "checkpoint", "reason_code"),
+    [
+        (False, "ALLOW", True, None, "RESUME_CARRYOVER_UNSUPPORTED"),
+        (True, "FORBID", True, None, "RESUME_CARRYOVER_NOT_ALLOWED"),
+        (True, "ALLOW", False, None, "RESUME_CARRYOVER_NOT_ALLOWED"),
+        (True, "ALLOW", True, None, "RESUME_CHECKPOINT_MISSING"),
+    ],
+)
+def test_resume_admission_refuses_unproven_exposure_carryover(
+    carryover_supported: bool,
+    carryover_policy: str,
+    account_policy: bool,
+    checkpoint: ResumeCheckpointAdmissionFact | None,
+    reason_code: str,
+) -> None:
+    clerk = _clerk().model_copy(
+        update={
+            "exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})
+        }
+    )
+    bot = _resume_bot(checkpoint=checkpoint).model_copy(
+        update={
+            "exposure_carryover_supported": carryover_supported,
+            "carryover_policy": carryover_policy,
+            "carryover_account_policy_enabled": account_policy,
+        }
+    )
+
+    decision = evaluate_run_admission(bot, clerk, evaluated_at_ms=_NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == reason_code
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_update", "reason_code"),
+    [
+        ({"account_id": "other-account"}, "RESUME_CHECKPOINT_MISMATCH"),
+        ({"stopped_run_id": "run-other"}, "RESUME_CHECKPOINT_MISMATCH"),
+        ({"configuration_hash": "c" * 64}, "RESUME_CHECKPOINT_MISMATCH"),
+        ({"exposure": {"SPY": 2.0}}, "RESUME_CHECKPOINT_MISMATCH"),
+    ],
+)
+def test_resume_checkpoint_requires_every_identity_leg(
+    checkpoint_update: dict[str, object],
+    reason_code: str,
+) -> None:
+    clerk = _clerk().model_copy(
+        update={
+            "exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})
+        }
+    )
+    checkpoint = ResumeCheckpointAdmissionFact(
+        account_id="paper-account",
+        stopped_run_id="run-prior",
+        configuration_hash="b" * 64,
+        exposure={"SPY": 1.0},
+        approved=True,
+        evidence_ref="carryover-checkpoint:run-prior",
+    ).model_copy(update=checkpoint_update)
+
+    decision = evaluate_run_admission(
+        _resume_bot(checkpoint=checkpoint),
+        clerk,
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == reason_code
+
+
+def test_resume_checkpoint_accepts_only_float_round_trip_noise() -> None:
+    clerk = _clerk().model_copy(
+        update={
+            "exposure": CustodyExposureFact(state="non_zero", positions={"SPY": 1.0})
+        }
+    )
+    exact = ResumeCheckpointAdmissionFact(
+        account_id="paper-account",
+        stopped_run_id="run-prior",
+        configuration_hash="b" * 64,
+        exposure={"SPY": 1.0},
+        approved=True,
+        evidence_ref="carryover-checkpoint:run-prior",
+    )
+    within_ulp = exact.model_copy(
+        update={"exposure": {"SPY": math.nextafter(1.0, math.inf)}}
+    )
+    changed = exact.model_copy(update={"exposure": {"SPY": 1.000_001}})
+
+    assert evaluate_run_admission(_resume_bot(checkpoint=exact), clerk, evaluated_at_ms=_NOW).allowed
+    assert evaluate_run_admission(_resume_bot(checkpoint=within_ulp), clerk, evaluated_at_ms=_NOW).allowed
+    assert not evaluate_run_admission(_resume_bot(checkpoint=changed), clerk, evaluated_at_ms=_NOW).allowed

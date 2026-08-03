@@ -46,6 +46,13 @@ _INTENT_BY_DEPLOYMENT_DECISION = {
     DeploymentDecision.ENTER: SignalIntentKind.ENTER,
     DeploymentDecision.EXIT: SignalIntentKind.EXIT,
 }
+# Carryover requires reconstructing the strategy's in-flight lifecycle from
+# durable state. Deployment validation is the one deliberately bounded
+# validation primitive approved for this path; every future strategy must opt
+# in here with its reconstruction evidence rather than inheriting permission.
+EXPOSURE_CARRYOVER_STRATEGY_KEYS: frozenset[AlpacaPaperStrategyKey] = frozenset(
+    {AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION}
+)
 
 
 class _RecordingSignalIntentExecutor:

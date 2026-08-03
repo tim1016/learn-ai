@@ -158,13 +158,12 @@ def _build_health_card(
     *,
     clerk: ClerkCard,
     exposure: dict[str, float],
-    latest_decision: DecisionReceipt | None,
+    last_decision_at_ms: int | None,
     last_bar_at_ms: int | None,
     now_ms: int,
     resume_admission: RunAdmissionDecision | None,
 ) -> BotHealthCard:
     desired_state = status.desired_state
-    last_decision_at_ms = latest_decision.ts_ms if latest_decision is not None else None
     decision_stale = last_decision_at_ms is not None and now_ms - last_decision_at_ms > STALE_THRESHOLD_MS
     can_resume = resume_admission is not None and resume_admission.allowed
     has_exposure = any(abs(quantity) > 0 for quantity in exposure.values())
@@ -459,6 +458,17 @@ def _recent_activity_views(
     )
 
 
+def _dry_run_last_bar_at_ms(activity: list[DryRunActivity]) -> int | None:
+    """Return the latest simulated bar timestamp, falling back to receipt time."""
+    if not activity:
+        return None
+    latest = activity[-1]
+    _symbol, separator, candidate = latest.bar_ref.rpartition("@")
+    if separator and candidate.isdecimal():
+        return int(candidate)
+    return latest.recorded_at_ms
+
+
 def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[ReadinessCheckView]:
     """Project present-tense enforcement checks from the canonical action guards."""
     checks: list[ReadinessCheckView] = []
@@ -614,13 +624,24 @@ def build_panel(
         now_ms=now_ms,
     )
 
+    activity = dry_run_activity or []
+    health_last_decision_at_ms = (
+        activity[-1].recorded_at_ms
+        if status.mode == "dry_run" and activity
+        else (latest_decision.ts_ms if latest_decision is not None else None)
+    )
+    health_last_bar_at_ms = (
+        _dry_run_last_bar_at_ms(activity)
+        if status.mode == "dry_run"
+        else last_bar_at_ms
+    )
     clerk = build_clerk_card(clerk_status, now_ms)
     health = _build_health_card(
         status,
         clerk=clerk,
         exposure=exposure,
-        latest_decision=latest_decision,
-        last_bar_at_ms=last_bar_at_ms,
+        last_decision_at_ms=health_last_decision_at_ms,
+        last_bar_at_ms=health_last_bar_at_ms,
         now_ms=now_ms,
         resume_admission=resume_admission,
     )
@@ -654,7 +675,7 @@ def build_panel(
         status,
         entries,
         decision_receipts,
-        dry_run_activity or [],
+        activity,
     )
 
     return BotPanelView(
