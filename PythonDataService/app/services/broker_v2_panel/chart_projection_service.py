@@ -177,7 +177,7 @@ def build_live_chart(
         strategy_instance_id, entries, from_ms=open_ms, to_ms=close_ms
     )
     notices = [
-        ChartOverlayNoticeView(code=notice.code, message=notice.message)
+        ChartOverlayNoticeView(code=notice.code, message=notice.message, source="polygon")
         for notice in chart_window.overlay_notices
     ]
     return ChartLiveResponse(

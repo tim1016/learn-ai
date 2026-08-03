@@ -1,5 +1,8 @@
 import type { AuthenticatedSseStatus } from './authenticated-sse-connection';
-import { openAuthenticatedSseConnection } from './authenticated-sse-connection';
+import {
+  openAuthenticatedSseConnection,
+  type AuthenticatedSseConnection,
+} from './authenticated-sse-connection';
 
 export interface VersionedSnapshot {
   readonly stream_epoch: string;
@@ -32,7 +35,8 @@ export function openVersionedSnapshotStream<T extends VersionedSnapshot>(
   label: string,
   callbacks: SnapshotStreamCallbacks<T>,
 ): SnapshotStream {
-  return openAuthenticatedSseConnection(url, 'snapshot', {
+  let connection: AuthenticatedSseConnection | null = null;
+  connection = openAuthenticatedSseConnection(url, 'snapshot', {
     onStatus: callbacks.onStatus,
     onEvent: (message) => {
       try {
@@ -50,6 +54,10 @@ export function openVersionedSnapshotStream<T extends VersionedSnapshot>(
     },
     onControlEvent: (name, message) => {
       if (name === 'reset') callbacks.onReset?.(message.data);
+      if (name === 'end') {
+        connection?.close();
+      }
     },
-  }, ['reset']);
+  }, ['reset', 'end']);
+  return { close: () => connection?.close() };
 }

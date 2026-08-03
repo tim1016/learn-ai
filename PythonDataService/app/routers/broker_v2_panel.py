@@ -19,7 +19,9 @@ field.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from typing import Literal, NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
@@ -39,6 +41,7 @@ from app.schemas.broker_v2_panel import (
     BotPanelView,
     ChartHistoryResponse,
     ChartLiveResponse,
+    LiveSnapshotUnavailableResponse,
     PanelAction,
     PanelActionRequest,
     PanelActionResult,
@@ -320,6 +323,12 @@ async def _live_snapshot(
     "/{broker}/accounts/{account_id}/bots/{sid}/live-snapshot",
     response_model=BotPanelLiveSnapshot,
     summary="Versioned REST bootstrap for the live bot panel",
+    responses={
+        503: {
+            "model": LiveSnapshotUnavailableResponse,
+            "description": "The producer has not published its first complete snapshot.",
+        },
+    },
 )
 async def get_live_snapshot_scoped(
     broker: str,
@@ -333,6 +342,12 @@ async def get_live_snapshot_scoped(
 @router.get(
     "/{broker}/accounts/{account_id}/bots/{sid}/live-stream",
     summary="Latest-wins SSE stream of complete bot-panel snapshots",
+    responses={
+        503: {
+            "model": LiveSnapshotUnavailableResponse,
+            "description": "The producer has not published its first complete snapshot.",
+        },
+    },
 )
 async def stream_live_snapshot_scoped(
     broker: str,
@@ -341,28 +356,23 @@ async def stream_live_snapshot_scoped(
     resolution: Literal["5s", "1m"] = Query("5s"),
     cursor: str | None = Query(default=None, max_length=128),
 ) -> StreamingResponse:
-    try:
-        await ds.validate_account_scope(broker, account_id, sid)
-        hub = await get_or_start_live_projection_hub(
-            broker,
-            account_id,
-            sid,
-            resolution=resolution,
-        )
-        current = await hub.snapshot()
-    except ds.PanelDataError as error:
-        _raise_panel_error(error)
-    except SnapshotUnavailableError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+    current = await _live_snapshot(broker, account_id, sid, resolution)
+    hub = await get_or_start_live_projection_hub(
+        broker,
+        account_id,
+        sid,
+        resolution=resolution,
+    )
 
     current_id = f"{current.stream_epoch}:{current.surface_version}"
     requested_epoch = cursor.rsplit(":", 1)[0] if cursor and ":" in cursor else None
 
-    async def event_source():
+    async def event_source() -> AsyncIterator[str]:
         queue = hub.subscribe()
         try:
             if cursor is not None and requested_epoch != current.stream_epoch:
-                yield f"event: reset\ndata: {{\"reason\":\"epoch_changed\",\"cursor\":\"{current_id}\"}}\n\n"
+                payload = json.dumps({"reason": "epoch_changed", "cursor": current_id})
+                yield f"event: reset\ndata: {payload}\n\n"
             while True:
                 try:
                     snapshot = await asyncio.wait_for(queue.get(), timeout=15.0)

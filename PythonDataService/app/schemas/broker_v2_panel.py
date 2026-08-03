@@ -475,7 +475,7 @@ class ChartOverlayNoticeView(BaseModel):
 
     code: str
     message: str
-    source: Literal["polygon"] = "polygon"
+    source: Literal["polygon"]
 
 
 class ChartLiveResponse(BaseModel):
@@ -503,10 +503,28 @@ class BotPanelLiveSnapshot(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    stream_epoch: str = ""
-    surface_version: int = Field(default=0, ge=0)
+    stream_epoch: str
+    surface_version: int = Field(ge=0)
     panel: BotPanelView
     live_chart: ChartLiveResponse
+
+
+class LiveSnapshotUnavailableDetail(BaseModel):
+    """Retry guidance when a producer has not published its first snapshot."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    message: str
+    why: str
+    next_action: str
+
+
+class LiveSnapshotUnavailableResponse(BaseModel):
+    """Typed 503 envelope for the live-panel bootstrap and stream routes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    detail: LiveSnapshotUnavailableDetail
 
 
 class ChartHistoryResponse(BaseModel):

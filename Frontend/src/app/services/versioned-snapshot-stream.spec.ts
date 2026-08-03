@@ -109,4 +109,24 @@ describe('versioned snapshot stream', () => {
     );
     expect(source.closed).toBe(true);
   });
+
+  it('treats an end control event as intentional termination', () => {
+    const onStatus = vi.fn();
+    openVersionedSnapshotStream(
+      '/api/test-snapshots/stream',
+      isTestSnapshot,
+      'Test stream',
+      {
+        onSnapshot: vi.fn(),
+        onMalformedSnapshot: vi.fn(),
+        onStatus,
+      },
+    );
+    const source = StubEventSource.instances[0];
+
+    source.emit('end', '{}');
+
+    expect(source.closed).toBe(true);
+    expect(onStatus).toHaveBeenLastCalledWith('closed');
+  });
 });

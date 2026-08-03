@@ -493,7 +493,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toBe('Network error');
   });
 
   it('persists keyboard lens changes in the query string', async () => {

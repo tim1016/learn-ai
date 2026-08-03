@@ -8560,18 +8560,18 @@
             "$ref": "#/components/schemas/BotPanelView"
           },
           "stream_epoch": {
-            "default": "",
             "title": "Stream Epoch",
             "type": "string"
           },
           "surface_version": {
-            "default": 0,
             "minimum": 0.0,
             "title": "Surface Version",
             "type": "integer"
           }
         },
         "required": [
+          "stream_epoch",
+          "surface_version",
           "panel",
           "live_chart"
         ],
@@ -12539,13 +12539,13 @@
           },
           "source": {
             "const": "polygon",
-            "default": "polygon",
             "title": "Source"
           }
         },
         "required": [
           "code",
-          "message"
+          "message",
+          "source"
         ],
         "title": "ChartOverlayNoticeView",
         "type": "object"
@@ -27466,6 +27466,45 @@
           "poisoned_flag_set"
         ],
         "title": "LiveRunSummary",
+        "type": "object"
+      },
+      "LiveSnapshotUnavailableDetail": {
+        "additionalProperties": false,
+        "description": "Retry guidance when a producer has not published its first snapshot.",
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "why": {
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "why",
+          "next_action"
+        ],
+        "title": "LiveSnapshotUnavailableDetail",
+        "type": "object"
+      },
+      "LiveSnapshotUnavailableResponse": {
+        "additionalProperties": false,
+        "description": "Typed 503 envelope for the live-panel bootstrap and stream routes.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/LiveSnapshotUnavailableDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "LiveSnapshotUnavailableResponse",
         "type": "object"
       },
       "LogLine": {
@@ -51359,6 +51398,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveSnapshotUnavailableResponse"
+                }
+              }
+            },
+            "description": "The producer has not published its first complete snapshot."
           }
         },
         "summary": "Versioned REST bootstrap for the live bot panel",
@@ -51464,6 +51513,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveSnapshotUnavailableResponse"
+                }
+              }
+            },
+            "description": "The producer has not published its first complete snapshot."
           }
         },
         "summary": "Latest-wins SSE stream of complete bot-panel snapshots",

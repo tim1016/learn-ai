@@ -14,6 +14,8 @@ the singleton for an account.
 
 from __future__ import annotations
 
+import logging
+
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
 from app.broker.alpaca.clerk.fills import project_instance_fills
 from app.broker.alpaca.clerk.journal import OrderJournal
@@ -23,6 +25,8 @@ from app.engine.live.order_identity import build_bot_order_namespace, parse_orde
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView
 from app.services.broker_v2_panel.catalog_projection_service import build_catalog
+
+logger = logging.getLogger(__name__)
 
 
 class AccountProjectionOwner:
@@ -68,7 +72,9 @@ class AccountProjectionOwner:
             self._index_entries(tail.entries)
         self._journal_offset = tail.next_offset
         self._journal_identity = tail.file_identity
-        return list(self._entries)
+        # The owner retains mutation authority; projection callers receive the
+        # stable read-only-by-convention view without an O(journal) warm copy.
+        return self._entries
 
     def entries_for_sid(self, sid: str) -> list[OrderJournalEntry]:
         """Return in-memory evidence for one bot without an account-wide scan."""
@@ -80,7 +86,16 @@ class AccountProjectionOwner:
                 continue
             try:
                 namespace, _intent_id = parse_order_ref(entry.order_ref)
-            except ValueError:
+            except ValueError as error:
+                logger.warning(
+                    "invalid Clerk order reference excluded from the bot evidence index",
+                    extra={
+                        "action": "panel_journal_reference_rejected",
+                        "account_id": self._account_id,
+                        "entry_kind": entry.kind.value,
+                        "error_type": type(error).__name__,
+                    },
+                )
                 continue
             self._entries_by_namespace.setdefault(namespace, []).append(entry)
 

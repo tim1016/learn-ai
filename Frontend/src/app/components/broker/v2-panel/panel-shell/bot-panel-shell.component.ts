@@ -179,7 +179,9 @@ export class BotPanelShellComponent {
   );
 
   protected readonly loadError = computed(() => {
-    const error = this.liveStore.error() ?? this.profile.error();
+    const liveError = this.liveStore.error();
+    if (liveError !== null) return liveError;
+    const error = this.profile.error();
     if (error === undefined || error === null) return null;
     return error instanceof Error ? error.message : 'Failed to load panel data.';
   });

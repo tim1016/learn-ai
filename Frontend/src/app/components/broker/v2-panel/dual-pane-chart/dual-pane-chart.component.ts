@@ -290,11 +290,19 @@ export class DualPaneChartComponent implements AfterViewInit {
     if (bars.length < this.renderedBars.length) return true;
     const changedFrom = this.firstChangedBar(this.renderedBars, bars);
     if (changedFrom < Math.max(0, this.renderedBars.length - 1)) return true;
-    const firstAppended = bars[this.renderedBars.length];
-    const previousLast = this.renderedBars.at(-1);
-    return firstAppended !== undefined
-      && previousLast !== undefined
-      && firstAppended.start_ms > previousLast.end_ms;
+    for (let index = this.renderedBars.length; index < bars.length; index += 1) {
+      const previous = bars[index - 1];
+      const appended = bars[index];
+      if (
+        previous === undefined
+        || appended === undefined
+        || appended.start_ms !== previous.end_ms
+        || appended.end_ms <= appended.start_ms
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private firstChangedBar(

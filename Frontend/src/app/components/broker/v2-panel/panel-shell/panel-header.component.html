@@ -34,42 +34,43 @@
     }
   </div>
 
-  <div
-    class="market-pulse"
-    [class.market-pulse--attention]="panel().market_pulse.attention_required"
+  <p-message
+    class="col-span-full w-full"
+    [severity]="panel().market_pulse.attention_required ? 'error' : 'success'"
     role="status"
     aria-live="polite"
   >
-    <div class="market-pulse__signal" aria-hidden="true"></div>
-    <div>
-      <span class="market-pulse__eyebrow">Market Pulse</span>
-      <strong>{{ panel().market_pulse.headline }}</strong>
-      <span>{{ panel().market_pulse.explanation }}</span>
+    <div class="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-3 md:grid-cols-[auto_minmax(0,1fr)_auto]">
+      <p-tag
+        [severity]="panel().market_pulse.attention_required ? 'danger' : 'success'"
+        [value]="panel().market_pulse.feed_state | receiptLabel"
+      />
+      <div class="min-w-0">
+        <span class="block text-xs font-bold uppercase tracking-wide">Market Pulse</span>
+        <strong class="block text-base">{{ panel().market_pulse.headline }}</strong>
+        <span class="block text-xs">{{ panel().market_pulse.explanation }}</span>
+      </div>
+      <dl class="col-start-2 m-0 flex flex-wrap gap-4 md:col-start-auto">
+        <div class="min-w-20">
+          <dt class="text-xs uppercase tracking-wide">Latest bar</dt>
+          <dd class="m-0 font-mono text-xs">
+            <app-timestamp-display [value]="panel().market_pulse.latest_bar_at_ms" mode="et" granularity="time" />
+          </dd>
+        </div>
+        <div class="min-w-20">
+          <dt class="text-xs uppercase tracking-wide">Age</dt>
+          <dd class="m-0 font-mono text-xs">{{ formatAge(panel().market_pulse.age_ms) }}</dd>
+        </div>
+        <div class="min-w-20">
+          <dt class="text-xs uppercase tracking-wide">Source</dt>
+          <dd class="m-0 font-mono text-xs">{{ panel().market_pulse.source ? (panel().market_pulse.source | receiptLabel) : 'Unavailable' }}</dd>
+        </div>
+      </dl>
+      @if (panel().market_pulse.next_step) {
+        <strong class="col-start-2 text-xs md:col-span-2">Next: {{ panel().market_pulse.next_step }}</strong>
+      }
     </div>
-    <dl>
-      <div>
-        <dt>Latest bar</dt>
-        <dd>
-          <app-timestamp-display
-            [value]="panel().market_pulse.latest_bar_at_ms"
-            mode="et"
-            granularity="time"
-          />
-        </dd>
-      </div>
-      <div>
-        <dt>Age</dt>
-        <dd>{{ formatAge(panel().market_pulse.age_ms) }}</dd>
-      </div>
-      <div>
-        <dt>Source</dt>
-        <dd>{{ panel().market_pulse.source ? (panel().market_pulse.source | receiptLabel) : 'Unavailable' }}</dd>
-      </div>
-    </dl>
-    @if (panel().market_pulse.next_step) {
-      <span class="market-pulse__next">Next: {{ panel().market_pulse.next_step }}</span>
-    }
-  </div>
+  </p-message>
 
   <div class="control-header__updated">
     Updated <app-timestamp-display [value]="panel().updated_at_ms" mode="local" />

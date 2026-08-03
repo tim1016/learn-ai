@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.marketdata.feed import FeedHealth
 from app.services.broker_v2_panel import market_pulse
 
@@ -16,7 +18,7 @@ class _Feed:
         return self._health
 
 
-def _session(monkeypatch, phase: str) -> None:
+def _session(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
     monkeypatch.setattr(
         market_pulse,
         "session_state_at_ms",
@@ -24,7 +26,13 @@ def _session(monkeypatch, phase: str) -> None:
     )
 
 
-def _admission_fact(monkeypatch, *, state: str, last_bar_ms: int | None, reason: str = "") -> None:
+def _admission_fact(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    state: str,
+    last_bar_ms: int | None,
+    reason: str = "",
+) -> None:
     monkeypatch.setattr(
         market_pulse,
         "market_data_admission_fact",
@@ -38,7 +46,7 @@ def _admission_fact(monkeypatch, *, state: str, last_bar_ms: int | None, reason:
     )
 
 
-def test_open_session_stale_feed_requires_attention(monkeypatch) -> None:
+def test_open_session_stale_feed_requires_attention(monkeypatch: pytest.MonkeyPatch) -> None:
     _session(monkeypatch, "RTH")
     _admission_fact(
         monkeypatch,
@@ -66,7 +74,7 @@ def test_open_session_stale_feed_requires_attention(monkeypatch) -> None:
     assert pulse.next_step is not None
 
 
-def test_closed_session_does_not_turn_idle_feed_into_false_alarm(monkeypatch) -> None:
+def test_closed_session_does_not_turn_idle_feed_into_false_alarm(monkeypatch: pytest.MonkeyPatch) -> None:
     _session(monkeypatch, "CLOSED")
     _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=1_000)
     feed = _Feed(
@@ -89,7 +97,7 @@ def test_closed_session_does_not_turn_idle_feed_into_false_alarm(monkeypatch) ->
     assert pulse.next_step is None
 
 
-def test_missing_feed_is_visible_and_blocks_during_open_session(monkeypatch) -> None:
+def test_missing_feed_is_visible_and_blocks_during_open_session(monkeypatch: pytest.MonkeyPatch) -> None:
     _session(monkeypatch, "RTH")
     _admission_fact(monkeypatch, state="UNAVAILABLE", last_bar_ms=None)
 

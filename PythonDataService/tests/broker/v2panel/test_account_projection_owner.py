@@ -8,9 +8,12 @@ tests pin.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from app.broker.alpaca.clerk.journal import OrderJournal
+import pytest
+
+from app.broker.alpaca.clerk.journal import JOURNAL_FILENAME, OrderJournal
 from app.services.broker_v2_panel.account_projection_owner import AccountProjectionOwner
 from tests.broker.v2panel.fixtures import (
     ACCT,
@@ -120,9 +123,10 @@ def test_refresh_journal_does_not_reread_history_on_warm_refresh(tmp_path: Path)
     second = fill_entry(sid=SID, intent="i2", ts_ms=2_000, qty=50.0)
     journal.append(first)
 
-    assert owner.refresh_journal(journal) == [first]
+    cold_entries = owner.refresh_journal(journal)
+    assert cold_entries == [first]
     _, bytes_after_cold_replay = owner.journal_read_stats
-    assert owner.refresh_journal(journal) == [first]
+    assert owner.refresh_journal(journal) is cold_entries
     _, bytes_after_unchanged_refresh = owner.journal_read_stats
     journal.append(second)
     assert owner.refresh_journal(journal) == [first, second]
@@ -132,3 +136,41 @@ def test_refresh_journal_does_not_reread_history_on_warm_refresh(tmp_path: Path)
     assert bytes_after_append - bytes_after_unchanged_refresh == len(
         (second.model_dump_json() + "\n").encode("utf-8")
     )
+
+
+def test_refresh_journal_rebuilds_index_after_file_replacement(tmp_path: Path) -> None:
+    owner = _owner()
+    journal = OrderJournal(account_id=ACCT, root=tmp_path)
+    original = fill_entry(sid=SID, intent="old-1", ts_ms=1_000, qty=100.0)
+    second_original = fill_entry(sid=SID, intent="old-2", ts_ms=1_500, qty=25.0)
+    replacement = fill_entry(sid=OTHER_SID, intent="new", ts_ms=2_000, qty=50.0)
+    journal.append(original)
+    journal.append(second_original)
+    owner.refresh_journal(journal)
+
+    (journal.account_dir / JOURNAL_FILENAME).unlink()
+    journal.append(replacement)
+    refreshed = owner.refresh_journal(journal)
+
+    assert refreshed == [replacement]
+    assert owner.entries_for_sid(SID) == []
+    assert owner.entries_for_sid(OTHER_SID) == [replacement]
+
+
+def test_refresh_journal_warns_without_exposing_invalid_order_reference(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    owner = _owner()
+    journal = OrderJournal(account_id=ACCT, root=tmp_path)
+    malformed = fill_entry(sid=SID, intent="bad", ts_ms=1_000).model_copy(
+        update={"order_ref": "not-a-valid-order-reference"}
+    )
+    journal.append(malformed)
+
+    with caplog.at_level(logging.WARNING):
+        owner.refresh_journal(journal)
+
+    assert "invalid Clerk order reference" in caplog.text
+    assert "not-a-valid-order-reference" not in caplog.text
+    assert owner.entries_for_sid(SID) == []

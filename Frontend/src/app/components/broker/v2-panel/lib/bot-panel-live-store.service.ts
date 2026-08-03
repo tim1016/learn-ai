@@ -24,7 +24,10 @@ function isLiveSnapshot(value: unknown): value is BotPanelLiveSnapshot {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Partial<BotPanelLiveSnapshot>;
   return typeof candidate.stream_epoch === 'string'
+    && candidate.stream_epoch.length > 0
     && typeof candidate.surface_version === 'number'
+    && Number.isInteger(candidate.surface_version)
+    && candidate.surface_version >= 0
     && typeof candidate.panel === 'object'
     && candidate.panel !== null
     && typeof candidate.live_chart === 'object'
@@ -50,12 +53,15 @@ export class BotPanelLiveStore {
 
   async start(request: LivePanelRequest): Promise<void> {
     const generation = ++this.generation;
-    if (this.request !== null && (
+    const identityChanged = this.request !== null && (
       this.request.broker !== request.broker
       || this.request.accountId !== request.accountId
       || this.request.sid !== request.sid
-    )) {
+    );
+    if (identityChanged) {
       this.selectedRail = null;
+      this.currentSnapshot.set(null);
+      this.currentError.set(null);
     }
     this.stopTransport();
     this.request = request;
@@ -75,9 +81,13 @@ export class BotPanelLiveStore {
   async refresh(): Promise<void> {
     const request = this.request;
     if (request === null) return;
+    const generation = this.generation;
     try {
-      this.adopt(await this.fetchSnapshot(request));
+      const snapshot = await this.fetchSnapshot(request);
+      if (!this.isCurrent(generation)) return;
+      this.adopt(snapshot);
     } catch (error) {
+      if (!this.isCurrent(generation)) return;
       this.currentError.set(error instanceof Error ? error.message : 'Live snapshot refresh failed.');
     }
   }
@@ -85,16 +95,25 @@ export class BotPanelLiveStore {
   async selectTransaction(transactionRef: string): Promise<void> {
     const request = this.request;
     if (request === null) return;
-    const panel = await this.panelService.getPanel(
-      request.broker,
-      request.accountId,
-      request.sid,
-      transactionRef,
-    );
-    this.selectedRail = panel.rail;
-    this.currentSnapshot.update((current) => current === null
-      ? current
-      : { ...current, panel: { ...current.panel, rail: panel.rail } });
+    const generation = this.generation;
+    try {
+      const panel = await this.panelService.getPanel(
+        request.broker,
+        request.accountId,
+        request.sid,
+        transactionRef,
+      );
+      if (!this.isCurrent(generation)) return;
+      this.selectedRail = panel.rail;
+      this.currentSnapshot.update((current) => current === null
+        ? current
+        : { ...current, panel: { ...current.panel, rail: panel.rail } });
+    } catch (error) {
+      if (!this.isCurrent(generation)) return;
+      this.currentError.set(
+        error instanceof Error ? error.message : 'Transaction evidence is unavailable.',
+      );
+    }
   }
 
   clearSelectedTransaction(): void {
@@ -142,7 +161,7 @@ export class BotPanelLiveStore {
         onReset: () => void this.refresh(),
         onStatus: (status) => {
           this.currentStatus.set(status);
-          if (status === 'open') this.stopFallback();
+          if (status === 'open' || status === 'closed') this.stopFallback();
           if (status === 'error') this.startFallback();
         },
       },
@@ -157,6 +176,10 @@ export class BotPanelLiveStore {
     const adopted = adoptVersionedSnapshot(current, candidate);
     if (adopted !== current) this.currentSnapshot.set(adopted);
     this.currentError.set(null);
+  }
+
+  private isCurrent(generation: number): boolean {
+    return generation === this.generation;
   }
 
   private startFallback(): void {

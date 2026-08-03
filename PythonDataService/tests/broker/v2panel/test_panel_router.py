@@ -341,15 +341,16 @@ async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
         async def snapshot(self) -> BotPanelLiveSnapshot:
             return snapshot
 
-        def subscribe(self):
-            queue: asyncio.Queue[BotPanelLiveSnapshot | None] = asyncio.Queue(maxsize=1)
+        def subscribe(self) -> asyncio.Queue[BotPanelLiveSnapshot | None]:
+            queue: asyncio.Queue[BotPanelLiveSnapshot | None] = asyncio.Queue(maxsize=2)
             queue.put_nowait(snapshot)
+            queue.put_nowait(None)
             return queue
 
-        def unsubscribe(self, _queue) -> None:
+        def unsubscribe(self, _queue: asyncio.Queue[BotPanelLiveSnapshot | None]) -> None:
             return None
 
-    async def get_hub(*_args, **_kwargs):
+    async def get_hub(*_args: object, **_kwargs: object) -> _Hub:
         return _Hub()
 
     monkeypatch.setattr(broker_v2_panel, "get_or_start_live_projection_hub", get_hub)
@@ -358,24 +359,28 @@ async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
             f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-snapshot",
             params={"resolution": "5s"},
         )
+        stale_cursor = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-stream",
+            params={"resolution": "5s", "cursor": "epoch-old:99"},
+        )
+        matching_cursor = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-stream",
+            params={"resolution": "5s", "cursor": "epoch-new:7"},
+        )
 
     assert bootstrap.status_code == 200
     assert bootstrap.json()["surface_version"] == 7
     assert bootstrap.json()["panel"]["market_pulse"]["headline"]
-
-    response = await broker_v2_panel.stream_live_snapshot_scoped(
-        "alpaca",
-        _ACCOUNT_ID,
-        SID,
-        resolution="5s",
-        cursor="epoch-old:99",
-    )
-    iterator = response.body_iterator
-    assert "event: reset" in await anext(iterator)
-    event = await anext(iterator)
-    assert "id: epoch-new:7" in event
-    assert "event: snapshot" in event
-    await iterator.aclose()
+    assert stale_cursor.status_code == 200
+    assert stale_cursor.headers["content-type"].startswith("text/event-stream")
+    assert stale_cursor.headers["cache-control"] == "no-cache"
+    assert stale_cursor.headers["x-accel-buffering"] == "no"
+    assert "event: reset" in stale_cursor.text
+    assert "id: epoch-new:7" in stale_cursor.text
+    assert "event: snapshot" in stale_cursor.text
+    assert matching_cursor.status_code == 200
+    assert "event: reset" not in matching_cursor.text
+    assert "id: epoch-new:7" in matching_cursor.text
 
 
 # ── §11 presented-action execution ───────────────────────────────────────────

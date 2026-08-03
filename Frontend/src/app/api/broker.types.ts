@@ -9652,16 +9652,10 @@ export interface components {
         BotPanelLiveSnapshot: {
             live_chart: components["schemas"]["ChartLiveResponse"];
             panel: components["schemas"]["BotPanelView"];
-            /**
-             * Stream Epoch
-             * @default
-             */
-            stream_epoch?: string;
-            /**
-             * Surface Version
-             * @default 0
-             */
-            surface_version?: number;
+            /** Stream Epoch */
+            stream_epoch: string;
+            /** Surface Version */
+            surface_version: number;
         };
         /**
          * BotPanelView
@@ -11281,10 +11275,9 @@ export interface components {
             message: string;
             /**
              * Source
-             * @default polygon
              * @constant
              */
-            source?: "polygon";
+            source: "polygon";
         };
         /**
          * ChartSnapshotResponse
@@ -18110,6 +18103,25 @@ export interface components {
             /** Session Start Ms */
             session_start_ms: number;
             state: components["schemas"]["RunState"];
+        };
+        /**
+         * LiveSnapshotUnavailableDetail
+         * @description Retry guidance when a producer has not published its first snapshot.
+         */
+        LiveSnapshotUnavailableDetail: {
+            /** Message */
+            message: string;
+            /** Next Action */
+            next_action: string;
+            /** Why */
+            why: string;
+        };
+        /**
+         * LiveSnapshotUnavailableResponse
+         * @description Typed 503 envelope for the live-panel bootstrap and stream routes.
+         */
+        LiveSnapshotUnavailableResponse: {
+            detail: components["schemas"]["LiveSnapshotUnavailableDetail"];
         };
         /**
          * LogLine
@@ -29139,6 +29151,15 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
+            /** @description The producer has not published its first complete snapshot. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveSnapshotUnavailableResponse"];
+                };
+            };
         };
     };
     stream_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_stream_get: {
@@ -29175,6 +29196,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The producer has not published its first complete snapshot. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveSnapshotUnavailableResponse"];
                 };
             };
         };

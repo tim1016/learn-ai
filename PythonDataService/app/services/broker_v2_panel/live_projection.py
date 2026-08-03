@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Literal
 
 from app.schemas.broker_v2_panel import BotPanelLiveSnapshot
@@ -31,18 +32,21 @@ async def get_or_start_live_projection_hub(
     key = _hub_key(broker, account_id, sid, resolution)
 
     async def assemble() -> BotPanelLiveSnapshot:
-        panel = await panel_data_source.get_panel(
-            broker,
-            account_id,
-            sid,
+        panel, chart = await asyncio.gather(
+            panel_data_source.get_panel(broker, account_id, sid),
+            panel_data_source.get_live_chart(
+                broker,
+                account_id,
+                sid,
+                resolution=resolution,
+            ),
         )
-        chart = await panel_data_source.get_live_chart(
-            broker,
-            account_id,
-            sid,
-            resolution=resolution,
+        return BotPanelLiveSnapshot(
+            stream_epoch="",
+            surface_version=0,
+            panel=panel,
+            live_chart=chart,
         )
-        return BotPanelLiveSnapshot(panel=panel, live_chart=chart)
 
     hub = _HUBS.get_or_create(
         key,

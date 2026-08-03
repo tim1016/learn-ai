@@ -183,9 +183,9 @@ async def validate_account_scope(broker: str, account_id: str, sid: str) -> None
     _bot_status(broker, sid)
 
 
-def _read_order_journal(account_id: str) -> list[OrderJournalEntry]:
+def _read_order_journal(broker: str, account_id: str) -> list[OrderJournalEntry]:
     journal = OrderJournal(account_id=account_id, root=get_clerk_settings().dir)
-    owner = get_or_create_owner(account_id, _PANEL_BROKER)
+    owner = get_or_create_owner(account_id, broker)
     return owner.refresh_journal(journal)
 
 
@@ -465,7 +465,7 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     """Build the bots-list catalog for one account (§5)."""
     resolved = await _validate_account(broker, account_id)
     statuses = _bot_statuses(broker)
-    entries = _read_order_journal(resolved)
+    entries = _read_order_journal(broker, resolved)
     sids = [status.strategy_instance_id for status in statuses]
     decisions = {sid: _latest_decision(resolved, sid) for sid in sids}
     owner = get_or_create_owner(resolved, broker)
@@ -545,7 +545,7 @@ async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: 
         # Preview can reconcile and advance Clerk evidence. Read all projection
         # inputs afterwards so this response is one post-admission evidence cut.
         status = _bot_status(broker, sid)
-    entries = _read_order_journal(resolved)
+    entries = _read_order_journal(broker, resolved)
     clerk_status = await _clerk_status()
     decisions = _recent_decisions(resolved, sid)
     decision = decisions[-1] if decisions else None
@@ -600,7 +600,7 @@ async def get_live_chart(
     resolved = await _validate_account(broker, account_id)
     status = _bot_status(broker, sid)
     symbol = status.symbol
-    entries = _read_order_journal(resolved)
+    entries = _read_order_journal(broker, resolved)
     now_ms = now_ms_utc()
 
     window = live_window(now_ms)
@@ -648,7 +648,7 @@ async def get_history_chart(broker: str, account_id: str, sid: str, preset: Char
     """Build the bounded HISTORY chart pane for one bot (§8)."""
     resolved = await _validate_account(broker, account_id)
     status = _bot_status(broker, sid)
-    entries = _read_order_journal(resolved)
+    entries = _read_order_journal(broker, resolved)
 
     async def _bar_source(symbol, start, end, multiplier, timespan):
         return await fetch_aggregate_bars(

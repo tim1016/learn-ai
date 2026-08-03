@@ -182,7 +182,22 @@ def test_cursor_read_consumes_only_appended_bytes(tmp_path: Path) -> None:
     assert warm.entries == ()
     assert warm.bytes_read == 0
     assert [entry.kind for entry in appended.entries] == [ClerkEntryKind.SUBMIT_ACKED]
-    assert appended.bytes_read < cold.bytes_read * 2
+    assert appended.bytes_read == appended.next_offset - warm.next_offset
+
+
+def test_cursor_read_resets_when_offset_is_past_journal_end(tmp_path: Path) -> None:
+    journal = OrderJournal(account_id="PA-1", root=tmp_path)
+    journal.append(_entry(ClerkEntryKind.INTENT_RECORDED))
+    cold = journal.read_from(0, file_identity=None)
+
+    reset = journal.read_from(
+        cold.next_offset + 1,
+        file_identity=cold.file_identity,
+    )
+
+    assert reset.reset is True
+    assert [entry.kind for entry in reset.entries] == [ClerkEntryKind.INTENT_RECORDED]
+    assert reset.next_offset == cold.next_offset
 
 
 def test_cursor_read_waits_for_complete_final_record(tmp_path: Path) -> None:

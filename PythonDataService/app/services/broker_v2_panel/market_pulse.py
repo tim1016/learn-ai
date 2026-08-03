@@ -7,6 +7,8 @@ from app.schemas.broker_v2_panel import MarketPulseView
 from app.services.bot_start_admission import market_data_admission_fact
 from app.services.session_authority import session_state_at_ms
 
+# The admission feed emits closed one-minute bars. This is the contracted source
+# cadence shown to operators, not the feed implementation's longer stale cutoff.
 _EXPECTED_CADENCE_MS = 60_000
 
 
