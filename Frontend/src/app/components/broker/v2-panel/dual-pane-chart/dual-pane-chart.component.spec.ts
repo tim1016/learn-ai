@@ -6,6 +6,7 @@ import {
 } from './dual-pane-chart.component';
 
 const chartMocks = vi.hoisted(() => ({
+  createChart: vi.fn(),
   setMarkers: vi.fn(),
   setData: vi.fn(),
   fitContent: vi.fn(),
@@ -29,7 +30,7 @@ vi.mock('lightweight-charts', () => {
     remove: vi.fn(),
   });
   return {
-    createChart: vi.fn().mockImplementation(() => createMockChart()),
+    createChart: chartMocks.createChart.mockImplementation(() => createMockChart()),
     createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
   };
@@ -38,6 +39,7 @@ vi.mock('lightweight-charts', () => {
 
 describe('DualPaneChartComponent', () => {
   beforeEach(() => {
+    chartMocks.createChart.mockClear();
     chartMocks.setMarkers.mockClear();
     chartMocks.setData.mockClear();
     chartMocks.fitContent.mockClear();
@@ -150,8 +152,10 @@ describe('DualPaneChartComponent', () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
-    fixture.detectChanges();
-    expect(chartMocks.setData).toHaveBeenCalledWith([]);
+    await waitFor(
+      () => expect(chartMocks.createChart).toHaveBeenCalledTimes(1),
+      { timeout: 5_000 },
+    );
     chartMocks.setData.mockClear();
 
     fixture.componentRef.setInput('liveBars', [
@@ -196,6 +200,10 @@ describe('DualPaneChartComponent', () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [initialBar], histBars: [] },
     });
+    await waitFor(
+      () => expect(chartMocks.setData).toHaveBeenCalled(),
+      { timeout: 5_000 },
+    );
     const fitCount = chartMocks.fitContent.mock.calls.length;
 
     fixture.componentRef.setInput('liveBars', [
@@ -207,6 +215,13 @@ describe('DualPaneChartComponent', () => {
       },
     ]);
     fixture.detectChanges();
+
+    await waitFor(() => {
+      expect(chartMocks.setData).toHaveBeenLastCalledWith([
+        expect.objectContaining({ time: 1_700_000_000 }),
+        expect.objectContaining({ time: 1_700_000_005 }),
+      ]);
+    });
 
     expect(chartMocks.fitContent).toHaveBeenCalledTimes(fitCount);
   });
