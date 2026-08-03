@@ -34,6 +34,43 @@
     }
   </div>
 
+  <div
+    class="market-pulse"
+    [class.market-pulse--attention]="panel().market_pulse.attention_required"
+    role="status"
+    aria-live="polite"
+  >
+    <div class="market-pulse__signal" aria-hidden="true"></div>
+    <div>
+      <span class="market-pulse__eyebrow">Market Pulse</span>
+      <strong>{{ panel().market_pulse.headline }}</strong>
+      <span>{{ panel().market_pulse.explanation }}</span>
+    </div>
+    <dl>
+      <div>
+        <dt>Latest bar</dt>
+        <dd>
+          <app-timestamp-display
+            [value]="panel().market_pulse.latest_bar_at_ms"
+            mode="et"
+            granularity="time"
+          />
+        </dd>
+      </div>
+      <div>
+        <dt>Age</dt>
+        <dd>{{ formatAge(panel().market_pulse.age_ms) }}</dd>
+      </div>
+      <div>
+        <dt>Source</dt>
+        <dd>{{ panel().market_pulse.source ? (panel().market_pulse.source | receiptLabel) : 'Unavailable' }}</dd>
+      </div>
+    </dl>
+    @if (panel().market_pulse.next_step) {
+      <span class="market-pulse__next">Next: {{ panel().market_pulse.next_step }}</span>
+    }
+  </div>
+
   <div class="control-header__updated">
     Updated <app-timestamp-display [value]="panel().updated_at_ms" mode="local" />
   </div>

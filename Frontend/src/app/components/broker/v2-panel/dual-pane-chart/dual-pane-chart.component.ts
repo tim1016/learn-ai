@@ -51,6 +51,17 @@ function toCandle(bar: ChartBar): {
   };
 }
 
+function sameBar(left: ChartBar, right: ChartBar): boolean {
+  return left.start_ms === right.start_ms
+    && left.end_ms === right.end_ms
+    && left.open === right.open
+    && left.high === right.high
+    && left.low === right.low
+    && left.close === right.close
+    && left.volume === right.volume
+    && left.source === right.source;
+}
+
 /** Return the exact candle whose half-open interval contains the fill. */
 function markerTime(
   marker: ChartFillMarker,
@@ -186,7 +197,7 @@ export class DualPaneChartComponent implements AfterViewInit {
   private series: ISeriesApi<'Candlestick'> | null = null;
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
   private renderedViewKey: string | null = null;
-  private renderedBarCount = 0;
+  private renderedBars: readonly ChartBar[] = [];
 
   constructor() {
     effect(() => this.renderActivePane());
@@ -254,18 +265,47 @@ export class DualPaneChartComponent implements AfterViewInit {
     const pane = this.activePane();
     const liveSource = this.liveSource();
     const viewKey = pane === 'live'
-      ? `live:${this.liveResolution()}`
-      : `polygon:${this.selectedPreset()}`;
+      ? `${this.symbol()}:live:${this.liveResolution()}`
+      : `${this.symbol()}:polygon:${this.selectedPreset()}`;
     if (!this.series) return;
     this.markers?.setMarkers(toSeriesMarkers(fillMarkers, bars));
     const source = pane === 'polygon' ? 'polygon' : (liveSource ?? 'ibkr');
     this.series.applyOptions(sourceColors(source));
-    this.series.setData(bars.map(toCandle));
+    const fullReplace = this.requiresFullReplace(viewKey, bars);
+    if (fullReplace) {
+      this.series.setData(bars.map(toCandle));
+    } else {
+      const changedFrom = this.firstChangedBar(this.renderedBars, bars);
+      for (const bar of bars.slice(changedFrom)) this.series.update(toCandle(bar));
+    }
     const shouldFit = bars.length > 0
-      && (viewKey !== this.renderedViewKey || this.renderedBarCount === 0);
+      && (viewKey !== this.renderedViewKey || this.renderedBars.length === 0);
     if (shouldFit) this.chart?.timeScale().fitContent();
     this.renderedViewKey = viewKey;
-    this.renderedBarCount = bars.length;
+    this.renderedBars = [...bars];
+  }
+
+  private requiresFullReplace(viewKey: string, bars: readonly ChartBar[]): boolean {
+    if (viewKey !== this.renderedViewKey || this.renderedBars.length === 0) return true;
+    if (bars.length < this.renderedBars.length) return true;
+    const changedFrom = this.firstChangedBar(this.renderedBars, bars);
+    if (changedFrom < Math.max(0, this.renderedBars.length - 1)) return true;
+    const firstAppended = bars[this.renderedBars.length];
+    const previousLast = this.renderedBars.at(-1);
+    return firstAppended !== undefined
+      && previousLast !== undefined
+      && firstAppended.start_ms > previousLast.end_ms;
+  }
+
+  private firstChangedBar(
+    previous: readonly ChartBar[],
+    next: readonly ChartBar[],
+  ): number {
+    const sharedLength = Math.min(previous.length, next.length);
+    for (let index = 0; index < sharedLength; index += 1) {
+      if (!sameBar(previous[index], next[index])) return index;
+    }
+    return sharedLength;
   }
 
   private cleanup(): void {
@@ -274,6 +314,6 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.series = null;
     this.markers = null;
     this.renderedViewKey = null;
-    this.renderedBarCount = 0;
+    this.renderedBars = [];
   }
 }

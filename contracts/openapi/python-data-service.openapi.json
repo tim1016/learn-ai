@@ -8550,6 +8550,34 @@
         "title": "BotLifecycleRosterRequest",
         "type": "object"
       },
+      "BotPanelLiveSnapshot": {
+        "description": "Versioned complete state document used by REST bootstrap and SSE.",
+        "properties": {
+          "live_chart": {
+            "$ref": "#/components/schemas/ChartLiveResponse"
+          },
+          "panel": {
+            "$ref": "#/components/schemas/BotPanelView"
+          },
+          "stream_epoch": {
+            "default": "",
+            "title": "Stream Epoch",
+            "type": "string"
+          },
+          "surface_version": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Surface Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "panel",
+          "live_chart"
+        ],
+        "title": "BotPanelLiveSnapshot",
+        "type": "object"
+      },
       "BotPanelView": {
         "description": "The full 5s-poll panel projection for one bot (\u00a77).\n\nEverything except chart data: bot health, clerk/account state, the six-\nstation rail, a journal-tail reference, the presented actions, and the\npanel-state ``revision`` those actions bind to.",
         "properties": {
@@ -8603,6 +8631,9 @@
               }
             ],
             "title": "Journal Tail Seq"
+          },
+          "market_pulse": {
+            "$ref": "#/components/schemas/MarketPulseView"
           },
           "mission_verdict": {
             "$ref": "#/components/schemas/MissionVerdictView"
@@ -8697,6 +8728,7 @@
           "mode",
           "updated_at_ms",
           "revision",
+          "market_pulse",
           "mission_verdict",
           "execution_policy",
           "health",
@@ -28042,6 +28074,110 @@
           "status"
         ],
         "title": "MarketPointModel",
+        "type": "object"
+      },
+      "MarketPulseView": {
+        "description": "Header-level market session and data recency authored by the backend.",
+        "properties": {
+          "age_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Ms"
+          },
+          "attention_required": {
+            "title": "Attention Required",
+            "type": "boolean"
+          },
+          "expected_cadence_ms": {
+            "title": "Expected Cadence Ms",
+            "type": "integer"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "feed_state": {
+            "enum": [
+              "LIVE",
+              "STALE",
+              "MISSING"
+            ],
+            "title": "Feed State",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "latest_bar_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Bar At Ms"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "session": {
+            "enum": [
+              "PRE_MARKET",
+              "OPEN",
+              "AFTER_HOURS",
+              "CLOSED",
+              "UNKNOWN"
+            ],
+            "title": "Session",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "required": [
+          "session",
+          "feed_state",
+          "latest_bar_at_ms",
+          "age_ms",
+          "source",
+          "expected_cadence_ms",
+          "headline",
+          "explanation",
+          "next_step",
+          "attention_required",
+          "observed_at_ms"
+        ],
+        "title": "MarketPulseView",
         "type": "object"
       },
       "MarketStatusResponse": {
@@ -51136,6 +51272,201 @@
           }
         },
         "summary": "Operator-gated raw evidence for one bot (bounded, paged, audit-logged) (\u00a714)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/live-snapshot": {
+      "get": {
+        "operationId": "get_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution",
+            "required": false,
+            "schema": {
+              "default": "5s",
+              "enum": [
+                "5s",
+                "1m"
+              ],
+              "title": "Resolution",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPanelLiveSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Versioned REST bootstrap for the live bot panel",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/live-stream": {
+      "get": {
+        "operationId": "stream_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution",
+            "required": false,
+            "schema": {
+              "default": "5s",
+              "enum": [
+                "5s",
+                "1m"
+              ],
+              "title": "Resolution",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Latest-wins SSE stream of complete bot-panel snapshots",
         "tags": [
           "broker-v2-panel"
         ]

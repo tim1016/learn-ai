@@ -25,6 +25,11 @@ _TRANSPORT_ONLY_PATHS = frozenset(
         ("surface_version",),
         ("fetched_at_ms",),
         ("daemon_fetched_at_ms",),
+        ("panel", "updated_at_ms"),
+        ("panel", "market_pulse", "observed_at_ms"),
+        ("panel", "mission_verdict", "evaluated_at_ms"),
+        ("panel", "readiness_checks", "evaluated_at_ms"),
+        ("live_chart", "as_of_ms"),
         ("readiness", "as_of_ms"),
         ("operator_surface", "trading_session", "as_of_ms"),
         (

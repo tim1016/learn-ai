@@ -8,6 +8,9 @@ tests pin.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from app.broker.alpaca.clerk.journal import OrderJournal
 from app.services.broker_v2_panel.account_projection_owner import AccountProjectionOwner
 from tests.broker.v2panel.fixtures import (
     ACCT,
@@ -108,3 +111,24 @@ def test_sync_inventory_baseline_retires_prior_exposure_and_accepts_later_fills(
     ]
     owner.sync(entries, [SID])
     assert owner.get_rollup(SID).exposure == {"SPY": 25.0}
+
+
+def test_refresh_journal_does_not_reread_history_on_warm_refresh(tmp_path: Path) -> None:
+    owner = _owner()
+    journal = OrderJournal(account_id=ACCT, root=tmp_path)
+    first = fill_entry(sid=SID, intent="i1", ts_ms=1_000, qty=100.0)
+    second = fill_entry(sid=SID, intent="i2", ts_ms=2_000, qty=50.0)
+    journal.append(first)
+
+    assert owner.refresh_journal(journal) == [first]
+    _, bytes_after_cold_replay = owner.journal_read_stats
+    assert owner.refresh_journal(journal) == [first]
+    _, bytes_after_unchanged_refresh = owner.journal_read_stats
+    journal.append(second)
+    assert owner.refresh_journal(journal) == [first, second]
+    _, bytes_after_append = owner.journal_read_stats
+
+    assert bytes_after_unchanged_refresh == bytes_after_cold_replay
+    assert bytes_after_append - bytes_after_unchanged_refresh == len(
+        (second.model_dump_json() + "\n").encode("utf-8")
+    )

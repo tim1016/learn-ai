@@ -18,10 +18,12 @@ field.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Literal, NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.schemas.broker_bots import (
@@ -33,6 +35,7 @@ from app.schemas.broker_bots import (
 from app.schemas.broker_v2_evidence import EvidencePage
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
+    BotPanelLiveSnapshot,
     BotPanelView,
     ChartHistoryResponse,
     ChartLiveResponse,
@@ -56,7 +59,9 @@ from app.services.broker_v2_panel.evidence_service import (
     PAGE_SIZE_DEFAULT,
     read_evidence_page,
 )
+from app.services.broker_v2_panel.live_projection import get_or_start_live_projection_hub
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
+from app.services.surface_hub import SnapshotUnavailableError
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -281,6 +286,102 @@ async def get_panel_unscoped(
 ) -> BotPanelView:
     account_id = await _resolve_default_account(broker)
     return await _panel(broker, account_id, sid, transaction_ref)
+
+
+async def _live_snapshot(
+    broker: str,
+    account_id: str,
+    sid: str,
+    resolution: Literal["5s", "1m"],
+) -> BotPanelLiveSnapshot:
+    try:
+        await ds.validate_account_scope(broker, account_id, sid)
+        hub = await get_or_start_live_projection_hub(
+            broker,
+            account_id,
+            sid,
+            resolution=resolution,
+        )
+        return await hub.snapshot()
+    except ds.PanelDataError as error:
+        _raise_panel_error(error)
+    except SnapshotUnavailableError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "The live panel snapshot is not available yet.",
+                "why": str(error),
+                "next_action": "Keep the current screen visible while the producer retries.",
+            },
+        ) from error
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/{sid}/live-snapshot",
+    response_model=BotPanelLiveSnapshot,
+    summary="Versioned REST bootstrap for the live bot panel",
+)
+async def get_live_snapshot_scoped(
+    broker: str,
+    account_id: str,
+    sid: str,
+    resolution: Literal["5s", "1m"] = Query("5s"),
+) -> BotPanelLiveSnapshot:
+    return await _live_snapshot(broker, account_id, sid, resolution)
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/{sid}/live-stream",
+    summary="Latest-wins SSE stream of complete bot-panel snapshots",
+)
+async def stream_live_snapshot_scoped(
+    broker: str,
+    account_id: str,
+    sid: str,
+    resolution: Literal["5s", "1m"] = Query("5s"),
+    cursor: str | None = Query(default=None, max_length=128),
+) -> StreamingResponse:
+    try:
+        await ds.validate_account_scope(broker, account_id, sid)
+        hub = await get_or_start_live_projection_hub(
+            broker,
+            account_id,
+            sid,
+            resolution=resolution,
+        )
+        current = await hub.snapshot()
+    except ds.PanelDataError as error:
+        _raise_panel_error(error)
+    except SnapshotUnavailableError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    current_id = f"{current.stream_epoch}:{current.surface_version}"
+    requested_epoch = cursor.rsplit(":", 1)[0] if cursor and ":" in cursor else None
+
+    async def event_source():
+        queue = hub.subscribe()
+        try:
+            if cursor is not None and requested_epoch != current.stream_epoch:
+                yield f"event: reset\ndata: {{\"reason\":\"epoch_changed\",\"cursor\":\"{current_id}\"}}\n\n"
+            while True:
+                try:
+                    snapshot = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if snapshot is None:
+                    yield "event: end\ndata: {}\n\n"
+                    return
+                event_id = f"{snapshot.stream_epoch}:{snapshot.surface_version}"
+                yield f"id: {event_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
+        finally:
+            hub.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── §11 Presented-action execution (account-scoped + unscoped alias) ─────────

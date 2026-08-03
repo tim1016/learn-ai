@@ -13,4 +13,10 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
 })
 export class PanelHeaderComponent {
   readonly panel = input.required<BotPanelView>();
+
+  protected formatAge(ageMs: number | null): string {
+    if (ageMs === null) return 'No bar received';
+    if (ageMs < 60_000) return `${Math.floor(ageMs / 1_000)}s old`;
+    return `${Math.floor(ageMs / 60_000)}m old`;
+  }
 }

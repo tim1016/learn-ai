@@ -9,6 +9,7 @@ const chartMocks = vi.hoisted(() => ({
   createChart: vi.fn(),
   setMarkers: vi.fn(),
   setData: vi.fn(),
+  update: vi.fn(),
   fitContent: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: chartMocks.fitContent };
   const createMockSeries = () => ({
     setData: chartMocks.setData,
+    update: chartMocks.update,
     applyOptions: vi.fn(),
   });
   const createSeriesMarkers = vi.fn().mockReturnValue({
@@ -42,6 +44,7 @@ interface ChartHarness {
   } | null;
   series: {
     setData: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
   } | null;
 }
 
@@ -54,6 +57,7 @@ describe('DualPaneChartComponent', () => {
     chartMocks.createChart.mockClear();
     chartMocks.setMarkers.mockClear();
     chartMocks.setData.mockClear();
+    chartMocks.update.mockClear();
     chartMocks.fitContent.mockClear();
   });
 
@@ -235,12 +239,12 @@ describe('DualPaneChartComponent', () => {
     fixture.detectChanges();
 
     await waitFor(() => {
-      expect(series.setData).toHaveBeenLastCalledWith([
-        expect.objectContaining({ time: 1_700_000_000 }),
+      expect(series.update).toHaveBeenLastCalledWith(
         expect.objectContaining({ time: 1_700_000_005 }),
-      ]);
+      );
     });
 
+    expect(series.setData).toHaveBeenCalledTimes(1);
     expect(fitContent).toHaveBeenCalledTimes(fitCount);
   }, 15_000);
 

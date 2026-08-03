@@ -63,6 +63,7 @@ from app.services.broker_v2_panel.chart_projection_service import (
     build_live_chart,
     live_window,
 )
+from app.services.broker_v2_panel.market_pulse import build_market_pulse
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
 from app.services.broker_v2_panel.panel_projection_service import (
     build_clerk_card,
@@ -184,7 +185,8 @@ async def validate_account_scope(broker: str, account_id: str, sid: str) -> None
 
 def _read_order_journal(account_id: str) -> list[OrderJournalEntry]:
     journal = OrderJournal(account_id=account_id, root=get_clerk_settings().dir)
-    return journal.read_entries()
+    owner = get_or_create_owner(account_id, _PANEL_BROKER)
+    return owner.refresh_journal(journal)
 
 
 def _latest_decision(account_id: str, sid: str) -> DecisionReceipt | None:
@@ -555,6 +557,8 @@ async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: 
     profile = panel_profile_for(broker)
     flatten_supported = profile.flatten_supported if profile is not None else False
     now_ms = now_ms_utc()
+    from app.marketdata.ibkr_feed import get_market_data_feed
+
     return build_panel(
         status,
         clerk_status,
@@ -574,6 +578,7 @@ async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: 
         recent_decisions=decisions,
         resume_admission=resume_admission,
         dry_run_activity=registry.dry_run_activity(broker, sid),
+        market_pulse=build_market_pulse(get_market_data_feed(), now_ms=now_ms),
     )
 
 

@@ -22,11 +22,8 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.journal import OrderJournal, get_clerk_settings
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
-from app.engine.live.order_identity import (
-    build_bot_order_namespace,
-    order_ref_namespace_matches,
-)
 from app.schemas.broker_v2_evidence import EvidenceAuditEntry, EvidenceEntry, EvidencePage
+from app.services.broker_v2_panel.account_projection_owner import get_or_create_owner
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -75,16 +72,6 @@ def _append_audit_entry(entry: EvidenceAuditEntry) -> None:
             "Evidence audit log write failed",
             extra={"account_id": entry.account_id, "sid": entry.strategy_instance_id},
         )
-
-
-def _is_bot_entry(entry: OrderJournalEntry, sid: str) -> bool:
-    """Return True if this journal entry belongs to the given bot's namespace."""
-    return bool(
-        entry.order_ref
-        and order_ref_namespace_matches(
-            entry.order_ref, frozenset({build_bot_order_namespace(sid)})
-        )
-    )
 
 
 def _redact_summary(entry: OrderJournalEntry) -> tuple[str, bool]:
@@ -184,10 +171,12 @@ def read_evidence_page(
     read_at = now_ms_utc()
 
     journal = OrderJournal(account_id=account_id, root=get_clerk_settings().dir)
-    all_entries: list[OrderJournalEntry] = journal.read_entries()
+    owner = get_or_create_owner(account_id, "alpaca")
+    owner.refresh_journal(journal)
 
-    # Filter to this bot's namespace (and optionally to one transaction_ref).
-    bot_entries = [e for e in all_entries if _is_bot_entry(e, sid)]
+    # The account projection owner maintains this namespace index while tailing
+    # appended records, so an evidence request never scans the full journal.
+    bot_entries = owner.entries_for_sid(sid)
     if transaction_ref:
         bot_entries = [
             e for e in bot_entries if e.order_ref == transaction_ref

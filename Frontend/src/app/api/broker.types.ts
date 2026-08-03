@@ -1657,6 +1657,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/live-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Versioned REST bootstrap for the live bot panel */
+        get: operations["get_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/live-stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Latest-wins SSE stream of complete bot-panel snapshots */
+        get: operations["stream_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/panel": {
         parameters: {
             query?: never;
@@ -9612,6 +9646,24 @@ export interface components {
             updated_by?: string;
         };
         /**
+         * BotPanelLiveSnapshot
+         * @description Versioned complete state document used by REST bootstrap and SSE.
+         */
+        BotPanelLiveSnapshot: {
+            live_chart: components["schemas"]["ChartLiveResponse"];
+            panel: components["schemas"]["BotPanelView"];
+            /**
+             * Stream Epoch
+             * @default
+             */
+            stream_epoch?: string;
+            /**
+             * Surface Version
+             * @default 0
+             */
+            surface_version?: number;
+        };
+        /**
          * BotPanelView
          * @description The full 5s-poll panel projection for one bot (§7).
          *
@@ -9640,6 +9692,7 @@ export interface components {
             journal_tail_ref: string;
             /** Journal Tail Seq */
             journal_tail_seq: number | null;
+            market_pulse: components["schemas"]["MarketPulseView"];
             mission_verdict: components["schemas"]["MissionVerdictView"];
             /**
              * Mode
@@ -18240,6 +18293,40 @@ export interface components {
              * @description Moneyness value
              */
             x: number;
+        };
+        /**
+         * MarketPulseView
+         * @description Header-level market session and data recency authored by the backend.
+         */
+        MarketPulseView: {
+            /** Age Ms */
+            age_ms: number | null;
+            /** Attention Required */
+            attention_required: boolean;
+            /** Expected Cadence Ms */
+            expected_cadence_ms: number;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Feed State
+             * @enum {string}
+             */
+            feed_state: "LIVE" | "STALE" | "MISSING";
+            /** Headline */
+            headline: string;
+            /** Latest Bar At Ms */
+            latest_bar_at_ms: number | null;
+            /** Next Step */
+            next_step: string | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /**
+             * Session
+             * @enum {string}
+             */
+            session: "PRE_MARKET" | "OPEN" | "AFTER_HOURS" | "CLOSED" | "UNKNOWN";
+            /** Source */
+            source: string | null;
         };
         /**
          * MarketStatusResponse
@@ -29004,6 +29091,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EvidencePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_snapshot_get: {
+        parameters: {
+            query?: {
+                resolution?: "5s" | "1m";
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotPanelLiveSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_live_snapshot_scoped_api_brokers__broker__accounts__account_id__bots__sid__live_stream_get: {
+        parameters: {
+            query?: {
+                resolution?: "5s" | "1m";
+                cursor?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

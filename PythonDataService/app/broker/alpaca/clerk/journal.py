@@ -26,6 +26,7 @@ import asyncio
 import os
 import re
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -42,6 +43,23 @@ _RESERVED_COMPONENTS = frozenset({".", ".."})
 
 INBOX_FILENAME = "order_inbox.jsonl"
 JOURNAL_FILENAME = "order_journal.jsonl"
+
+
+@dataclass(frozen=True)
+class JournalTailRead:
+    """One cursor-based read of complete canonical-ledger records.
+
+    ``next_offset`` always points immediately after the last complete newline,
+    so a concurrent writer's partial final record is retried on the next read.
+    ``reset`` tells the projection owner that rotation or truncation invalidated
+    its in-memory projection and a cold replay was performed.
+    """
+
+    entries: tuple[OrderJournalEntry, ...]
+    next_offset: int
+    file_identity: tuple[int, int] | None
+    reset: bool
+    bytes_read: int
 
 
 class ClerkSettings(BaseSettings):
@@ -201,6 +219,56 @@ class OrderJournal:
                 for raw in handle
                 if (stripped := raw.strip())
             ]
+
+    def read_from(
+        self,
+        offset: int,
+        *,
+        file_identity: tuple[int, int] | None,
+    ) -> JournalTailRead:
+        """Read only complete records appended after ``offset``.
+
+        This is the warm-projection API. The journal is replayed from byte zero
+        only when the caller has no cursor, or when inode change/truncation
+        proves that the prior cursor no longer names the canonical ledger.
+        """
+        if offset < 0:
+            raise ValueError("journal offset must be non-negative")
+        root_real = os.path.realpath(os.fspath(self._root))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        candidate = os.path.realpath(os.fspath(self._dir / JOURNAL_FILENAME))
+        if not candidate.startswith(root_prefix):
+            raise ValueError(f"clerk journal path escapes root: {candidate!r}")
+        if not os.path.isfile(candidate):
+            return JournalTailRead((), 0, None, file_identity is not None or offset > 0, 0)
+
+        with self._lock, open(candidate, "rb") as handle:
+            stat = os.fstat(handle.fileno())
+            identity = (stat.st_dev, stat.st_ino)
+            reset = (
+                (file_identity is not None and identity != file_identity)
+                or offset > stat.st_size
+            )
+            start = 0 if reset else offset
+            handle.seek(start)
+            payload = handle.read()
+
+        last_newline = payload.rfind(b"\n")
+        if last_newline < 0:
+            return JournalTailRead((), start, identity, reset, len(payload))
+        complete = payload[: last_newline + 1]
+        entries = tuple(
+            OrderJournalEntry.model_validate_json(line)
+            for line in complete.splitlines()
+            if line.strip()
+        )
+        return JournalTailRead(
+            entries=entries,
+            next_offset=start + len(complete),
+            file_identity=identity,
+            reset=reset,
+            bytes_read=len(payload),
+        )
 
 
 _settings: ClerkSettings | None = None

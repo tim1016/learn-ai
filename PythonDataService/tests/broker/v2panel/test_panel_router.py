@@ -37,8 +37,11 @@ from app.broker.contract.registry import (
     reset_broker_registry_for_testing,
 )
 from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.routers import broker_v2_panel
 from app.routers.broker_v2_panel import router
+from app.schemas.broker_v2_panel import BotPanelLiveSnapshot, ChartLiveResponse
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
@@ -307,6 +310,72 @@ async def test_panel_scoped_never_emits_paused(api) -> None:
     assert body["health"]["desired_state"] != "PAUSED"
     assert len(body["rail"]["stations"]) == 6
     assert "revision" in body
+
+
+async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _clerk, registry = api
+    await _deploy_bot(registry)
+    panel = await panel_data_source.get_panel("alpaca", _ACCOUNT_ID, SID)
+    chart = ChartLiveResponse(
+        strategy_instance_id=SID,
+        symbol="SPY",
+        trading_date_open_ms=_T0,
+        trading_date_close_ms=_T0 + 60_000,
+        resolution="5s",
+        bars=[],
+        fill_markers=[],
+        overlay_notices=[],
+        as_of_ms=_T0,
+    )
+    snapshot = BotPanelLiveSnapshot(
+        stream_epoch="epoch-new",
+        surface_version=7,
+        panel=panel,
+        live_chart=chart,
+    )
+
+    class _Hub:
+        async def snapshot(self) -> BotPanelLiveSnapshot:
+            return snapshot
+
+        def subscribe(self):
+            queue: asyncio.Queue[BotPanelLiveSnapshot | None] = asyncio.Queue(maxsize=1)
+            queue.put_nowait(snapshot)
+            return queue
+
+        def unsubscribe(self, _queue) -> None:
+            return None
+
+    async def get_hub(*_args, **_kwargs):
+        return _Hub()
+
+    monkeypatch.setattr(broker_v2_panel, "get_or_start_live_projection_hub", get_hub)
+    async with _client(app) as client:
+        bootstrap = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-snapshot",
+            params={"resolution": "5s"},
+        )
+
+    assert bootstrap.status_code == 200
+    assert bootstrap.json()["surface_version"] == 7
+    assert bootstrap.json()["panel"]["market_pulse"]["headline"]
+
+    response = await broker_v2_panel.stream_live_snapshot_scoped(
+        "alpaca",
+        _ACCOUNT_ID,
+        SID,
+        resolution="5s",
+        cursor="epoch-old:99",
+    )
+    iterator = response.body_iterator
+    assert "event: reset" in await anext(iterator)
+    event = await anext(iterator)
+    assert "id: epoch-new:7" in event
+    assert "event: snapshot" in event
+    await iterator.aclose()
 
 
 # ── §11 presented-action execution ───────────────────────────────────────────

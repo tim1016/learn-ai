@@ -3,6 +3,7 @@ import {
   Component,
   DestroyRef,
   computed,
+  effect,
   inject,
   input,
   linkedSignal,
@@ -23,6 +24,7 @@ import type {
   RunHistoryState,
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
 import { PanelHeaderComponent } from './panel-header.component';
@@ -67,6 +69,7 @@ interface RunHistoryLocation {
   ],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
+  providers: [BotPanelLiveStore],
 })
 export class BotPanelShellComponent {
   // ── Route inputs (Angular route input binding) ────────────────────────────
@@ -78,6 +81,7 @@ export class BotPanelShellComponent {
   // ── Services ──────────────────────────────────────────────────────────────
 
   private readonly panelSvc = inject(BrokerV2PanelService);
+  private readonly liveStore = inject(BotPanelLiveStore);
   private readonly destroyRef = inject(DestroyRef);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -105,22 +109,12 @@ export class BotPanelShellComponent {
     computation: () => ({ mode: 'current', cursor: null, newerCursors: [] }),
   });
 
-  protected readonly panel = resource({
-    params: () => ({
-      ...this.routeParams(),
-      transactionRef:
-        this.activeLens() === 'operator'
-          ? (this.selectedTransactionRef() ?? undefined)
-          : undefined,
-    }),
-    loader: ({ params }) =>
-      this.panelSvc.getPanel(
-        params.broker,
-        params.accountId,
-        params.sid,
-        params.transactionRef,
-      ),
+  protected readonly panel = computed(() => this.liveStore.snapshot()?.panel ?? null);
+  protected readonly liveChart = computed(() => {
+    const chart = this.liveStore.snapshot()?.live_chart ?? null;
+    return chart?.resolution === this.liveResolution() ? chart : null;
   });
+  protected readonly liveStreamStatus = this.liveStore.status;
 
   protected readonly profile = resource({
     params: () => this.broker(),
@@ -166,20 +160,6 @@ export class BotPanelShellComponent {
     };
   });
 
-  protected readonly liveChart = resource({
-    params: () =>
-      this.activeLens() === 'trader'
-        ? { ...this.routeParams(), resolution: this.liveResolution() }
-        : undefined,
-    loader: ({ params }) =>
-      this.panelSvc.getLiveChart(
-        params.broker,
-        params.accountId,
-        params.sid,
-        params.resolution,
-      ),
-  });
-
   protected readonly histChart = resource({
     params: () =>
       this.activeLens() === 'trader'
@@ -195,30 +175,33 @@ export class BotPanelShellComponent {
   });
 
   protected readonly isLoaded = computed(
-    () => this.panel.hasValue() && this.profile.hasValue(),
+    () => this.panel() !== null && this.profile.hasValue(),
   );
 
   protected readonly loadError = computed(() => {
-    const error = this.panel.error() ?? this.profile.error();
-    if (error === undefined) return null;
+    const error = this.liveStore.error() ?? this.profile.error();
+    if (error === undefined || error === null) return null;
     return error instanceof Error ? error.message : 'Failed to load panel data.';
   });
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   constructor() {
+    effect(() => {
+      void this.liveStore.start({
+        ...this.routeParams(),
+        resolution: this.liveResolution(),
+      });
+    });
     const pollTimer = setInterval(() => {
-      if (!this.panel.isLoading()) {
-        this.panel.reload();
-      }
       if (!this.currentRun.isLoading()) {
         this.currentRun.reload();
       }
-      if (this.activeLens() === 'trader' && !this.liveChart.isLoading()) {
-        this.liveChart.reload();
-      }
     }, 5_000);
-    this.destroyRef.onDestroy(() => clearInterval(pollTimer));
+    this.destroyRef.onDestroy(() => {
+      clearInterval(pollTimer);
+      this.liveStore.stop();
+    });
   }
 
   // ── Shell helpers for S4 extension ───────────────────────────────────────
@@ -228,6 +211,7 @@ export class BotPanelShellComponent {
     this.activeLens.set(lens);
     if (lens === 'trader') {
       this.selectedTransactionRef.set(null);
+      this.liveStore.clearSelectedTransaction();
     }
     void this.router.navigate([], {
       relativeTo: this.route,
@@ -277,6 +261,7 @@ export class BotPanelShellComponent {
 
   protected onTransactionSelected(transactionRef: string): void {
     this.selectedTransactionRef.set(transactionRef);
+    void this.liveStore.selectTransaction(transactionRef);
   }
 
   protected onRunHistoryNavigation(destination: RunHistoryNavigation): void {
@@ -338,7 +323,7 @@ export class BotPanelShellComponent {
         action,
       );
       this.actionReceipt.set(this.successReceipt(result));
-      this.panel.reload();
+      await this.liveStore.refresh();
       this.currentRun.reload();
     } catch (error) {
       const receipt = this.errorReceipt(error, action);

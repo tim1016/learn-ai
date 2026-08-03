@@ -169,6 +169,41 @@ def test_read_entries_on_empty_journal_returns_empty(tmp_path: Path) -> None:
     assert OrderJournal(account_id="PA-1", root=tmp_path).read_entries() == []
 
 
+def test_cursor_read_consumes_only_appended_bytes(tmp_path: Path) -> None:
+    journal = OrderJournal(account_id="PA-1", root=tmp_path)
+    journal.append(_entry(ClerkEntryKind.INTENT_RECORDED))
+
+    cold = journal.read_from(0, file_identity=None)
+    warm = journal.read_from(cold.next_offset, file_identity=cold.file_identity)
+    journal.append(_entry(ClerkEntryKind.SUBMIT_ACKED))
+    appended = journal.read_from(warm.next_offset, file_identity=warm.file_identity)
+
+    assert [entry.kind for entry in cold.entries] == [ClerkEntryKind.INTENT_RECORDED]
+    assert warm.entries == ()
+    assert warm.bytes_read == 0
+    assert [entry.kind for entry in appended.entries] == [ClerkEntryKind.SUBMIT_ACKED]
+    assert appended.bytes_read < cold.bytes_read * 2
+
+
+def test_cursor_read_waits_for_complete_final_record(tmp_path: Path) -> None:
+    journal = OrderJournal(account_id="PA-1", root=tmp_path)
+    journal.append(_entry())
+    cold = journal.read_from(0, file_identity=None)
+    path = journal.account_dir / JOURNAL_FILENAME
+    partial = _entry(ClerkEntryKind.SUBMIT_ACKED).model_dump_json().encode("utf-8")
+    with path.open("ab") as handle:
+        handle.write(partial)
+
+    incomplete = journal.read_from(cold.next_offset, file_identity=cold.file_identity)
+    with path.open("ab") as handle:
+        handle.write(b"\n")
+    complete = journal.read_from(incomplete.next_offset, file_identity=incomplete.file_identity)
+
+    assert incomplete.entries == ()
+    assert incomplete.next_offset == cold.next_offset
+    assert [entry.kind for entry in complete.entries] == [ClerkEntryKind.SUBMIT_ACKED]
+
+
 @pytest.mark.parametrize("account_id", ["../escape", ".", ".."])
 def test_unsafe_account_id_is_rejected(tmp_path: Path, account_id: str) -> None:
     with pytest.raises(ValueError, match="unsafe account_id"):
