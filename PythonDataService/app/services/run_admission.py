@@ -1,4 +1,4 @@
-"""Pure, typed first-Start admission policy for broker bot runs.
+"""Pure, typed Start and Resume admission policy for broker bot runs.
 
 Projection endpoints and mutation paths must call :func:`evaluate_run_admission`
 with authority-authored facts. The policy does not read files, call a broker,
@@ -8,18 +8,52 @@ gate.
 
 from __future__ import annotations
 
+import logging
+import math
+
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.schemas.run_admission import (
+    ResumeRunFacts,
     RunAdmissionDecision,
     RunAdmissionFactAges,
-    StartRunFacts,
+    RunAdmissionFacts,
 )
 
 AUTHORITY_FACT_MAX_AGE_MS = 5_000
+_QTY_TOLERANCE_ULPS = 4
+
+logger = logging.getLogger(__name__)
+
+
+def _exposure_matches(
+    checkpoint: dict[str, float],
+    observed: dict[str, float] | None,
+) -> bool:
+    """Compare custody quantities without rejecting JSON float round-off.
+
+    Custody contracts currently do not carry a broker minimum-increment field,
+    so the narrow safe tolerance is four IEEE-754 ULPs at each quantity. This
+    accepts serialization noise only; it cannot hide a tradable quantity move.
+    """
+    if observed is None or checkpoint.keys() != observed.keys():
+        return False
+    return all(
+        math.isclose(
+            checkpoint[symbol],
+            observed[symbol],
+            rel_tol=0.0,
+            abs_tol=max(
+                math.ulp(checkpoint[symbol]),
+                math.ulp(observed[symbol]),
+            )
+            * _QTY_TOLERANCE_ULPS,
+        )
+        for symbol in checkpoint
+    )
 
 
 def _decision(
-    bot: StartRunFacts,
+    bot: RunAdmissionFacts,
     clerk: ClerkCustodySnapshot,
     *,
     evaluated_at_ms: int,
@@ -29,6 +63,13 @@ def _decision(
     explanation: str,
     next_step: str | None,
 ) -> RunAdmissionDecision:
+    evidence_refs = [
+        f"bot-process-registry:{bot.process.registry_generation}",
+        f"market-data-feed:{bot.market_data.feed_id or 'unknown'}:{bot.market_data.observed_at_ms}",
+        *clerk.evidence_refs,
+    ]
+    if isinstance(bot, ResumeRunFacts) and bot.checkpoint is not None:
+        evidence_refs.append(bot.checkpoint.evidence_ref)
     return RunAdmissionDecision(
         operation=bot.operation,
         allowed=allowed,
@@ -41,21 +82,17 @@ def _decision(
         account_id=clerk.account_id,
         evaluated_at_ms=evaluated_at_ms,
         fact_ages_ms=fact_ages_ms,
-        evidence_refs=(
-            f"bot-process-registry:{bot.process.registry_generation}",
-            f"market-data-feed:{bot.market_data.feed_id or 'unknown'}:{bot.market_data.observed_at_ms}",
-            *clerk.evidence_refs,
-        ),
+        evidence_refs=tuple(evidence_refs),
     )
 
 
 def evaluate_run_admission(
-    bot: StartRunFacts,
+    bot: RunAdmissionFacts,
     clerk: ClerkCustodySnapshot,
     *,
     evaluated_at_ms: int,
 ) -> RunAdmissionDecision:
-    """Decide Start from bot and Clerk facts only; unknown always blocks."""
+    """Decide Start or Resume from bot and Clerk facts; unknown blocks."""
     fact_ages_ms = RunAdmissionFactAges(
         runtime=evaluated_at_ms - bot.runtime.observed_at_ms,
         process=evaluated_at_ms - bot.process.observed_at_ms,
@@ -87,7 +124,7 @@ def evaluate_run_admission(
             allowed=False,
             reason_code="AUTHORITY_CLOCK_INVALID",
             explanation="An authority fact is dated after this admission evaluation.",
-            next_step="Refresh process, market-data, and Clerk evidence before Start.",
+            next_step=f"Refresh process, market-data, and Clerk evidence before {bot.operation.title()}.",
         )
     stale_authority = next(
         (authority for authority, age_ms in fact_ages.items() if age_ms > AUTHORITY_FACT_MAX_AGE_MS),
@@ -97,8 +134,11 @@ def evaluate_run_admission(
         return decide(
             allowed=False,
             reason_code="AUTHORITY_FACT_STALE",
-            explanation=(f"The {stale_authority} fact is older than the 5-second Start boundary."),
-            next_step="Refresh process, market-data, and Clerk evidence before Start.",
+            explanation=(
+                f"The {stale_authority} fact is older than the 5-second "
+                f"{bot.operation.title()} boundary."
+            ),
+            next_step=f"Refresh process, market-data, and Clerk evidence before {bot.operation.title()}.",
         )
     if clerk.strategy_instance_id != bot.strategy_instance_id:
         return decide(
@@ -119,9 +159,9 @@ def evaluate_run_admission(
             allowed=False,
             reason_code="PROCESS_STATE_UNKNOWN",
             explanation="The process registry cannot prove whether this instance is already running.",
-            next_step="Recover the bot runner registry before Start.",
+            next_step=f"Recover the bot runner registry before {bot.operation.title()}.",
         )
-    if bot.process.state != "ABSENT":
+    if bot.operation == "START" and bot.process.state != "ABSENT":
         active = bot.process.state in {"STARTING", "RUNNING", "STOPPING"}
         return decide(
             allowed=False,
@@ -137,6 +177,35 @@ def evaluate_run_admission(
                 else "Use Resume for the unchanged instance, or create a new instance ID."
             ),
         )
+    if isinstance(bot, ResumeRunFacts):
+        if bot.process.state in {"STARTING", "RUNNING", "STOPPING"}:
+            return decide(
+                allowed=False,
+                reason_code="RUN_ALREADY_ACTIVE",
+                explanation="This strategy instance already has an active process-owned run.",
+                next_step="Use the current run controls instead of creating another run.",
+            )
+        if bot.process.state != "EXITED" or bot.process.run_id != bot.prior_run_id:
+            return decide(
+                allowed=False,
+                reason_code="RESUME_PROCESS_NOT_TERMINAL",
+                explanation="The process registry cannot prove the prior run exited terminally.",
+                next_step="Recover terminal process evidence before Resume.",
+            )
+        if bot.phase == "RETIRED":
+            return decide(
+                allowed=False,
+                reason_code="BOT_RETIRED",
+                explanation="A retired strategy instance cannot create another run.",
+                next_step="Deploy a replacement strategy instance with a new ID.",
+            )
+        if bot.phase != "OFF_DUTY" or bot.desired_state != "STOPPED":
+            return decide(
+                allowed=False,
+                reason_code="RESUME_REQUIRES_STOPPED_INSTANCE",
+                explanation="Resume requires an off-duty instance with durable STOPPED intent.",
+                next_step="Resolve the prior lifecycle transition before Resume.",
+            )
     if bot.market_data.state != "AVAILABLE":
         reason_codes = {
             "STALE": "MARKET_DATA_STALE",
@@ -147,7 +216,7 @@ def evaluate_run_admission(
             allowed=False,
             reason_code=reason_codes[bot.market_data.state],
             explanation="The required market-data feed is not proven ready for this run.",
-            next_step="Restore fresh market data before Start.",
+            next_step=f"Restore fresh market data before {bot.operation.title()}.",
         )
     if clerk.reconciliation_state != "clean" or not clerk.reconciliation_fresh:
         return decide(
@@ -161,23 +230,23 @@ def evaluate_run_admission(
             allowed=False,
             reason_code=clerk.freeze.category or "CLERK_FREEZE_ACTIVE",
             explanation=clerk.freeze.explanation or "The Clerk has frozen new exposure.",
-            next_step=clerk.freeze.next_step or "Resolve the Clerk freeze before Start.",
+            next_step=clerk.freeze.next_step or f"Resolve the Clerk freeze before {bot.operation.title()}.",
         )
     if clerk.hold.active:
         return decide(
             allowed=False,
             reason_code=clerk.hold.reason_code or "CLERK_HOLD_ACTIVE",
             explanation=clerk.hold.reason or "The Clerk is holding new exposure.",
-            next_step="Resolve the Clerk hold before Start.",
+            next_step=f"Resolve the Clerk hold before {bot.operation.title()}.",
         )
     if clerk.exposure.state == "unknown":
         return decide(
             allowed=False,
             reason_code="CLERK_EXPOSURE_UNKNOWN",
             explanation="The Clerk cannot prove the instance exposure state.",
-            next_step="Reconcile exposure through the Clerk before Start.",
+            next_step=f"Reconcile exposure through the Clerk before {bot.operation.title()}.",
         )
-    if clerk.exposure.state == "non_zero":
+    if clerk.exposure.state == "non_zero" and bot.operation == "START":
         return decide(
             allowed=False,
             reason_code="START_REQUIRES_FLAT_CUSTODY",
@@ -196,7 +265,7 @@ def evaluate_run_admission(
             allowed=False,
             reason_code="CLERK_WORK_STATE_UNKNOWN",
             explanation=f"The Clerk cannot prove the state of {unknown}.",
-            next_step="Reconcile all order and effect work before Start.",
+            next_step=f"Reconcile all order and effect work before {bot.operation.title()}.",
         )
     remaining = next((label for label, fact in unresolved if fact.state == "non_zero"), None)
     if remaining is not None:
@@ -204,11 +273,63 @@ def evaluate_run_admission(
             allowed=False,
             reason_code="CLERK_WORK_REMAINS",
             explanation=f"The Clerk proves that unresolved {remaining} remain.",
-            next_step="Resolve the remaining Clerk work before Start.",
+            next_step=f"Resolve the remaining Clerk work before {bot.operation.title()}.",
         )
+    if isinstance(bot, ResumeRunFacts) and clerk.exposure.state == "non_zero":
+        if not bot.exposure_carryover_supported:
+            return decide(
+                allowed=False,
+                reason_code="RESUME_CARRYOVER_UNSUPPORTED",
+                explanation="This strategy cannot safely restore its prior open-position lifecycle.",
+                next_step="Flatten the exact Clerk-attributed exposure before Resume.",
+            )
+        if bot.carryover_policy != "ALLOW" or not bot.carryover_account_policy_enabled:
+            return decide(
+                allowed=False,
+                reason_code="RESUME_CARRYOVER_NOT_ALLOWED",
+                explanation="The stopped exposure is not approved by both the immutable instance and account policy.",
+                next_step="Flatten the exact Clerk-attributed exposure before Resume.",
+            )
+        checkpoint = bot.checkpoint
+        if checkpoint is None or not checkpoint.approved:
+            return decide(
+                allowed=False,
+                reason_code="RESUME_CHECKPOINT_MISSING",
+                explanation="No approved terminal STOP checkpoint proves this carried exposure.",
+                next_step="Flatten the attributed exposure or restore the approved STOP checkpoint.",
+            )
+        matches = (
+            checkpoint.account_id == clerk.account_id
+            and checkpoint.stopped_run_id == bot.prior_run_id
+            and checkpoint.configuration_hash == bot.configuration_hash
+            and _exposure_matches(checkpoint.exposure, clerk.exposure.positions)
+        )
+        if not matches:
+            logger.warning(
+                "Resume checkpoint custody does not match current Clerk exposure",
+                extra={
+                    "action": "resume_checkpoint_mismatch",
+                    "strategy_instance_id": bot.strategy_instance_id,
+                    "checkpoint_exposure": checkpoint.exposure,
+                    "clerk_exposure": clerk.exposure.positions,
+                },
+            )
+            return decide(
+                allowed=False,
+                reason_code="RESUME_CHECKPOINT_MISMATCH",
+                explanation=(
+                    "The carryover custody proof changed: account, prior run, "
+                    "configuration, or Clerk-attributed exposure no longer matches STOP."
+                ),
+                next_step="Reconcile and flatten rather than adopting changed custody.",
+            )
     return decide(
         allowed=True,
-        reason_code="START_ADMITTED",
-        explanation="The process slot is absent, market data is ready, and the Clerk proves flat custody.",
+        reason_code=f"{bot.operation}_ADMITTED",
+        explanation=(
+            "The process slot is absent, market data is ready, and the Clerk proves flat custody."
+            if bot.operation == "START"
+            else "The prior run is terminal, market data is ready, and the Clerk proves resumable custody."
+        ),
         next_step=None,
     )

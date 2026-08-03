@@ -120,7 +120,7 @@ export class BotsRosterComponent {
 
   protected onAction(bot: BotCatalogView): void {
     const action = bot.row_action?.action_id;
-    if (action !== 'start' && action !== 'stop') return;
+    if (action !== 'resume' && action !== 'stop') return;
     this.rowAction.emit({ bot, action });
   }
 }

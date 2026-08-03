@@ -36,7 +36,7 @@ class CarryoverBinding(Protocol):
     broker: str
     symbol: str
     use_rth: bool
-    mode: Literal["log_only", "trade"]
+    mode: Literal["log_only", "dry_run", "trade"]
     quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"]
     action_plan: ActionPlan

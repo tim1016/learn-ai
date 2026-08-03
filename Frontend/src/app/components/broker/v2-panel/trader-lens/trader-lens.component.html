@@ -3,6 +3,7 @@
     <span class="eyebrow">Trader status</span>
     <h2 id="trader-status-title">{{ headline() }}</h2>
     <p>{{ panel().execution_policy }}</p>
+    @if (isDryRun()) { <strong>Dry Run · no broker orders</strong> }
   </div>
   <div class="trader-command__actions">
     <a
@@ -57,7 +58,10 @@
       <ul>
         @for (decision of panel().recent_decisions; track decision.seq) {
           <li>
-            <div><strong>{{ decision.outcome | receiptLabel }}</strong><span>{{ decision.reason_code | receiptLabel }}</span></div>
+            <div>
+              <strong>{{ decision.outcome | receiptLabel }}</strong>
+              <span>{{ decision.reason_code | receiptLabel }}{{ decision.simulated ? ' · Simulated' : '' }}</span>
+            </div>
             <app-timestamp-display [value]="decision.recorded_at_ms" mode="local" />
           </li>
         }
@@ -78,7 +82,10 @@
       <ul>
         @for (fill of panel().recent_fills; track fill.order_ref + fill.filled_at_ms) {
           <li>
-            <div><strong>{{ fill.side | receiptLabel }} {{ fill.symbol }}</strong><span>{{ fill.quantity ?? 'Quantity not reported' }} @ {{ fill.price ?? 'Price pending' }}</span></div>
+            <div>
+              <strong>{{ fill.side | receiptLabel }} {{ fill.symbol }}</strong>
+              <span>{{ fill.quantity ?? 'Quantity not reported' }} @ {{ fill.price ?? 'Price pending' }}{{ fill.simulated ? ' · Simulated fill' : '' }}</span>
+            </div>
             <app-timestamp-display [value]="fill.filled_at_ms" mode="local" />
           </li>
         }
@@ -87,7 +94,7 @@
   </section>
 </div>
 
-@if (!isLogOnly()) {
+@if (isPaperExecution()) {
   <app-trades-today-list
     [fills]="liveFillMarkers()"
     [feeFidelity]="profile().fee_fidelity"

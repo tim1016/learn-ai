@@ -55,8 +55,12 @@ def status_explanation_for(status: BotStatusView, rollup: BotRollup) -> str:
     if status.phase == "RETIRED":
         return "Retired; no further runs can start."
     if status.running:
+        if status.desired_state == "PAUSED":
+            return "Paused; the current run remains live while bar evaluation is held."
         if status.mode == "trade":
             return "Running under Account Clerk custody."
+        if status.mode == "dry_run":
+            return "Running as a Dry Run; decisions and fills are simulated with no broker writes."
         return "Running in log-only mode; no order custody is active."
     if rollup.exposure:
         return "Off duty with Clerk-attributed exposure."
@@ -87,10 +91,9 @@ def compose_catalog_view(
 ) -> BotCatalogView:
     """Compose one roster row from a bot's status and its rollup (§5).
 
-    ``desired_state`` is narrowed to ``RUNNING | STOPPED`` — a ``PAUSED`` value
-    would be a contract violation (decision #10); the panel never emits it.
+    The roster preserves the backend-owned desired state, including ``PAUSED``
+    for a live run whose evaluation is temporarily held.
     """
-    desired_state = "RUNNING" if status.desired_state == "RUNNING" else "STOPPED"
     return BotCatalogView(
         strategy_instance_id=status.strategy_instance_id,
         strategy_key=status.strategy_key,
@@ -99,7 +102,7 @@ def compose_catalog_view(
         symbol=status.symbol,
         mode=status.mode,
         phase=status.phase,
-        desired_state=desired_state,
+        desired_state=status.desired_state,
         running=status.running,
         status_label=status_label_for(status),
         status_explanation=status_explanation_for(status, rollup),

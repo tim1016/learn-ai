@@ -11,13 +11,10 @@ backend capability that performs the action:
 3. **Identity from the channel.** The operator identity is the configured
    ``PANEL_OPERATOR_IDENTITY`` (§14), never a request field.
 
-The dispatch wires the actions the backend can perform today, including
-``stop``, ``reconcile_now``, ``clear_hold``, and the guarded account inventory
-baseline recovery. Actions whose lifecycle backend lands in a
-later slice (``start``, ``retire``, ``flatten_stop``, ``deploy``,
-``cancel_order`` — the last needs an order id chosen from the working-orders
-list) raise ``ActionNotAvailableError`` rather than presenting a fake success,
-per the closed-set/no-fake-buttons rule (§11).
+The dispatch wires Resume, Pause, Continue, Stop, flatten-and-stop,
+reconciliation, clear-hold, and guarded inventory recovery. Unsupported
+closed-set actions such as Retire and Cancel order are not presented and raise
+``ActionNotAvailableError`` if called directly.
 """
 
 from __future__ import annotations
@@ -331,7 +328,7 @@ async def execute_action(
 
     try:
         # Availability is checked only after idempotency recovery. A retry of
-        # a completed Start/Stop may observe the action disabled precisely
+        # a completed lifecycle action may observe itself disabled precisely
         # because its first request succeeded.
         if availability_error is not None:
             raise availability_error

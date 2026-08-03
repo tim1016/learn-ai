@@ -5551,9 +5551,13 @@
             "type": "string"
           },
           "execution_mode": {
-            "const": "paper",
             "default": "paper",
-            "title": "Execution Mode"
+            "enum": [
+              "paper",
+              "dry_run"
+            ],
+            "title": "Execution Mode",
+            "type": "string"
           },
           "explanation": {
             "title": "Explanation",
@@ -5622,6 +5626,15 @@
               "ALLOW"
             ],
             "title": "Carryover Policy",
+            "type": "string"
+          },
+          "execution_mode": {
+            "default": "paper",
+            "enum": [
+              "paper",
+              "dry_run"
+            ],
+            "title": "Execution Mode",
             "type": "string"
           },
           "sizing": {
@@ -5803,6 +5816,7 @@
           "mode": {
             "enum": [
               "paper",
+              "dry_run",
               "live"
             ],
             "title": "Mode",
@@ -7411,6 +7425,7 @@
           "desired_state": {
             "enum": [
               "RUNNING",
+              "PAUSED",
               "STOPPED"
             ],
             "title": "Desired State",
@@ -7441,6 +7456,7 @@
           "mode": {
             "enum": [
               "log_only",
+              "dry_run",
               "trade"
             ],
             "title": "Mode",
@@ -8197,7 +8213,7 @@
         "type": "string"
       },
       "BotHealthCard": {
-        "description": "Bot-health card beside the rail (\u00a77.2).\n\n``desired_state`` is narrowed to ``RUNNING | STOPPED`` \u2014 the panel never\nemits ``PAUSED`` (decision #10; pinned by a contract test).",
+        "description": "Bot-health card beside the rail (\u00a77.2).\n\n``PAUSED`` means the current process/run remains live while bar delivery\nis held. Continue retains that run identity; Resume is not applicable.",
         "properties": {
           "carryover_checkpoint_exposure": {
             "additionalProperties": {
@@ -8213,6 +8229,7 @@
           "desired_state": {
             "enum": [
               "RUNNING",
+              "PAUSED",
               "STOPPED"
             ],
             "title": "Desired State",
@@ -8593,6 +8610,7 @@
           "mode": {
             "enum": [
               "log_only",
+              "dry_run",
               "trade"
             ],
             "title": "Mode",
@@ -9267,6 +9285,7 @@
           "mode": {
             "enum": [
               "log_only",
+              "dry_run",
               "trade"
             ],
             "title": "Mode",
@@ -16166,6 +16185,7 @@
             "default": "log_only",
             "enum": [
               "log_only",
+              "dry_run",
               "trade"
             ],
             "title": "Mode",
@@ -33174,7 +33194,9 @@
           "action_id": {
             "enum": [
               "deploy",
-              "start",
+              "resume",
+              "pause",
+              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -33244,7 +33266,9 @@
           "action_id": {
             "enum": [
               "deploy",
-              "start",
+              "resume",
+              "pause",
+              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -33301,7 +33325,9 @@
           "action_id": {
             "enum": [
               "deploy",
-              "start",
+              "resume",
+              "pause",
+              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -33390,7 +33416,9 @@
             "items": {
               "enum": [
                 "deploy",
-                "start",
+                "resume",
+                "pause",
+                "continue",
                 "stop",
                 "flatten_stop",
                 "retire",
@@ -35025,7 +35053,9 @@
           "operation": {
             "enum": [
               "deploy",
-              "start",
+              "resume",
+              "pause",
+              "continue",
               "stop",
               "flatten_stop",
               "retire",
@@ -35544,6 +35574,11 @@
           "seq": {
             "title": "Seq",
             "type": "integer"
+          },
+          "simulated": {
+            "default": false,
+            "title": "Simulated",
+            "type": "boolean"
           }
         },
         "required": [
@@ -35593,6 +35628,11 @@
           "side": {
             "title": "Side",
             "type": "string"
+          },
+          "simulated": {
+            "default": false,
+            "title": "Simulated",
+            "type": "boolean"
           },
           "symbol": {
             "title": "Symbol",
@@ -36587,8 +36627,12 @@
             "title": "Next Step"
           },
           "operation": {
-            "const": "START",
-            "title": "Operation"
+            "enum": [
+              "START",
+              "RESUME"
+            ],
+            "title": "Operation",
+            "type": "string"
           },
           "proposed_run_id": {
             "title": "Proposed Run Id",

@@ -1,7 +1,7 @@
 <!-- Transaction rail (spec §7.1). One selected transaction's six stations. -->
 <section class="rail" aria-label="Transaction pipeline rail">
   @if (!hasTransaction()) {
-    <p class="rail__empty" role="status">No active transaction. Start the bot to see pipeline activity.</p>
+    <p class="rail__empty" role="status">No active transaction. Resume the bot to see pipeline activity.</p>
   }
 
   @if (hasTransaction()) {

@@ -64,7 +64,7 @@ class RunAdmissionRefusedError(BotRunnerError):
     http_status = 409
 
 
-def raise_start_refusal(decision: RunAdmissionDecision) -> NoReturn:
+def raise_run_refusal(decision: RunAdmissionDecision) -> NoReturn:
     """Translate one denied policy decision into the stable runner taxonomy."""
     if decision.reason_code == "RUN_ALREADY_ACTIVE":
         raise BotAlreadyRunningError(
@@ -78,7 +78,7 @@ def raise_start_refusal(decision: RunAdmissionDecision) -> NoReturn:
         "MARKET_DATA_UNKNOWN",
     }:
         raise MarketDataFeedUnavailableError(
-            "Market data is not ready; bot cannot be deployed.",
+            f"Market data is not ready; bot cannot {decision.operation.title()}.",
             detail=decision.explanation,
             admission_decision=decision,
         )
@@ -86,16 +86,25 @@ def raise_start_refusal(decision: RunAdmissionDecision) -> NoReturn:
         "BOOT_RECOVERY_INCOMPLETE": BootRecoveryIncompleteError,
         "RECOVERY_UNCERTAIN": RecoveryUncertainError,
         "RESTART_INTENSITY_EXCEEDED": RestartIntensityRefusedError,
+        "RESUME_CARRYOVER_UNSUPPORTED": RecoveryUncertainError,
+        "RESUME_CHECKPOINT_MISSING": RecoveryUncertainError,
+        "RESUME_CHECKPOINT_MISMATCH": RecoveryUncertainError,
     }
     error_type = error_types.get(decision.reason_code)
     if error_type is not None:
         raise error_type(
-            "Bot runtime safety refused Start.",
+            decision.explanation,
+            detail=f"Bot runtime safety refused {decision.operation.title()}.",
+            admission_decision=decision,
+        )
+    if decision.reason_code == "RESUME_CARRYOVER_NOT_ALLOWED":
+        raise CarryoverPolicyRefusedError(
+            "Exposure carryover is not approved for this Resume.",
             detail=decision.explanation,
             admission_decision=decision,
         )
     raise RunAdmissionRefusedError(
-        "Start admission was refused.",
+        f"{decision.operation.title()} admission was refused.",
         detail=decision.explanation,
         admission_decision=decision,
     )

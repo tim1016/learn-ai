@@ -1,7 +1,6 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 
 import type {
-  DeployBotView,
   DeployExecutionMode,
   DeploySizingOption,
 } from '../v2-panel/lib/broker-v2-panel.service';
@@ -16,7 +15,7 @@ export type DeploySizingPreset = DeploySizingOption['preset'];
 })
 export class DeployExecutionSectionComponent {
   readonly executionModes = input.required<DeployExecutionMode[]>();
-  readonly accountMode = input.required<DeployBotView['account_mode']>();
+  readonly selectedMode = input.required<DeployExecutionMode['mode']>();
   readonly actionPlanExplanation = input.required<string>();
   readonly symbol = input.required<string>();
   readonly symbolError = input<string | null>(null);
@@ -35,6 +34,7 @@ export class DeployExecutionSectionComponent {
   readonly quantityChange = output<number>();
   readonly quantityBlur = output();
   readonly carryoverAllowedChange = output<boolean>();
+  readonly executionModeChange = output<DeployExecutionMode['mode']>();
 
   protected capabilityStatus(mode: DeployExecutionMode): string {
     return mode.availability === 'available' ? 'Available' : 'Planned';
@@ -48,6 +48,15 @@ export class DeployExecutionSectionComponent {
     if (event.target instanceof HTMLInputElement) {
       this.symbolChange.emit(event.target.value);
     }
+  }
+
+  protected changeExecutionMode(event: Event): void {
+    if (!(event.target instanceof HTMLInputElement)) return;
+    const selectedValue = event.target.value;
+    const mode = this.executionModes().find(
+      (candidate) => candidate.mode === selectedValue,
+    );
+    if (mode?.availability === 'available') this.executionModeChange.emit(mode.mode);
   }
 
   protected changeSizing(event: Event): void {

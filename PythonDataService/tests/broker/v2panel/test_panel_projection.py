@@ -18,6 +18,8 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.live_runs import BotDutyOutcomeView
+from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
+from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
@@ -43,7 +45,7 @@ def _status(
     carryover_account_policy_enabled: bool = True,
     checkpoint_exposure: dict[str, float] | None = None,
     checkpoint_matches: bool = False,
-    mode: Literal["log_only", "trade"] = "log_only",
+    mode: Literal["log_only", "dry_run", "trade"] = "log_only",
 ) -> BotStatusView:
     resolved_desired_state = desired_state or ("RUNNING" if running else "STOPPED")
     return BotStatusView(
@@ -105,13 +107,55 @@ def _panel(
     decision=None,
     *,
     exposure: dict[str, float] | None = None,
+    resume_allowed: bool | None = None,
+    dry_run_activity: list[DryRunActivity] | None = None,
+    admission_evidence_refs: tuple[str, ...] = ("test:resume-admission",),
 ):
+    resolved_exposure = {"SPY": 100.0} if exposure is None else exposure
+    if resume_allowed is None:
+        resume_allowed = (
+            not status.running
+            and not clerk.hold.active
+            and not clerk.freeze.active
+            and (
+                not any(abs(quantity) > 0 for quantity in resolved_exposure.values())
+                or (
+                    status.carryover_policy == "ALLOW"
+                    and status.carryover_account_policy_enabled
+                    and status.carryover_checkpoint_config_matches
+                    and status.carryover_checkpoint_exposure == resolved_exposure
+                )
+            )
+        )
+    resume_admission = RunAdmissionDecision(
+        operation="RESUME",
+        allowed=resume_allowed,
+        reason_code="RESUME_ADMITTED" if resume_allowed else "RESUME_TEST_BLOCKED",
+        explanation=(
+            "The runner and Clerk admit this new run."
+            if resume_allowed
+            else "The runner and Clerk block this new run."
+        ),
+        next_step=None,
+        strategy_instance_id=status.strategy_instance_id,
+        proposed_run_id="run-proposed",
+        configuration_hash="a" * 64,
+        account_id=ACCT,
+        evaluated_at_ms=_NOW,
+        fact_ages_ms=RunAdmissionFactAges(
+            runtime=0,
+            process=0,
+            market_data=0,
+            clerk=0,
+        ),
+        evidence_refs=admission_evidence_refs,
+    )
     return build_panel(
         status,
         clerk,
         entries,
         account_id=ACCT,
-        exposure={"SPY": 100.0} if exposure is None else exposure,
+        exposure=resolved_exposure,
         fills_today=0,
         realized_pnl_today=0.0,
         open_pnl=None,
@@ -121,6 +165,8 @@ def _panel(
         journal_tail_seq=(decision.seq if decision is not None else None),
         flatten_supported=True,
         now_ms=_NOW,
+        resume_admission=resume_admission,
+        dry_run_activity=dry_run_activity,
     )
 
 
@@ -145,7 +191,9 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     assert len(panel.rail.stations) == 6
     action_ids = {a.action_id for a in panel.actions}
     assert action_ids == {
-        "start",
+        "resume",
+        "pause",
+        "continue",
         "stop",
         "flatten_stop",
         "clear_hold",
@@ -223,11 +271,11 @@ def test_disabled_action_explains_backend_blocker_and_safe_next_step() -> None:
         exposure={},
     )
 
-    start = _action(panel, "start")
-    assert start.enabled is False
-    assert start.blockers[0].condition.scope == "account"
-    assert start.blockers[0].detail is not None
-    readiness = next(check for check in panel.readiness_checks if check.operation == "start")
+    resume = _action(panel, "resume")
+    assert resume.enabled is False
+    assert resume.blockers[0].condition.id == "RESUME_TEST_BLOCKED"
+    assert resume.blockers[0].detail is not None
+    readiness = next(check for check in panel.readiness_checks if check.operation == "resume")
     assert readiness.ready is False
     assert readiness.cure is not None
 
@@ -283,11 +331,10 @@ def test_unhealthy_required_channel_blocks_trade_mode_mission() -> None:
     assert "execution" in panel.mission_verdict.explanation
 
 
-def test_panel_never_emits_paused_desired_state() -> None:
-    """Decision #10: a PAUSED lifecycle value narrows to STOPPED on the card."""
-    panel = _panel(_status(desired_state="PAUSED", running=False), _clerk_status(), [])
-    assert panel.health.desired_state == "STOPPED"
-    assert panel.health.desired_state != "PAUSED"
+def test_panel_preserves_authoritative_paused_desired_state() -> None:
+    panel = _panel(_status(desired_state="PAUSED", running=True), _clerk_status(), [])
+    assert panel.health.desired_state == "PAUSED"
+    assert _action(panel, "continue").enabled is True
 
 
 def test_stop_outcome_copy_distinguishes_approved_carryover() -> None:
@@ -314,10 +361,26 @@ def test_stop_enabled_only_when_running() -> None:
     stopped_panel = _panel(_status(running=False), _clerk_status(), [], exposure={})
     assert _action(running_panel, "stop").enabled is True
     assert _action(stopped_panel, "stop").enabled is False
-    assert _action(stopped_panel, "start").enabled is True
+    assert _action(stopped_panel, "resume").enabled is True
 
 
-def test_start_requires_flat_exposure_and_no_clerk_hold() -> None:
+def test_pause_and_continue_are_mutually_exclusive_same_run_actions() -> None:
+    evaluating = _panel(_status(running=True), _clerk_status(), [])
+    paused = _panel(
+        _status(running=True, desired_state="PAUSED"),
+        _clerk_status(),
+        [],
+    )
+
+    assert _action(evaluating, "pause").enabled is True
+    assert _action(evaluating, "continue").enabled is False
+    assert _action(paused, "pause").enabled is False
+    assert _action(paused, "continue").enabled is True
+    assert paused.health.desired_state == "PAUSED"
+    assert paused.mission_verdict.label == "Paused"
+
+
+def test_resume_requires_flat_exposure_and_no_clerk_hold() -> None:
     flat = _panel(_status(running=False), _clerk_status(), [], exposure={})
     exposed = _panel(
         _status(running=False),
@@ -332,14 +395,14 @@ def test_start_requires_flat_exposure_and_no_clerk_hold() -> None:
         exposure={},
     )
 
-    assert _action(flat, "start").enabled is True
-    assert _action(exposed, "start").enabled is False
-    assert _action(held, "start").enabled is False
-    assert _action(flat, "start").concurrency_token != _action(exposed, "start").concurrency_token
-    assert _action(flat, "start").concurrency_token != _action(held, "start").concurrency_token
+    assert _action(flat, "resume").enabled is True
+    assert _action(exposed, "resume").enabled is False
+    assert _action(held, "resume").enabled is False
+    assert _action(flat, "resume").concurrency_token != _action(exposed, "resume").concurrency_token
+    assert _action(flat, "resume").concurrency_token != _action(held, "resume").concurrency_token
 
 
-def test_start_requires_exact_approved_carryover_projection() -> None:
+def test_resume_requires_exact_approved_carryover_projection() -> None:
     exact = _panel(
         _status(
             running=False,
@@ -377,11 +440,85 @@ def test_start_requires_exact_approved_carryover_projection() -> None:
 
     assert exact.health.resume_eligible is True
     assert exact.health.resume_label == "Resume custody proof ready"
-    assert _action(exact, "start").enabled is True
+    assert _action(exact, "resume").enabled is True
     assert mismatch.health.resume_eligible is False
-    assert _action(mismatch, "start").enabled is False
+    assert _action(mismatch, "resume").enabled is False
     assert account_disabled.health.resume_eligible is False
-    assert _action(account_disabled, "start").enabled is False
+    assert _action(account_disabled, "resume").enabled is False
+
+
+def test_typed_resume_admission_outranks_projection_fields() -> None:
+    flat_but_refused = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        resume_allowed=False,
+    )
+    exposed_but_admitted = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={"SPY": 2.0},
+        resume_allowed=True,
+    )
+
+    assert _action(flat_but_refused, "resume").enabled is False
+    assert flat_but_refused.health.resume_eligible is False
+    assert _action(exposed_but_admitted, "resume").enabled is True
+    assert exposed_but_admitted.health.resume_eligible is True
+
+
+def test_dry_run_activity_is_structurally_labelled_simulated() -> None:
+    activity = DryRunActivity(
+        seq=1,
+        strategy_instance_id=SID,
+        run_id="run-dry",
+        recorded_at_ms=_NOW - 100,
+        bar_ref="SPY@1699999999900",
+        intent="ENTER",
+        order_ref="simulated:run-dry:1699999999900:ENTER",
+        symbol="SPY",
+        side="buy",
+        quantity=1,
+        fill_price=401.25,
+    )
+
+    panel = _panel(
+        _status(running=True, mode="dry_run"),
+        _clerk_status(),
+        [],
+        dry_run_activity=[activity],
+    )
+
+    assert panel.mode == "dry_run"
+    assert "broker writes are impossible" in panel.execution_policy
+    assert panel.recent_decisions[0].simulated is True
+    assert panel.recent_decisions[0].reason_code == "SIMULATED_ENTER"
+    assert panel.recent_fills[0].simulated is True
+    assert panel.recent_fills[0].order_ref.startswith("simulated:")
+    assert panel.health.last_decision_at_ms == _NOW - 100
+    assert panel.health.last_bar_at_ms == 1_699_999_999_900
+
+
+def test_resume_token_ignores_market_data_observation_timestamp() -> None:
+    common = ("bot-process-registry:registry-1",)
+    first = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(*common, "market-data-feed:alpaca:1700000000000"),
+    )
+    second = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(*common, "market-data-feed:alpaca:1700000000001"),
+    )
+
+    assert _action(first, "resume").concurrency_token == _action(second, "resume").concurrency_token
 
 
 def test_clear_hold_gated_on_healthy_and_fresh() -> None:
@@ -420,7 +557,7 @@ def test_account_freeze_blocks_start_and_flatten_with_authored_copy() -> None:
     assert frozen.clerk.freeze_label == "Account state unprovable"
     assert frozen.clerk.freeze_explanation == "Fresh account truth is unavailable."
     assert frozen.clerk.freeze_next_step == "Restore broker observation and reconcile."
-    assert _action(frozen, "start").enabled is False
+    assert _action(frozen, "resume").enabled is False
     assert _action(frozen, "flatten_stop").enabled is False
 
 

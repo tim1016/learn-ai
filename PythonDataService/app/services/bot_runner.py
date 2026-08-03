@@ -32,7 +32,6 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -43,7 +42,6 @@ from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
-    BotDutyOutcome,
     BotLifecyclePhase,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
@@ -56,14 +54,13 @@ from app.engine.live.desired_state import (
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
 from app.schemas.broker_bots import (
-    AlpacaPaperStrategyKey,
-    BotDutyOutcomeView,
     BotProcessFact,
     BotRunHistoryPage,
     BotRunView,
     BotStatusView,
 )
 from app.schemas.run_admission import (
+    ResumeCheckpointAdmissionFact,
     RunAdmissionDecision,
     RunProcessAdmissionFact,
     StartRuntimeAdmissionFact,
@@ -75,14 +72,26 @@ from app.services.bot_binding_repository import (
 )
 from app.services.bot_boot_recovery import BootRecoveryReport, BotBootRecovery
 from app.services.bot_carryover import (
-    CarryoverResumeRefusedError,
     checkpoint_status,
-    prove_stop_outcome,
-    require_resume_custody,
+    read_checkpoint,
+)
+from app.services.bot_dry_run import DryRunActivity
+from app.services.bot_registry_projection import (
+    project_bot_status,
+    project_process_fact,
+    read_dry_run_activity,
+)
+from app.services.bot_resume_admission import (
+    AdmittedBotResume,
+    BotResumeAdmission,
 )
 from app.services.bot_run_evidence import (
     PROVISIONAL_STOP_REASON_CODE,
     BotRunEvidenceService,
+)
+from app.services.bot_run_terminal import (
+    BotRunTerminalRecorder,
+    prove_terminal_stop_outcome,
 )
 from app.services.bot_runner_errors import (
     BootRecoveryIncompleteError,
@@ -95,8 +104,13 @@ from app.services.bot_runner_errors import (
     RestartIntensityRefusedError,
     RunAdmissionRefusedError,
     UnknownBotError,
-    raise_start_refusal,
+    raise_run_refusal,
     require_start_configuration,
+)
+from app.services.bot_runtime import (
+    ManagedBot,
+    execute_bot_run,
+    require_live_managed_bot,
 )
 from app.services.bot_start_admission import (
     AdmittedBotStart,
@@ -104,16 +118,15 @@ from app.services.bot_start_admission import (
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartAdmissionUnavailable,
-    StartRequest,
     default_start_custody_guard,
     log_run_launch,
     make_start_request,
-    new_run_binding,
     resolve_start_runtime_fact,
 )
 from app.utils.timestamps import now_ms_utc
 
 __all__ = [
+    "AdmittedBotResume",
     "AdmittedBotStart",
     "BootRecoveryIncompleteError",
     "BotAlreadyRunningError",
@@ -133,19 +146,6 @@ logger = logging.getLogger(__name__)
 _CARRYOVER_CHECKPOINT_FILENAME = "carryover_checkpoint.json"
 _UPDATED_BY = "bot_runner"
 _STOP_TIMEOUT_S = 5.0
-
-
-@dataclass
-class _ManagedBot:
-    """One supervised bot task and its stop bookkeeping."""
-
-    binding: BrokerBotBinding
-    task: asyncio.Task[None] = field(repr=False)
-    # Set BEFORE cancellation by a deliberate stop; a cancel that arrives
-    # without this set is a kill and is finalized as EXITED_UNVERIFIED.
-    stop_reason_code: str | None = None
-    # Exactly one terminal duty outcome per run: set by the first finalize.
-    finalized: bool = False
 
 
 class BotTaskRegistry:
@@ -173,7 +173,7 @@ class BotTaskRegistry:
         self._restart_policy = restart_policy or RestartIntensityPolicy()
         self._now_ms = now_ms
         self._registry_generation = uuid4().hex
-        self._bots: dict[str, _ManagedBot] = {}
+        self._bots: dict[str, ManagedBot] = {}
         self._operation_locks: dict[str, asyncio.Lock] = {}
         self._start_history: dict[str, list[int]] = {}
         # S5 (#1263) fail-closed start gate: no bot starts until the boot
@@ -212,9 +212,25 @@ class BotTaskRegistry:
             runtime_fact=self._start_runtime_fact,
             activate=self._activate_start_binding,
         )
+        self._resume_admission = BotResumeAdmission(
+            now_ms=self._now_ms,
+            feed_resolver=self._feed_resolver,
+            custody_guard=start_custody_guard or default_start_custody_guard,
+            process_fact=self._resume_process_fact,
+            runtime_fact=self._start_runtime_fact,
+            checkpoint=self._resume_checkpoint_fact,
+            activate=self._activate_resume_binding,
+            carryover_account_policy_enabled=self._carryover_allowed,
+        )
         self._run_evidence = BotRunEvidenceService(
             self._bindings,
             lifecycle_repo_for=self._lifecycle_repo,
+        )
+        self._terminal = BotRunTerminalRecorder(
+            managed_bots=self._bots,
+            desired_repo_for=self._desired_repo,
+            run_evidence=self._run_evidence,
+            now_ms=self._now_ms,
         )
 
     # ── deploy / stop ─────────────────────────────────────────────────
@@ -227,7 +243,7 @@ class BotTaskRegistry:
         strategy_key: str = "deployment_validation",
         symbol: str,
         use_rth: bool = True,
-        mode: Literal["log_only", "trade"] = "log_only",
+        mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
     ) -> BotStatusView:
@@ -253,7 +269,7 @@ class BotTaskRegistry:
         strategy_key: str = "deployment_validation",
         symbol: str,
         use_rth: bool = True,
-        mode: Literal["log_only", "trade"] = "log_only",
+        mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
     ) -> AdmittedBotStart:
@@ -278,7 +294,7 @@ class BotTaskRegistry:
             try:
                 return await self._start_admission.start(request)
             except StartAdmissionDenied as exc:
-                raise_start_refusal(exc.decision)
+                raise_run_refusal(exc.decision)
             except StartAdmissionUnavailable as exc:
                 raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
             except StartAdmissionEvidenceChanged as exc:
@@ -295,7 +311,7 @@ class BotTaskRegistry:
         strategy_key: str = "deployment_validation",
         symbol: str,
         use_rth: bool = True,
-        mode: Literal["log_only", "trade"] = "log_only",
+        mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
     ) -> RunAdmissionDecision:
@@ -335,37 +351,51 @@ class BotTaskRegistry:
         launches a newly identified run through the same recovery and restart
         gates as a first deployment.
         """
+        return (await self.resume_existing_with_admission(broker, strategy_instance_id)).bot
+
+    async def preview_resume_admission(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+    ) -> RunAdmissionDecision:
+        """Project the exact new-run Resume decision without mutation."""
         async with self._operation_lock(strategy_instance_id):
             binding = self.binding_for_control(broker, strategy_instance_id)
-            await self._require_resume_custody(binding)
-            return await self._launch_resume(binding)
+            try:
+                return await self._resume_admission.preview(
+                    binding,
+                    self.status(broker, strategy_instance_id),
+                )
+            except StartAdmissionUnavailable as exc:
+                raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
+            except StartAdmissionEvidenceChanged as exc:
+                raise RunAdmissionRefusedError(
+                    "Resume admission could not obtain stable Clerk custody.",
+                    detail="Refresh admission after Clerk reconciliation settles.",
+                ) from exc
 
-    async def _launch_resume(self, prior: BrokerBotBinding) -> BotStatusView:
-        """Launch a new run from one Clerk-approved immutable binding."""
-        await self._require_recovered()
-        now = self._now_ms()
-        self._enforce_restart_intensity(prior.strategy_instance_id, now)
-        feed = self._feed_resolver()
-        if feed is None:
-            raise MarketDataFeedUnavailableError(
-                "Market-data feed is not available; bot cannot be resumed.",
-                detail="The shared MarketDataFeed is not installed.",
-            )
-        request = StartRequest(
-            broker=prior.broker,
-            strategy_instance_id=prior.strategy_instance_id,
-            strategy_key=prior.strategy_key,
-            symbol=prior.symbol,
-            use_rth=prior.use_rth,
-            mode=prior.mode,
-            quantity=prior.quantity,
-            carryover_policy=prior.carryover_policy,
-            action_plan=prior.action_plan,
-        )
-        binding = new_run_binding(request, now_ms=now)
-        await self._activate_binding(binding, feed, now=now, reason="resume")
-        log_run_launch(binding, reason="resume")
-        return self.status(binding.broker, binding.strategy_instance_id)
+    async def resume_existing_with_admission(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+    ) -> AdmittedBotResume:
+        """Create a new run using the same policy exposed by preview."""
+        async with self._operation_lock(strategy_instance_id):
+            binding = self.binding_for_control(broker, strategy_instance_id)
+            try:
+                return await self._resume_admission.resume(
+                    binding,
+                    self.status(broker, strategy_instance_id),
+                )
+            except StartAdmissionDenied as exc:
+                raise_run_refusal(exc.decision)
+            except StartAdmissionUnavailable as exc:
+                raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
+            except StartAdmissionEvidenceChanged as exc:
+                raise RunAdmissionRefusedError(
+                    "Resume admission could not obtain stable Clerk custody.",
+                    detail="Refresh admission after Clerk reconciliation settles.",
+                ) from exc
 
     async def _activate_start_binding(
         self,
@@ -375,6 +405,16 @@ class BotTaskRegistry:
     ) -> BotStatusView:
         await self._activate_binding(binding, feed, now=now_ms, reason="deploy")
         log_run_launch(binding, reason="deploy")
+        return self.status(binding.broker, binding.strategy_instance_id)
+
+    async def _activate_resume_binding(
+        self,
+        binding: BrokerBotBinding,
+        feed: MarketDataFeed,
+        now_ms: int,
+    ) -> BotStatusView:
+        await self._activate_binding(binding, feed, now=now_ms, reason="resume")
+        log_run_launch(binding, reason="resume")
         return self.status(binding.broker, binding.strategy_instance_id)
 
     async def _activate_binding(
@@ -406,11 +446,18 @@ class BotTaskRegistry:
             carryover_policy=binding.carryover_policy,
             reason=f"{reason}_{binding.mode}_bot",
         )
-        task = asyncio.create_task(self._supervise(binding, feed), name=f"bot:{binding.strategy_instance_id}")
-        self._bots[binding.strategy_instance_id] = _ManagedBot(
+        run_gate = asyncio.Event()
+        run_gate.set()
+        task = asyncio.create_task(
+            self._supervise(binding, feed, run_gate),
+            name=f"bot:{binding.strategy_instance_id}",
+        )
+        managed = ManagedBot(
             binding=binding,
             task=task,
+            run_gate=run_gate,
         )
+        self._bots[binding.strategy_instance_id] = managed
         self._start_history[binding.strategy_instance_id] = [
             *self._starts_in_window(binding.strategy_instance_id, now),
             now,
@@ -459,6 +506,37 @@ class BotTaskRegistry:
             restart_window_ms=self._restart_policy.window_ms,
         )
 
+    def _resume_process_fact(
+        self,
+        binding: BrokerBotBinding,
+        observed_at_ms: int,
+    ) -> RunProcessAdmissionFact:
+        process = self.process_fact(binding.broker, binding.strategy_instance_id)
+        return RunProcessAdmissionFact(
+            state=process.state,
+            run_id=process.run_id,
+            process_identity=process.process_identity,
+            registry_generation=process.registry_generation,
+            observed_at_ms=observed_at_ms,
+        )
+
+    def _resume_checkpoint_fact(
+        self,
+        binding: BrokerBotBinding,
+    ) -> ResumeCheckpointAdmissionFact | None:
+        path = self._carryover_checkpoint_path(binding.strategy_instance_id)
+        checkpoint = read_checkpoint(path)
+        if checkpoint is None:
+            return None
+        return ResumeCheckpointAdmissionFact(
+            account_id=checkpoint.account_id,
+            stopped_run_id=checkpoint.stopped_run_id,
+            configuration_hash=checkpoint.configuration_hash,
+            exposure=checkpoint.exposure,
+            approved=checkpoint.approved,
+            evidence_ref=f"carryover-checkpoint:{path.name}:{checkpoint.recorded_at_ms}",
+        )
+
     async def stop(
         self,
         broker: str,
@@ -475,6 +553,67 @@ class BotTaskRegistry:
                 updated_by=updated_by,
                 reason=reason,
             )
+
+    async def pause(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str = "operator",
+        reason: str | None = None,
+    ) -> BotStatusView:
+        """Pause bar evaluation without ending or replacing the current run."""
+        async with self._operation_lock(strategy_instance_id):
+            self._confined_instance_dir(strategy_instance_id)
+            managed = require_live_managed_bot(self._bots, broker, strategy_instance_id)
+            current = self._desired_repo(strategy_instance_id).read_state()
+            if current is DesiredState.PAUSED:
+                raise RunAdmissionRefusedError(
+                    "The current run is already paused.",
+                    detail="Use Continue to let this same run evaluate bars again.",
+                )
+            # Pause conservatively stops bar evaluation before the durable
+            # write. Unlike Stop's intent-first ordering, this prevents one
+            # more strategy decision while the PAUSED transition is recorded.
+            managed.run_gate.clear()
+            try:
+                self._desired_repo(strategy_instance_id).set(
+                    DesiredState.PAUSED,
+                    updated_by=updated_by,
+                    now_ms=self._now_ms(),
+                    reason=reason or "operator_pause",
+                )
+            except Exception:
+                managed.run_gate.set()
+                raise
+            return self.status(broker, strategy_instance_id)
+
+    async def continue_paused(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str = "operator",
+        reason: str | None = None,
+    ) -> BotStatusView:
+        """Continue one paused live run without changing its run identity."""
+        async with self._operation_lock(strategy_instance_id):
+            self._confined_instance_dir(strategy_instance_id)
+            managed = require_live_managed_bot(self._bots, broker, strategy_instance_id)
+            current = self._desired_repo(strategy_instance_id).read_state()
+            if current is not DesiredState.PAUSED:
+                raise RunAdmissionRefusedError(
+                    "Continue requires an authoritatively live paused run.",
+                    detail="Use Resume only after a stopped run has terminal evidence.",
+                )
+            self._desired_repo(strategy_instance_id).set(
+                DesiredState.RUNNING,
+                updated_by=updated_by,
+                now_ms=self._now_ms(),
+                reason=reason or "operator_continue",
+            )
+            managed.run_gate.set()
+            return self.status(broker, strategy_instance_id)
 
     async def _stop_locked(
         self,
@@ -515,32 +654,28 @@ class BotTaskRegistry:
         # Backstop for a coroutine that never entered supervision (cancelled
         # pre-start): _finalize is idempotent, so this is a no-op whenever the
         # supervisor already recorded the outcome.
-        self._finalize(
+        self._terminal.finalize(
             managed.binding,
             kind="STOPPED",
             reason_code=PROVISIONAL_STOP_REASON_CODE,
         )
-        self._reap(strategy_instance_id, managed.binding.run_id)
+        self._terminal.reap(strategy_instance_id, managed.binding.run_id)
         outcome = "OPERATOR_STOP"
         if broker == "alpaca" and managed.binding.mode == "trade":
-            outcome = await self._prove_stop_outcome(managed.binding)
-        terminal_outcome = BotDutyOutcome(
-            kind="STOPPED",
+            outcome = await prove_terminal_stop_outcome(
+                managed.binding,
+                checkpoint_path=self._carryover_checkpoint_path(strategy_instance_id),
+                now_ms=self._now_ms,
+            )
+        self._terminal.replace_provisional_stop(
+            managed.binding,
             reason_code=outcome,
-            recorded_at_ms=self._now_ms(),
-            run_id=managed.binding.run_id,
-        )
-        self._run_evidence.record_terminal(
-            strategy_instance_id,
-            terminal_outcome,
-            updated_by=_UPDATED_BY,
-            reason=outcome,
         )
         return self.status(broker, strategy_instance_id)
 
     async def stop_all(self) -> None:
         """Service shutdown: stop every task without overwriting operator intent."""
-        stopping: list[_ManagedBot] = []
+        stopping: list[ManagedBot] = []
         for managed in self._bots.values():
             if managed.task.done():
                 continue
@@ -551,8 +686,15 @@ class BotTaskRegistry:
             await asyncio.wait([m.task for m in stopping], timeout=_STOP_TIMEOUT_S)
         for managed in stopping:
             # Idempotent backstop, same as stop().
-            self._finalize(managed.binding, kind="STOPPED", reason_code="SERVICE_SHUTDOWN")
-            self._reap(managed.binding.strategy_instance_id, managed.binding.run_id)
+            self._terminal.finalize(
+                managed.binding,
+                kind="STOPPED",
+                reason_code="SERVICE_SHUTDOWN",
+            )
+            self._terminal.reap(
+                managed.binding.strategy_instance_id,
+                managed.binding.run_id,
+            )
 
     # ── S5 boot recovery (container restart is a drilled event) ───────
 
@@ -624,33 +766,10 @@ class BotTaskRegistry:
                 detail="Deploy the bot first; bindings are broker-tagged.",
             )
 
-        lifecycle = self._lifecycle_repo(strategy_instance_id).read()
-        managed = self._bots.get(strategy_instance_id)
-        process_identity: str | None = None
-        state: Literal["STARTING", "RUNNING", "STOPPING", "EXITED", "UNKNOWN"] = "UNKNOWN"
-        if managed is not None and managed.binding.run_id == binding.run_id:
-            process_identity = f"in-process-task:{binding.run_id}"
-            lifecycle_matches = (
-                lifecycle is not None
-                and lifecycle.phase is BotLifecyclePhase.ON_DUTY
-                and lifecycle.active_run_id == binding.run_id
-            )
-            if lifecycle_matches and not managed.task.done():
-                state = "STOPPING" if managed.stop_reason_code is not None else "RUNNING"
-        elif (
-            lifecycle is not None
-            and lifecycle.phase is BotLifecyclePhase.OFF_DUTY
-            and lifecycle.active_run_id is None
-            and lifecycle.duty_outcome is not None
-            and lifecycle.duty_outcome.run_id == binding.run_id
-        ):
-            state = "EXITED"
-
-        return BotProcessFact(
-            strategy_instance_id=strategy_instance_id,
-            run_id=binding.run_id,
-            process_identity=process_identity,
-            state=state,
+        return project_process_fact(
+            binding,
+            self._lifecycle_repo(strategy_instance_id).read(),
+            self._bots.get(strategy_instance_id),
             registry_generation=self._registry_generation,
             observed_at_ms=self._now_ms(),
         )
@@ -702,26 +821,46 @@ class BotTaskRegistry:
             limit=limit,
         )
 
+    def dry_run_activity(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        limit: int = 8,
+    ) -> list[DryRunActivity]:
+        """Return bounded, explicitly simulated activity for a dry instance."""
+        binding = self.binding_for_control(broker, strategy_instance_id)
+        return read_dry_run_activity(
+            binding,
+            self._confined_instance_dir(strategy_instance_id),
+            limit=limit,
+        )
+
     # ── supervision ───────────────────────────────────────────────────
 
-    async def _supervise(self, binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
+    async def _supervise(
+        self,
+        binding: BrokerBotBinding,
+        feed: MarketDataFeed,
+        run_gate: asyncio.Event,
+    ) -> None:
         """Run the bot; on ANY exit record a typed durable duty outcome, then reap."""
-        from app.services.bot_trade_strategy import run_trade_bot
-
         sid = binding.strategy_instance_id
         try:
-            if binding.mode == "trade":
-                await run_trade_bot(binding, feed)
-            else:
-                await self._run_log_only_bot(binding, feed)
+            await execute_bot_run(
+                binding,
+                feed,
+                run_gate=run_gate,
+                instance_dir=self._confined_instance_dir(sid),
+            )
         except asyncio.CancelledError:
             managed = self._bots.get(sid)
             stop_reason = managed.stop_reason_code if managed is not None else None
             if stop_reason is not None:
-                self._finalize(binding, kind="STOPPED", reason_code=stop_reason)
+                self._terminal.finalize(binding, kind="STOPPED", reason_code=stop_reason)
             else:
                 # A cancellation nobody asked for is a kill, not a clean stop.
-                self._finalize(
+                self._terminal.finalize(
                     binding,
                     kind="EXITED_UNVERIFIED",
                     reason_code="CANCELLED_WITHOUT_STOP_INTENT",
@@ -732,7 +871,7 @@ class BotTaskRegistry:
                 "Bot crashed: market-data feed died",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid, "error": str(exc)},
             )
-            self._finalize(binding, kind="CRASHED", reason_code="FEED_DEATH")
+            self._terminal.finalize(binding, kind="CRASHED", reason_code="FEED_DEATH")
         except Exception as exc:
             # Supervision boundary: every crash becomes typed durable evidence
             # plus a logged traceback — deliberately not re-raised, so the
@@ -741,84 +880,19 @@ class BotTaskRegistry:
                 "Bot crashed",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid},
             )
-            self._finalize(binding, kind="CRASHED", reason_code=type(exc).__name__)
+            self._terminal.finalize(
+                binding,
+                kind="CRASHED",
+                reason_code=type(exc).__name__,
+            )
         else:
-            self._finalize(binding, kind="EXITED_UNVERIFIED", reason_code="BAR_STREAM_ENDED")
+            self._terminal.finalize(
+                binding,
+                kind="EXITED_UNVERIFIED",
+                reason_code="BAR_STREAM_ENDED",
+            )
         finally:
-            self._reap(sid, binding.run_id)
-
-    async def _run_log_only_bot(self, binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
-        """Walking skeleton: consume closed bars, log a decision per bar."""
-        sid = binding.strategy_instance_id
-        logger.info(
-            "Log-only bot on duty",
-            extra={
-                "action": "bot_on_duty",
-                "strategy_instance_id": sid,
-                "broker": binding.broker,
-                "symbol": binding.symbol,
-                "run_id": binding.run_id,
-            },
-        )
-        async for bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
-            logger.info(
-                "Log-only bot decision",
-                extra={
-                    "action": "bot_decision",
-                    "strategy_instance_id": sid,
-                    "broker": binding.broker,
-                    "decision": "HOLD",
-                    "symbol": bar.symbol,
-                    "bar_start_ms": bar.start_ms,
-                    "bar_end_ms": bar.end_ms,
-                    "close": str(bar.close),
-                },
-            )
-
-    def _finalize(
-        self,
-        binding: BrokerBotBinding,
-        *,
-        kind: Literal["STOPPED", "CRASHED", "EXITED_UNVERIFIED"],
-        reason_code: str,
-    ) -> None:
-        """Record the terminal duty fact; OFF_DUTY, run-id fenced, idempotent."""
-        managed = self._bots.get(binding.strategy_instance_id)
-        if managed is not None and managed.binding.run_id == binding.run_id:
-            if managed.finalized:
-                return
-            managed.finalized = True
-        now_ms = self._now_ms()
-        if kind in ("CRASHED", "EXITED_UNVERIFIED"):
-            # Unexpected terminal exits are fail-closed.  A RUNNING intent with
-            # no live task strands the bot because proof-gated Start is legal
-            # only from STOPPED; persist the legal recovery state before the
-            # lifecycle terminal so a crash between writes remains conservative.
-            self._desired_repo(binding.strategy_instance_id).set(
-                DesiredState.STOPPED,
-                updated_by=_UPDATED_BY,
-                now_ms=now_ms,
-                reason=f"terminal_outcome:{reason_code}",
-            )
-        outcome = BotDutyOutcome(
-            kind=kind,
-            reason_code=reason_code,
-            recorded_at_ms=now_ms,
-            run_id=binding.run_id,
-        )
-        self._run_evidence.record_terminal(
-            binding.strategy_instance_id,
-            outcome,
-            updated_by=_UPDATED_BY,
-            reason=reason_code,
-            expected_active_run_id=binding.run_id,
-            persist_receipt=reason_code != PROVISIONAL_STOP_REASON_CODE,
-        )
-
-    def _reap(self, strategy_instance_id: str, run_id: str) -> None:
-        managed = self._bots.get(strategy_instance_id)
-        if managed is not None and managed.binding.run_id == run_id:
-            self._bots.pop(strategy_instance_id, None)
+            self._terminal.reap(sid, binding.run_id)
 
     # ── guards and composition ────────────────────────────────────────
 
@@ -849,55 +923,6 @@ class BotTaskRegistry:
             )
             return False
         return binding is not None and binding.broker in self._supported_broker_ids
-
-    async def _prove_stop_outcome(self, binding: BrokerBotBinding) -> str:
-        """Cancel entries, obtain fresh custody, and persist the STOP checkpoint."""
-        from app.broker.alpaca.clerk import get_alpaca_clerk
-
-        clerk = get_alpaca_clerk()
-        if clerk is None:
-            logger.error(
-                "Trade bot stopped without an available Alpaca Clerk proof",
-                extra={
-                    "action": "stop_custody_unprovable",
-                    "strategy_instance_id": binding.strategy_instance_id,
-                },
-            )
-            return "STOPPED_CUSTODY_UNPROVABLE"
-        return await prove_stop_outcome(
-            binding,
-            clerk=clerk,
-            checkpoint_path=self._carryover_checkpoint_path(binding.strategy_instance_id),
-            now_ms=self._now_ms,
-        )
-
-    async def _require_resume_custody(self, binding: BrokerBotBinding) -> None:
-        """Admit Resume only after a fresh exact Clerk proof."""
-        if binding.carryover_policy == "ALLOW" and not self._carryover_allowed:
-            raise CarryoverPolicyRefusedError(
-                "Exposure carryover is disabled for this Alpaca paper account.",
-                detail=(
-                    "The deployment opted in, but the account policy is no "
-                    "longer enabled. Flatten the attributed exposure before Resume."
-                ),
-            )
-        status = self.status(binding.broker, binding.strategy_instance_id)
-        clerk = None
-        if binding.broker == "alpaca" and binding.mode == "trade":
-            from app.broker.alpaca.clerk import get_alpaca_clerk
-
-            clerk = get_alpaca_clerk()
-        try:
-            await require_resume_custody(
-                binding,
-                clerk=clerk,
-                checkpoint_path=self._carryover_checkpoint_path(binding.strategy_instance_id),
-                desired_state=status.desired_state,
-                phase=status.phase,
-                exposure_carryover_supported=(binding.strategy_key != AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL),
-            )
-        except CarryoverResumeRefusedError as exc:
-            raise RecoveryUncertainError(str(exc), detail=exc.detail) from exc
 
     def _carryover_checkpoint_path(self, strategy_instance_id: str) -> Path:
         return self._confined_instance_dir(strategy_instance_id) / _CARRYOVER_CHECKPOINT_FILENAME
@@ -947,37 +972,18 @@ class BotTaskRegistry:
         lifecycle = self._lifecycle_repo(sid).read()
         desired = self._desired_repo(sid).read_state()
         managed = self._bots.get(sid)
-        running = managed is not None and not managed.task.done()
-        duty_outcome = None
-        if lifecycle is not None and lifecycle.duty_outcome is not None:
-            duty_outcome = BotDutyOutcomeView(
-                kind=lifecycle.duty_outcome.kind,
-                reason_code=lifecycle.duty_outcome.reason_code,
-                recorded_at_ms=lifecycle.duty_outcome.recorded_at_ms,
-                run_id=lifecycle.duty_outcome.run_id,
-            )
         checkpoint_exposure, checkpoint_matches = checkpoint_status(
             binding,
             self._carryover_checkpoint_path(sid),
         )
-        return BotStatusView(
-            strategy_instance_id=sid,
-            strategy_key=binding.strategy_key,
-            broker=binding.broker,
-            symbol=binding.symbol,
-            mode=binding.mode,
-            quantity=binding.quantity,
-            carryover_policy=binding.carryover_policy,
+        return project_bot_status(
+            binding,
+            lifecycle,
+            desired,
+            running=managed is not None and not managed.task.done(),
             carryover_account_policy_enabled=self._carryover_allowed,
-            carryover_checkpoint_exposure=checkpoint_exposure,
-            carryover_checkpoint_config_matches=checkpoint_matches,
-            running=running,
-            phase=(lifecycle.phase.value if lifecycle is not None else "OFF_DUTY"),
-            desired_state=desired.value,
-            active_run_id=(lifecycle.active_run_id if lifecycle is not None else None),
-            duty_outcome=duty_outcome,
-            binding_created_at_ms=binding.created_at_ms,
-            last_transition_at_ms=(lifecycle.last_transition_at_ms if lifecycle is not None else None),
+            checkpoint_exposure=checkpoint_exposure,
+            checkpoint_matches=checkpoint_matches,
         )
 
 

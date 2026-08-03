@@ -201,7 +201,7 @@ export class BotsListPageComponent {
       if (action?.action_id !== event.action || !action.enabled) {
         this.actionNotice.set({
           tone: 'danger',
-          message: `${event.action === 'start' ? 'Start' : 'Stop'} is no longer available for ${sid}. Refreshing its current state.`,
+          message: `${event.action === 'resume' ? 'Resume' : 'Stop'} is no longer available for ${sid}. Refreshing its current state.`,
         });
         this.catalog.reload();
         return;

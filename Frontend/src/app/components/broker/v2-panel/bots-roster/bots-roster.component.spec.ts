@@ -29,11 +29,11 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
 }
 
 function fakeRowAction(
-  actionId: 'start' | 'stop' = 'stop',
+  actionId: 'resume' | 'stop' = 'stop',
 ): NonNullable<BotCatalogView['row_action']> {
   return {
     action_id: actionId,
-    label: actionId === 'start' ? 'Start' : 'Stop',
+    label: actionId === 'resume' ? 'Resume' : 'Stop',
     explanation: `${actionId} this bot.`,
     enabled: true,
     blockers: [],

@@ -196,6 +196,45 @@ async def test_deploy_scoped_correct_account_delegates(deploy_app) -> None:
     assert call["use_rth"] is True
 
 
+async def test_dry_run_deploy_selects_zero_broker_write_runner_mode(deploy_app) -> None:
+    fast_app, registry = deploy_app
+    request = {**_BODY, "execution_mode": "dry_run"}
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json=request,
+        )
+
+    assert response.status_code == 201
+    assert response.json()["execution_mode"] == "dry_run"
+    assert response.json()["bot"]["mode"] == "dry_run"
+    assert registry.deploy_calls[-1]["mode"] == "dry_run"
+
+
+async def test_dry_run_refuses_broker_exposure_carryover(deploy_app) -> None:
+    fast_app, registry = deploy_app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots",
+            json={
+                **_BODY,
+                "execution_mode": "dry_run",
+                "carryover_policy": "ALLOW",
+            },
+        )
+
+    assert response.status_code == 422
+    assert registry.deploy_calls == []
+
+
 @pytest.mark.asyncio
 async def test_start_admission_preview_uses_the_request_specific_policy(deploy_app) -> None:
     fast_app, _registry = deploy_app
@@ -292,6 +331,15 @@ async def test_deploy_view_is_closed_paper_only_contract(deploy_app) -> None:
     }
     assert all(check["ready"] for check in body["readiness_checks"])
     assert body["execution_modes"] == [
+        {
+            "mode": "dry_run",
+            "label": "Dry Run",
+            "availability": "available",
+            "explanation": (
+                "Real market data and strategy decisions produce clearly simulated fills; "
+                "the runner never calls the Clerk's broker-effect boundary."
+            ),
+        },
         {
             "mode": "paper",
             "label": "Paper",

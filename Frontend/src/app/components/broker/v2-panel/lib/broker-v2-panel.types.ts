@@ -22,7 +22,9 @@ export type StationState =
 
 export type ActionId =
   | 'deploy'
-  | 'start'
+  | 'resume'
+  | 'pause'
+  | 'continue'
   | 'stop'
   | 'flatten_stop'
   | 'retire'

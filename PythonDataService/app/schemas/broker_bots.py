@@ -78,7 +78,7 @@ class DeployBotRequest(BaseModel):
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     symbol: str = Field(min_length=1, max_length=12)
     use_rth: bool = True
-    mode: Literal["log_only", "trade"] = "log_only"
+    mode: Literal["log_only", "dry_run", "trade"] = "log_only"
     quantity: int = Field(default=1, ge=1, le=100)
 
     @field_validator("strategy_instance_id")
@@ -119,6 +119,7 @@ class AlpacaPaperDeployRequest(BaseModel):
     strategy_key: AlpacaPaperStrategyKey
     symbol: str = Field(min_length=1, max_length=12)
     sizing: AlpacaPaperSizingSelection = Field(default_factory=AlpacaPaperSizingSelection)
+    execution_mode: Literal["paper", "dry_run"] = "paper"
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
 
     @field_validator("strategy_instance_id")
@@ -130,6 +131,12 @@ class AlpacaPaperDeployRequest(BaseModel):
     @classmethod
     def _normalize_symbol(cls, value: str) -> str:
         return _normalized_symbol(value)
+
+    @model_validator(mode="after")
+    def _dry_run_cannot_carry_broker_exposure(self) -> AlpacaPaperDeployRequest:
+        if self.execution_mode == "dry_run" and self.carryover_policy == "ALLOW":
+            raise ValueError("dry_run requires carryover_policy=FORBID")
+        return self
 
 
 class AlpacaPaperDeployEligibility(BaseModel):
@@ -177,7 +184,7 @@ class AlpacaPaperExecutionMode(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    mode: Literal["paper", "live"]
+    mode: Literal["paper", "dry_run", "live"]
     label: str
     availability: Literal["available", "planned"]
     explanation: str
@@ -235,7 +242,7 @@ class BotStatusView(BaseModel):
     strategy_key: str = "deployment_validation"
     broker: str
     symbol: str
-    mode: Literal["log_only", "trade"]
+    mode: Literal["log_only", "dry_run", "trade"]
     quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     carryover_account_policy_enabled: bool = False
@@ -342,7 +349,7 @@ class AlpacaPaperDeployReceipt(BaseModel):
     next_action: str
     panel_path: str
     account_id: str
-    execution_mode: Literal["paper"] = "paper"
+    execution_mode: Literal["paper", "dry_run"] = "paper"
     sizing: AlpacaPaperSizingSelection
     carryover_policy: Literal["FORBID", "ALLOW"]
     action_plan: ActionPlan

@@ -1,5 +1,5 @@
 {
-  "$comment": "Snapshot of the closed broker-v2 panel operator vocabulary (phases, desired states, duty-outcome kinds, hold reasons, reconciliation verdicts, channel states, station ids, station states, action ids). PAUSED is deliberately absent (spec \u00a712, decision #10). Two test surfaces lock against this file. Pytest PythonDataService/tests/broker/v2panel/test_vocabulary_snapshot.py reads the Python-tree copy and asserts equality with the live ALL_VOCABULARY_CODES frozenset and non-trivial copy for every code. The Frontend Vitest surface (S5) reads the Frontend-tree copy. Adding a code requires (a) updating vocabulary.py, (b) re-running PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py, (c) adding the emergency-fallback copy on the Frontend map. Any missing step fails a parity test.",
+  "$comment": "Snapshot of the closed broker-v2 panel operator vocabulary (phases, desired states, duty-outcome kinds, hold reasons, reconciliation verdicts, channel states, station ids, station states, action ids). PAUSED and Continue encode the same-run hold/release lifecycle. Two test surfaces lock against this file. Pytest PythonDataService/tests/broker/v2panel/test_vocabulary_snapshot.py reads the Python-tree copy and asserts equality with the live ALL_VOCABULARY_CODES frozenset and non-trivial copy for every code. The Frontend Vitest surface (S5) reads the Frontend-tree copy. Adding a code requires (a) updating vocabulary.py, (b) re-running PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py, (c) adding the emergency-fallback copy on the Frontend map. Any missing step fails a parity test.",
   "generated_by": "PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py",
   "source_files": [
     "PythonDataService/app/broker/v2panel/vocabulary.py (ALL_VOCABULARY_CODES, OPERATOR_COPY)"
@@ -13,6 +13,7 @@
     "NO_HOLD",
     "OFF_DUTY",
     "ON_DUTY",
+    "PAUSED",
     "RECONCILED",
     "RETIRED",
     "RUNNING",
@@ -26,17 +27,19 @@
     "cancel_order",
     "clean",
     "clear_hold",
+    "continue",
     "deploy",
     "flatten_stop",
     "healthy",
     "missing_intent",
     "not_applicable",
+    "pause",
     "reconcile_now",
     "record_inventory_baseline",
+    "resume",
     "retire",
     "satisfied",
     "stale",
-    "start",
     "stop",
     "unexplained_order",
     "unhealthy",
@@ -76,6 +79,10 @@
     "ON_DUTY": {
       "label": "On duty",
       "explanation": "The bot is running and evaluating bars as they close."
+    },
+    "PAUSED": {
+      "label": "Paused",
+      "explanation": "The current run remains alive but bar evaluation is held until Continue."
     },
     "RECONCILED": {
       "label": "Reconciled",
@@ -129,6 +136,10 @@
       "label": "Clear hold",
       "explanation": "Lift the account exposure hold once its root condition is healthy and freshly observed."
     },
+    "continue": {
+      "label": "Continue",
+      "explanation": "Let this paused live run evaluate bars again without changing its run ID."
+    },
     "deploy": {
       "label": "Deploy",
       "explanation": "Create and start a new bot bound to this account."
@@ -149,6 +160,10 @@
       "label": "Not applicable",
       "explanation": "This broker or mode has no such station."
     },
+    "pause": {
+      "label": "Pause",
+      "explanation": "Hold bar evaluation while keeping the current process and run identity alive."
+    },
     "reconcile_now": {
       "label": "Reconcile now",
       "explanation": "Run a reconciliation sweep against the broker immediately."
@@ -156,6 +171,10 @@
     "record_inventory_baseline": {
       "label": "Recover inventory baseline",
       "explanation": "Record the freshly observed broker positions as the account accounting cutover, retiring prior bot attribution without deleting history or assigning current positions to a bot."
+    },
+    "resume": {
+      "label": "Resume",
+      "explanation": "Create a new run of this unchanged strategy instance after backend admission."
     },
     "retire": {
       "label": "Retire",
@@ -168,10 +187,6 @@
     "stale": {
       "label": "Stale",
       "explanation": "The last sweep could not reach the broker; the verdict is out of date."
-    },
-    "start": {
-      "label": "Start",
-      "explanation": "Begin evaluating bars for this off-duty bot."
     },
     "stop": {
       "label": "Stop",

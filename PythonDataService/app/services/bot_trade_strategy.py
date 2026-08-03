@@ -32,6 +32,7 @@ from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.broker_bots import AlpacaPaperStrategyKey
 
 if TYPE_CHECKING:
+    from app.services.bot_dry_run import DryRunActivityJournal
     from app.services.bot_runner import BrokerBotBinding
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,13 @@ _INTENT_BY_DEPLOYMENT_DECISION = {
     DeploymentDecision.ENTER: SignalIntentKind.ENTER,
     DeploymentDecision.EXIT: SignalIntentKind.EXIT,
 }
+# Carryover requires reconstructing the strategy's in-flight lifecycle from
+# durable state. Deployment validation is the one deliberately bounded
+# validation primitive approved for this path; every future strategy must opt
+# in here with its reconstruction evidence rather than inheriting permission.
+EXPOSURE_CARRYOVER_STRATEGY_KEYS: frozenset[AlpacaPaperStrategyKey] = frozenset(
+    {AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION}
+)
 
 
 class _RecordingSignalIntentExecutor:
@@ -125,7 +133,7 @@ async def _ema_crossover_intents(
             yield intent
 
 
-async def _strategy_intents(
+async def strategy_intents(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
 ) -> AsyncIterator[SignalIntent]:
@@ -158,7 +166,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise RuntimeError("AlpacaClerk is not installed; cannot execute trade-mode decisions.")
-    async for intent in _strategy_intents(binding, feed):
+    async for intent in strategy_intents(binding, feed):
         logger.info(
             "Trade bot decision",
             extra={
@@ -187,5 +195,43 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                 "purpose": intent.kind,
                 "effect_state": receipt.state.value,
                 "order_refs": receipt.child_order_refs,
+            },
+        )
+
+
+async def run_dry_run_bot(
+    binding: BrokerBotBinding,
+    feed: MarketDataFeed,
+    journal: DryRunActivityJournal,
+) -> None:
+    """Run real strategy decisions with durable simulated fills and no Clerk."""
+    from app.services.bot_dry_run import DryRunActivity
+
+    async for intent in strategy_intents(binding, feed):
+        side = "buy" if intent.kind is SignalIntentKind.ENTER else "sell"
+        order_ref = f"simulated:{binding.run_id}:{intent.bar_close_ms}:{intent.kind}"
+        journal.append(
+            DryRunActivity(
+                seq=journal.next_seq(),
+                strategy_instance_id=binding.strategy_instance_id,
+                run_id=binding.run_id,
+                recorded_at_ms=intent.bar_close_ms,
+                bar_ref=f"{binding.symbol}@{intent.bar_close_ms}",
+                intent=intent.kind.value,
+                order_ref=order_ref,
+                symbol=binding.symbol,
+                side=side,
+                quantity=float(binding.quantity),
+                fill_price=float(intent.intended_price),
+            )
+        )
+        logger.info(
+            "Dry-run simulated fill",
+            extra={
+                "action": "dry_run_simulated_fill",
+                "strategy_instance_id": binding.strategy_instance_id,
+                "run_id": binding.run_id,
+                "intent": intent.kind.value,
+                "order_ref": order_ref,
             },
         )

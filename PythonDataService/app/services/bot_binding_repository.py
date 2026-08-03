@@ -76,7 +76,7 @@ class BrokerBotBinding(BaseModel):
     broker: str
     symbol: str
     use_rth: bool = True
-    mode: Literal["log_only", "trade"] = "log_only"
+    mode: Literal["log_only", "dry_run", "trade"] = "log_only"
     quantity: int = 1
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     action_plan: ActionPlan
@@ -95,7 +95,7 @@ class StrategyInstanceRecord(BaseModel):
     broker: str
     symbol: str
     use_rth: bool
-    mode: Literal["log_only", "trade"]
+    mode: Literal["log_only", "dry_run", "trade"]
     quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"]
     action_plan: ActionPlan

@@ -27,6 +27,10 @@ interface ReadinessControl {
 }
 
 const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
+  resume: 'primary',
+  pause: 'warning',
+  continue: 'primary',
+  stop: 'danger',
   flatten_stop: 'danger',
   reconcile_now: 'neutral',
   clear_hold: 'warning',

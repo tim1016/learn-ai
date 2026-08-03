@@ -10,9 +10,7 @@ snapshot/TS-parity mechanism pins (the same discipline as
 
 Two invariants this file enforces and the contract tests pin:
 
-- ``PAUSED`` is absent everywhere (decision #10 — verified dead in
-  ``bot_runner.py``; the panel narrows ``desired_state`` to ``RUNNING |
-  STOPPED``).
+- ``PAUSED`` means one live run is held; Continue keeps that run identity.
 - Every emitted code carries server-authored copy (``label`` + ``explanation``)
   in :data:`OPERATOR_COPY`; the copy-coverage contract test fails visibly when a
   code is emitted without copy (decision #7 — no open-ended string reaches the
@@ -33,9 +31,9 @@ from typing import Final, Literal
 Phase = Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
 PHASES: Final[frozenset[str]] = frozenset({"OFF_DUTY", "ON_DUTY", "RETIRED"})
 
-# ── Desired state (§12, decision #10) — PAUSED deliberately removed ───────────
-DesiredState = Literal["RUNNING", "STOPPED"]
-DESIRED_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "STOPPED"})
+# ── Desired state (§12) ───────────────────────────────────────────────────────
+DesiredState = Literal["RUNNING", "PAUSED", "STOPPED"]
+DESIRED_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "PAUSED", "STOPPED"})
 
 # ── Duty-outcome kinds (§7.2) ────────────────────────────────────────────────
 # The typed terminal duty facts a bot records on exit (bot_runner exit taxonomy)
@@ -85,7 +83,9 @@ STATION_STATES: Final[frozenset[str]] = frozenset(
 # ── Action ids (§11, the closed presented-actions enum) ──────────────────────
 ActionId = Literal[
     "deploy",
-    "start",
+    "resume",
+    "pause",
+    "continue",
     "stop",
     "flatten_stop",
     "retire",
@@ -96,7 +96,9 @@ ActionId = Literal[
 ]
 ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "deploy",
-    "start",
+    "resume",
+    "pause",
+    "continue",
     "stop",
     "flatten_stop",
     "retire",
@@ -139,6 +141,10 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     # Desired state
     "RUNNING": OperatorCopy("Running", "The operator wants this bot evaluating bars."),
+    "PAUSED": OperatorCopy(
+        "Paused",
+        "The current run remains alive but bar evaluation is held until Continue.",
+    ),
     "STOPPED": OperatorCopy(
         "Stopped", "The operator wants this bot idle. Exposure is left untouched."
     ),
@@ -229,7 +235,18 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     # Action ids
     "deploy": OperatorCopy("Deploy", "Create and start a new bot bound to this account."),
-    "start": OperatorCopy("Start", "Begin evaluating bars for this off-duty bot."),
+    "resume": OperatorCopy(
+        "Resume",
+        "Create a new run of this unchanged strategy instance after backend admission.",
+    ),
+    "pause": OperatorCopy(
+        "Pause",
+        "Hold bar evaluation while keeping the current process and run identity alive.",
+    ),
+    "continue": OperatorCopy(
+        "Continue",
+        "Let this paused live run evaluate bars again without changing its run ID.",
+    ),
     "stop": OperatorCopy(
         "Stop",
         "Stop evaluating bars and cancel this bot's working entry orders. "

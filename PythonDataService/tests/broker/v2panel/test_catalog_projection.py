@@ -31,7 +31,7 @@ def _status(
     running: bool = True,
     desired_state: str = "RUNNING",
     duty_kind: str | None = None,
-    mode: Literal["log_only", "trade"] = "log_only",
+    mode: Literal["log_only", "dry_run", "trade"] = "log_only",
 ) -> BotStatusView:
     duty = (
         BotDutyOutcomeView(
@@ -148,13 +148,23 @@ def test_catalog_no_journal_activity_still_lists_the_bot() -> None:
     assert catalog[0].exposure == {}
 
 
-def test_catalog_never_emits_paused_desired_state() -> None:
+def test_catalog_preserves_paused_live_run_state() -> None:
     cache = BotRollupCache()
     bootstrap_rollup_cache(cache, [SID], [])
-    # A PAUSED lifecycle value is narrowed to STOPPED by the projection.
-    status = _status(sid=SID, running=False, phase="OFF_DUTY", desired_state="PAUSED")
+    status = _status(sid=SID, desired_state="PAUSED")
     catalog = build_catalog([status], cache, account_id=ACCT)
-    assert catalog[0].desired_state == "STOPPED"
+    assert catalog[0].desired_state == "PAUSED"
+    assert "bar evaluation is held" in catalog[0].status_explanation
+
+
+def test_catalog_describes_dry_run_without_claiming_log_only_mode() -> None:
+    cache = BotRollupCache()
+    bootstrap_rollup_cache(cache, [SID], [])
+
+    catalog = build_catalog([_status(sid=SID, mode="dry_run")], cache, account_id=ACCT)
+
+    assert "Dry Run" in catalog[0].status_explanation
+    assert "no broker writes" in catalog[0].status_explanation
 
 
 def test_catalog_poll_does_not_traverse_journal() -> None:

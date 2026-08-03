@@ -41,7 +41,9 @@ from app.schemas.broker_v2_panel import (
     TransactionRail,
     WorkingOrderView,
 )
-from app.services.broker_v2_panel.presented_actions import build_actions, resume_eligible
+from app.schemas.run_admission import RunAdmissionDecision
+from app.services.bot_dry_run import DryRunActivity
+from app.services.broker_v2_panel.presented_actions import build_actions
 from app.services.broker_v2_panel.station_derivation import (
     STALE_THRESHOLD_MS,
     derive_stations,
@@ -156,30 +158,33 @@ def _build_health_card(
     *,
     clerk: ClerkCard,
     exposure: dict[str, float],
-    latest_decision: DecisionReceipt | None,
+    last_decision_at_ms: int | None,
     last_bar_at_ms: int | None,
     now_ms: int,
+    resume_admission: RunAdmissionDecision | None,
 ) -> BotHealthCard:
-    desired_state = "RUNNING" if status.desired_state == "RUNNING" else "STOPPED"
-    last_decision_at_ms = latest_decision.ts_ms if latest_decision is not None else None
+    desired_state = status.desired_state
     decision_stale = last_decision_at_ms is not None and now_ms - last_decision_at_ms > STALE_THRESHOLD_MS
-    can_resume = resume_eligible(status, clerk, exposure)
+    can_resume = resume_admission is not None and resume_admission.allowed
     has_exposure = any(abs(quantity) > 0 for quantity in exposure.values())
     if can_resume and has_exposure:
         resume_label = "Resume custody proof ready"
         resume_explanation = (
             "The durable checkpoint, current Clerk attribution, and latest "
-            "clean reconciliation agree. Start will obtain one fresh broker proof."
+            "clean reconciliation agree. Resume will obtain one fresh broker proof."
         )
     elif can_resume:
         resume_label = "Flat Resume ready"
-        resume_explanation = "The stopped instance is flat and may start a newly identified run."
+        resume_explanation = "The stopped instance is flat and may resume as a newly identified run."
     elif status.running:
         resume_label = "Resume not applicable"
         resume_explanation = "This strategy instance already has a live run."
-    else:
+    elif resume_admission is not None:
         resume_label = "Resume blocked"
-        resume_explanation = "The backend cannot prove flat state or an exact approved carryover checkpoint."
+        resume_explanation = resume_admission.explanation
+    else:
+        resume_label = "Resume unknown"
+        resume_explanation = "The backend could not obtain one current Resume admission decision."
     return BotHealthCard(
         strategy_instance_id=status.strategy_instance_id,
         phase=status.phase,
@@ -383,11 +388,94 @@ def _recent_fill_views(sid: str, entries: list[OrderJournalEntry], *, limit: int
     ]
 
 
+def _dry_run_decision_views(
+    activity: list[DryRunActivity],
+    *,
+    limit: int = 8,
+) -> list[RecentDecisionView]:
+    return [
+        RecentDecisionView(
+            seq=row.seq,
+            recorded_at_ms=row.recorded_at_ms,
+            outcome="entered" if row.intent == "ENTER" else "exited",
+            reason_code=f"SIMULATED_{row.intent}",
+            bar_ref=row.bar_ref,
+            order_ref=row.order_ref,
+            simulated=True,
+        )
+        for row in reversed(activity[-limit:])
+    ]
+
+
+def _dry_run_fill_views(
+    activity: list[DryRunActivity],
+    *,
+    limit: int = 8,
+) -> list[RecentFillView]:
+    return [
+        RecentFillView(
+            order_ref=row.order_ref,
+            symbol=row.symbol,
+            side=row.side,
+            quantity=row.quantity,
+            price=row.fill_price,
+            filled_at_ms=row.recorded_at_ms,
+            simulated=True,
+        )
+        for row in reversed(activity[-limit:])
+    ]
+
+
+def _execution_policy(mode: str) -> str:
+    policies = {
+        "dry_run": (
+            "Dry Run. Real market data produces clearly simulated decisions "
+            "and fills; broker writes are impossible."
+        ),
+        "log_only": (
+            "Observation only. Decisions are recorded, but the Clerk will not place orders."
+        ),
+        "trade": "Paper execution. Only the Clerk may submit, cancel, or reduce broker orders.",
+    }
+    return policies[mode]
+
+
+def _recent_activity_views(
+    status: BotStatusView,
+    entries: list[OrderJournalEntry],
+    decision_receipts: list[DecisionReceipt],
+    dry_run_activity: list[DryRunActivity],
+) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
+    """Project real or simulated activity behind one explicit mode boundary."""
+    if status.mode == "dry_run":
+        return (
+            _dry_run_decision_views(dry_run_activity),
+            _dry_run_fill_views(dry_run_activity),
+        )
+    return (
+        _recent_decision_views(decision_receipts),
+        _recent_fill_views(status.strategy_instance_id, entries),
+    )
+
+
+def _dry_run_last_bar_at_ms(activity: list[DryRunActivity]) -> int | None:
+    """Return the latest simulated bar timestamp, falling back to receipt time."""
+    if not activity:
+        return None
+    latest = activity[-1]
+    _symbol, separator, candidate = latest.bar_ref.rpartition("@")
+    if separator and candidate.isdecimal():
+        return int(candidate)
+    return latest.recorded_at_ms
+
+
 def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[ReadinessCheckView]:
     """Project present-tense enforcement checks from the canonical action guards."""
     checks: list[ReadinessCheckView] = []
     authorities = {
-        "start": "Bot lifecycle registry + Clerk custody proof",
+        "resume": "Bot lifecycle registry + Clerk custody proof",
+        "pause": "Bot lifecycle registry",
+        "continue": "Bot lifecycle registry",
         "stop": "Bot lifecycle registry",
         "flatten_stop": "Bot lifecycle registry + Alpaca Clerk",
         "clear_hold": "Alpaca Clerk account hold gate",
@@ -428,7 +516,7 @@ def _mission_verdict(
     channel_health: ChannelHealthEvaluation,
     now_ms: int,
 ) -> MissionVerdictView:
-    start = next((action for action in actions if action.action_id == "start"), None)
+    resume = next((action for action in actions if action.action_id == "resume"), None)
     if status.phase == "RETIRED":
         return MissionVerdictView(
             state="retired",
@@ -464,6 +552,14 @@ def _mission_verdict(
             evaluated_at_ms=now_ms,
         )
     if status.running:
+        if status.desired_state == "PAUSED":
+            return MissionVerdictView(
+                state="ready",
+                label="Paused",
+                explanation="The current run is live, but bar evaluation is held.",
+                next_action="Use Continue to release this same run without changing its run ID.",
+                evaluated_at_ms=now_ms,
+            )
         return MissionVerdictView(
             state="working",
             label="Working",
@@ -471,20 +567,20 @@ def _mission_verdict(
             next_action="Monitor decisions, fills, and custody evidence.",
             evaluated_at_ms=now_ms,
         )
-    if start is not None and start.enabled:
+    if resume is not None and resume.enabled:
         return MissionVerdictView(
             state="ready",
-            label="Ready to start",
-            explanation="Lifecycle and Clerk custody checks currently allow Start.",
-            next_action="Start the bot when the execution session is intended to run.",
+            label="Ready to resume",
+            explanation="The shared backend admission currently allows a new run.",
+            next_action="Resume the bot when the execution session is intended to run.",
             evaluated_at_ms=now_ms,
         )
-    blocker = start.blockers[0] if start is not None and start.blockers else None
+    blocker = resume.blockers[0] if resume is not None and resume.blockers else None
     return MissionVerdictView(
         state="off_duty",
         label="Off duty",
         explanation=(blocker.headline if blocker is not None else "The bot is not evaluating bars."),
-        next_action=(blocker.detail if blocker is not None else "Review readiness before Start."),
+        next_action=(blocker.detail if blocker is not None else "Review readiness before Resume."),
         evaluated_at_ms=now_ms,
     )
 
@@ -507,6 +603,8 @@ def build_panel(
     now_ms: int,
     selected_transaction_ref: str | None = None,
     recent_decisions: list[DecisionReceipt] | None = None,
+    resume_admission: RunAdmissionDecision | None = None,
+    dry_run_activity: list[DryRunActivity] | None = None,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
 
@@ -526,14 +624,26 @@ def build_panel(
         now_ms=now_ms,
     )
 
+    activity = dry_run_activity or []
+    health_last_decision_at_ms = (
+        activity[-1].recorded_at_ms
+        if status.mode == "dry_run" and activity
+        else (latest_decision.ts_ms if latest_decision is not None else None)
+    )
+    health_last_bar_at_ms = (
+        _dry_run_last_bar_at_ms(activity)
+        if status.mode == "dry_run"
+        else last_bar_at_ms
+    )
     clerk = build_clerk_card(clerk_status, now_ms)
     health = _build_health_card(
         status,
         clerk=clerk,
         exposure=exposure,
-        latest_decision=latest_decision,
-        last_bar_at_ms=last_bar_at_ms,
+        last_decision_at_ms=health_last_decision_at_ms,
+        last_bar_at_ms=health_last_bar_at_ms,
         now_ms=now_ms,
+        resume_admission=resume_admission,
     )
 
     revision = compute_revision(
@@ -557,9 +667,16 @@ def build_panel(
         working_order_count=len(working_orders),
         account_working_order_count=_account_working_order_count(entries),
         account_expected_exposure=project_expected_account_exposure(entries),
+        resume_admission=resume_admission,
     )
 
     decision_receipts = recent_decisions or ([latest_decision] if latest_decision else [])
+    decision_views, fill_views = _recent_activity_views(
+        status,
+        entries,
+        decision_receipts,
+        activity,
+    )
 
     return BotPanelView(
         strategy_instance_id=status.strategy_instance_id,
@@ -578,11 +695,7 @@ def build_panel(
             channel_health=channel_health,
             now_ms=now_ms,
         ),
-        execution_policy=(
-            "Observation only. Decisions are recorded, but the Clerk will not place orders."
-            if status.mode == "log_only"
-            else "Paper execution. Only the Clerk may submit, cancel, or reduce broker orders."
-        ),
+        execution_policy=_execution_policy(status.mode),
         health=health,
         clerk=clerk,
         rail=TransactionRail(transaction_ref=transaction_ref, stations=stations),
@@ -592,8 +705,8 @@ def build_panel(
         readiness_checks=_readiness_checks(actions, now_ms),
         exposure=exposure,
         working_orders=working_orders,
-        recent_decisions=_recent_decision_views(decision_receipts),
-        recent_fills=_recent_fill_views(status.strategy_instance_id, entries),
+        recent_decisions=decision_views,
+        recent_fills=fill_views,
         fills_today=fills_today,
         realized_pnl_today=realized_pnl_today,
         open_pnl=open_pnl,

@@ -18,7 +18,7 @@ import asyncio
 import csv
 import json
 from collections.abc import Callable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
 
@@ -44,7 +44,13 @@ from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
-from app.services.bot_binding_repository import RunOutcomeConflictError
+from app.services.bot_binding_repository import (
+    BrokerBotBinding,
+    RunOutcomeConflictError,
+    alpaca_v1_action_plan,
+)
+from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
+from app.services.bot_registry_projection import read_dry_run_activity
 from app.services.bot_run_evidence import PROVISIONAL_STOP_REASON_CODE
 from app.services.bot_runner import (
     BootRecoveryIncompleteError,
@@ -59,6 +65,7 @@ from app.services.bot_runner import (
     UnknownBotError,
 )
 from app.services.bot_runner_errors import InvalidRunHistoryCursorError
+from app.services.bot_runtime import PauseAwareFeed
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.utils.timestamps import now_ms_utc
 
@@ -157,6 +164,40 @@ class _CustodyClerk:
         assert sid == self.proof.strategy_instance_id
         return self.proof
 
+    @asynccontextmanager
+    async def start_admission_snapshot(self, sid: str):
+        assert sid == self.proof.strategy_instance_id
+        zero = CustodyCountFact(state="zero", count=0)
+        exposure = (
+            CustodyExposureFact(state="non_zero", positions=self.proof.exposure)
+            if self.proof.exposure
+            else CustodyExposureFact(state="zero", positions={})
+        )
+        yield ClerkCustodySnapshot(
+            broker="alpaca",
+            account_id=self.proof.account_id,
+            strategy_instance_id=sid,
+            clerk_generation="test-clerk",
+            journal_sequence=1,
+            reconciliation_state=self.proof.reconciliation_verdict,
+            reconciliation_fresh=self.proof.reconciliation_verdict == "clean",
+            reconciled_at_ms=now_ms_utc(),
+            exposure=exposure,
+            working_orders=zero,
+            pending_orders=zero,
+            terminal_orders=zero,
+            unresolved_effects=zero,
+            hold=HoldState(active=False),
+            freeze=self.proof.freeze,
+            reason_code=(
+                "CLERK_CUSTODY_PROVEN"
+                if self.proof.reconciliation_verdict == "clean"
+                else "CLERK_CUSTODY_UNPROVABLE"
+            ),
+            evidence_refs=("test-clerk:1",),
+            observed_at_ms=now_ms_utc(),
+        )
+
 
 def _custody_proof(
     *,
@@ -236,6 +277,9 @@ def _registry(
     policy: RestartIntensityPolicy | None = None,
     carryover_allowed: bool = False,
     now_ms: Callable[[], int] = now_ms_utc,
+    start_custody_guard: (
+        Callable[[str], AbstractAsyncContextManager[ClerkCustodySnapshot]] | None
+    ) = None,
 ) -> BotTaskRegistry:
     return BotTaskRegistry(
         tmp_path,
@@ -244,7 +288,7 @@ def _registry(
         # Boot recovery has its own suite (test_boot_recovery.py).
         boot_recovery_required=False,
         carryover_allowed=carryover_allowed,
-        start_custody_guard=_flat_start_guard,
+        start_custody_guard=start_custody_guard or _flat_start_guard,
         now_ms=now_ms,
     )
 
@@ -946,7 +990,7 @@ async def test_resume_does_not_preserve_provisional_stop_outcome(tmp_path: Path)
     managed.finalized = True
     managed.task.cancel()
     await asyncio.wait({managed.task})
-    registry._reap(_SID, binding.run_id)
+    registry._terminal.reap(_SID, binding.run_id)
     registry._desired_repo(_SID).set(
         DesiredState.STOPPED,
         updated_by="test",
@@ -988,7 +1032,7 @@ async def test_conflicting_terminal_outcome_does_not_mutate_lifecycle(tmp_path: 
     managed.finalized = True
     managed.task.cancel()
     await asyncio.wait({managed.task})
-    registry._reap(_SID, binding.run_id)
+    registry._terminal.reap(_SID, binding.run_id)
     recorded = BotDutyOutcome(
         kind="STOPPED",
         reason_code="OPERATOR_STOP",
@@ -1063,12 +1107,126 @@ async def test_run_history_pages_previous_runs_without_changing_current_target(
 
 
 @pytest.mark.asyncio
-async def test_approved_carryover_resumes_only_after_exact_fresh_proof(
+async def test_pause_and_continue_keep_the_same_live_run_id(tmp_path: Path) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    deployed = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    paused = await registry.pause("alpaca", _SID)
+    continued = await registry.continue_paused("alpaca", _SID)
+
+    assert paused.running is True
+    assert paused.desired_state == "PAUSED"
+    assert paused.active_run_id == deployed.active_run_id
+    assert continued.running is True
+    assert continued.desired_state == "RUNNING"
+    assert continued.active_run_id == deployed.active_run_id
+    assert registry.current_run("alpaca", _SID).run_id == deployed.active_run_id
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_continue_refuses_a_live_run_that_is_not_paused(tmp_path: Path) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    deployed = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+
+    with pytest.raises(RunAdmissionRefusedError, match=r"requires.*paused run"):
+        await registry.continue_paused("alpaca", _SID)
+
+    assert registry.status("alpaca", _SID).active_run_id == deployed.active_run_id
+    await registry.stop("alpaca", _SID)
+
+
+@pytest.mark.asyncio
+async def test_pause_aware_feed_discards_bars_buffered_during_pause() -> None:
+    class _QueueFeed:
+        feed_id = "queue"
+
+        def __init__(self) -> None:
+            self.queue: asyncio.Queue[MarketDataBar] = asyncio.Queue()
+
+        async def stream_bars(self, _symbol: str, *, use_rth: bool = True):
+            while True:
+                yield await self.queue.get()
+
+    source = _QueueFeed()
+    gate = asyncio.Event()
+    gate.set()
+    clock = [100]
+    feed = PauseAwareFeed(source, gate, now_ms=lambda: clock[0])
+    stream = feed.stream_bars("SPY")
+
+    await source.queue.put(_bar(0))
+    assert (await anext(stream)).end_ms == 60_000
+
+    gate.clear()
+    await source.queue.put(_bar(100))
+    next_bar = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    assert not next_bar.done()
+
+    clock[0] = 200_000
+    gate.set()
+    await source.queue.put(_bar(300_000))
+    assert (await next_bar).end_ms == 360_000
+
+
+def test_dry_run_activity_projection_excludes_prior_run_rows(tmp_path: Path) -> None:
+    journal = DryRunActivityJournal(tmp_path)
+    for run_id, seq in (("run-prior", 1), ("run-current", 2)):
+        journal.append(
+            DryRunActivity(
+                seq=seq,
+                strategy_instance_id=_SID,
+                run_id=run_id,
+                recorded_at_ms=seq * 1_000,
+                bar_ref=f"SPY@{seq * 1_000}",
+                intent="ENTER",
+                order_ref=f"simulated:{run_id}",
+                symbol="SPY",
+                side="buy",
+                quantity=1,
+                fill_price=400,
+            )
+        )
+    binding = BrokerBotBinding(
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        broker="alpaca",
+        symbol="SPY",
+        use_rth=True,
+        mode="dry_run",
+        quantity=1,
+        carryover_policy="FORBID",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-current",
+        created_at_ms=_T0,
+    )
+
+    activity = read_dry_run_activity(binding, tmp_path, limit=8)
+
+    assert [row.run_id for row in activity] == ["run-current"]
+
+
+@pytest.mark.asyncio
+async def test_approved_carryover_resumes_for_the_explicitly_supported_strategy(
     tmp_path: Path,
 ) -> None:
     feed = _FakeFeed([], mode="hold")
-    registry = _registry(tmp_path, feed, carryover_allowed=True)
-    clerk = _CustodyClerk(_custody_proof(exposure={"SPY": 1.0}))
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    registry = _registry(
+        tmp_path,
+        feed,
+        carryover_allowed=True,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
     set_alpaca_clerk(clerk)  # type: ignore[arg-type]
     try:
         deployed = await registry.deploy(
@@ -1078,6 +1236,7 @@ async def test_approved_carryover_resumes_only_after_exact_fresh_proof(
             mode="trade",
             carryover_policy="ALLOW",
         )
+        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
         stopped = await registry.stop("alpaca", _SID)
 
         assert stopped.duty_outcome is not None
@@ -1100,8 +1259,13 @@ async def test_ema_resume_refuses_carried_exposure_without_restorable_exit_state
     tmp_path: Path,
 ) -> None:
     feed = _FakeFeed([], mode="hold")
-    registry = _registry(tmp_path, feed, carryover_allowed=True)
-    clerk = _CustodyClerk(_custody_proof(exposure={"SPY": 1.0}))
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    registry = _registry(
+        tmp_path,
+        feed,
+        carryover_allowed=True,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
     set_alpaca_clerk(clerk)  # type: ignore[arg-type]
     try:
         await registry.deploy(
@@ -1112,6 +1276,7 @@ async def test_ema_resume_refuses_carried_exposure_without_restorable_exit_state
             mode="trade",
             carryover_policy="ALLOW",
         )
+        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
         await registry.stop("alpaca", _SID)
 
         with pytest.raises(RecoveryUncertainError, match="cannot safely restore"):
@@ -1127,8 +1292,13 @@ async def test_ema_resume_allows_freshly_proven_flat_custody(
     tmp_path: Path,
 ) -> None:
     feed = _FakeFeed([], mode="hold")
-    registry = _registry(tmp_path, feed, carryover_allowed=True)
-    clerk = _CustodyClerk(_custody_proof(exposure={"SPY": 1.0}))
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    registry = _registry(
+        tmp_path,
+        feed,
+        carryover_allowed=True,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
     set_alpaca_clerk(clerk)  # type: ignore[arg-type]
     try:
         deployed = await registry.deploy(
@@ -1139,6 +1309,7 @@ async def test_ema_resume_allows_freshly_proven_flat_custody(
             mode="trade",
             carryover_policy="ALLOW",
         )
+        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
         await registry.stop("alpaca", _SID)
         clerk.proof = _custody_proof(exposure={})
 
@@ -1156,8 +1327,13 @@ async def test_carryover_resume_refuses_quantity_mismatch_without_side_effect(
     tmp_path: Path,
 ) -> None:
     feed = _FakeFeed([], mode="hold")
-    registry = _registry(tmp_path, feed, carryover_allowed=True)
-    clerk = _CustodyClerk(_custody_proof(exposure={"SPY": 1.0}))
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    registry = _registry(
+        tmp_path,
+        feed,
+        carryover_allowed=True,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
     set_alpaca_clerk(clerk)  # type: ignore[arg-type]
     try:
         await registry.deploy(
@@ -1167,6 +1343,7 @@ async def test_carryover_resume_refuses_quantity_mismatch_without_side_effect(
             mode="trade",
             carryover_policy="ALLOW",
         )
+        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
         await registry.stop("alpaca", _SID)
         clerk.proof = _custody_proof(exposure={"SPY": 2.0})
 
@@ -1183,8 +1360,12 @@ async def test_forbidden_carryover_requires_flatten_before_resume(
     tmp_path: Path,
 ) -> None:
     feed = _FakeFeed([], mode="hold")
-    registry = _registry(tmp_path, feed)
-    clerk = _CustodyClerk(_custody_proof(exposure={"SPY": 1.0}))
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    registry = _registry(
+        tmp_path,
+        feed,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
     set_alpaca_clerk(clerk)  # type: ignore[arg-type]
     try:
         await registry.deploy(
@@ -1193,11 +1374,12 @@ async def test_forbidden_carryover_requires_flatten_before_resume(
             symbol="SPY",
             mode="trade",
         )
+        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
         stopped = await registry.stop("alpaca", _SID)
 
         assert stopped.duty_outcome is not None
         assert stopped.duty_outcome.reason_code == "STOP_REQUIRES_FLATTEN"
-        with pytest.raises(RecoveryUncertainError, match="not approved"):
+        with pytest.raises(CarryoverPolicyRefusedError, match="not approved"):
             await registry.resume_existing("alpaca", _SID)
     finally:
         set_alpaca_clerk(None)
@@ -1225,8 +1407,13 @@ async def test_account_policy_must_remain_enabled_for_carryover_resume(
     tmp_path: Path,
 ) -> None:
     feed = _FakeFeed([], mode="hold")
-    enabled_registry = _registry(tmp_path, feed, carryover_allowed=True)
-    clerk = _CustodyClerk(_custody_proof(exposure={"SPY": 1.0}))
+    clerk = _CustodyClerk(_custody_proof(exposure={}))
+    enabled_registry = _registry(
+        tmp_path,
+        feed,
+        carryover_allowed=True,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
     set_alpaca_clerk(clerk)  # type: ignore[arg-type]
     try:
         await enabled_registry.deploy(
@@ -1236,9 +1423,15 @@ async def test_account_policy_must_remain_enabled_for_carryover_resume(
             mode="trade",
             carryover_policy="ALLOW",
         )
+        clerk.proof = _custody_proof(exposure={"SPY": 1.0})
         await enabled_registry.stop("alpaca", _SID)
 
-        disabled_registry = _registry(tmp_path, feed, carryover_allowed=False)
+        disabled_registry = _registry(
+            tmp_path,
+            feed,
+            carryover_allowed=False,
+            start_custody_guard=clerk.start_admission_snapshot,
+        )
         with pytest.raises(CarryoverPolicyRefusedError):
             await disabled_registry.resume_existing("alpaca", _SID)
     finally:
@@ -1487,6 +1680,39 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
         (f"{_EMA_FIRST_ENTER_MS}:ENTER", "ENTER", 3),
         (f"{_EMA_FIRST_EXIT_MS}:EXIT", "EXIT", 3),
     ]
+
+
+@pytest.mark.asyncio
+async def test_dry_run_records_simulated_round_trip_with_zero_broker_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk = _FakeClerk()
+    _install_fake_clerk(monkeypatch, clerk)
+    bars = _ema_parity_bars_through_first_exit()
+    feed = _FakeFeed(bars, mode="hold")
+    registry = _registry(tmp_path, feed)
+
+    deployed = await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="ema_crossover_signal",
+        symbol="SPY",
+        mode="dry_run",
+        quantity=3,
+    )
+    await _wait_for(lambda: feed.bars_consumed == len(bars))
+    await _wait_for(lambda: len(registry.dry_run_activity("alpaca", _SID)) >= 2)
+
+    activity = registry.dry_run_activity("alpaca", _SID)
+    assert deployed.mode == "dry_run"
+    assert clerk.calls == []
+    assert [(row.intent, row.side, row.quantity, row.simulated) for row in activity[:2]] == [
+        ("ENTER", "buy", 3.0, True),
+        ("EXIT", "sell", 3.0, True),
+    ]
+    assert all(row.order_ref.startswith("simulated:") for row in activity)
+    await registry.stop("alpaca", _SID)
 
 
 @pytest.mark.asyncio
