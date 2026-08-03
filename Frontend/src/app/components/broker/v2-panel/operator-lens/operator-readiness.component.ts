@@ -10,6 +10,7 @@ import type {
   ActionId,
   BotPanelView,
   PanelAction,
+  PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import {
@@ -47,7 +48,7 @@ const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
 export class OperatorReadinessComponent {
   readonly panel = input.required<BotPanelView>();
   readonly actionPending = input(false);
-  readonly actionRequested = output<PanelAction>();
+  readonly actionRequested = output<PanelActionTrigger>();
 
   protected readonly readinessControls = computed<readonly ReadinessControl[]>(
     () => {

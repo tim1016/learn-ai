@@ -190,9 +190,10 @@ export class BrokerV2PanelService {
     accountId: string,
     sid: string,
     action: PanelAction,
+    reason: string | null = null,
   ): Promise<PanelActionResult> {
     try {
-      return await this.submitAction(broker, accountId, sid, action);
+      return await this.submitAction(broker, accountId, sid, action, reason);
     } catch (error) {
       if (
         !(error instanceof HttpErrorResponse) ||
@@ -212,7 +213,9 @@ export class BrokerV2PanelService {
       ) {
         throw error;
       }
-      return await this.submitAction(broker, accountId, sid, fresh);
+      // Same operator-confirmed action, resubmitted against a refreshed
+      // token — not a new action, so the same reason still applies.
+      return await this.submitAction(broker, accountId, sid, fresh, reason);
     }
   }
 
@@ -221,13 +224,14 @@ export class BrokerV2PanelService {
     accountId: string,
     sid: string,
     action: PanelAction,
+    reason: string | null,
   ): Promise<PanelActionResult> {
     const request: PanelActionRequest = {
       action_id: action.action_id,
       revision: action.revision,
       concurrency_token: action.concurrency_token,
       idempotency_key: crypto.randomUUID(),
-      reason: null,
+      reason,
     };
     return this.runAction(broker, accountId, sid, request);
   }

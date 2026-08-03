@@ -11,7 +11,7 @@ import {
 import { EMPTY_RUN_HISTORY_STATE } from '../lib/broker-v2-panel.types';
 import type {
   BotPanelView,
-  PanelAction,
+  PanelActionTrigger,
   PanelProfile,
   RunHistoryNavigation,
   RunHistoryState,
@@ -63,7 +63,7 @@ export class OperatorLensComponent {
   readonly actionPending = input(false);
   readonly runHistory = input<RunHistoryState>(EMPTY_RUN_HISTORY_STATE);
 
-  readonly actionRequested = output<PanelAction>();
+  readonly actionRequested = output<PanelActionTrigger>();
   readonly transactionSelected = output<string>();
   readonly runHistoryNavigation = output<RunHistoryNavigation>();
 
@@ -121,7 +121,7 @@ export class OperatorLensComponent {
     this.evidenceDrawerRef.set(null);
   }
 
-  protected onActionRequested(action: PanelAction): void {
+  protected onActionRequested(action: PanelActionTrigger): void {
     this.actionRequested.emit(action);
   }
 

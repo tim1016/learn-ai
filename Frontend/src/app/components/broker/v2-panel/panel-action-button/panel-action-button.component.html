@@ -21,14 +21,27 @@
 </div>
 
 @if (action().confirmation; as confirmation) {
-  <app-typed-halt-confirm
-    [open]="confirmationOpen()"
-    [heading]="confirmation.title"
-    [message]="confirmation.body"
-    [consequence]="confirmation.consequence"
-    [requiredToken]="confirmation.required_token ?? ''"
-    [confirmLabel]="confirmation.confirm_label"
-    (confirmed)="confirm()"
-    (cancelled)="confirmationOpen.set(false)"
-  />
+  @if (requiresComment()) {
+    <app-panel-action-comment-confirm
+      [open]="confirmationOpen()"
+      [heading]="confirmation.title"
+      [message]="confirmation.body"
+      [consequence]="confirmation.consequence"
+      [requiredToken]="confirmation.required_token ?? ''"
+      [confirmLabel]="confirmation.confirm_label"
+      (confirmed)="confirmWithReason($event)"
+      (cancelled)="confirmationOpen.set(false)"
+    />
+  } @else {
+    <app-typed-halt-confirm
+      [open]="confirmationOpen()"
+      [heading]="confirmation.title"
+      [message]="confirmation.body"
+      [consequence]="confirmation.consequence"
+      [requiredToken]="confirmation.required_token ?? ''"
+      [confirmLabel]="confirmation.confirm_label"
+      (confirmed)="confirm()"
+      (cancelled)="confirmationOpen.set(false)"
+    />
+  }
 }

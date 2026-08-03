@@ -5,7 +5,11 @@ import {
   output,
 } from '@angular/core';
 import { KeyValuePipe } from '@angular/common';
-import type { BotHealthCard, PanelAction } from '../lib/broker-v2-panel.types';
+import type {
+  BotHealthCard,
+  PanelAction,
+  PanelActionTrigger,
+} from '../lib/broker-v2-panel.types';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokerV2CardHelpButtonComponent } from '../help-drawer/broker-v2-card-help-button.component';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
@@ -35,5 +39,5 @@ export class HealthCardComponent {
   readonly retireAction = input<PanelAction | null>(null);
   readonly actionPending = input(false);
 
-  readonly actionRequested = output<PanelAction>();
+  readonly actionRequested = output<PanelActionTrigger>();
 }

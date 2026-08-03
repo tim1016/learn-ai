@@ -58,6 +58,19 @@ export type ClerkCard = components['schemas']['ClerkCard'];
 export type StationView = components['schemas']['StationView'];
 export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
+
+/**
+ * One `PanelActionButtonComponent` trigger event: the presented action plus
+ * the operator-typed comment (required for `clear_hold` /
+ * `record_inventory_baseline`, `null` for every other action). Carried
+ * unchanged through every fan-out hop back to the shell so `reason` reaches
+ * `PanelActionRequest` regardless of which lens/card the button lives in.
+ */
+export interface PanelActionTrigger {
+  readonly action: PanelAction;
+  readonly reason: string | null;
+}
+
 export type BotPanelView = components['schemas']['BotPanelView'];
 export type MarketPulseView = components['schemas']['MarketPulseView'];
 

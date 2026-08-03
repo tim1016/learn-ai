@@ -383,7 +383,9 @@ describe('OperatorLensComponent', () => {
 
   it('clicking flatten-stop calls actionRequested with the action', async () => {
     const fakeSvc = makeFakePanelService();
-    const onActionRequested = vi.fn() as unknown as (action: PanelAction) => void;
+    const onActionRequested = vi.fn() as unknown as (
+      trigger: { action: PanelAction; reason: string | null },
+    ) => void;
     const flattenAction = {
       action_id: 'flatten_stop' as const,
       label: 'Flatten & Stop',
@@ -416,7 +418,7 @@ describe('OperatorLensComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: /flatten & stop/i }));
     await fixture.whenStable();
 
-    expect(onActionRequested).toHaveBeenCalledWith(flattenAction);
+    expect(onActionRequested).toHaveBeenCalledWith({ action: flattenAction, reason: null });
   });
 
   it('evidence drawer is hidden by default', async () => {
