@@ -65,6 +65,10 @@ export class AlpacaCustodyResolutionComponent {
     return divergence.position_deltas ?? [];
   }
 
+  protected evidenceRefs(divergence: CustodyDivergence): string[] {
+    return divergence.evidence_refs ?? [];
+  }
+
   // A fresh resolve attempt must never carry over a prior attempt's stale
   // error or receipt — both are part of the audited flow and would otherwise
   // render before any new submission happens.

@@ -65,6 +65,14 @@
           @if (div.prerequisite_detail) {
             <p class="custody__prereq" role="status">{{ div.prerequisite_detail }}</p>
           }
+
+          @if (evidenceRefs(div).length) {
+            <ul class="custody__evidence" aria-label="Evidence references">
+              @for (ref of evidenceRefs(div); track ref) {
+                <li><code>{{ ref }}</code></li>
+              }
+            </ul>
+          }
         </article>
       }
 

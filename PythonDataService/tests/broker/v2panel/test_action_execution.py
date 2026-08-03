@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.models import EffectOperationState
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
@@ -807,3 +808,34 @@ async def test_timed_out_duplicate_never_refires_in_flight_mutation() -> None:
     result = await first_post
     assert result.applied is True
     assert calls == 1
+
+
+# ── §11 per-bot comment-discipline parity (final-review finding #2) ─────────
+#
+# Mirrors the account-level `CustodyResolutionRequest.reason` discipline
+# (`app/broker/alpaca/clerk/diagnosis.py`: required, non-blank, stripped) but
+# only for the two mutating verbs that journal an operator comment
+# (`clear_hold`, `record_inventory_baseline`). Every other action_id leaves
+# `reason` optional, unchanged from before.
+
+
+@pytest.mark.parametrize("action_id", ["clear_hold", "record_inventory_baseline"])
+@pytest.mark.parametrize("reason", [None, "", "   "])
+def test_reason_required_and_nonblank_for_comment_required_actions(
+    action_id: str, reason: str | None
+) -> None:
+    with pytest.raises(ValidationError):
+        _request(action_id=action_id, reason=reason)
+
+
+@pytest.mark.parametrize("action_id", ["clear_hold", "record_inventory_baseline"])
+def test_reason_is_stripped_for_comment_required_actions(action_id: str) -> None:
+    request = _request(action_id=action_id, reason="  operator note  ")
+
+    assert request.reason == "operator note"
+
+
+def test_reason_left_optional_for_non_comment_actions() -> None:
+    request = _request(action_id="resume", reason=None)
+
+    assert request.reason is None

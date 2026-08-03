@@ -1,7 +1,7 @@
 # Clerk ↔ Broker custody resolution — design
 
 - **Date:** 2026-08-03
-- **Status:** approved (design); implementation not started
+- **Status:** implemented
 - **Surface:** Alpaca Accounts page (`/brokers/alpaca`) + per-bot Operator lens (parity)
 - **Motivating case:** paper account `PA3KWXU1C4C3` froze ("new entries blocked", reconciliation "Missing Intent") because the Clerk attributes **SPY 2** while the broker holds **SPY 1**, left by a 2026-07-31 run that "Exited Unverified — Interrupted By Restart." The only resolution today is two verbs buried in the per-bot Operator lens, with **no operator-comment capture** and **nothing on the Accounts page**.
 

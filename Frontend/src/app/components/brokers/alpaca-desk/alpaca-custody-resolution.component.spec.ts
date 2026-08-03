@@ -93,6 +93,24 @@ describe('AlpacaCustodyResolutionComponent', () => {
     expect(screen.getByRole('button', { name: /resolve & sync/i })).toBeTruthy();
   });
 
+  it('renders evidence_refs for a needs_review divergence so the operator knows which intent to check', async () => {
+    const diverged = diagnosis({
+      in_sync: false, resolvable: false,
+      divergences: [{
+        kind: 'needs_review', state: 'needs_review',
+        explanation: 'An unresolved submission cannot be mapped to any broker outcome.',
+        possible_causes: ['The Clerk submitted an order the broker reports neither as working nor filled.'],
+        position_deltas: [], resolution_step: null, prerequisite_detail: null,
+        evidence_refs: ['order-ref-abc123'],
+      }],
+      resolution_plan: [],
+    });
+    await render(AlpacaCustodyResolutionComponent, {
+      providers: [{ provide: BrokersService, useValue: svc(diverged) }],
+    });
+    expect(await screen.findByText('order-ref-abc123')).toBeTruthy();
+  });
+
   it('opens the confirm dialog when "Resolve & sync" is clicked', async () => {
     const { fixture } = await render(AlpacaCustodyResolutionComponent, {
       providers: [{ provide: BrokersService, useValue: svc(divergedResolvable()) }],
