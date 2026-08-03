@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +24,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     DurableIdempotencyStore,
     IdempotencyStore,
     StaleRevisionError,
+    UnknownActionError,
     execute_action,
 )
 from app.services.broker_v2_panel.panel_data_source import _action_performers, run_action
@@ -139,6 +141,38 @@ async def test_performer_failure_returns_unknown_and_burns_receipt_key() -> None
 
     assert "Inspect Clerk evidence" in (exc.value.detail or "")
     assert store._records[(_SID, "stop", "unknown")].state == "failed"
+
+
+async def test_performer_raised_action_execution_error_burns_key_not_released(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A performer-raised ``ActionExecutionError`` subclass is a performer failure.
+
+    Only ``StaleRevisionError``/``ActionNotAvailableError`` raised BEFORE the
+    performer runs are pre-execution rejections. A performer that starts real
+    work and then raises some other ``ActionExecutionError`` subclass (here
+    ``UnknownActionError``, standing in for any future performer-raised type)
+    must be treated like any other performer failure: the key is failed (not
+    released) and no ``panel_action_rejected`` pre-execution log fires.
+    """
+
+    async def _perform(_operator: str) -> str:
+        raise UnknownActionError("performer rejected mid-flight")
+
+    store = IdempotencyStore()
+    with caplog.at_level(logging.INFO), pytest.raises(ActionOutcomeUnknownError):
+        await execute_action(
+            _request(key="mid-flight"),
+            sid=_SID,
+            current_revision=42,
+            current_concurrency_token="token",
+            performers={"stop": _perform},
+            operator_identity="op",
+            store=store,
+        )
+
+    assert store._records[(_SID, "stop", "mid-flight")].state == "failed"
+    assert "panel_action_rejected" not in caplog.text
 
 
 async def test_disabled_presented_action_cannot_bypass_guard_via_post(

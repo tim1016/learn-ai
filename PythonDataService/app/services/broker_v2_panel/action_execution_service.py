@@ -355,9 +355,16 @@ async def execute_action(
         # 3. Identity from the channel — the performer receives the configured
         # operator identity, never anything from the request body.
         message = await performer(operator_identity)
-    except ActionExecutionError as err:
+    except (StaleRevisionError, ActionNotAvailableError) as err:
         # Pre-execution rejection (stale revision / not available): the action
-        # never ran, so free a fresh reservation for a corrected retry.
+        # never ran, so free a fresh reservation for a corrected retry. Scoped
+        # to exactly these two types — NOT the broader ``ActionExecutionError``
+        # — because a performer can also raise ``ActionNotAvailableError``
+        # (e.g. ``_resume``) after it already attempted real work; that case is
+        # legitimately pre-execution too. Any OTHER ``ActionExecutionError``
+        # subclass a performer raises (e.g. ``UnknownActionError``) falls
+        # through to the ``except Exception`` branch below and burns the key,
+        # since the performer ran and its outcome is unknown.
         # Instrument which 409-class subclass fired so a Stop-409 in the field
         # is attributable — a stale action token (running flipped) vs the
         # action being not-available — instead of an ambiguous bare 409

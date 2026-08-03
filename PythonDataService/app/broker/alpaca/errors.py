@@ -5,7 +5,10 @@ The mapping is asserted by tests:
 - 401 / 403 → :class:`BrokerAuthError`
 - 429       → :class:`BrokerRateLimited` (carries the Retry-After hint)
 - 400 / 422 → :class:`BrokerRequestInvalid`
-- 409       → :class:`BrokerOrderRejected` (definitive order conflict)
+- 409, order mutation → :class:`BrokerOrderRejected` (definitive order conflict)
+- 409, everywhere else → :class:`BrokerUnavailable` (``BrokerOrderRejected`` is a
+  write-only error per its own contract docstring; a 409 from a read endpoint
+  is unexpected, not a rejected order)
 - 5xx       → :class:`BrokerUnavailable`
 - network / unknown → :class:`BrokerUnavailable`
 
@@ -56,8 +59,17 @@ def _retry_after_ms(exc: APIError) -> int | None:
         return None
 
 
-def map_api_error(exc: APIError, *, broker: str) -> BrokerError:
-    """Translate an alpaca-py ``APIError`` into a broker-contract error."""
+def map_api_error(exc: APIError, *, broker: str, is_order_mutation: bool = False) -> BrokerError:
+    """Translate an alpaca-py ``APIError`` into a broker-contract error.
+
+    ``is_order_mutation`` scopes the 409 branch: ``BrokerOrderRejected`` is a
+    write-only error (its own docstring promises phase-1 read paths never
+    raise it), but ``map_api_error`` is invoked from the single shared
+    ``_call`` every read AND write goes through. Only ``submit_order`` /
+    ``cancel_order`` pass ``is_order_mutation=True``; a 409 anywhere else falls
+    through to the generic ``BrokerUnavailable`` catch-all below rather than
+    misreporting a broker-read failure as an order rejection.
+    """
     status = status_of(exc)
     message = _message_of(exc)
     detail = f"HTTP {status}" if status is not None else "no HTTP status"
@@ -81,7 +93,7 @@ def map_api_error(exc: APIError, *, broker: str) -> BrokerError:
             broker=broker,
             detail=detail,
         )
-    if status == 409:
+    if status == 409 and is_order_mutation:
         # A definitive order conflict (duplicate client_order_id, order-state
         # conflict), NOT a transient outage. Kept distinct from
         # BrokerUnavailable so the Clerk classifies it as a clean SUBMIT_FAILED

@@ -23,8 +23,9 @@ fixes with regression tests.
 **Scope.** This pass covers the layer the 2026-08-02 audit did **not**: the
 Alpaca **adapter execution path** (error mapping, capability honesty,
 rate-limit handling, journal idempotency), the operator-facing **defect #10**,
-and **tomorrow's 4-bot UI-driven readiness**. The panel custody P0s are owned
-by the gated research plan and were deliberately **not** hot-fixed here.
+and the **August 4, 2026 4-bot UI-driven readiness**. The panel custody P0s
+are owned by the gated research plan and were deliberately **not** hot-fixed
+here.
 
 **Architectural invariant held throughout.** *The Clerk is the authority over
 everything (order registration, classification, journal, reconciliation,
@@ -46,7 +47,7 @@ Alpaca run** — its recovery verbs (`clear_hold`, `reconcile_now`,
 | **CB1** | A vendor **409** had no branch in `map_api_error` → fell to `BrokerUnavailable` (503), so the Clerk mis-routed a definitive order conflict into the S5 *uncertain*-lookup path and the operator saw "broker outage / retry". | Added a `409 → BrokerOrderRejected` branch (the class was already declared, never raised). The Clerk's existing `except BrokerError` now classifies it as a definitive `SUBMIT_FAILED`. | `test_errors.py` (unit + `not-Unavailable` assertion); `test_orders_endpoint.py::test_conflict_leg_is_definitive_failure_not_uncertain` (real `responses`-mocked 409 end-to-end, asserts no by-client-order-id lookup). |
 | **CB2** | `capabilities()` advertised `stop`/`stop_limit`/`trailing_stop`, but `OrderType` has only `MARKET`/`LIMIT` — a caller gating on capability got a false "yes" (constructing a stop leg raises `ValidationError`). | Narrowed `supported_order_types` to `("market","limit")`. | `test_capabilities.py` — pins the advertised set to the constructible `OrderType` enum so they cannot drift. |
 | **CB3** | **No rate-limit backoff.** A 429 was parsed (`retry_after_ms`) but never retried; a synchronized N-bot burst would drop that bar's decision indistinguishably from a reject. | Bounded write-path retry (`submit`/`cancel`) honoring `Retry-After`, capped (≤2 retries, ≤1 s each) so it can never stall a bar; on exhaustion a **distinct "throttled" message** surfaces (not a plain reject). Retry is idempotency-safe: a 429 means the order did not land, and a genuine duplicate returns a 409 → definitive (composes with CB1). Reads never retry. | `test_client.py` — retry-then-succeed, exhaust-with-distinct-signal, backoff-capped, cancel-retry, read-does-not-retry. |
-| **Defect #10** | The 2026-07-30 Stop **409-storm** dead-ended the operator (forced a raw `POST .../stop`). The documented cause ("whole-panel revision advances faster than the refetch") is **architecturally impossible** — the Stop token keys only on `ctx.running` (`action_policy.py:362`, verified). | (a) **Instrumentation:** a single log line at the pre-execution reject choke point names the 409 subclass (`StaleRevisionError` vs `ActionNotAvailableError`) so a field 409 is attributable. (b) **Token-stability pin:** two contexts differing in every field except `running` yield a byte-identical Stop token. (c) **Frontend resilient retry:** on a 409, refetch the authoritative panel and retry **once** with the current token — but only if the action is still offered, enabled, and its token changed; otherwise re-throw so the operator sees an honest "state changed" message. Folded into the single public `runBotAction`, so **both** the panel shell and the fleet-list Stop are resilient and no bare dead-ending variant remains. (Safe for every action: every action-endpoint 409 is a pre-execution rejection — the mid-flight `ActionOutcomeUnknownError` is a 500 — so a retry can never double-fire.) | `test_action_policy.py` (token stability + non-vacuous control); `broker-v2-panel.service.spec.ts` (retry-on-clearing-409, no-retry-when-disabled, no-retry-when-token-unchanged, non-409 passthrough); shell spec updated to the resilient path. |
+| **Defect #10** | The 2026-07-30 Stop **409-storm** dead-ended the operator (forced a raw `POST .../stop`). The documented cause ("whole-panel revision advances faster than the refetch") is **architecturally impossible** — the Stop token keys only on `ctx.running` (`action_policy.py:362`, verified). | (a) **Instrumentation:** a single log line at the pre-execution reject choke point names the 409 subclass (`StaleRevisionError` vs `ActionNotAvailableError`) so a field 409 is attributable — this is the actual Stop fix. (b) **Token-stability pin:** two contexts differing in every field except `running` yield a byte-identical Stop token. (c) **Frontend resilient retry:** on a 409, refetch the authoritative panel and retry **once** with the current token — but only if the action requires no operator confirmation, is still offered, enabled, and its token changed; otherwise re-throw so the operator sees an honest "state changed" message. Folded into the single public `runBotAction`, so every caller shares the same policy. **Correction (post-review):** because Stop's token is a pure function of `running`, this retry can never productively fire for Stop — `enabled` already IS the one bit the token encodes, so a re-offered-enabled Stop always carries the SAME token. It benefits other unconfirmed actions (e.g. Resume, whose token also depends on admission evidence that can shift while still allowed). The confirmation guard exists because `flatten_stop`'s token depends on live exposure/working-order state that legitimately changes while enabled — retrying it silently would resubmit against numbers the operator never confirmed. | `test_action_policy.py` (token stability + non-vacuous control); `broker-v2-panel.service.spec.ts` (retry-succeeds-for-unconfirmed-action, no-retry-when-disabled, no-retry-when-token-unchanged, no-retry-when-confirmation-required, non-409 passthrough); shell spec updated to the resilient path. |
 | **Env** | `test_missing_credentials_map_to_auth_error` passed in CI but failed locally — `AlpacaSettings` reads `.env` relative to CWD, defeating `delenv`. | `monkeypatch.chdir(tmp_path)` so the settings genuinely find no credentials — host-independent. | The test itself. |
 
 **Files changed:** `app/broker/alpaca/errors.py`, `app/broker/alpaca/broker.py`,
@@ -105,7 +106,7 @@ protect.
 
 ---
 
-## 4. Tomorrow — 4-bot UI-driven rehearsal runbook
+## 4. August 4, 2026 — 4-bot UI-driven rehearsal runbook
 
 Goal: exercise **many failure scenarios**, prove both authority layers are
 enforced, and confirm **correct UI feedback with zero CLI drop**. Alpaca
@@ -116,13 +117,13 @@ enforced, and confirm **correct UI feedback with zero CLI drop**. Alpaca
 | 1 | Broker reject (422) | Deploy a bot sized past buying power; let it try to submit. | Leg fails with a specific *what/why* ("insufficient buying power"), **not** an outage. | Clerk journals `SUBMIT_FAILED`; no order lands. |
 | 2 | **Order conflict (409)** | Hard to force on paper; watch the logs. | If it occurs: a definitive conflict message, not "broker outage / retry" (CB1). | `map_api_error` → `BrokerOrderRejected`; Clerk `SUBMIT_FAILED` (definitive), no uncertain lookup. |
 | 3 | Rate-limit (429) | Unlikely at 4 bots (≪ 200/min); watch for it under bursts. | A distinct **"throttled … it did not land"** message after bounded retries — never a silent lost bar (CB3). | Logs: `rate_limit_retry` → `rate_limit_exhausted`. |
-| 4 | **Stop a hot bot** | Click Stop repeatedly on an actively-trading bot. | Stop **succeeds** (FE refetches a fresh token and retries once on a transient 409). If it genuinely can't stop, an honest "state changed" message — no dead-end (defect #10). | Log `panel_action_rejected` names the 409 subclass (`StaleRevisionError` vs `ActionNotAvailableError`) — **capture which one appears** to finally attribute the 2026-07-30 storm. |
+| 4 | **Stop a hot bot** | Click Stop repeatedly on an actively-trading bot. | Stop either succeeds outright, or a 409 shows an honest "state changed" message — no dead-end. **Correction (post-review):** Stop's token is a pure function of `running` (`action_policy.py:362`), so a real "Stop, enabled" refetch can never carry a different token — the FE fresh-token retry cannot productively fire for Stop specifically (it can for other unconfirmed actions, e.g. Resume). Defect #10's fix for Stop is the backend disambiguation logging below, not this retry. | Log `panel_action_rejected` names the 409 subclass (`StaleRevisionError` vs `ActionNotAvailableError`) — **capture which one appears** to finally attribute the 2026-07-30 storm. |
 | 5 | Partial fill | Small marketable order in a thin name. | `filled X / total` surfaced honestly. | Exposure/FIFO fold counts the execution slice. |
 | 6 | Cancel a working order | Rest a limit order, then cancel. | Cancel from the account desk manual ticket (per-bot cancel is deferred — see §5). | Clerk journals `cancel`; a throttled cancel now retries (CB3). |
 | 7 | Flatten with unprovable outcome | Flatten while a reducing order is only working. | **Read the receipt message** — it says "await durable fill receipt" / "cannot prove flat". The green check overstates (deferred, see §5). | `EffectOperationState` is honest at the Clerk; the visual is the only gap. |
 | 8 | Reconciliation drift | Place a foreign order in the account outside the bot. | Hold raised; `clear_hold` co-located on the Clerk card. | Clerk `UNEXPLAINED_ORDER_HOLD`; submits blocked, cancels allowed. |
 | 9 | Deploy in each execution mode | Deploy once per mode. | Confirm the mode is not a silent no-op (the 2026-07-30 `log_only` surprise). | Verify the deploy vocabulary matches the runtime mode end-to-end. |
-| 10 | **Data-plane restart mid-run** | Restart `polygon-data-service` while bots hold exposure. | After restart, P&L/exposure intact; no phantom double fill in numbers. | `event_key` dedup absorbs any redelivery (CB4 disproof); a duplicate *line* is harmless. |
+| 10 | **Data-plane restart mid-run** | Restart `polygon-data-service` while bots hold exposure. | After restart, P&L/exposure intact; no phantom double fill in numbers. | `event_key` dedup absorbs any redelivery (CB4 disproof); a duplicate journal line is numerically harmless but may duplicate raw evidence and undercount `skipped_duplicate`. |
 
 ---
 
@@ -141,7 +142,12 @@ enforced, and confirm **correct UI feedback with zero CLI drop**. Alpaca
   surfaces as a distinct "throttled" failure for that bar — bounded, honest, and
   never silent.
 - **Defect #10 root cause is still unconfirmed** — the instrumentation exists to
-  attribute it during the run. The FE retry makes Stop reliable regardless.
+  attribute it during the run. **Correction (post-review):** the FE retry does
+  **not** make Stop reliable — Stop's token is a pure function of `running`,
+  so a real 409 retry for Stop always bails (either the refetch shows it
+  disabled, or the token is unchanged). If Stop 409s during the run, the
+  operator sees an honest "state changed" message, not a silent recovery;
+  watch the `panel_action_rejected` log to attribute the storm.
 
 ---
 
@@ -150,8 +156,8 @@ enforced, and confirm **correct UI feedback with zero CLI drop**. Alpaca
 | Check | Result |
 |---|---|
 | `ruff check app/ tests/` (project scope) | **Passed** |
-| Python — touched surfaces (`tests/broker/alpaca/`, `tests/broker/v2panel/test_action_policy.py`, `test_action_execution.py`) | **402 passed, 1 inherited failure** (below) |
-| Frontend — touched specs (v2-panel service + panel-shell) | **18 passed** |
+| Python — touched surfaces (`tests/broker/alpaca/`, `tests/broker/v2panel/test_action_policy.py`, `test_action_execution.py`) | **403 passed, 1 inherited failure** (below) |
+| Frontend — touched specs (v2-panel service + panel-shell) | **19 passed** |
 | `eslint` on touched frontend files (`--max-warnings 0`) | **Passed** |
 
 **Inherited (pre-existing) failure, surfaced per pre-push hygiene:**

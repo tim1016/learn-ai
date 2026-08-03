@@ -74,6 +74,13 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
 
   const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+  // Stop's token is a pure function of `running` (action_policy.py:362) — a
+  // single boolean. `enabled` already IS `running`, so a real "Stop, enabled"
+  // action can only ever recompute to the SAME token; there is no reachable
+  // backend state where it is re-offered enabled with a DIFFERENT token. The
+  // two tests below cover Stop's only two real post-409 outcomes (disabled,
+  // or unchanged token) and both correctly bail — Stop cannot productively
+  // retry through this mechanism (see runBotAction's docstring).
   const staleStop: PanelAction = {
     action_id: 'stop',
     revision: 1,
@@ -85,14 +92,46 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     confirmation: null,
   };
 
+  // `resume`'s token additionally derives from resume-admission evidence
+  // (configuration_hash, evidence_refs) that can legitimately change while
+  // `allowed` — and so `enabled` — stays true, so unlike Stop it CAN be
+  // re-offered enabled with a different token after a 409.
+  const staleResume: PanelAction = {
+    action_id: 'resume',
+    revision: 1,
+    concurrency_token: 'tok-stale',
+    enabled: true,
+    label: 'Resume',
+    explanation: '',
+    blockers: [],
+    confirmation: null,
+  };
+
+  const staleFlattenStop: PanelAction = {
+    action_id: 'flatten_stop',
+    revision: 1,
+    concurrency_token: 'tok-stale',
+    enabled: true,
+    label: 'Flatten & stop',
+    explanation: '',
+    blockers: [],
+    confirmation: {
+      title: 'Flatten attributed exposure and stop?',
+      body: 'Attributed exposure: AAPL 10.',
+      consequence: 'The runtime stops first.',
+      confirm_label: 'Flatten & stop',
+      required_token: 'FLATTEN',
+    },
+  };
+
   const ACTIONS_URL = '/api/brokers/alpaca/accounts/acct-1/bots/sid-1/actions';
   const PANEL_URL = '/api/brokers/alpaca/accounts/acct-1/bots/sid-1/panel';
 
   const conflict = () =>
     ({ detail: { message: 'stale' } });
 
-  it('refetches a fresh token and retries once when a transient 409 clears', async () => {
-    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleStop);
+  it('refetches a fresh token and retries once when a transient 409 clears (unconfirmed action)', async () => {
+    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleResume);
 
     http
       .expectOne(ACTIONS_URL)
@@ -100,7 +139,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     await tick();
 
     http.expectOne(PANEL_URL).flush({
-      actions: [{ ...staleStop, concurrency_token: 'tok-fresh' }],
+      actions: [{ ...staleResume, concurrency_token: 'tok-fresh' }],
     });
     await tick();
 
@@ -108,13 +147,13 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     // The retry carries the CURRENT token, not the stale one.
     expect(retry.request.body.concurrency_token).toBe('tok-fresh');
     retry.flush({
-      action_id: 'stop',
+      action_id: 'resume',
       receipt_id: 'r-1',
       recorded_at_ms: 1,
       applied: true,
       revision: 2,
       concurrency_token: 'tok-fresh',
-      message: 'stopped',
+      message: 'resumed',
     });
 
     await expect(promise).resolves.toMatchObject({ receipt_id: 'r-1' });
@@ -146,6 +185,22 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     http.expectOne(PANEL_URL).flush({ actions: [staleStop] });
 
     await expect(promise).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('does NOT retry an action that requires operator confirmation, even if its token changed and it is still enabled', async () => {
+    // flatten_stop's token derives from live exposure/working-order state,
+    // and its confirmation text quotes exact numbers back to the operator. A
+    // silent retry after a 409 could flatten a materially different position
+    // than the one the operator confirmed — so confirmed actions always
+    // re-throw and let the operator re-confirm explicitly.
+    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleFlattenStop);
+
+    http
+      .expectOne(ACTIONS_URL)
+      .flush(conflict(), { status: 409, statusText: 'Conflict' });
+
+    await expect(promise).rejects.toMatchObject({ status: 409 });
+    http.expectNone(PANEL_URL);
   });
 
   it('re-throws a non-409 error without refetching the panel', async () => {

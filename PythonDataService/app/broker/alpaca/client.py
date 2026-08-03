@@ -158,7 +158,9 @@ class AlpacaTradingClient:
             self._raw_client = factory()
         return self._raw_client
 
-    async def _call(self, fn: Callable[[Any], Any], *, describe: str) -> Any:
+    async def _call(
+        self, fn: Callable[[Any], Any], *, describe: str, is_order_mutation: bool = False
+    ) -> Any:
         if self._thread_limiter is None:
             # AnyIO 3 requires an active async backend when constructing a
             # limiter. Build it lazily so sync dependency-injection fixtures
@@ -195,7 +197,9 @@ class AlpacaTradingClient:
                 detail=f"The broker did not respond within {self._timeout_s:g} seconds.",
             ) from exc
         except APIError as exc:
-            raise map_api_error(exc, broker=self.broker_id) from exc
+            raise map_api_error(
+                exc, broker=self.broker_id, is_order_mutation=is_order_mutation
+            ) from exc
         except RequestException as exc:
             raise BrokerUnavailable(
                 f"Could not reach Alpaca while fetching {describe}.",
@@ -292,7 +296,7 @@ class AlpacaTradingClient:
         attempt = 0
         while True:
             try:
-                return await self._call(fn, describe=describe)
+                return await self._call(fn, describe=describe, is_order_mutation=True)
             except BrokerRateLimited as exc:
                 if attempt >= _MAX_RATE_LIMIT_RETRIES:
                     logger.warning(
