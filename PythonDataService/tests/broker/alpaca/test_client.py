@@ -248,7 +248,12 @@ async def test_timed_out_submit_stays_uncertain_while_sdk_worker_is_in_flight(
 
     with pytest.raises(BrokerUnavailable, match="timed out"):
         await client.submit_order(order)
-    assert started.is_set()
+    # The 1 ms timeout can fire before the abandoned in-flight worker thread has
+    # executed far enough to set ``started`` — that ordering is not guaranteed on
+    # a loaded runner. Wait for the in-flight worker to prove it started rather
+    # than asserting on a race (mirrors the poll-until-started idiom used by
+    # test_timeouts_do_not_exhaust_the_global_anyio_thread_limiter below).
+    assert started.wait(timeout=1)
 
     with pytest.raises(BrokerUnavailable, match="still become visible"):
         await client.get_order_by_client_order_id(order["client_order_id"])
