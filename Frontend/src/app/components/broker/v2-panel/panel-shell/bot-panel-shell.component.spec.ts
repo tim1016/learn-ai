@@ -384,6 +384,39 @@ describe('BotPanelShellComponent', () => {
     }
   });
 
+  it('refreshes current-run evidence during panel polling', async () => {
+    mockService.getCurrentRun
+      .mockResolvedValueOnce(makeRun())
+      .mockResolvedValueOnce(
+        makeRun({
+          process: null,
+          terminal_outcome: {
+            kind: 'STOPPED',
+            reason_code: 'OPERATOR_STOP',
+            recorded_at_ms: 1_753_805_000_000,
+            run_id: 'run-current',
+          },
+        }),
+      );
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('Stopped')).toBeTruthy();
+    fixture.destroy();
+  }, 10_000);
+
   it('shows log-only degradation panel after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },

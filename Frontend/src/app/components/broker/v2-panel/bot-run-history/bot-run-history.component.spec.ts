@@ -100,4 +100,26 @@ describe('BotRunHistoryComponent', () => {
 
     expect(requests).toEqual(['history']);
   });
+
+  it('keeps newer-page navigation available when the current history request fails', async () => {
+    const { fixture } = await render(BotRunHistoryComponent, {
+      inputs: {
+        state: state({
+          mode: 'history',
+          historyFailed: true,
+          canViewNewer: true,
+        }),
+      },
+    });
+    const requests: RunHistoryNavigation[] = [];
+    fixture.componentInstance.navigationRequested.subscribe((request) =>
+      requests.push(request),
+    );
+
+    const newerRun = screen.getByRole('button', { name: 'Newer run' });
+    expect(newerRun.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(newerRun);
+
+    expect(requests).toEqual(['newer']);
+  });
 });

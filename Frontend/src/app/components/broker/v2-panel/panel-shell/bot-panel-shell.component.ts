@@ -211,6 +211,9 @@ export class BotPanelShellComponent {
       if (!this.panel.isLoading()) {
         this.panel.reload();
       }
+      if (!this.currentRun.isLoading()) {
+        this.currentRun.reload();
+      }
       if (this.activeLens() === 'trader' && !this.liveChart.isLoading()) {
         this.liveChart.reload();
       }
