@@ -179,4 +179,65 @@ describe('AlpacaCustodyResolutionComponent', () => {
     // Never auto-resubmit: only the one resolveCustody call from the confirm above.
     expect(resolveCustody).toHaveBeenCalledTimes(1);
   });
+
+  it('does not resurface a stale resolve error when the dialog is reopened after cancel', async () => {
+    const getCustodyDiagnosis = vi.fn().mockResolvedValue(divergedResolvable());
+    const resolveCustody = vi.fn().mockRejectedValue(
+      new HttpErrorResponse({
+        status: 409,
+        error: { detail: { message: 'Snapshot changed.', why: 'Re-check before resolving.' } },
+      }),
+    );
+    const { fixture } = await render(AlpacaCustodyResolutionComponent, {
+      providers: [{ provide: BrokersService, useValue: { getCustodyDiagnosis, resolveCustody } }],
+    });
+    await screen.findByRole('button', { name: /resolve & sync/i });
+
+    const trigger = fixture.nativeElement.querySelector(
+      'button.custody__resolve',
+    ) as HTMLButtonElement;
+    trigger.click();
+    fixture.detectChanges();
+
+    let dialogDebug = fixture.debugElement.query(
+      By.directive(CustodyResolutionConfirmDialogComponent),
+    );
+    dialogDebug.componentInstance.confirmed.emit({
+      reason: 'A bot process was terminated mid-run.',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    // Confirm the error actually surfaced before cancelling — otherwise this
+    // test would pass vacuously.
+    dialogDebug = fixture.debugElement.query(
+      By.directive(CustodyResolutionConfirmDialogComponent),
+    );
+    expect(dialogDebug.componentInstance.errorMessage()).toMatch(/state changed/i);
+
+    dialogDebug.componentInstance.cancelled.emit();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('dialog')).toBeNull();
+
+    // Re-query the trigger: the diagnosis.reload() triggered by the 409 above
+    // round-trips isLoading(), which tears down and rebuilds the diverged
+    // `@else if` branch — the originally-captured button node is now
+    // detached from the live view.
+    const reopenTrigger = fixture.nativeElement.querySelector(
+      'button.custody__resolve',
+    ) as HTMLButtonElement;
+    reopenTrigger.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    dialogDebug = fixture.debugElement.query(
+      By.directive(CustodyResolutionConfirmDialogComponent),
+    );
+    expect(dialogDebug).not.toBeNull();
+    expect(dialogDebug.componentInstance.errorMessage()).toBeNull();
+    // No new submission has happened yet — the reopen alone must not carry
+    // the prior attempt's error forward.
+    expect(resolveCustody).toHaveBeenCalledTimes(1);
+  });
 });

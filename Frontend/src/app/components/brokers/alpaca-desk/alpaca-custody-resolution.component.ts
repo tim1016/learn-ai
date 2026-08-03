@@ -65,6 +65,20 @@ export class AlpacaCustodyResolutionComponent {
     return divergence.position_deltas ?? [];
   }
 
+  // A fresh resolve attempt must never carry over a prior attempt's stale
+  // error or receipt — both are part of the audited flow and would otherwise
+  // render before any new submission happens.
+  protected requestResolve(): void {
+    this.resolveError.set(null);
+    this.receipt.set(null);
+    this.confirmOpen.set(true);
+  }
+
+  protected cancelResolve(): void {
+    this.resolveError.set(null);
+    this.confirmOpen.set(false);
+  }
+
   protected async onConfirmed({ reason }: { reason: string }): Promise<void> {
     const d = this.diagnosis.value();
     if (d === undefined || this.busy()) return;
