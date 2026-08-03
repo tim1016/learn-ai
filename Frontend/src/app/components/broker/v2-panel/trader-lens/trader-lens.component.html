@@ -21,6 +21,11 @@
   </div>
 </section>
 
+<app-bot-run-history
+  [state]="runHistory()"
+  (navigationRequested)="runHistoryNavigation.emit($event)"
+/>
+
 <app-trader-metrics [panel]="panel()" />
 
 <section class="chart-section" aria-label="Market and fill charts">

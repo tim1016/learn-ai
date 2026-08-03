@@ -5,6 +5,11 @@
     (actionRequested)="onActionRequested($event)"
   />
 
+  <app-bot-run-history
+    [state]="runHistory()"
+    (navigationRequested)="runHistoryNavigation.emit($event)"
+  />
+
   <div class="operator-lens__main">
     <section class="operator-lens__trace" aria-labelledby="transaction-trace-title">
       <div class="section-heading">

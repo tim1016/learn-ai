@@ -58,6 +58,39 @@ export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
 export type BotPanelView = components['schemas']['BotPanelView'];
 
+// ── Run navigation ──────────────────────────────────────────────────────────
+
+export type BotRunView = components['schemas']['BotRunView'];
+export type BotRunHistoryPage = components['schemas']['BotRunHistoryPage'];
+export type RunHistoryMode = 'current' | 'history';
+export type RunHistoryNavigation =
+  | 'current'
+  | 'history'
+  | 'newer'
+  | 'older';
+
+export interface RunHistoryState {
+  readonly mode: RunHistoryMode;
+  readonly current: BotRunView | null;
+  readonly history: BotRunHistoryPage | null;
+  readonly currentLoading: boolean;
+  readonly historyLoading: boolean;
+  readonly currentFailed: boolean;
+  readonly historyFailed: boolean;
+  readonly canViewNewer: boolean;
+}
+
+export const EMPTY_RUN_HISTORY_STATE: RunHistoryState = Object.freeze({
+  mode: 'current',
+  current: null,
+  history: null,
+  currentLoading: false,
+  historyLoading: false,
+  currentFailed: false,
+  historyFailed: false,
+  canViewNewer: false,
+});
+
 // ── §11 Action execution ─────────────────────────────────────────────────────
 
 export type PanelActionRequest = components['schemas']['PanelActionRequest'];

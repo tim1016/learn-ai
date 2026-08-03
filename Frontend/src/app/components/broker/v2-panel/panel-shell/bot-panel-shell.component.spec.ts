@@ -3,7 +3,11 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
-import type { BotPanelView, PanelProfile } from '../lib/broker-v2-panel.types';
+import type {
+  BotPanelView,
+  BotRunView,
+  PanelProfile,
+} from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
 
 // DualPaneChartComponent -> lightweight-charts: mock for unit tests.
@@ -100,9 +104,49 @@ const PANEL: BotPanelView = {
   open_pnl: null,
 };
 
+function makeRun(overrides: Partial<BotRunView> = {}): BotRunView {
+  return {
+    strategy_instance_id: 'sid-001',
+    run_id: 'run-current',
+    configuration_hash: 'a'.repeat(64),
+    launch_reason: 'deploy',
+    started_at_ms: 1_753_800_000_000,
+    is_current: true,
+    process: {
+      strategy_instance_id: 'sid-001',
+      run_id: 'run-current',
+      process_identity: 'process-1',
+      state: 'RUNNING',
+      registry_generation: 'registry-1',
+      observed_at_ms: 1_753_800_005_000,
+    },
+    terminal_outcome: null,
+    ...overrides,
+  };
+}
+
 const mockService = {
   getPanelProfile: vi.fn().mockResolvedValue(PROFILE),
   getPanel: vi.fn().mockResolvedValue(PANEL),
+  getCurrentRun: vi.fn().mockResolvedValue(makeRun()),
+  getRunHistory: vi.fn().mockResolvedValue({
+    runs: [
+      makeRun({
+        run_id: 'run-previous',
+        launch_reason: 'resume',
+        started_at_ms: 1_753_700_000_000,
+        is_current: false,
+        process: null,
+        terminal_outcome: {
+          kind: 'STOPPED',
+          reason_code: 'OPERATOR_STOP',
+          recorded_at_ms: 1_753_750_000_000,
+          run_id: 'run-previous',
+        },
+      }),
+    ],
+    next_cursor: null,
+  }),
   getLiveChart: vi.fn().mockResolvedValue({
     strategy_instance_id: 'sid-001',
     symbol: 'QQQ',
@@ -183,6 +227,134 @@ describe('BotPanelShellComponent', () => {
       'sid-001',
       '5s',
     );
+    expect(screen.getByText('run-current')).toBeTruthy();
+    expect(mockService.getRunHistory).not.toHaveBeenCalled();
+  });
+
+  it('loads previous runs only on demand and preserves the selection across lenses', async () => {
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockService.getRunHistory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockService.getRunHistory).toHaveBeenCalledWith(
+      'alpaca',
+      'sid-001',
+      undefined,
+    );
+    expect(screen.getByText('run-previous')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
+    await fixture.whenStable();
+    expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('run-previous')).toBeTruthy();
+    expect(
+      screen.getByText('Viewing history — controls apply to the current run.'),
+    ).toBeTruthy();
+  });
+
+  it('requests one older run at a time with the server-issued cursor', async () => {
+    mockService.getRunHistory
+      .mockResolvedValueOnce({
+        runs: [
+          makeRun({
+            run_id: 'run-newest-previous',
+            launch_reason: 'resume',
+            started_at_ms: 1_753_700_000_000,
+            is_current: false,
+            process: null,
+          }),
+        ],
+        next_cursor: 'run-newest-previous',
+      })
+      .mockResolvedValueOnce({
+        runs: [
+          makeRun({
+            run_id: 'run-older',
+            started_at_ms: 1_753_600_000_000,
+            is_current: false,
+            process: null,
+          }),
+        ],
+        next_cursor: null,
+      });
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+      ],
+    });
+    await fixture.whenStable();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Older run' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockService.getRunHistory).toHaveBeenLastCalledWith(
+      'alpaca',
+      'sid-001',
+      'run-newest-previous',
+    );
+    expect(screen.getByText('run-older')).toBeTruthy();
+  });
+
+  it('keeps lifecycle actions bound to the current instance while viewing history', async () => {
+    mockService.getPanel.mockResolvedValueOnce({
+      ...PANEL,
+      health: { ...PANEL.health, running: false },
+      actions: [
+        {
+          action_id: 'start',
+          label: 'Start',
+          explanation: 'Start evaluating bars.',
+          enabled: true,
+          blockers: [],
+          confirmation: null,
+          revision: 1,
+          concurrency_token: 'start-token',
+        },
+      ],
+    });
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+      ],
+    });
+    await fixture.whenStable();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    await fixture.whenStable();
+
+    expect(mockService.runBotAction).toHaveBeenCalledWith(
+      'alpaca',
+      'DUM284968',
+      'sid-001',
+      expect.objectContaining({ action_id: 'start' }),
+    );
   });
 
   it('does not restart a panel request that is still loading', async () => {
@@ -211,6 +383,39 @@ describe('BotPanelShellComponent', () => {
       vi.useRealTimers();
     }
   });
+
+  it('refreshes current-run evidence during panel polling', async () => {
+    mockService.getCurrentRun
+      .mockResolvedValueOnce(makeRun())
+      .mockResolvedValueOnce(
+        makeRun({
+          process: null,
+          terminal_outcome: {
+            kind: 'STOPPED',
+            reason_code: 'OPERATOR_STOP',
+            recorded_at_ms: 1_753_805_000_000,
+            run_id: 'run-current',
+          },
+        }),
+      );
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('Stopped')).toBeTruthy();
+    fixture.destroy();
+  }, 10_000);
 
   it('shows log-only degradation panel after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {

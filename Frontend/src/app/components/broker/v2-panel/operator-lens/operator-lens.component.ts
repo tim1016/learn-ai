@@ -8,10 +8,13 @@ import {
   resource,
   signal,
 } from '@angular/core';
+import { EMPTY_RUN_HISTORY_STATE } from '../lib/broker-v2-panel.types';
 import type {
   BotPanelView,
   PanelAction,
   PanelProfile,
+  RunHistoryNavigation,
+  RunHistoryState,
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { TransactionRailComponent } from './transaction-rail.component';
@@ -21,6 +24,7 @@ import { JournalTailComponent } from './journal-tail.component';
 import { EvidenceDrawerComponent } from './evidence-drawer.component';
 import { OperatorReadinessComponent } from './operator-readiness.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { BotRunHistoryComponent } from '../bot-run-history/bot-run-history.component';
 
 /**
  * Operator lens (spec §7).
@@ -46,6 +50,7 @@ import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
     EvidenceDrawerComponent,
     OperatorReadinessComponent,
     ReceiptLabelPipe,
+    BotRunHistoryComponent,
   ],
   templateUrl: './operator-lens.component.html',
   styleUrl: './operator-lens.component.scss',
@@ -56,9 +61,11 @@ export class OperatorLensComponent {
   readonly panel = input.required<BotPanelView>();
   readonly profile = input.required<PanelProfile>();
   readonly actionPending = input(false);
+  readonly runHistory = input<RunHistoryState>(EMPTY_RUN_HISTORY_STATE);
 
   readonly actionRequested = output<PanelAction>();
   readonly transactionSelected = output<string>();
+  readonly runHistoryNavigation = output<RunHistoryNavigation>();
 
   // Route context — needed for the evidence endpoint calls.
   readonly broker = input.required<string>();

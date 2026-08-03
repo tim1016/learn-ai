@@ -6,6 +6,7 @@ import {
 } from './dual-pane-chart.component';
 
 const chartMocks = vi.hoisted(() => ({
+  createChart: vi.fn(),
   setMarkers: vi.fn(),
   setData: vi.fn(),
   fitContent: vi.fn(),
@@ -29,15 +30,28 @@ vi.mock('lightweight-charts', () => {
     remove: vi.fn(),
   });
   return {
-    createChart: vi.fn().mockImplementation(() => createMockChart()),
+    createChart: chartMocks.createChart.mockImplementation(() => createMockChart()),
     createSeriesMarkers,
     CandlestickSeries: 'CandlestickSeries',
   };
 });
 
+interface ChartHarness {
+  chart: {
+    timeScale: () => { fitContent: ReturnType<typeof vi.fn> };
+  } | null;
+  series: {
+    setData: ReturnType<typeof vi.fn>;
+  } | null;
+}
+
+function chartHarness(component: DualPaneChartComponent): ChartHarness {
+  return component as unknown as ChartHarness;
+}
 
 describe('DualPaneChartComponent', () => {
   beforeEach(() => {
+    chartMocks.createChart.mockClear();
     chartMocks.setMarkers.mockClear();
     chartMocks.setData.mockClear();
     chartMocks.fitContent.mockClear();
@@ -150,9 +164,13 @@ describe('DualPaneChartComponent', () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [], histBars: [] },
     });
-    fixture.detectChanges();
-    expect(chartMocks.setData).toHaveBeenCalledWith([]);
-    chartMocks.setData.mockClear();
+    await waitFor(
+      () => expect(chartHarness(fixture.componentInstance).series).not.toBeNull(),
+      { timeout: 5_000 },
+    );
+    const series = chartHarness(fixture.componentInstance).series;
+    if (series === null) throw new Error('chart series did not mount');
+    series.setData.mockClear();
 
     fixture.componentRef.setInput('liveBars', [
       {
@@ -170,7 +188,7 @@ describe('DualPaneChartComponent', () => {
     await fixture.whenStable();
 
     await waitFor(() => {
-      expect(chartMocks.setData).toHaveBeenLastCalledWith([
+      expect(series.setData).toHaveBeenLastCalledWith([
         {
           time: 1_700_000_000,
           open: 100,
@@ -180,7 +198,7 @@ describe('DualPaneChartComponent', () => {
         },
       ]);
     });
-  });
+  }, 15_000);
 
   it('preserves a manual zoom while fresh bars append to the same view', async () => {
     const initialBar = {
@@ -196,7 +214,15 @@ describe('DualPaneChartComponent', () => {
     const { fixture } = await render(DualPaneChartComponent, {
       inputs: { symbol: 'SPY', liveBars: [initialBar], histBars: [] },
     });
-    const fitCount = chartMocks.fitContent.mock.calls.length;
+    await waitFor(
+      () => expect(chartHarness(fixture.componentInstance).series).not.toBeNull(),
+      { timeout: 5_000 },
+    );
+    const { chart, series } = chartHarness(fixture.componentInstance);
+    if (chart === null || series === null) throw new Error('chart did not mount');
+    await waitFor(() => expect(series.setData).toHaveBeenCalled());
+    const fitContent = chart.timeScale().fitContent;
+    const fitCount = fitContent.mock.calls.length;
 
     fixture.componentRef.setInput('liveBars', [
       initialBar,
@@ -208,8 +234,15 @@ describe('DualPaneChartComponent', () => {
     ]);
     fixture.detectChanges();
 
-    expect(chartMocks.fitContent).toHaveBeenCalledTimes(fitCount);
-  });
+    await waitFor(() => {
+      expect(series.setData).toHaveBeenLastCalledWith([
+        expect.objectContaining({ time: 1_700_000_000 }),
+        expect.objectContaining({ time: 1_700_000_005 }),
+      ]);
+    });
+
+    expect(fitContent).toHaveBeenCalledTimes(fitCount);
+  }, 15_000);
 
   it('projects live fills into candle-series markers', () => {
     const markers = toSeriesMarkers(

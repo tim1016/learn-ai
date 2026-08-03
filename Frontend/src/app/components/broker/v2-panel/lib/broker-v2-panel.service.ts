@@ -5,6 +5,8 @@ import type { components } from '../../../../api/broker.types';
 import type {
   BotCatalogView,
   BotPanelView,
+  BotRunHistoryPage,
+  BotRunView,
   ChartHistoryPreset,
   ChartHistoryResponse,
   ChartLiveResolution,
@@ -102,6 +104,29 @@ export class BrokerV2PanelService {
     return firstValueFrom(
       this.http.get<BotPanelView>(
         `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/panel`,
+        { params },
+      ),
+    );
+  }
+
+  getCurrentRun(broker: string, sid: string): Promise<BotRunView> {
+    return firstValueFrom(
+      this.http.get<BotRunView>(
+        `/api/brokers/${encodeURIComponent(broker)}/bots/${encodeURIComponent(sid)}/runs/current`,
+      ),
+    );
+  }
+
+  getRunHistory(
+    broker: string,
+    sid: string,
+    cursor?: string,
+  ): Promise<BotRunHistoryPage> {
+    let params = new HttpParams().set('limit', '1');
+    if (cursor) params = params.set('cursor', cursor);
+    return firstValueFrom(
+      this.http.get<BotRunHistoryPage>(
+        `/api/brokers/${encodeURIComponent(broker)}/bots/${encodeURIComponent(sid)}/runs/history`,
         { params },
       ),
     );

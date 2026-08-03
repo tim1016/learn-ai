@@ -18,6 +18,9 @@ import type {
   ChartLiveResolution,
   PanelAction,
   PanelActionResult,
+  RunHistoryNavigation,
+  RunHistoryMode,
+  RunHistoryState,
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
@@ -29,6 +32,12 @@ import {
 } from './panel-action-receipt.component';
 
 type PanelLens = 'trader' | 'operator';
+
+interface RunHistoryLocation {
+  readonly mode: RunHistoryMode;
+  readonly cursor: string | null;
+  readonly newerCursors: readonly (string | null)[];
+}
 
 /**
  * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
@@ -91,6 +100,10 @@ export class BotPanelShellComponent {
   protected readonly selectedTransactionRef = signal<string | null>(null);
   protected readonly actionPending = signal(false);
   protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
+  private readonly runHistoryLocation = linkedSignal<string, RunHistoryLocation>({
+    source: this.sid,
+    computation: () => ({ mode: 'current', cursor: null, newerCursors: [] }),
+  });
 
   protected readonly panel = resource({
     params: () => ({
@@ -112,6 +125,45 @@ export class BotPanelShellComponent {
   protected readonly profile = resource({
     params: () => this.broker(),
     loader: ({ params }) => this.panelSvc.getPanelProfile(params),
+  });
+
+  protected readonly currentRun = resource({
+    params: () => ({ broker: this.broker(), sid: this.sid() }),
+    loader: ({ params }) =>
+      this.panelSvc.getCurrentRun(params.broker, params.sid),
+  });
+
+  protected readonly previousRun = resource({
+    params: () => {
+      const location = this.runHistoryLocation();
+      return location.mode === 'history'
+        ? {
+            broker: this.broker(),
+            sid: this.sid(),
+            cursor: location.cursor,
+          }
+        : undefined;
+    },
+    loader: ({ params }) =>
+      this.panelSvc.getRunHistory(
+        params.broker,
+        params.sid,
+        params.cursor ?? undefined,
+      ),
+  });
+
+  protected readonly runHistoryState = computed<RunHistoryState>(() => {
+    const location = this.runHistoryLocation();
+    return {
+      mode: location.mode,
+      current: this.currentRun.value() ?? null,
+      history: this.previousRun.value() ?? null,
+      currentLoading: this.currentRun.isLoading(),
+      historyLoading: this.previousRun.isLoading(),
+      currentFailed: this.currentRun.error() !== undefined,
+      historyFailed: this.previousRun.error() !== undefined,
+      canViewNewer: location.newerCursors.length > 0,
+    };
   });
 
   protected readonly liveChart = resource({
@@ -158,6 +210,9 @@ export class BotPanelShellComponent {
     const pollTimer = setInterval(() => {
       if (!this.panel.isLoading()) {
         this.panel.reload();
+      }
+      if (!this.currentRun.isLoading()) {
+        this.currentRun.reload();
       }
       if (this.activeLens() === 'trader' && !this.liveChart.isLoading()) {
         this.liveChart.reload();
@@ -224,6 +279,49 @@ export class BotPanelShellComponent {
     this.selectedTransactionRef.set(transactionRef);
   }
 
+  protected onRunHistoryNavigation(destination: RunHistoryNavigation): void {
+    const location = this.runHistoryLocation();
+    if (destination === 'current') {
+      if (location.mode === 'current') {
+        if (this.currentRun.error() !== undefined) this.currentRun.reload();
+        return;
+      }
+      this.runHistoryLocation.update((current) => ({
+        ...current,
+        mode: 'current',
+      }));
+      return;
+    }
+    if (destination === 'history') {
+      if (location.mode === 'history') {
+        if (this.previousRun.error() !== undefined) this.previousRun.reload();
+        return;
+      }
+      this.runHistoryLocation.update((current) => ({
+        ...current,
+        mode: 'history',
+      }));
+      return;
+    }
+    if (destination === 'older') {
+      const nextCursor = this.previousRun.value()?.next_cursor;
+      if (!nextCursor) return;
+      this.runHistoryLocation.set({
+        mode: 'history',
+        cursor: nextCursor,
+        newerCursors: [...location.newerCursors, location.cursor],
+      });
+      return;
+    }
+    const newerCursor = location.newerCursors.at(-1);
+    if (newerCursor === undefined) return;
+    this.runHistoryLocation.set({
+      mode: 'history',
+      cursor: newerCursor,
+      newerCursors: location.newerCursors.slice(0, -1),
+    });
+  }
+
   protected dismissActionReceipt(): void {
     this.actionReceipt.set(null);
   }
@@ -241,6 +339,7 @@ export class BotPanelShellComponent {
       );
       this.actionReceipt.set(this.successReceipt(result));
       this.panel.reload();
+      this.currentRun.reload();
     } catch (error) {
       const receipt = this.errorReceipt(error, action);
       this.actionReceipt.set(receipt);

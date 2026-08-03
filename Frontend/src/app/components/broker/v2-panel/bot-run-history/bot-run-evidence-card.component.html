@@ -1,0 +1,40 @@
+<article class="run-card" [attr.aria-label]="mode() === 'current' ? 'Current run evidence' : 'Previous run evidence'">
+  <div class="run-card__identity">
+    <div>
+      <span class="run-card__badge">{{ mode() === 'current' ? 'Current Run' : 'Previous Run' }}</span>
+      <h3><app-timestamp-display [value]="run().started_at_ms" mode="local" /></h3>
+      <p>{{ run().launch_reason | receiptLabel }} · <code>{{ run().run_id }}</code></p>
+    </div>
+    <dl>
+      <div><dt>Instance</dt><dd><code>{{ run().strategy_instance_id }}</code></dd></div>
+      <div><dt>Configuration</dt><dd><code>{{ run().configuration_hash }}</code></dd></div>
+    </dl>
+  </div>
+
+  <div class="run-card__evidence">
+    <div>
+      <span>Process evidence</span>
+      @if (run().process; as process) {
+        <strong>{{ process.state | receiptLabel }}</strong>
+        @if (process.process_identity) {
+          <small>Process ID <code>{{ process.process_identity }}</code></small>
+        } @else {
+          <small>Process identity unavailable</small>
+        }
+        <small>Registry <code>{{ process.registry_generation }}</code></small>
+        <small>Observed <app-timestamp-display [value]="process.observed_at_ms" mode="local" /></small>
+      } @else {
+        <strong>Not attached to this historical view</strong>
+      }
+    </div>
+    <div>
+      <span>Terminal evidence</span>
+      @if (run().terminal_outcome; as outcome) {
+        <strong>{{ outcome.kind | receiptLabel }}</strong>
+        <small>{{ outcome.reason_code | receiptLabel }} · <app-timestamp-display [value]="outcome.recorded_at_ms" mode="local" /></small>
+      } @else {
+        <strong>No terminal evidence recorded</strong>
+      }
+    </div>
+  </div>
+</article>
