@@ -59,6 +59,11 @@ from app.broker.alpaca import adapter
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
+from app.broker.alpaca.fault_injection import (
+    frame_for_fault,
+    get_fault_injection_registry,
+    injection_permitted,
+)
 from app.broker.capture.journal import CaptureEndpoint, CaptureJournal, get_capture_journal
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
 from app.broker.contract.ports import BrokerReadPort
@@ -667,10 +672,23 @@ class TradeUpdatesConsumer:
         ``_handle_frame`` — so no key material is ever journaled).
         """
         resolved = settings or get_alpaca_settings()
+
+        def _socket_source() -> AsyncIterator[bytes | str]:
+            return alpaca_socket_frames(resolved)
+
+        def _injected_source() -> AsyncIterator[bytes | str]:
+            return _inject_frame_faults(_socket_source())
+
+        # Dev-only fault-injection seam (PRD #1354): wrap the real socket source
+        # so armed frame faults interleave through the SAME consumer path. The
+        # wrap is applied ONLY when the seam is permitted (off by default,
+        # paper-only), so a normal run's hot path has zero injection code.
+        frame_source: FrameSource = _injected_source if injection_permitted() else _socket_source
+
         return cls(
             clerk=clerk,
             read=read,
-            frame_source=lambda: alpaca_socket_frames(resolved),
+            frame_source=frame_source,
             journal=journal,
         )
 
@@ -758,6 +776,56 @@ def _ms_to_rfc3339(ms: int) -> str:
 
 def _opt_ms_to_rfc3339(ms: int | None) -> str | None:
     return None if ms is None else _ms_to_rfc3339(ms)
+
+
+async def _inject_frame_faults(
+    source: AsyncIterator[bytes | str],
+) -> AsyncIterator[bytes | str]:
+    """Interleave armed dev-only fault frames into a real inbound frame stream.
+
+    Wraps a real frame source (PRD #1354). After each real frame it drains any
+    armed frame faults and yields the crafted frames, so they thread through the
+    SAME ``_handle_frame`` path (capture → parse → live_idempotent dedup →
+    attribution → journal) as socket frames. The last real ``trade_updates``
+    frame is remembered so ``REDELIVER_LAST`` re-emits it verbatim (proving
+    idempotent absorption). Draining is inert when the seam is not permitted, so
+    a mis-wired wrap can never fabricate a frame off-paper.
+
+    Injection is triggered by real inbound frames; the live socket always
+    delivers frames (auth/listen acks, keepalives), so an armed fault fires on
+    the next frame rather than requiring a bot execution.
+    """
+    registry = get_fault_injection_registry()
+    last_trade_update: str | None = None
+
+    def _drain() -> list[str]:
+        frames: list[str] = []
+        for fault in registry.drain_frame_faults():
+            frame = frame_for_fault(fault, last_frame=last_trade_update)
+            if frame is None:
+                logger.warning(
+                    "fault injection: nothing to redeliver (no prior trade_updates frame)",
+                    extra={"action": "frame_fault_redeliver_empty", "kind": fault.kind},
+                )
+                continue
+            logger.warning(
+                "alpaca frame fault injected (dev seam)",
+                extra={"action": "frame_fault_injected", "kind": fault.kind},
+            )
+            frames.append(frame)
+        return frames
+
+    async for frame in source:
+        yield frame
+        text = frame.decode("utf-8") if isinstance(frame, bytes) else frame
+        try:
+            message = json.loads(text)
+        except (ValueError, TypeError):
+            message = None
+        if isinstance(message, dict) and message.get("stream") == _STREAM_TRADE_UPDATES:
+            last_trade_update = text
+        for injected in _drain():
+            yield injected
 
 
 async def alpaca_socket_frames(settings: AlpacaSettings) -> AsyncIterator[bytes | str]:

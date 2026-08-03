@@ -27,6 +27,7 @@ from app.broker.alpaca.client import (
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.broker.contract.errors import (
     BrokerAuthError,
+    BrokerOrderRejected,
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
@@ -525,3 +526,125 @@ async def test_timeouts_do_not_exhaust_the_global_anyio_thread_limiter() -> None
     finally:
         release.set()
         global_limiter.total_tokens = original_tokens
+
+
+# ── Dev-only fault-injection seam: write-path hook (PRD #1354) ─────────────────
+
+
+@pytest.fixture
+def permit_write_injection(monkeypatch: pytest.MonkeyPatch):
+    """Permit the seam (flag on + paper) and reset the registry around the test."""
+    from types import SimpleNamespace
+
+    from app.broker.alpaca import fault_injection as fi
+
+    monkeypatch.setattr(fi.settings, "ALPACA_FAULT_INJECTION_ENABLED", True)
+    monkeypatch.setattr(fi, "get_alpaca_settings", lambda: SimpleNamespace(is_paper=True))
+    fi.reset_fault_injection_for_testing()
+    yield fi
+    fi.reset_fault_injection_for_testing()
+
+
+_INJECT_ORDER = {
+    "symbol": "SPY",
+    "qty": "1",
+    "side": "buy",
+    "type": "market",
+    "client_order_id": "manual/bot-a/v1:inject",
+}
+
+
+async def test_injected_reject_short_circuits_before_sdk(permit_write_injection) -> None:
+    permit_write_injection.get_fault_injection_registry().arm(
+        permit_write_injection.WriteFaultKind.REJECT_422
+    )
+    fake = _FakeAlpaca()
+    client = _client(fake)
+
+    with pytest.raises(BrokerRequestInvalid):
+        await client.submit_order(_INJECT_ORDER)
+
+    # No abnormal order: the SDK post was never called.
+    assert fake.post_call is None
+
+
+async def test_injected_conflict_is_definitive_reject(permit_write_injection) -> None:
+    permit_write_injection.get_fault_injection_registry().arm(
+        permit_write_injection.WriteFaultKind.CONFLICT_409
+    )
+    fake = _FakeAlpaca()
+
+    with pytest.raises(BrokerOrderRejected):
+        await _client(fake).submit_order(_INJECT_ORDER)
+
+    assert fake.post_call is None
+
+
+async def test_injected_timeout_marks_uncertain_and_skips_sdk(permit_write_injection) -> None:
+    permit_write_injection.get_fault_injection_registry().arm(
+        permit_write_injection.WriteFaultKind.TIMEOUT
+    )
+    fake = _FakeAlpaca()
+    client = _client(fake)
+
+    with pytest.raises(BrokerUnavailable, match="timed out"):
+        await client.submit_order(_INJECT_ORDER)
+
+    assert fake.post_call is None
+    # Uncertain-submission window opened, exactly like a real timeout.
+    assert client._submission_may_become_visible(_INJECT_ORDER["client_order_id"])
+
+
+async def test_injected_throttle_retries_then_lands_on_real_sdk(permit_write_injection) -> None:
+    # A single injected 429 composes with the bounded rate-limit retry (CB3):
+    # attempt 1 is throttled, attempt 2 hits the real SDK and lands.
+    permit_write_injection.get_fault_injection_registry().arm(
+        permit_write_injection.WriteFaultKind.THROTTLE_429, count=1
+    )
+    fake = _FakeAlpaca()
+
+    result = await _client(fake).submit_order(_INJECT_ORDER)
+
+    assert result == {"id": "broker-order-1", "status": "accepted"}
+    # The order landed on the real SDK exactly once (the retry, not the throttle).
+    assert fake.post_call == ("/orders", _INJECT_ORDER)
+
+
+async def test_injected_fault_targets_only_matching_bot(permit_write_injection) -> None:
+    permit_write_injection.get_fault_injection_registry().arm(
+        permit_write_injection.WriteFaultKind.REJECT_422, target="bot-b"
+    )
+    fake = _FakeAlpaca()
+
+    # This order is for bot-a; the fault targets bot-b, so it lands normally.
+    result = await _client(fake).submit_order(_INJECT_ORDER)
+
+    assert result == {"id": "broker-order-1", "status": "accepted"}
+    assert fake.post_call == ("/orders", _INJECT_ORDER)
+
+
+async def test_injected_cancel_fault_short_circuits_delete(permit_write_injection) -> None:
+    permit_write_injection.get_fault_injection_registry().arm(
+        permit_write_injection.WriteFaultKind.REJECT_422, target="order-xyz"
+    )
+    fake = _FakeAlpaca()
+    client = _client(fake)
+
+    with pytest.raises(BrokerRequestInvalid):
+        await client.cancel_order("order-xyz")
+
+    assert fake.delete_call is None
+
+
+async def test_seam_off_does_not_inject(monkeypatch: pytest.MonkeyPatch) -> None:
+    # With the flag off, arming is refused and the submit lands on the SDK.
+    from app.broker.alpaca import fault_injection as fi
+
+    monkeypatch.setattr(fi.settings, "ALPACA_FAULT_INJECTION_ENABLED", False)
+    fi.reset_fault_injection_for_testing()
+    fake = _FakeAlpaca()
+
+    result = await _client(fake).submit_order(_INJECT_ORDER)
+
+    assert result == {"id": "broker-order-1", "status": "accepted"}
+    assert fake.post_call == ("/orders", _INJECT_ORDER)

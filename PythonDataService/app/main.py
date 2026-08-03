@@ -735,6 +735,23 @@ if settings.DATA_LAKE_ENABLED:
 else:
     logger.info("data lake routes disabled (set DATA_LAKE_ENABLED=true to enable)")
 
+# Dev-only broker fault-injection seam (PRD #1354) — gated by
+# ALPACA_FAULT_INJECTION_ENABLED. When disabled the prefix has no registered
+# routes (clients get 404); the seam ALSO refuses to arm off a paper posture.
+# Registered behind the always-on data-plane control secret like every broker
+# control route. Never enable in a live/production path.
+if settings.ALPACA_FAULT_INJECTION_ENABLED:
+    from app.routers import alpaca_fault_injection as alpaca_fault_injection_router
+
+    app.include_router(
+        alpaca_fault_injection_router.router,
+        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+    )
+    logger.warning(
+        "ALPACA FAULT INJECTION seam ENABLED (dev only, paper-only). "
+        "Never enable this in a live/production path."
+    )
+
 # Exception handler
 app.add_exception_handler(Exception, polygon_exception_handler)
 
