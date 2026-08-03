@@ -57,6 +57,31 @@ describe('CustodyResolutionConfirmDialogComponent', () => {
     expect(confirmed).toHaveBeenCalledWith({ reason: 'killed mid-fill' });
   });
 
+  it('clears the reason and token when the dialog is closed then reopened', async () => {
+    const view = await render(CustodyResolutionConfirmDialogComponent, {
+      inputs: { open: true, diagnosis: divergedDiagnosis(), busy: false, errorMessage: null },
+    });
+
+    const reason = screen.getByLabelText(/why did the clerk and broker/i) as HTMLTextAreaElement;
+    const token = screen.getByLabelText(/type RESOLVE/i) as HTMLInputElement;
+    fireEvent.input(reason, { target: { value: 'killed mid-fill' } });
+    fireEvent.input(token, { target: { value: 'RESOLVE' } });
+    const confirm = screen.getByRole('button', {
+      name: /resolve & sync/i,
+      hidden: true,
+    }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+
+    view.fixture.componentRef.setInput('open', false);
+    view.fixture.detectChanges();
+    view.fixture.componentRef.setInput('open', true);
+    view.fixture.detectChanges();
+
+    expect(reason.value).toBe('');
+    expect(token.value).toBe('');
+    expect(confirm.disabled).toBe(true);
+  });
+
   it('renders the delta table and recovery plan for a diverged diagnosis', async () => {
     await render(CustodyResolutionConfirmDialogComponent, {
       inputs: { open: true, diagnosis: divergedDiagnosis(), busy: false, errorMessage: null },
