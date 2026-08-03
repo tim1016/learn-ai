@@ -15357,6 +15357,97 @@
         "title": "CustodyPositionDelta",
         "type": "object"
       },
+      "CustodyResolutionReceipt": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "in_sync": {
+            "default": false,
+            "title": "In Sync",
+            "type": "boolean"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "remaining_divergences": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CustodyDivergence"
+            },
+            "title": "Remaining Divergences",
+            "type": "array"
+          },
+          "resolved": {
+            "title": "Resolved",
+            "type": "boolean"
+          },
+          "steps_executed": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CustodyResolutionStepResult"
+            },
+            "title": "Steps Executed",
+            "type": "array"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "resolved",
+          "receipt_id",
+          "recorded_at_ms"
+        ],
+        "title": "CustodyResolutionReceipt",
+        "type": "object"
+      },
+      "CustodyResolutionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_token": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "snapshot_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Snapshot Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "snapshot_version",
+          "confirmation_token",
+          "idempotency_key"
+        ],
+        "title": "CustodyResolutionRequest",
+        "type": "object"
+      },
       "CustodyResolutionStep": {
         "properties": {
           "action_id": {
@@ -15388,6 +15479,24 @@
           "mutates"
         ],
         "title": "CustodyResolutionStep",
+        "type": "object"
+      },
+      "CustodyResolutionStepResult": {
+        "properties": {
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "message"
+        ],
+        "title": "CustodyResolutionStepResult",
         "type": "object"
       },
       "CustodySpineStep": {
@@ -53432,6 +53541,75 @@
           }
         },
         "summary": "Get Custody Diagnosis",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerk/resolve": {
+      "post": {
+        "description": "Resolve Clerk\u2194broker divergence: run the diagnosed plan, journal the reason.\n\nA control mutation. The typed token is a UI friction gate; the operator\nidentity is injected server-side. A stale snapshot is a 409; a blocked\nprerequisite is a 409 with the blocker's what/why.",
+        "operationId": "resolve_custody_api_brokers__broker__clerk_resolve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustodyResolutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustodyResolutionReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve Custody",
         "tags": [
           "brokers-v2"
         ]
