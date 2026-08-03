@@ -31,6 +31,7 @@ from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker.alpaca.trade_updates import (
     TradeUpdatesConsumer,
+    _inject_frame_faults,
     _order_to_event_payload,
     _stream_url,
     alpaca_socket_frames,
@@ -1080,3 +1081,121 @@ async def test_connection_watermark_flips_during_a_cycle_and_clears_after(
     assert observed == [True]  # connected while the cycle was live
     assert consumer.connected is False  # source exhausted -> disconnected
     assert consumer.connection_changed_at_ms == _FIXED_MS
+
+
+# ── Dev-only fault-injection seam: frame-source hook (PRD #1354) ───────────────
+
+
+@pytest.fixture
+def permit_frame_injection(monkeypatch: pytest.MonkeyPatch):
+    """Permit the seam (flag on + paper) and reset the registry around the test."""
+    from types import SimpleNamespace
+
+    from app.broker.alpaca import fault_injection as fi
+
+    monkeypatch.setattr(fi.settings, "ALPACA_FAULT_INJECTION_ENABLED", True)
+    monkeypatch.setattr(fi, "get_alpaca_settings", lambda: SimpleNamespace(is_paper=True))
+    fi.reset_fault_injection_for_testing()
+    yield fi
+    fi.reset_fault_injection_for_testing()
+
+
+async def _collect(agen) -> list[str]:
+    return [frame async for frame in agen]
+
+
+async def test_inject_frame_faults_interleaves_after_real_frame(permit_frame_injection) -> None:
+    from app.broker.alpaca.fault_injection import FrameFaultKind
+
+    real = json.dumps(
+        {"stream": "trade_updates", "data": {"event": "new", "order": {"client_order_id": "coid"}}}
+    )
+    permit_frame_injection.get_fault_injection_registry().arm(
+        FrameFaultKind.HALT_SUSPENDED, target="coid", params={"symbol": "AAPL"}
+    )
+
+    out = await _collect(_inject_frame_faults(_frame_source([real])()))
+
+    assert len(out) == 2
+    assert out[0] == real
+    injected = json.loads(out[1])
+    assert injected["stream"] == "trade_updates"
+    assert injected["data"]["event"] == "suspended"
+    assert injected["data"]["order"]["client_order_id"] == "coid"
+
+
+async def test_inject_frame_faults_redelivers_last_trade_update(permit_frame_injection) -> None:
+    from app.broker.alpaca.fault_injection import FrameFaultKind
+
+    fill = json.dumps(
+        {"stream": "trade_updates", "data": {"event": "fill", "order": {"client_order_id": "coid"}}}
+    )
+    permit_frame_injection.get_fault_injection_registry().arm(FrameFaultKind.REDELIVER_LAST)
+
+    out = await _collect(_inject_frame_faults(_frame_source([fill])()))
+
+    # The fill is redelivered verbatim — the dedup path must absorb the copy.
+    assert out == [fill, fill]
+
+
+async def test_inject_frame_faults_redeliver_with_no_prior_frame_is_skipped(
+    permit_frame_injection,
+) -> None:
+    from app.broker.alpaca.fault_injection import FrameFaultKind
+
+    # A non-trade_updates frame does not become the redelivery target.
+    keepalive = json.dumps({"stream": "listening", "data": {"streams": ["trade_updates"]}})
+    permit_frame_injection.get_fault_injection_registry().arm(FrameFaultKind.REDELIVER_LAST)
+
+    out = await _collect(_inject_frame_faults(_frame_source([keepalive])()))
+
+    assert out == [keepalive]
+
+
+async def test_inject_frame_faults_passthrough_when_not_permitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.broker.alpaca import fault_injection as fi
+
+    monkeypatch.setattr(fi.settings, "ALPACA_FAULT_INJECTION_ENABLED", False)
+    fi.reset_fault_injection_for_testing()
+    real = json.dumps({"stream": "trade_updates", "data": {"event": "new"}})
+
+    out = await _collect(_inject_frame_faults(_frame_source([real])()))
+
+    assert out == [real]
+
+
+async def test_injected_frame_threads_through_the_real_consumer(
+    tmp_path: Path, permit_frame_injection
+) -> None:
+    # The injected frame must reach the SAME consumer path — verbatim capture
+    # is step 1 of _handle_frame, so a captured injected frame proves it threaded
+    # through the real consumer, not a stubbed shortcut.
+    from app.broker.alpaca.fault_injection import FrameFaultKind
+
+    permit_frame_injection.get_fault_injection_registry().arm(
+        FrameFaultKind.HALT_SUSPENDED, target=_OWNED_COID
+    )
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    await _warm(clerk)
+    journal = _capture_journal(tmp_path)
+    real = json.dumps(_load_frames()[0])  # a real 'new' event for _OWNED_COID
+    consumer = TradeUpdatesConsumer(
+        clerk=clerk,
+        read=broker,
+        frame_source=lambda: _inject_frame_faults(_frame_source([real])()),
+        journal=journal,
+        clock=lambda: _FIXED_MS,
+        backoff=_no_backoff,
+        max_reconnects=0,
+    )
+
+    await consumer.run()
+
+    captured = _capture_records(tmp_path)
+    # Both the real frame AND the injected suspended frame were captured.
+    assert len(captured) == 2
+    bodies = "".join(json.dumps(record) for record in captured)
+    assert "suspended" in bodies

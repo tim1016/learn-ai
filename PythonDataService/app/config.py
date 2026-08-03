@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # Account-level half of the two-key carryover permission. A deployment
     # must also opt in explicitly; the default remains flat-only Resume.
     ALPACA_PAPER_CARRYOVER_ENABLED: bool = False
+    # Dev-only broker fault-injection seam (PRD #1354). Off by default; the seam
+    # ALSO fails closed unless the Alpaca posture is paper. Never enable in a
+    # live/production path — it exists to rehearse reject/throttle/conflict/
+    # timeout/redelivery/halt scenarios against the real adapter+consumer without
+    # ever placing an abnormal order.
+    ALPACA_FAULT_INJECTION_ENABLED: bool = False
     TRUSTED_HOSTS: str = (
         "localhost,127.0.0.1,test,testserver,python-service,backend,"
         "host.containers.internal,host.docker.internal"

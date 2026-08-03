@@ -47,9 +47,14 @@ from app.broker.alpaca.config import (
     get_alpaca_settings,
 )
 from app.broker.alpaca.errors import map_api_error, status_of
+from app.broker.alpaca.fault_injection import (
+    craft_write_error,
+    get_fault_injection_registry,
+)
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import (
     BrokerAuthError,
+    BrokerError,
     BrokerRateLimited,
     BrokerUnavailable,
 )
@@ -280,22 +285,55 @@ class AlpacaTradingClient:
         )
         await anyio.sleep(min(hint_s, _RATE_LIMIT_RETRY_CAP_S))
 
+    def _maybe_injected_write_fault(self, identifier: str) -> BrokerError | None:
+        """Return the contract error for an armed write fault, else ``None``.
+
+        Inert unless the dev-only fault-injection seam is permitted (off by
+        default, paper-only). When a fault matches this mutation it short-circuits
+        BEFORE the SDK call, so no order reaches Alpaca — the seam can only
+        simulate the *vendor response*, never place a different order. Reject /
+        conflict / throttle are byte-identical to a genuine vendor failure
+        (crafted via the real ``map_api_error``); a throttle re-enters the
+        bounded retry below exactly like a real 429.
+        """
+        fault = get_fault_injection_registry().consume_write_fault(identifier)
+        if fault is None:
+            return None
+        logger.warning(
+            "alpaca write fault injected (dev seam)",
+            extra={
+                "action": "write_fault_injected",
+                "kind": fault.kind,
+                "identifier": identifier,
+            },
+        )
+        return craft_write_error(fault.kind)
+
     async def _call_write(
         self,
         fn: Callable[[Any], Any],
         *,
         describe: str,
         throttle_context: str,
+        identifier: str,
     ) -> Any:
         """Run a write call with a bounded rate-limit retry (429 only).
 
         Every other error (auth, invalid, conflict, unavailable, timeout) flows
         through :meth:`_call` unchanged — only a ``BrokerRateLimited`` is
         retried, because only a throttle guarantees the request did not land.
+
+        ``identifier`` (the submit ``client_order_id`` or the cancel
+        ``order_id``) scopes the dev-only fault-injection seam; it is otherwise
+        unused. Injection is consulted each attempt so an injected throttle
+        composes with the retry loop exactly like a real one.
         """
         attempt = 0
         while True:
             try:
+                injected = self._maybe_injected_write_fault(identifier)
+                if injected is not None:
+                    raise injected
                 return await self._call(fn, describe=describe, is_order_mutation=True)
             except BrokerRateLimited as exc:
                 if attempt >= _MAX_RATE_LIMIT_RETRIES:
@@ -342,6 +380,7 @@ class AlpacaTradingClient:
                 lambda client: client.post("/orders", order),
                 describe="order submission",
                 throttle_context="order",
+                identifier=client_order_id,
             )
         except BrokerUnavailable:
             # The synchronous SDK worker may continue after AnyIO returns a
@@ -367,6 +406,7 @@ class AlpacaTradingClient:
             lambda c: c.delete(f"/orders/{order_id}"),
             describe="order cancellation",
             throttle_context="cancel",
+            identifier=order_id,
         )
 
     async def get_order_by_client_order_id(
