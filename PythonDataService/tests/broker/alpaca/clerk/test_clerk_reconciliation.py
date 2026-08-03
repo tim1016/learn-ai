@@ -775,6 +775,24 @@ async def test_clear_hold_restores_submission() -> None:
     assert result.results[0].status == "acked"
 
 
+async def test_clear_hold_journals_operator_supplied_reason() -> None:
+    # Mirrors test_operator_inventory_baseline_recovers_missing_intent_without_rewriting_history:
+    # asserts the caller-supplied reason lands verbatim on the persisted row,
+    # not just that the clerk method was called with it.
+    broker = _FakeBroker(orders=[_order(client_order_id="foreign")])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    assert await clerk.reconcile_once() == "unexplained_order"
+    assert clerk.is_on_hold() is True
+
+    await clerk.clear_hold(operator="desk-operator", reason="operator note")
+
+    entries = await clerk.read_journal_entries()
+    cleared_rows = [e for e in entries if e.kind is ClerkEntryKind.HOLD_CLEARED]
+    assert len(cleared_rows) == 1
+    assert cleared_rows[0].operator == "desk-operator"
+    assert cleared_rows[0].reason == "operator note"
+
+
 async def test_periodic_sweep_resolves_a_stranded_uncertain_submit() -> None:
     broker = _FakeBroker(
         submit_error=BrokerUnavailable("timeout", broker="alpaca", detail="timeout"),
