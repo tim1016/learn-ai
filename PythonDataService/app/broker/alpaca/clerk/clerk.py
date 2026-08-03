@@ -529,6 +529,50 @@ class AlpacaClerk(ClerkEffectOperations):
             resolution_plan=plan,
         )
 
+    async def resolve_custody(
+        self, *, operator: str, reason: str, snapshot_version: str
+    ) -> diagnosis.CustodyResolutionReceipt:
+        """Execute the diagnosed resolution plan, journaling the operator reason.
+
+        Snapshot-guarded: rejects a stale token so the operator never resolves
+        against evidence that changed after they looked. Idempotent: an already
+        in-sync account resolves to a benign no-op.
+        """
+        diag = await self.custody_diagnosis()
+        if diag.snapshot_version != snapshot_version:
+            raise diagnosis.CustodySnapshotChangedError()
+        if diag.in_sync:
+            return diagnosis.CustodyResolutionReceipt(
+                broker=self.broker_id, account_id=diag.account_id, resolved=True,
+                receipt_id=uuid4().hex, recorded_at_ms=self._clock(),
+                in_sync=True,
+            )
+        steps: list[diagnosis.CustodyResolutionStepResult] = []
+        for step in diag.resolution_plan:
+            if step.action_id == "reconcile_now":
+                verdict = await self.reconcile_once()
+                steps.append(diagnosis.CustodyResolutionStepResult(
+                    action_id="reconcile_now", message=f"Reconciliation sweep: {verdict}."))
+            elif step.action_id == "record_inventory_baseline":
+                baseline = await self.record_inventory_baseline(operator=operator, reason=reason)
+                positions = ", ".join(
+                    f"{p.symbol} {p.signed_quantity:g}" for p in baseline.positions
+                )
+                steps.append(diagnosis.CustodyResolutionStepResult(
+                    action_id="record_inventory_baseline",
+                    message=f"Adopted broker inventory as baseline: {positions or 'flat'}."))
+            elif step.action_id == "clear_hold":
+                await self.clear_hold(operator=operator, reason=reason)
+                steps.append(diagnosis.CustodyResolutionStepResult(
+                    action_id="clear_hold", message="Exposure hold cleared."))
+        after = await self.custody_diagnosis()
+        return diagnosis.CustodyResolutionReceipt(
+            broker=self.broker_id, account_id=diag.account_id,
+            resolved=after.in_sync, receipt_id=uuid4().hex, recorded_at_ms=self._clock(),
+            steps_executed=tuple(steps), in_sync=after.in_sync,
+            remaining_divergences=after.divergences,
+        )
+
     async def clear_hold(self, *, operator: str, reason: str) -> ClerkStatus:
         """Clear the active hold (operator exit); journal ``HOLD_CLEARED``.
 

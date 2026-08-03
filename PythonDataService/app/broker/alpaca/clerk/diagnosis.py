@@ -235,6 +235,14 @@ class CustodyResolutionReceipt(BaseModel):
     remaining_divergences: tuple[CustodyDivergence, ...] = ()
 
 
+class CustodySnapshotChangedError(Exception):
+    """The custody snapshot changed since diagnosis; re-diagnose before resolving."""
+
+    def __init__(self, message: str = "Account state changed since it was diagnosed.") -> None:
+        super().__init__(message)
+        self.detail = "Re-run the diagnosis and confirm the current state before resolving."
+
+
 class CustodyResolutionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     reason: str = Field(min_length=1, max_length=512)
