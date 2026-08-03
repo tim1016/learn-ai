@@ -477,6 +477,22 @@ def _confirmation_for_action(
             confirm_label="Recover inventory baseline",
             required_token="BASELINE",
         )
+    if action_id == "clear_hold":
+        return OperatorConfirmationCopy(
+            title="Clear the account hold?",
+            body=(
+                f"This account-level hold on {ctx.account_id} currently blocks "
+                "new-entry order submission for every bot on the account."
+            ),
+            consequence=(
+                f"New-entry order submission resumes immediately for every bot "
+                f"on {ctx.account_id}. The condition that caused the hold is "
+                "not re-checked by this action — clear it only once the root "
+                "cause is confirmed resolved."
+            ),
+            confirm_label="Clear hold",
+            required_token="CLEARHOLD",
+        )
     return None
 
 

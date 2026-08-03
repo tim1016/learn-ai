@@ -279,6 +279,21 @@ def test_clean_flat_account_presents_stale_bot_attribution_recovery() -> None:
     )
 
 
+def test_active_hold_presents_confirmed_clear_hold_recovery() -> None:
+    panel = _panel(
+        _status(),
+        _clerk_status(hold=True, hold_code="UNEXPLAINED_ORDER_HOLD", healthy=True),
+        [],
+    )
+
+    action = _action(panel, "clear_hold")
+    assert action.enabled is True
+    assert action.confirmation is not None
+    assert action.confirmation.required_token == "CLEARHOLD"
+    assert ACCT in action.confirmation.body
+    assert "resumes immediately" in action.confirmation.consequence
+
+
 def test_disabled_action_explains_backend_blocker_and_safe_next_step() -> None:
     panel = _panel(
         _status(running=False),
