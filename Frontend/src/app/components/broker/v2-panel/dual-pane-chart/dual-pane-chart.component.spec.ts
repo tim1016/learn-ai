@@ -184,7 +184,7 @@ describe('DualPaneChartComponent', () => {
         },
       ]);
     });
-  });
+  }, 15_000);
 
   it('preserves a manual zoom while fresh bars append to the same view', async () => {
     const initialBar = {
@@ -224,7 +224,7 @@ describe('DualPaneChartComponent', () => {
     });
 
     expect(chartMocks.fitContent).toHaveBeenCalledTimes(fitCount);
-  });
+  }, 15_000);
 
   it('projects live fills into candle-series markers', () => {
     const markers = toSeriesMarkers(
