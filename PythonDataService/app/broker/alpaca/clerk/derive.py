@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from app.broker.alpaca.clerk.exposure import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
-    project_expected_account_exposure,
+    account_exposure_deltas,
     signed_broker_position_quantity,
 )
 from app.broker.alpaca.clerk.models import (
@@ -316,28 +316,15 @@ def has_missing_intent(
     # fired ~7s before the fill event landed). A symbol with such an in-flight
     # order is skipped for this pass — the next sweep, after the fill event
     # lands, decides. A position with no journal presence still flags
-    # (foreign exposure must not be masked by this suppression).
-    expected_quantity_by_symbol = project_expected_account_exposure(entries)
-    symbols_with_inflight_order = inflight_order_symbols(entries)
-
-    actual_quantity_by_symbol: dict[str, float] = {}
-    for position in positions:
-        symbol = position.symbol.upper()
-        if symbol in symbols_with_inflight_order:
-            continue
-        actual_quantity = signed_broker_position_quantity(position)
-        actual_quantity_by_symbol[symbol] = (
-            actual_quantity_by_symbol.get(symbol, 0.0) + actual_quantity
+    # (foreign exposure must not be masked by this suppression). The per-symbol
+    # comparison itself is the shared ``exposure.account_exposure_deltas`` fold
+    # (also used by ``diagnosis._attribution_deltas``) — this call site only
+    # cares whether any drift exists.
+    return bool(
+        account_exposure_deltas(
+            entries, positions, inflight_symbols=inflight_order_symbols(entries)
         )
-
-    for symbol in set(expected_quantity_by_symbol) | set(actual_quantity_by_symbol):
-        if symbol in symbols_with_inflight_order:
-            continue
-        expected_quantity = expected_quantity_by_symbol.get(symbol, 0.0)
-        actual_quantity = actual_quantity_by_symbol.get(symbol, 0.0)
-        if abs(actual_quantity - expected_quantity) > 1e-9:
-            return True
-    return False
+    )
 
 
 def inflight_order_symbols(entries: list[OrderJournalEntry]) -> frozenset[str]:
