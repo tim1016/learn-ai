@@ -18,62 +18,7 @@
       <h2 id="custody-title">Clerk and broker out of sync</h2>
 
       @for (div of divergences(); track div.kind) {
-        <article class="custody__divergence">
-          <div class="custody__divergence-header">
-            <span class="custody__kind">{{ div.kind | receiptLabel }}</span>
-            <span class="custody__state" [class.custody__state--attention]="div.state !== 'resolvable_now'">
-              {{ div.state | receiptLabel }}
-            </span>
-          </div>
-
-          <p class="custody__explanation">{{ div.explanation }}</p>
-
-          @if (positionDeltas(div).length) {
-            <div class="custody__delta-scroll">
-              <table class="custody__delta">
-                <thead>
-                  <tr>
-                    <th scope="col">Symbol</th>
-                    <th scope="col">Clerk attributes</th>
-                    <th scope="col">Broker holds</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (p of positionDeltas(div); track p.symbol) {
-                    <tr>
-                      <td>{{ p.symbol }}</td>
-                      <td>{{ p.clerk_attributed_qty }}</td>
-                      <td>{{ p.broker_observed_qty }}</td>
-                    </tr>
-                  }
-                </tbody>
-              </table>
-            </div>
-          }
-
-          @if (div.possible_causes.length) {
-            <details class="custody__causes">
-              <summary>Possible causes</summary>
-              <ul>
-                @for (cause of div.possible_causes; track cause) {
-                  <li>{{ cause }}</li>
-                }
-              </ul>
-            </details>
-          }
-
-          @if (div.prerequisite_detail) {
-            <p class="custody__prereq" role="status">{{ div.prerequisite_detail }}</p>
-          }
-
-          @if (evidenceRefs(div).length) {
-            <ul class="custody__evidence" aria-label="Evidence references">
-              @for (ref of evidenceRefs(div); track ref) {
-                <li><code>{{ ref }}</code></li>
-              }
-            </ul>
-          }
-        </article>
+        <app-custody-divergence [divergence]="div" />
       }
 
       @if (d.resolvable) {

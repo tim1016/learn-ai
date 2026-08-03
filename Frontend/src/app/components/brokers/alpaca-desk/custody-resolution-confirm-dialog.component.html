@@ -21,42 +21,7 @@
   </header>
 
   @for (div of divergences(); track div.kind) {
-    <article class="custody-resolve-confirm__divergence">
-      <div class="custody-resolve-confirm__divergence-header">
-        <span class="custody-resolve-confirm__kind">{{ div.kind | receiptLabel }}</span>
-        <span
-          class="custody-resolve-confirm__state"
-          [class.custody-resolve-confirm__state--attention]="div.state !== 'resolvable_now'"
-        >
-          {{ div.state | receiptLabel }}
-        </span>
-      </div>
-
-      <p class="custody-resolve-confirm__explanation">{{ div.explanation }}</p>
-
-      @if (positionDeltas(div).length) {
-        <div class="custody-resolve-confirm__delta-scroll">
-          <table class="custody-resolve-confirm__delta">
-            <thead>
-              <tr>
-                <th scope="col">Symbol</th>
-                <th scope="col">Clerk attributes</th>
-                <th scope="col">Broker holds</th>
-              </tr>
-            </thead>
-            <tbody>
-              @for (p of positionDeltas(div); track p.symbol) {
-                <tr>
-                  <td>{{ p.symbol }}</td>
-                  <td>{{ p.clerk_attributed_qty }}</td>
-                  <td>{{ p.broker_observed_qty }}</td>
-                </tr>
-              }
-            </tbody>
-          </table>
-        </div>
-      }
-    </article>
+    <app-custody-divergence [divergence]="div" />
   }
 
   @if (resolutionPlan().length) {

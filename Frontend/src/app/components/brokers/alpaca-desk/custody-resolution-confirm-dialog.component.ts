@@ -1,8 +1,9 @@
 import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, input, output, signal, viewChild } from '@angular/core';
 import { Textarea } from 'primeng/textarea';
 
-import type { CustodyDiagnosis, CustodyDivergence, CustodyPositionDelta } from '../../../api/alpaca.types';
+import type { CustodyDiagnosis, CustodyDivergence } from '../../../api/alpaca.types';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { CustodyDivergenceComponent } from './custody-divergence.component';
 
 const CONFIRMATION_TOKEN = 'RESOLVE';
 
@@ -11,11 +12,17 @@ const CONFIRMATION_TOKEN = 'RESOLVE';
  * resolution (Slice 2, Task 2.3). Presentational only — the Accounts-page
  * card (Task 2.4) opens this dialog and wires `confirmed` to the
  * `POST /clerk/resolve` endpoint; this component never calls it.
+ *
+ * Kept separate from `PanelActionCommentConfirmComponent` rather than merged
+ * into it: that dialog is generic panel-action-confirmation copy with no
+ * divergence data at all, while this one is `CustodyDiagnosis`-specific and
+ * renders a divergence list plus a resolution plan. Different data shapes,
+ * a deliberate scope decision rather than an oversight.
  */
 @Component({
   selector: 'app-custody-resolution-confirm-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe, Textarea],
+  imports: [ReceiptLabelPipe, Textarea, CustodyDivergenceComponent],
   templateUrl: './custody-resolution-confirm-dialog.component.html',
   styleUrl: './custody-resolution-confirm-dialog.component.scss',
 })
@@ -63,10 +70,6 @@ export class CustodyResolutionConfirmDialogComponent {
         this.token.set('');
       }
     });
-  }
-
-  protected positionDeltas(divergence: CustodyDivergence): CustodyPositionDelta[] {
-    return divergence.position_deltas ?? [];
   }
 
   cancel(event?: Event): void {

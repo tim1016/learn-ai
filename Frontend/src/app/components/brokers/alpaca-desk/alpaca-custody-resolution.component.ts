@@ -1,18 +1,14 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ChangeDetectionStrategy, Component, computed, inject, resource, signal } from '@angular/core';
 
-import type {
-  CustodyDivergence,
-  CustodyPositionDelta,
-  CustodyResolutionReceipt,
-} from '../../../api/alpaca.types';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import type { CustodyDivergence, CustodyResolutionReceipt } from '../../../api/alpaca.types';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { BrokersService } from '../../../services/brokers.service';
 import {
   type ActionReceiptView,
   PanelActionReceiptComponent,
 } from '../../broker/v2-panel/panel-shell/panel-action-receipt.component';
+import { CustodyDivergenceComponent } from './custody-divergence.component';
 import { CustodyResolutionConfirmDialogComponent } from './custody-resolution-confirm-dialog.component';
 
 const STATE_CHANGED_MESSAGE = 'Account state changed since you looked — re-checking.';
@@ -33,8 +29,8 @@ const STATE_CHANGED_MESSAGE = 'Account state changed since you looked — re-che
   selector: 'app-alpaca-custody-resolution',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    ReceiptLabelPipe,
     TimestampDisplayComponent,
+    CustodyDivergenceComponent,
     CustodyResolutionConfirmDialogComponent,
     PanelActionReceiptComponent,
   ],
@@ -60,14 +56,6 @@ export class AlpacaCustodyResolutionComponent {
   protected readonly divergences = computed<CustodyDivergence[]>(
     () => this.diagnosis.value()?.divergences ?? [],
   );
-
-  protected positionDeltas(divergence: CustodyDivergence): CustodyPositionDelta[] {
-    return divergence.position_deltas ?? [];
-  }
-
-  protected evidenceRefs(divergence: CustodyDivergence): string[] {
-    return divergence.evidence_refs ?? [];
-  }
 
   // A fresh resolve attempt must never carry over a prior attempt's stale
   // error or receipt — both are part of the audited flow and would otherwise

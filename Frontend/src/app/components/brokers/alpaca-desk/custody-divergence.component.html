@@ -1,0 +1,59 @@
+<article class="custody-divergence">
+  <div class="custody-divergence__header">
+    <span class="custody-divergence__kind">{{ divergence().kind | receiptLabel }}</span>
+    <span
+      class="custody-divergence__state"
+      [class.custody-divergence__state--attention]="divergence().state !== 'resolvable_now'"
+    >
+      {{ divergence().state | receiptLabel }}
+    </span>
+  </div>
+
+  <p class="custody-divergence__explanation">{{ divergence().explanation }}</p>
+
+  @if (positionDeltas().length) {
+    <div class="custody-divergence__delta-scroll">
+      <table class="custody-divergence__delta">
+        <thead>
+          <tr>
+            <th scope="col">Symbol</th>
+            <th scope="col">Clerk attributes</th>
+            <th scope="col">Broker holds</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (p of positionDeltas(); track p.symbol) {
+            <tr>
+              <td>{{ p.symbol }}</td>
+              <td>{{ p.clerk_attributed_qty }}</td>
+              <td>{{ p.broker_observed_qty }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+
+  @if (divergence().possible_causes.length) {
+    <details class="custody-divergence__causes">
+      <summary>Possible causes</summary>
+      <ul>
+        @for (cause of divergence().possible_causes; track cause) {
+          <li>{{ cause }}</li>
+        }
+      </ul>
+    </details>
+  }
+
+  @if (divergence().prerequisite_detail) {
+    <p class="custody-divergence__prereq" role="status">{{ divergence().prerequisite_detail }}</p>
+  }
+
+  @if (evidenceRefs().length) {
+    <ul class="custody-divergence__evidence" aria-label="Evidence references">
+      @for (ref of evidenceRefs(); track ref) {
+        <li><code>{{ ref }}</code></li>
+      }
+    </ul>
+  }
+</article>
