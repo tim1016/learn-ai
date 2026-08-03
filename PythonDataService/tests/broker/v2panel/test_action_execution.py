@@ -307,25 +307,58 @@ async def test_unwired_action_is_typed_not_available() -> None:
     assert exc.value.http_status == 409
 
 
-async def test_start_performer_resumes_durable_binding(monkeypatch) -> None:
+async def test_resume_performer_creates_new_run_from_durable_binding(monkeypatch) -> None:
     resumed: list[tuple[str, str]] = []
 
     class _Registry:
-        async def resume_existing(self, broker: str, sid: str) -> None:
+        async def resume_existing_with_admission(self, broker: str, sid: str):
             resumed.append((broker, sid))
+            return SimpleNamespace(bot=SimpleNamespace(active_run_id="run-2"))
 
     monkeypatch.setattr(
         "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
         lambda: _Registry(),
     )
-
-    message = await _action_performers("alpaca", _SID, idempotency_key="resume-1")["start"]("desk-operator")
+    message = await _action_performers(
+        "alpaca",
+        _SID,
+        idempotency_key="resume-1",
+    )["resume"]("desk-operator")
 
     assert resumed == [("alpaca", _SID)]
     assert message == (
-        "Bot started from its durable deployment configuration. "
+        "Bot resumed as new run run-2 from its immutable configuration. "
         "The Clerk remains the only owner of broker order effects."
     )
+
+
+async def test_pause_and_continue_performers_preserve_run_identity(monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    class _Registry:
+        async def pause(self, broker: str, sid: str, **_kwargs):
+            calls.append(("pause", broker, sid))
+            return SimpleNamespace(active_run_id="run-live")
+
+        async def continue_paused(self, broker: str, sid: str, **_kwargs):
+            calls.append(("continue", broker, sid))
+            return SimpleNamespace(active_run_id="run-live")
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_bot_task_registry",
+        lambda: _Registry(),
+    )
+    performers = _action_performers("alpaca", _SID, idempotency_key="same-run-1")
+
+    paused = await performers["pause"]("desk-operator")
+    continued = await performers["continue"]("desk-operator")
+
+    assert calls == [
+        ("pause", "alpaca", _SID),
+        ("continue", "alpaca", _SID),
+    ]
+    assert paused == "Run run-live is paused; its process remains live."
+    assert continued == "Run run-live continued without changing run identity."
 
 
 async def test_flatten_stop_stops_strategy_before_unprovable_exit(monkeypatch) -> None:

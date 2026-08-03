@@ -27,7 +27,7 @@ const PROFILE: PanelProfile = {
   flatten_supported: false,
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: ['start', 'stop'],
+  supported_action_ids: ['resume', 'stop'],
 };
 
 const BASE_PANEL: BotPanelView = {
@@ -206,7 +206,7 @@ describe('TraderLensComponent — primary verb button', () => {
     expect(btn).toBeTruthy();
   });
 
-  it('renders Start when start action is presented', async () => {
+  it('renders Resume when resume action is presented', async () => {
     const panel: BotPanelView = {
       ...BASE_PANEL,
       health: {
@@ -219,8 +219,8 @@ describe('TraderLensComponent — primary verb button', () => {
       },
       actions: [
         {
-          action_id: 'start',
-          label: 'Start',
+          action_id: 'resume',
+          label: 'Resume',
           explanation: 'Begin evaluating bars.',
           enabled: true,
           blockers: [],
@@ -235,7 +235,7 @@ describe('TraderLensComponent — primary verb button', () => {
       inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
     });
 
-    const btn = screen.getByRole('button', { name: 'Start' });
+    const btn = screen.getByRole('button', { name: 'Resume' });
     expect(btn).toBeTruthy();
   });
 

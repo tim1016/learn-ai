@@ -117,7 +117,7 @@ class BotCatalogView(BaseModel):
     broker: str
     account_id: str
     symbol: str
-    mode: Literal["log_only", "trade"]
+    mode: Literal["log_only", "dry_run", "trade"]
     phase: Phase
     desired_state: DesiredState
     running: bool
@@ -157,8 +157,8 @@ class DutyOutcomeView(BaseModel):
 class BotHealthCard(BaseModel):
     """Bot-health card beside the rail (§7.2).
 
-    ``desired_state`` is narrowed to ``RUNNING | STOPPED`` — the panel never
-    emits ``PAUSED`` (decision #10; pinned by a contract test).
+    ``PAUSED`` means the current process/run remains live while bar delivery
+    is held. Continue retains that run identity; Resume is not applicable.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -309,6 +309,7 @@ class RecentDecisionView(BaseModel):
     reason_code: str
     bar_ref: str
     order_ref: str | None
+    simulated: bool = False
 
 
 class RecentFillView(BaseModel):
@@ -322,6 +323,7 @@ class RecentFillView(BaseModel):
     quantity: float | None
     price: float | None
     filled_at_ms: int
+    simulated: bool = False
 
 
 class BotPanelView(BaseModel):
@@ -340,7 +342,7 @@ class BotPanelView(BaseModel):
     broker: str
     account_id: str
     symbol: str
-    mode: Literal["log_only", "trade"]
+    mode: Literal["log_only", "dry_run", "trade"]
     updated_at_ms: int
     revision: int
     mission_verdict: MissionVerdictView

@@ -4,19 +4,27 @@
     <h2 id="deploy-execution-title">Choose how this bot trades</h2>
   </header>
 
-  <div class="mode-grid" role="list" aria-label="Execution modes">
+  <fieldset class="mode-grid" aria-label="Execution modes">
+    <legend class="sr-only">Execution mode</legend>
     @for (mode of executionModes(); track mode.mode) {
-      <article
+      <label
         class="mode-card"
-        role="listitem"
-        [class.mode-card--selected]="mode.mode === accountMode()"
+        [class.mode-card--selected]="mode.mode === selectedMode()"
         [class.mode-card--planned]="isPlanned(mode)"
       >
+        <input
+          type="radio"
+          name="alpaca-execution-mode"
+          [value]="mode.mode"
+          [checked]="mode.mode === selectedMode()"
+          [disabled]="isPlanned(mode)"
+          (change)="changeExecutionMode($event)"
+        />
         <div><strong>{{ mode.label }}</strong><span>{{ capabilityStatus(mode) }}</span></div>
         <p>{{ mode.explanation }}</p>
-      </article>
+      </label>
     }
-  </div>
+  </fieldset>
 
   <div class="execution-fields">
     <label class="field">
@@ -68,7 +76,9 @@
     </label>
   }
 
-  @if (carryoverAvailable()) {
+  @if (selectedMode() === 'dry_run') {
+    <p class="carryover-policy"><strong>When stopped:</strong> Dry Run has no broker exposure to carry over.</p>
+  } @else if (carryoverAvailable()) {
     <label class="carryover">
       <input type="checkbox" [checked]="carryoverAllowed()" (change)="changeCarryover($event)" />
       <span><strong>{{ carryoverLabel() }}</strong><small>{{ carryoverExplanation() }}</small></span>

@@ -38,7 +38,9 @@ def test_alpaca_profile_advertises_only_actions_with_production_performers() -> 
     profile = alpaca_panel_profile()
     assert profile.supported_action_ids == [
         "deploy",
-        "start",
+        "resume",
+        "pause",
+        "continue",
         "stop",
         "flatten_stop",
         "clear_hold",

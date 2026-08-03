@@ -64,11 +64,11 @@ function fakeBot(overrides: Partial<BotCatalogView> = {}): BotCatalogView {
 }
 
 function fakeRowAction(
-  actionId: 'start' | 'stop',
+  actionId: 'resume' | 'stop',
 ): NonNullable<BotCatalogView['row_action']> {
   return {
     action_id: actionId,
-    label: actionId === 'start' ? 'Start' : 'Stop',
+    label: actionId === 'resume' ? 'Resume' : 'Stop',
     explanation: `${actionId} this bot.`,
     enabled: true,
     blockers: [],
@@ -99,7 +99,7 @@ async function renderPage(
     getPanel: vi.fn(() => Promise.reject(new Error('full-panel preflight is forbidden'))),
     runBotAction: vi.fn(() =>
       Promise.resolve({
-        action_id: 'start',
+        action_id: 'resume',
         applied: true,
         revision: 1,
         concurrency_token: 'next-token',
@@ -151,16 +151,16 @@ describe('BotsListPageComponent', () => {
     expect(attentionEl).toBeTruthy();
   });
 
-  it('renders Start button for OFF_DUTY bot when start is supported', async () => {
+  it('renders Resume button for OFF_DUTY bot when resume is supported', async () => {
     const bot = fakeBot({
       phase: 'OFF_DUTY',
       running: false,
       status_label: 'Off duty',
-      row_action: fakeRowAction('start'),
+      row_action: fakeRowAction('resume'),
     });
     await renderPage([bot]);
 
-    expect(await screen.findByRole('button', { name: /Start spy-momentum-01/i })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /Resume spy-momentum-01/i })).toBeTruthy();
   });
 
   it('renders "Fees not reported" note', async () => {

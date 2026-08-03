@@ -9,6 +9,8 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
+    ResumeCheckpointAdmissionFact,
+    ResumeRunFacts,
     RunProcessAdmissionFact,
     StartRunFacts,
     StartRuntimeAdmissionFact,
@@ -85,6 +87,45 @@ def _clerk(
         reason_code=("CLERK_CUSTODY_PROVEN" if reconciliation_state == "clean" else "CLERK_CUSTODY_UNPROVABLE"),
         evidence_refs=("clerk:paper-account:7",),
         observed_at_ms=observed_at_ms,
+    )
+
+
+def _resume_bot(
+    *,
+    process_state: str = "EXITED",
+    process_run_id: str | None = "run-prior",
+    desired_state: str = "STOPPED",
+    phase: str = "OFF_DUTY",
+    checkpoint: ResumeCheckpointAdmissionFact | None = None,
+) -> ResumeRunFacts:
+    return ResumeRunFacts(
+        strategy_instance_id=_SID,
+        proposed_run_id="run-resumed",
+        prior_run_id="run-prior",
+        configuration_hash="b" * 64,
+        runtime=StartRuntimeAdmissionFact(
+            state="READY",
+            observed_at_ms=_NOW - 1_000,
+            explanation="The bot runtime is ready for Resume.",
+        ),
+        process=RunProcessAdmissionFact(
+            state=process_state,
+            run_id=process_run_id,
+            process_identity=None,
+            registry_generation="registry-1",
+            observed_at_ms=_NOW - 1_000,
+        ),
+        market_data=MarketDataAdmissionFact(
+            state="AVAILABLE",
+            feed_id="alpaca-feed",
+            observed_at_ms=_NOW - 1_000,
+        ),
+        desired_state=desired_state,
+        phase=phase,
+        carryover_policy="ALLOW",
+        carryover_account_policy_enabled=True,
+        exposure_carryover_supported=True,
+        checkpoint=checkpoint,
     )
 
 
@@ -179,3 +220,60 @@ def test_start_admission_fact_age_boundary_is_explicit() -> None:
     assert at_boundary.allowed is True
     assert above.allowed is False
     assert above.reason_code == "AUTHORITY_FACT_STALE"
+
+
+def test_resume_admission_allows_terminal_flat_instance_and_mints_proposed_run() -> None:
+    decision = evaluate_run_admission(_resume_bot(), _clerk(), evaluated_at_ms=_NOW)
+
+    assert decision.operation == "RESUME"
+    assert decision.allowed is True
+    assert decision.reason_code == "RESUME_ADMITTED"
+    assert decision.proposed_run_id == "run-resumed"
+
+
+def test_resume_admission_blocks_without_terminal_prior_process() -> None:
+    decision = evaluate_run_admission(
+        _resume_bot(process_state="UNKNOWN", process_run_id="run-prior"),
+        _clerk(),
+        evaluated_at_ms=_NOW,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "PROCESS_STATE_UNKNOWN"
+
+
+def test_resume_admission_requires_exact_approved_carryover_checkpoint() -> None:
+    clerk = _clerk().model_copy(
+        update={
+            "exposure": CustodyExposureFact(
+                state="non_zero",
+                positions={"SPY": 1.0},
+            )
+        }
+    )
+    checkpoint = ResumeCheckpointAdmissionFact(
+        account_id="paper-account",
+        stopped_run_id="run-prior",
+        configuration_hash="b" * 64,
+        exposure={"SPY": 1.0},
+        approved=True,
+        evidence_ref="carryover-checkpoint:run-prior",
+    )
+
+    allowed = evaluate_run_admission(
+        _resume_bot(checkpoint=checkpoint),
+        clerk,
+        evaluated_at_ms=_NOW,
+    )
+    changed = evaluate_run_admission(
+        _resume_bot(
+            checkpoint=checkpoint.model_copy(update={"exposure": {"SPY": 2.0}})
+        ),
+        clerk,
+        evaluated_at_ms=_NOW,
+    )
+
+    assert allowed.allowed is True
+    assert "carryover-checkpoint:run-prior" in allowed.evidence_refs
+    assert changed.allowed is False
+    assert changed.reason_code == "RESUME_CHECKPOINT_MISMATCH"

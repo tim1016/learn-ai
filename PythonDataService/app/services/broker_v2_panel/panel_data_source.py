@@ -374,7 +374,7 @@ async def deploy_alpaca_paper_bot(
             strategy_key=request.strategy_key,
             symbol=request.symbol,
             use_rth=True,
-            mode="trade",
+            mode="dry_run" if request.execution_mode == "dry_run" else "trade",
             quantity=request.sizing.quantity,
             carryover_policy=request.carryover_policy,
         )
@@ -417,7 +417,7 @@ async def preview_alpaca_paper_start_admission(
             strategy_key=request.strategy_key,
             symbol=request.symbol,
             use_rth=True,
-            mode="trade",
+            mode="dry_run" if request.execution_mode == "dry_run" else "trade",
             quantity=request.sizing.quantity,
             carryover_policy=request.carryover_policy,
         )
@@ -522,6 +522,21 @@ async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: 
     status = _bot_status(broker, sid)
     entries = _read_order_journal(resolved)
     clerk_status = await _clerk_status()
+    registry = get_bot_task_registry()
+    if registry is None:
+        raise PanelUnavailableError(
+            "The bot runner is not available.",
+            detail="The service is still starting or has shut down.",
+        )
+    try:
+        resume_admission = await registry.preview_resume_admission(broker, sid)
+    except BotRunnerError as exc:
+        resume_admission = exc.admission_decision
+        if resume_admission is None:
+            logger.warning(
+                "broker panel Resume admission is unavailable",
+                extra={"broker": broker, "account_id": account_id, "sid": sid, "detail": exc.detail},
+            )
     decisions = _recent_decisions(resolved, sid)
     decision = decisions[-1] if decisions else None
 
@@ -549,6 +564,8 @@ async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: 
         now_ms=now_ms,
         selected_transaction_ref=transaction_ref,
         recent_decisions=decisions,
+        resume_admission=resume_admission,
+        dry_run_activity=registry.dry_run_activity(broker, sid),
     )
 
 
@@ -648,13 +665,13 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
     presenting a fake success.
     """
 
-    async def _start(operator: str) -> str:
+    async def _resume(operator: str) -> str:
         registry = get_bot_task_registry()
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
-        await registry.resume_existing(broker, sid)
+        admitted = await registry.resume_existing_with_admission(broker, sid)
         return (
-            "Bot started from its durable deployment configuration. "
+            f"Bot resumed as new run {admitted.bot.active_run_id} from its immutable configuration. "
             "The Clerk remains the only owner of broker order effects."
         )
 
@@ -664,6 +681,30 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
             raise PanelUnavailableError("The bot runner is not available.")
         await registry.stop(broker, sid, reason=f"Panel stop by {operator}")
         return "Bot stopped. The Clerk cancelled any working entry orders; attributed exposure was left untouched."
+
+    async def _pause(operator: str) -> str:
+        registry = get_bot_task_registry()
+        if registry is None:
+            raise PanelUnavailableError("The bot runner is not available.")
+        status = await registry.pause(
+            broker,
+            sid,
+            updated_by=operator,
+            reason=f"Panel pause by {operator}",
+        )
+        return f"Run {status.active_run_id} is paused; its process remains live."
+
+    async def _continue(operator: str) -> str:
+        registry = get_bot_task_registry()
+        if registry is None:
+            raise PanelUnavailableError("The bot runner is not available.")
+        status = await registry.continue_paused(
+            broker,
+            sid,
+            updated_by=operator,
+            reason=f"Panel Continue by {operator}",
+        )
+        return f"Run {status.active_run_id} continued without changing run identity."
 
     async def _reconcile(operator: str) -> str:
         clerk = get_alpaca_clerk()
@@ -745,7 +786,9 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         )
 
     return {
-        "start": _start,
+        "resume": _resume,
+        "pause": _pause,
+        "continue": _continue,
         "stop": _stop,
         "flatten_stop": _flatten_stop,
         "reconcile_now": _reconcile,

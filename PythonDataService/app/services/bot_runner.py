@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,9 +54,8 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
-from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
+from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed, MarketDataFeedError
 from app.schemas.broker_bots import (
-    AlpacaPaperStrategyKey,
     BotDutyOutcomeView,
     BotProcessFact,
     BotRunHistoryPage,
@@ -64,6 +63,7 @@ from app.schemas.broker_bots import (
     BotStatusView,
 )
 from app.schemas.run_admission import (
+    ResumeCheckpointAdmissionFact,
     RunAdmissionDecision,
     RunProcessAdmissionFact,
     StartRuntimeAdmissionFact,
@@ -75,10 +75,14 @@ from app.services.bot_binding_repository import (
 )
 from app.services.bot_boot_recovery import BootRecoveryReport, BotBootRecovery
 from app.services.bot_carryover import (
-    CarryoverResumeRefusedError,
     checkpoint_status,
     prove_stop_outcome,
-    require_resume_custody,
+    read_checkpoint,
+)
+from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
+from app.services.bot_resume_admission import (
+    AdmittedBotResume,
+    BotResumeAdmission,
 )
 from app.services.bot_run_evidence import (
     PROVISIONAL_STOP_REASON_CODE,
@@ -95,7 +99,7 @@ from app.services.bot_runner_errors import (
     RestartIntensityRefusedError,
     RunAdmissionRefusedError,
     UnknownBotError,
-    raise_start_refusal,
+    raise_run_refusal,
     require_start_configuration,
 )
 from app.services.bot_start_admission import (
@@ -104,16 +108,15 @@ from app.services.bot_start_admission import (
     StartAdmissionDenied,
     StartAdmissionEvidenceChanged,
     StartAdmissionUnavailable,
-    StartRequest,
     default_start_custody_guard,
     log_run_launch,
     make_start_request,
-    new_run_binding,
     resolve_start_runtime_fact,
 )
 from app.utils.timestamps import now_ms_utc
 
 __all__ = [
+    "AdmittedBotResume",
     "AdmittedBotStart",
     "BootRecoveryIncompleteError",
     "BotAlreadyRunningError",
@@ -146,6 +149,29 @@ class _ManagedBot:
     stop_reason_code: str | None = None
     # Exactly one terminal duty outcome per run: set by the first finalize.
     finalized: bool = False
+    run_gate: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+
+
+class _PauseAwareFeed:
+    """Hold bar delivery while one live run is durably paused."""
+
+    def __init__(self, source: MarketDataFeed, gate: asyncio.Event) -> None:
+        self._source = source
+        self._gate = gate
+        self.feed_id = source.feed_id
+
+    async def stream_bars(
+        self,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+    ) -> AsyncIterator[MarketDataBar]:
+        async for bar in self._source.stream_bars(symbol, use_rth=use_rth):
+            await self._gate.wait()
+            yield bar
+
+    def health(self) -> FeedHealth:
+        return self._source.health()
 
 
 class BotTaskRegistry:
@@ -212,6 +238,16 @@ class BotTaskRegistry:
             runtime_fact=self._start_runtime_fact,
             activate=self._activate_start_binding,
         )
+        self._resume_admission = BotResumeAdmission(
+            now_ms=self._now_ms,
+            feed_resolver=self._feed_resolver,
+            custody_guard=start_custody_guard or default_start_custody_guard,
+            process_fact=self._resume_process_fact,
+            runtime_fact=self._start_runtime_fact,
+            checkpoint=self._resume_checkpoint_fact,
+            activate=self._activate_resume_binding,
+            carryover_account_policy_enabled=self._carryover_allowed,
+        )
         self._run_evidence = BotRunEvidenceService(
             self._bindings,
             lifecycle_repo_for=self._lifecycle_repo,
@@ -227,7 +263,7 @@ class BotTaskRegistry:
         strategy_key: str = "deployment_validation",
         symbol: str,
         use_rth: bool = True,
-        mode: Literal["log_only", "trade"] = "log_only",
+        mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
     ) -> BotStatusView:
@@ -253,7 +289,7 @@ class BotTaskRegistry:
         strategy_key: str = "deployment_validation",
         symbol: str,
         use_rth: bool = True,
-        mode: Literal["log_only", "trade"] = "log_only",
+        mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
     ) -> AdmittedBotStart:
@@ -278,7 +314,7 @@ class BotTaskRegistry:
             try:
                 return await self._start_admission.start(request)
             except StartAdmissionDenied as exc:
-                raise_start_refusal(exc.decision)
+                raise_run_refusal(exc.decision)
             except StartAdmissionUnavailable as exc:
                 raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
             except StartAdmissionEvidenceChanged as exc:
@@ -295,7 +331,7 @@ class BotTaskRegistry:
         strategy_key: str = "deployment_validation",
         symbol: str,
         use_rth: bool = True,
-        mode: Literal["log_only", "trade"] = "log_only",
+        mode: Literal["log_only", "dry_run", "trade"] = "log_only",
         quantity: int = 1,
         carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID",
     ) -> RunAdmissionDecision:
@@ -335,37 +371,51 @@ class BotTaskRegistry:
         launches a newly identified run through the same recovery and restart
         gates as a first deployment.
         """
+        return (await self.resume_existing_with_admission(broker, strategy_instance_id)).bot
+
+    async def preview_resume_admission(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+    ) -> RunAdmissionDecision:
+        """Project the exact new-run Resume decision without mutation."""
         async with self._operation_lock(strategy_instance_id):
             binding = self.binding_for_control(broker, strategy_instance_id)
-            await self._require_resume_custody(binding)
-            return await self._launch_resume(binding)
+            try:
+                return await self._resume_admission.preview(
+                    binding,
+                    self.status(broker, strategy_instance_id),
+                )
+            except StartAdmissionUnavailable as exc:
+                raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
+            except StartAdmissionEvidenceChanged as exc:
+                raise RunAdmissionRefusedError(
+                    "Resume admission could not obtain stable Clerk custody.",
+                    detail="Refresh admission after Clerk reconciliation settles.",
+                ) from exc
 
-    async def _launch_resume(self, prior: BrokerBotBinding) -> BotStatusView:
-        """Launch a new run from one Clerk-approved immutable binding."""
-        await self._require_recovered()
-        now = self._now_ms()
-        self._enforce_restart_intensity(prior.strategy_instance_id, now)
-        feed = self._feed_resolver()
-        if feed is None:
-            raise MarketDataFeedUnavailableError(
-                "Market-data feed is not available; bot cannot be resumed.",
-                detail="The shared MarketDataFeed is not installed.",
-            )
-        request = StartRequest(
-            broker=prior.broker,
-            strategy_instance_id=prior.strategy_instance_id,
-            strategy_key=prior.strategy_key,
-            symbol=prior.symbol,
-            use_rth=prior.use_rth,
-            mode=prior.mode,
-            quantity=prior.quantity,
-            carryover_policy=prior.carryover_policy,
-            action_plan=prior.action_plan,
-        )
-        binding = new_run_binding(request, now_ms=now)
-        await self._activate_binding(binding, feed, now=now, reason="resume")
-        log_run_launch(binding, reason="resume")
-        return self.status(binding.broker, binding.strategy_instance_id)
+    async def resume_existing_with_admission(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+    ) -> AdmittedBotResume:
+        """Create a new run using the same policy exposed by preview."""
+        async with self._operation_lock(strategy_instance_id):
+            binding = self.binding_for_control(broker, strategy_instance_id)
+            try:
+                return await self._resume_admission.resume(
+                    binding,
+                    self.status(broker, strategy_instance_id),
+                )
+            except StartAdmissionDenied as exc:
+                raise_run_refusal(exc.decision)
+            except StartAdmissionUnavailable as exc:
+                raise RunAdmissionRefusedError(str(exc), detail=exc.detail) from exc
+            except StartAdmissionEvidenceChanged as exc:
+                raise RunAdmissionRefusedError(
+                    "Resume admission could not obtain stable Clerk custody.",
+                    detail="Refresh admission after Clerk reconciliation settles.",
+                ) from exc
 
     async def _activate_start_binding(
         self,
@@ -375,6 +425,16 @@ class BotTaskRegistry:
     ) -> BotStatusView:
         await self._activate_binding(binding, feed, now=now_ms, reason="deploy")
         log_run_launch(binding, reason="deploy")
+        return self.status(binding.broker, binding.strategy_instance_id)
+
+    async def _activate_resume_binding(
+        self,
+        binding: BrokerBotBinding,
+        feed: MarketDataFeed,
+        now_ms: int,
+    ) -> BotStatusView:
+        await self._activate_binding(binding, feed, now=now_ms, reason="resume")
+        log_run_launch(binding, reason="resume")
         return self.status(binding.broker, binding.strategy_instance_id)
 
     async def _activate_binding(
@@ -407,10 +467,12 @@ class BotTaskRegistry:
             reason=f"{reason}_{binding.mode}_bot",
         )
         task = asyncio.create_task(self._supervise(binding, feed), name=f"bot:{binding.strategy_instance_id}")
-        self._bots[binding.strategy_instance_id] = _ManagedBot(
+        managed = _ManagedBot(
             binding=binding,
             task=task,
         )
+        managed.run_gate.set()
+        self._bots[binding.strategy_instance_id] = managed
         self._start_history[binding.strategy_instance_id] = [
             *self._starts_in_window(binding.strategy_instance_id, now),
             now,
@@ -459,6 +521,37 @@ class BotTaskRegistry:
             restart_window_ms=self._restart_policy.window_ms,
         )
 
+    def _resume_process_fact(
+        self,
+        binding: BrokerBotBinding,
+        observed_at_ms: int,
+    ) -> RunProcessAdmissionFact:
+        process = self.process_fact(binding.broker, binding.strategy_instance_id)
+        return RunProcessAdmissionFact(
+            state=process.state,
+            run_id=process.run_id,
+            process_identity=process.process_identity,
+            registry_generation=process.registry_generation,
+            observed_at_ms=observed_at_ms,
+        )
+
+    def _resume_checkpoint_fact(
+        self,
+        binding: BrokerBotBinding,
+    ) -> ResumeCheckpointAdmissionFact | None:
+        path = self._carryover_checkpoint_path(binding.strategy_instance_id)
+        checkpoint = read_checkpoint(path)
+        if checkpoint is None:
+            return None
+        return ResumeCheckpointAdmissionFact(
+            account_id=checkpoint.account_id,
+            stopped_run_id=checkpoint.stopped_run_id,
+            configuration_hash=checkpoint.configuration_hash,
+            exposure=checkpoint.exposure,
+            approved=checkpoint.approved,
+            evidence_ref=f"carryover-checkpoint:{path.name}:{checkpoint.recorded_at_ms}",
+        )
+
     async def stop(
         self,
         broker: str,
@@ -475,6 +568,62 @@ class BotTaskRegistry:
                 updated_by=updated_by,
                 reason=reason,
             )
+
+    async def pause(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str = "operator",
+        reason: str | None = None,
+    ) -> BotStatusView:
+        """Pause bar evaluation without ending or replacing the current run."""
+        async with self._operation_lock(strategy_instance_id):
+            managed = self._require_live_managed_bot(broker, strategy_instance_id)
+            current = self._desired_repo(strategy_instance_id).read_state()
+            if current is DesiredState.PAUSED:
+                raise RunAdmissionRefusedError(
+                    "The current run is already paused.",
+                    detail="Use Continue to let this same run evaluate bars again.",
+                )
+            managed.run_gate.clear()
+            try:
+                self._desired_repo(strategy_instance_id).set(
+                    DesiredState.PAUSED,
+                    updated_by=updated_by,
+                    now_ms=self._now_ms(),
+                    reason=reason or "operator_pause",
+                )
+            except Exception:
+                managed.run_gate.set()
+                raise
+            return self.status(broker, strategy_instance_id)
+
+    async def continue_paused(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str = "operator",
+        reason: str | None = None,
+    ) -> BotStatusView:
+        """Continue one paused live run without changing its run identity."""
+        async with self._operation_lock(strategy_instance_id):
+            managed = self._require_live_managed_bot(broker, strategy_instance_id)
+            current = self._desired_repo(strategy_instance_id).read_state()
+            if current is not DesiredState.PAUSED:
+                raise RunAdmissionRefusedError(
+                    "Continue requires an authoritatively live paused run.",
+                    detail="Use Resume only after a stopped run has terminal evidence.",
+                )
+            self._desired_repo(strategy_instance_id).set(
+                DesiredState.RUNNING,
+                updated_by=updated_by,
+                now_ms=self._now_ms(),
+                reason=reason or "operator_continue",
+            )
+            managed.run_gate.set()
+            return self.status(broker, strategy_instance_id)
 
     async def _stop_locked(
         self,
@@ -702,18 +851,45 @@ class BotTaskRegistry:
             limit=limit,
         )
 
+    def dry_run_activity(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        limit: int = 8,
+    ) -> list[DryRunActivity]:
+        """Return bounded, explicitly simulated activity for a dry instance."""
+        binding = self.binding_for_control(broker, strategy_instance_id)
+        if binding.mode != "dry_run":
+            return []
+        return DryRunActivityJournal(
+            self._confined_instance_dir(strategy_instance_id)
+        ).tail(limit)
+
     # ── supervision ───────────────────────────────────────────────────
 
     async def _supervise(self, binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
         """Run the bot; on ANY exit record a typed durable duty outcome, then reap."""
-        from app.services.bot_trade_strategy import run_trade_bot
+        from app.services.bot_trade_strategy import run_dry_run_bot, run_trade_bot
 
         sid = binding.strategy_instance_id
+        managed = self._bots.get(sid)
+        run_feed: MarketDataFeed = (
+            _PauseAwareFeed(feed, managed.run_gate)
+            if managed is not None and managed.binding.run_id == binding.run_id
+            else feed
+        )
         try:
             if binding.mode == "trade":
-                await run_trade_bot(binding, feed)
+                await run_trade_bot(binding, run_feed)
+            elif binding.mode == "dry_run":
+                await run_dry_run_bot(
+                    binding,
+                    run_feed,
+                    DryRunActivityJournal(self._confined_instance_dir(sid)),
+                )
             else:
-                await self._run_log_only_bot(binding, feed)
+                await self._run_log_only_bot(binding, run_feed)
         except asyncio.CancelledError:
             managed = self._bots.get(sid)
             stop_reason = managed.stop_reason_code if managed is not None else None
@@ -826,6 +1002,25 @@ class BotTaskRegistry:
         """One lifecycle mutation at a time for a strategy instance."""
         return self._operation_locks.setdefault(strategy_instance_id, asyncio.Lock())
 
+    def _require_live_managed_bot(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+    ) -> _ManagedBot:
+        self._confined_instance_dir(strategy_instance_id)
+        managed = self._bots.get(strategy_instance_id)
+        if managed is None or managed.task.done():
+            raise RunAdmissionRefusedError(
+                "The bot has no authoritatively live run.",
+                detail="Use Resume only after the prior run has terminal evidence.",
+            )
+        if managed.binding.broker != broker:
+            raise UnknownBotError(
+                f"Bot '{strategy_instance_id}' is not bound to broker '{broker}'.",
+                detail=f"The bot's binding carries broker '{managed.binding.broker}'.",
+            )
+        return managed
+
     def _is_running(self, strategy_instance_id: str) -> bool:
         managed = self._bots.get(strategy_instance_id)
         return managed is not None and not managed.task.done()
@@ -870,34 +1065,6 @@ class BotTaskRegistry:
             checkpoint_path=self._carryover_checkpoint_path(binding.strategy_instance_id),
             now_ms=self._now_ms,
         )
-
-    async def _require_resume_custody(self, binding: BrokerBotBinding) -> None:
-        """Admit Resume only after a fresh exact Clerk proof."""
-        if binding.carryover_policy == "ALLOW" and not self._carryover_allowed:
-            raise CarryoverPolicyRefusedError(
-                "Exposure carryover is disabled for this Alpaca paper account.",
-                detail=(
-                    "The deployment opted in, but the account policy is no "
-                    "longer enabled. Flatten the attributed exposure before Resume."
-                ),
-            )
-        status = self.status(binding.broker, binding.strategy_instance_id)
-        clerk = None
-        if binding.broker == "alpaca" and binding.mode == "trade":
-            from app.broker.alpaca.clerk import get_alpaca_clerk
-
-            clerk = get_alpaca_clerk()
-        try:
-            await require_resume_custody(
-                binding,
-                clerk=clerk,
-                checkpoint_path=self._carryover_checkpoint_path(binding.strategy_instance_id),
-                desired_state=status.desired_state,
-                phase=status.phase,
-                exposure_carryover_supported=(binding.strategy_key != AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL),
-            )
-        except CarryoverResumeRefusedError as exc:
-            raise RecoveryUncertainError(str(exc), detail=exc.detail) from exc
 
     def _carryover_checkpoint_path(self, strategy_instance_id: str) -> Path:
         return self._confined_instance_dir(strategy_instance_id) / _CARRYOVER_CHECKPOINT_FILENAME

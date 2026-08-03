@@ -76,6 +76,43 @@ class StartRunFacts(BaseModel):
     market_data: MarketDataAdmissionFact
 
 
+class ResumeCheckpointAdmissionFact(BaseModel):
+    """Durable STOP checkpoint compared with fresh Clerk custody on Resume."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: str
+    stopped_run_id: str
+    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    exposure: dict[str, float]
+    approved: bool
+    evidence_ref: str
+
+
+class ResumeRunFacts(BaseModel):
+    """Bot-owned immutable and lifecycle facts for a proposed new run."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operation: Literal["RESUME"] = "RESUME"
+    strategy_instance_id: str
+    proposed_run_id: str
+    prior_run_id: str
+    configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runtime: StartRuntimeAdmissionFact
+    process: RunProcessAdmissionFact
+    market_data: MarketDataAdmissionFact
+    desired_state: Literal["RUNNING", "PAUSED", "STOPPED"]
+    phase: Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
+    carryover_policy: Literal["FORBID", "ALLOW"]
+    carryover_account_policy_enabled: bool
+    exposure_carryover_supported: bool
+    checkpoint: ResumeCheckpointAdmissionFact | None
+
+
+RunAdmissionFacts = StartRunFacts | ResumeRunFacts
+
+
 class RunAdmissionFactAges(BaseModel):
     """Age of every authority fact at the exact admission evaluation."""
 
@@ -92,7 +129,7 @@ class RunAdmissionDecision(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    operation: Literal["START"]
+    operation: Literal["START", "RESUME"]
     allowed: bool
     reason_code: str
     explanation: str

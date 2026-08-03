@@ -42,6 +42,12 @@ const DEPLOY_VIEW: DeployBotView = {
   },
   strategies: [VALIDATION_STRATEGY, EMA_STRATEGY],
   execution_modes: [
+    {
+      mode: 'dry_run',
+      label: 'Dry Run',
+      availability: 'available',
+      explanation: 'Real market data with simulated decisions and fills only.',
+    },
     { mode: 'paper', label: 'Paper', availability: 'available', explanation: 'Available through the Alpaca Clerk.' },
     { mode: 'live', label: 'Live', availability: 'planned', explanation: 'Live Alpaca execution is planned.' },
   ],
@@ -289,6 +295,7 @@ describe('AlpacaDeployWorkflowComponent', () => {
       strategy_key: 'deployment_validation',
       symbol: 'SPY',
       sizing: { preset: 'safe_canary', quantity: 1 },
+      execution_mode: 'paper',
       carryover_policy: 'FORBID',
     });
     expect(body).not.toHaveProperty('mode');
@@ -296,6 +303,28 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByRole('link', { name: 'Open bot control' }).getAttribute('href'))
       .toBe(RECEIPT.panel_path);
     expect(screen.queryByRole('tab')).toBeNull();
+  });
+
+  it('submits a first-class Dry Run mode that cannot opt into carryover', async () => {
+    const service = mockService({
+      ...RECEIPT,
+      execution_mode: 'dry_run',
+      message: 'spy-dry-01 is on duty in Dry Run.',
+      bot: { ...RECEIPT.bot, strategy_instance_id: 'spy-dry-01', mode: 'dry_run' },
+    });
+    await renderWorkflow(service);
+
+    fireEvent.input(screen.getByLabelText('Bot name'), {
+      target: { value: 'spy-dry-01' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: /Dry Run Available/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Deploy dry run bot' }));
+
+    await vi.waitFor(() => expect(service.deployBot).toHaveBeenCalledOnce());
+    const body = service.deployBot.mock.calls[0][2] as DeployBotBody;
+    expect(body.execution_mode).toBe('dry_run');
+    expect(body.carryover_policy).toBe('FORBID');
+    expect(screen.getByText('Dry Run')).toBeTruthy();
   });
 
   it('renders a backend-authored Start refusal without dispatching deployment', async () => {

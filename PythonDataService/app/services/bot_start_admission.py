@@ -43,7 +43,7 @@ class StartRequest:
     strategy_key: str
     symbol: str
     use_rth: bool
-    mode: Literal["log_only", "trade"]
+    mode: Literal["log_only", "dry_run", "trade"]
     quantity: int
     carryover_policy: Literal["FORBID", "ALLOW"]
     action_plan: ActionPlan
@@ -84,7 +84,7 @@ def make_start_request(
     strategy_key: str,
     symbol: str,
     use_rth: bool,
-    mode: Literal["log_only", "trade"],
+    mode: Literal["log_only", "dry_run", "trade"],
     quantity: int,
     carryover_policy: Literal["FORBID", "ALLOW"],
     action_plan: ActionPlan,
@@ -269,7 +269,7 @@ class BotStartAdmission:
                     configuration_hash=configuration_hash(binding),
                     runtime=runtime,
                     process=process,
-                    market_data=_market_data_fact(
+                    market_data=market_data_admission_fact(
                         feed,
                         observed_at_ms,
                         use_rth=binding.use_rth,
@@ -287,7 +287,7 @@ class BotStartAdmission:
             raise StartAdmissionEvidenceChanged("Clerk custody evidence changed before Start could be fenced.") from exc
 
 
-def _market_data_fact(
+def market_data_admission_fact(
     feed: MarketDataFeed | None,
     observed_at_ms: int,
     *,

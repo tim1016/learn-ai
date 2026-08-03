@@ -124,7 +124,7 @@
                   (click)="onAction(bot)"
                 >
                   @if (isPending(bot)) {
-                    {{ action.action_id === 'start' ? 'Starting…' : 'Stopping…' }}
+                    {{ action.action_id === 'resume' ? 'Resuming…' : 'Stopping…' }}
                   } @else {
                     {{ action.label }}
                   }

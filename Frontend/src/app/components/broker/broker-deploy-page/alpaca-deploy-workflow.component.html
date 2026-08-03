@@ -77,7 +77,7 @@
           <div class="deploy-layout__main">
             <app-deploy-execution-section
               [executionModes]="view.execution_modes"
-              [accountMode]="view.account_mode"
+              [selectedMode]="ticket().executionMode"
               [actionPlanExplanation]="view.action_plan_explanation"
               [symbol]="ticket().symbol"
               [symbolError]="symbolError()"
@@ -89,6 +89,7 @@
               [carryoverLabel]="view.carryover_label"
               [carryoverExplanation]="view.carryover_explanation"
               [carryoverAllowed]="ticket().allowCarryover"
+              (executionModeChange)="setExecutionMode($event)"
               (symbolChange)="setSymbol($event)"
               (symbolBlur)="touchSymbol()"
               (sizingPresetChange)="setSizingPreset($event)"
@@ -132,6 +133,7 @@
                 [sizingLabel]="sizingLabel()"
                 [quantity]="effectiveQuantity()"
                 [carryoverAllowed]="ticket().allowCarryover"
+                [executionLabel]="executionLabel()"
               />
             }
 
@@ -157,6 +159,7 @@
                 <div><dt>Bot</dt><dd>{{ ticket().instanceId || 'Name required' }}</dd></div>
                 <div><dt>Strategy</dt><dd>{{ selectedStrategy()?.label ?? 'Unavailable' }}</dd></div>
                 <div><dt>Trade</dt><dd>{{ ticket().symbol || 'Symbol required' }} · {{ effectiveQuantity() }} share(s)</dd></div>
+                <div><dt>Mode</dt><dd>{{ executionLabel() }}</dd></div>
               </dl>
               <button type="submit" [disabled]="!canSubmit()" [attr.aria-busy]="submitting()">
                 {{ submitting() ? 'Deploying…' : 'Deploy ' + executionLabel().toLowerCase() + ' bot' }}

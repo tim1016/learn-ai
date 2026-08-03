@@ -73,13 +73,15 @@ export class TraderLensComponent {
   /** User selected a history preset. */
   readonly presetChange = output<ChartHistoryPreset>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
-  /** User clicked the primary verb button (Start/Stop). */
+  /** User clicked the primary verb button (Resume/Stop). */
   readonly actionRequested = output<PanelAction>();
   readonly runHistoryNavigation = output<RunHistoryNavigation>();
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
   protected readonly isLogOnly = computed(() => this.panel().mode === 'log_only');
+  protected readonly isDryRun = computed(() => this.panel().mode === 'dry_run');
+  protected readonly isPaperExecution = computed(() => this.panel().mode === 'trade');
 
   protected readonly symbol = computed(() => this.panel().symbol);
 
@@ -94,9 +96,14 @@ export class TraderLensComponent {
     return health.desired_state_label;
   });
 
-  /** The one primary verb action (start or stop) — exactly one at a time. */
+  /** The one primary verb action (Resume or Stop) — exactly one at a time. */
   protected readonly primaryAction = computed<PanelAction | null>(() => {
-    const actionId = this.panel().health.running ? 'stop' : 'start';
+    const health = this.panel().health;
+    const actionId = !health.running
+      ? 'resume'
+      : health.desired_state === 'PAUSED'
+        ? 'continue'
+        : 'stop';
     return this.panel().actions.find((action) => action.action_id === actionId) ?? null;
   });
 

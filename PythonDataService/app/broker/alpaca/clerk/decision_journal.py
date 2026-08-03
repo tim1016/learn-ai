@@ -160,8 +160,7 @@ class DecisionJournal:
         if n <= 0:
             raise ValueError(f"tail n must be positive; got {n}")
         limit = min(n, MAX_TAIL)
-        rows = self._wal.read_all()
-        return rows[-limit:]
+        return self._wal.read_tail(limit=limit)
 
     def by_transaction(self, ref: str) -> list[DecisionReceipt]:
         """All receipts whose intent_id or order_ref matches ``ref``.

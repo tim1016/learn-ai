@@ -27,6 +27,7 @@ import {
   type DeployBotBody,
   type DeployBotReceipt,
   type DeployBotStrategy,
+  type DeployExecutionMode,
   type RunAdmissionDecision,
 } from '../v2-panel/lib/broker-v2-panel.service';
 import { DeployBindingStripComponent } from './deploy-binding-strip.component';
@@ -49,6 +50,7 @@ interface AlpacaDeployTicket {
   symbol: string;
   sizingPreset: 'safe_canary' | 'custom';
   quantity: number;
+  executionMode: Extract<DeployExecutionMode['mode'], 'dry_run' | 'paper'>;
   allowCarryover: boolean;
 }
 
@@ -116,6 +118,7 @@ export class AlpacaDeployWorkflowComponent {
     symbol: '',
     sizingPreset: 'safe_canary',
     quantity: 1,
+    executionMode: 'paper',
     allowCarryover: false,
   });
 
@@ -145,7 +148,9 @@ export class AlpacaDeployWorkflowComponent {
 
   protected readonly selectedExecutionMode = computed(() => {
     const view = this.currentView();
-    return view?.execution_modes.find((mode) => mode.mode === view.account_mode) ?? null;
+    return view?.execution_modes.find(
+      (mode) => mode.mode === this.ticket().executionMode,
+    ) ?? null;
   });
 
   protected readonly executionLabel = computed(() =>
@@ -173,6 +178,7 @@ export class AlpacaDeployWorkflowComponent {
       view
       && view.eligibility.eligible
       && view.allowed_actions.includes('deploy')
+      && this.selectedExecutionMode()?.availability === 'available'
       && this.selectedStrategy() !== null
       && this.ticketForm().valid()
       && !this.submitting(),
@@ -259,7 +265,22 @@ export class AlpacaDeployWorkflowComponent {
     this.ticket.update((current) => ({ ...current, quantity }));
   }
 
+  protected setExecutionMode(mode: DeployExecutionMode['mode']): void {
+    if (mode !== 'dry_run' && mode !== 'paper') return;
+    const option = this.currentView()?.execution_modes.find(
+      (candidate) => candidate.mode === mode,
+    );
+    if (option?.availability !== 'available') return;
+    this.clearAdmission();
+    this.ticket.update((current) => ({
+      ...current,
+      executionMode: mode,
+      allowCarryover: mode === 'dry_run' ? false : current.allowCarryover,
+    }));
+  }
+
   protected setCarryover(checked: boolean): void {
+    if (this.ticket().executionMode === 'dry_run') return;
     if (!this.currentView()?.carryover_available) return;
     this.clearAdmission();
     this.ticket.update((current) => ({ ...current, allowCarryover: checked }));
@@ -330,6 +351,7 @@ export class AlpacaDeployWorkflowComponent {
         preset: ticket.sizingPreset,
         quantity: ticket.sizingPreset === 'safe_canary' ? 1 : ticket.quantity,
       },
+      execution_mode: ticket.executionMode,
       carryover_policy: ticket.allowCarryover ? 'ALLOW' : 'FORBID',
     };
   }
@@ -343,6 +365,7 @@ export class AlpacaDeployWorkflowComponent {
       && current.symbol === submitted.symbol
       && current.sizing?.preset === submitted.sizing?.preset
       && current.sizing?.quantity === submitted.sizing?.quantity
+      && current.execution_mode === submitted.execution_mode
       && current.carryover_policy === submitted.carryover_policy;
   }
 

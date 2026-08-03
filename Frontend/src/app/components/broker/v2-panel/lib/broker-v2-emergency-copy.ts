@@ -48,6 +48,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Off duty',
     explanation: 'The bot is not running. It evaluates no bars and places no orders.',
   },
+  PAUSED: {
+    label: 'Paused',
+    explanation:
+      'The current run remains alive but bar evaluation is held until Continue.',
+  },
   ON_DUTY: {
     label: 'On duty',
     explanation: 'The bot is running and evaluating bars as they close.',
@@ -149,9 +154,20 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Stale',
     explanation: 'The last sweep could not reach the broker; the verdict is out of date.',
   },
-  start: {
-    label: 'Start',
-    explanation: 'Begin evaluating bars for this off-duty bot.',
+  resume: {
+    label: 'Resume',
+    explanation:
+      'Create a new run of this unchanged strategy instance after backend admission.',
+  },
+  pause: {
+    label: 'Pause',
+    explanation:
+      'Hold bar evaluation while keeping the current process and run identity alive.',
+  },
+  continue: {
+    label: 'Continue',
+    explanation:
+      'Let this paused live run evaluate bars again without changing its run ID.',
   },
   stop: {
     label: 'Stop',

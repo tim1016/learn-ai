@@ -73,6 +73,21 @@ def test_tail_all_when_fewer_than_n(journal: DecisionJournal) -> None:
     assert len(result) == 2
 
 
+def test_tail_does_not_replay_an_unrelated_cold_prefix(tmp_path: Path) -> None:
+    """Request-time tail reads only the bounded suffix, not the full journal."""
+    path = decision_journal_path(account_id="ACC1", sid="bot-123", root=tmp_path)
+    path.parent.mkdir(parents=True)
+    valid_suffix = b"".join(
+        _receipt(seq, ts_ms=seq).model_dump_json().encode() + b"\n"
+        for seq in range(10_000, 10_003)
+    )
+    path.write_bytes(b"not-request-time-replay\n" + b"x" * 70_000 + b"\n" + valid_suffix)
+
+    reopened = DecisionJournal(account_id="ACC1", sid="bot-123", root=tmp_path)
+
+    assert [row.seq for row in reopened.tail(3)] == [10_000, 10_001, 10_002]
+
+
 def test_tail_invalid_n_raises(journal: DecisionJournal) -> None:
     with pytest.raises(ValueError, match="positive"):
         journal.tail(0)

@@ -1,8 +1,8 @@
 """Contract tests for the closed broker-v2 panel vocabulary (S1, spec §13).
 
 Pins the snapshot ↔ live-set parity, the copy-coverage rule (every emitted code
-carries non-trivial server-authored copy), the ``PAUSED`` absence (decision
-#10), and the reconciliation-verdict lockstep with the clerk model.
+carries non-trivial server-authored copy), same-run Pause/Continue vocabulary,
+and the reconciliation-verdict lockstep with the clerk model.
 """
 
 from __future__ import annotations
@@ -54,11 +54,13 @@ def test_snapshot_codes_are_sorted_and_unique() -> None:
     assert len(codes) == len(set(codes)), "snapshot codes contain duplicates"
 
 
-def test_paused_is_absent_from_the_vocabulary() -> None:
-    """Decision #10: the panel never emits PAUSED anywhere."""
-    assert "PAUSED" not in ALL_VOCABULARY_CODES
+def test_same_run_pause_and_continue_are_closed_vocabulary() -> None:
+    """Pause is a live-run state and Continue is its identity-preserving verb."""
+    assert "PAUSED" in ALL_VOCABULARY_CODES
+    assert "pause" in ALL_VOCABULARY_CODES
+    assert "continue" in ALL_VOCABULARY_CODES
     snapshot = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    assert "PAUSED" not in snapshot["codes"]
+    assert {"PAUSED", "pause", "continue"}.issubset(snapshot["codes"])
 
 
 def test_every_emitted_code_has_nontrivial_copy() -> None:

@@ -299,8 +299,8 @@ def _eligibility(
         reason_code="ALPACA_PAPER_DEPLOY_READY",
         headline="This Alpaca paper account is eligible for a Clerk-governed deployment.",
         explanation=(
-            "The bot will start in order-producing mode. Every ENTER and EXIT "
-            "is executed through the Alpaca Clerk; no observation-only mode is available."
+            "The operator may choose Clerk-governed paper execution or a "
+            "zero-broker-write Dry Run before launch."
         ),
         next_action="Choose the symbol and sizing, then deploy the bot.",
     )
@@ -330,6 +330,15 @@ def build_alpaca_paper_deploy_view(
         eligibility=eligibility,
         readiness_checks=readiness_checks,
         execution_modes=(
+            AlpacaPaperExecutionMode(
+                mode="dry_run",
+                label="Dry Run",
+                availability="available",
+                explanation=(
+                    "Real market data and strategy decisions produce clearly simulated fills; "
+                    "the runner never calls the Clerk's broker-effect boundary."
+                ),
+            ),
             AlpacaPaperExecutionMode(
                 mode="paper",
                 label="Paper",
@@ -397,11 +406,24 @@ def build_alpaca_paper_deploy_receipt(
             f"alpaca-paper-deploy:{view.account_id}:{request.strategy_instance_id}:{bot.binding_created_at_ms}"
         ),
         recorded_at_ms=bot.binding_created_at_ms,
-        message=f"{request.strategy_instance_id} is on duty in Alpaca paper.",
-        explanation=("The deployment binding is durable and all strategy effects are owned by the Alpaca Clerk."),
-        next_action="Open the production bot panel and verify the first Clerk receipt.",
+        message=(
+            f"{request.strategy_instance_id} is on duty in Dry Run."
+            if request.execution_mode == "dry_run"
+            else f"{request.strategy_instance_id} is on duty in Alpaca paper."
+        ),
+        explanation=(
+            "The immutable Dry Run binding consumes market data and records only simulated activity."
+            if request.execution_mode == "dry_run"
+            else "The deployment binding is durable and all strategy effects are owned by the Alpaca Clerk."
+        ),
+        next_action=(
+            "Open the bot panel and verify clearly labelled simulated decisions and fills."
+            if request.execution_mode == "dry_run"
+            else "Open the production bot panel and verify the first Clerk receipt."
+        ),
         panel_path=(f"/brokers/{broker}/accounts/{view.account_id}/bots/{request.strategy_instance_id}"),
         account_id=view.account_id,
+        execution_mode=request.execution_mode,
         sizing=request.sizing,
         carryover_policy=request.carryover_policy,
         action_plan=alpaca_v1_action_plan(request.symbol),

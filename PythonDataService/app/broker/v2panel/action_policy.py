@@ -29,6 +29,7 @@ from app.schemas.operator_blocker import (
     OperatorBlocker,
     OperatorConfirmationCopy,
 )
+from app.schemas.run_admission import RunAdmissionDecision
 
 
 @dataclass(frozen=True)
@@ -44,7 +45,7 @@ class ActionGuardContext:
     outstanding_intents: int
     channel_fresh: bool
     has_exposure: bool
-    carryover_resume_ready: bool
+    resume_admission: RunAdmissionDecision | None
     flatten_supported: bool
     account_id: str
     strategy_instance_id: str
@@ -109,66 +110,33 @@ def _guard_deploy(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]
     return _disabled()
 
 
-def _guard_start(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
-    blockers: list[OperatorBlocker] = []
-    if ctx.running:
-        blockers.append(
+def _guard_resume(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
+    """Render the runner's typed Resume decision without recreating it."""
+    decision = ctx.resume_admission
+    if decision is None:
+        return _disabled(
             _blocker(
-                "BOT_ALREADY_RUNNING",
+                "RESUME_ADMISSION_UNAVAILABLE",
                 scope="bot",
-                headline="The bot is already running.",
-                detail="Use Stop before attempting another lifecycle transition.",
-            )
-        )
-    if ctx.phase == "RETIRED":
-        blockers.append(
-            _blocker(
-                "BOT_RETIRED",
-                scope="bot",
-                headline="A retired bot cannot be started.",
-                detail="Deploy a replacement strategy instance; this SID remains immutable.",
-            )
-        )
-    if ctx.desired_state != "STOPPED":
-        blockers.append(
-            _blocker(
-                "STOP_NOT_DURABLE",
-                scope="bot",
-                headline="The durable desired state is not stopped.",
-                detail="Wait for the current lifecycle command to settle, then refresh.",
-            )
-        )
-    if ctx.hold_active:
-        blockers.append(
-            _blocker(
-                "ACCOUNT_HOLD_ACTIVE",
-                scope="account",
-                headline="An account exposure hold blocks Start.",
-                detail="Restore the hold's root condition, reconcile, then use Clear hold.",
-                evidence={"account_id": ctx.account_id},
-            )
-        )
-    if ctx.freeze_active:
-        blockers.append(
-            _blocker(
-                "ACCOUNT_CUSTODY_UNPROVABLE",
-                scope="account",
-                headline="The Clerk cannot prove current account custody.",
-                detail="Restore broker observation and run Reconcile now before Start.",
-                evidence={"account_id": ctx.account_id},
-            )
-        )
-    if ctx.has_exposure and not ctx.carryover_resume_ready:
-        blockers.append(
-            _blocker(
-                "CARRYOVER_NOT_PROVED",
-                scope="bot",
-                headline="Attributed exposure is not approved for Resume.",
-                detail="Flatten the attributed exposure or restore an exact approved carryover checkpoint.",
+                headline="Resume safety is unknown.",
+                detail="Refresh after the bot registry and Clerk can produce one admission decision.",
                 evidence={"strategy_instance_id": ctx.strategy_instance_id},
             )
         )
-    return (not blockers), blockers
+    if decision.allowed:
+        return True, []
+    return _disabled(
+        _blocker(
+            decision.reason_code,
+            scope="bot",
+            headline="Resume is blocked.",
+            detail=decision.explanation,
+            evidence={
+                "strategy_instance_id": decision.strategy_instance_id,
+                "evaluated_at_ms": decision.evaluated_at_ms,
+            },
+        )
+    )
 
 
 def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
@@ -179,7 +147,35 @@ def _guard_stop(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
             "BOT_NOT_RUNNING",
             scope="bot",
             headline="The bot is already off duty.",
-            detail="Use Start when you are ready to resume bar evaluation.",
+                detail="Use Resume when you are ready to create a new run.",
+        )
+    )
+
+
+def _guard_pause(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
+    if ctx.running and ctx.desired_state == "RUNNING":
+        return True, []
+    return _disabled(
+        _blocker(
+            "PAUSE_REQUIRES_LIVE_RUNNING_RUN",
+            scope="bot",
+            headline="Pause requires a live evaluating run.",
+            detail="Resume a stopped bot, or use Continue if this run is already paused.",
+            evidence={"strategy_instance_id": ctx.strategy_instance_id},
+        )
+    )
+
+
+def _guard_continue(ctx: ActionGuardContext) -> tuple[bool, list[OperatorBlocker]]:
+    if ctx.running and ctx.desired_state == "PAUSED":
+        return True, []
+    return _disabled(
+        _blocker(
+            "CONTINUE_REQUIRES_LIVE_PAUSED_RUN",
+            scope="bot",
+            headline="Continue requires a live paused run.",
+            detail="Continue keeps the current run ID; Resume is only for a terminal prior run.",
+            evidence={"strategy_instance_id": ctx.strategy_instance_id},
         )
     )
 
@@ -312,20 +308,31 @@ ACTION_REGISTRY: dict[str, ActionPolicy] = {
         guard=_guard_deploy,
         revision_inputs=lambda ctx: (),
     ),
-    "start": ActionPolicy(
-        action_id="start",
+    "resume": ActionPolicy(
+        action_id="resume",
         supported_brokers=frozenset({"alpaca"}),
         list_page_only=False,
-        guard=_guard_start,
+        guard=_guard_resume,
         revision_inputs=lambda ctx: (
-            ctx.running,
-            ctx.phase,
-            ctx.desired_state,
-            ctx.has_exposure,
-            ctx.carryover_resume_ready,
-            ctx.hold_active,
-            ctx.freeze_active,
+            ctx.resume_admission.allowed if ctx.resume_admission is not None else None,
+            ctx.resume_admission.reason_code if ctx.resume_admission is not None else None,
+            ctx.resume_admission.configuration_hash if ctx.resume_admission is not None else None,
+            ctx.resume_admission.evidence_refs if ctx.resume_admission is not None else (),
         ),
+    ),
+    "pause": ActionPolicy(
+        action_id="pause",
+        supported_brokers=frozenset({"alpaca"}),
+        list_page_only=False,
+        guard=_guard_pause,
+        revision_inputs=lambda ctx: (ctx.running, ctx.desired_state),
+    ),
+    "continue": ActionPolicy(
+        action_id="continue",
+        supported_brokers=frozenset({"alpaca"}),
+        list_page_only=False,
+        guard=_guard_continue,
+        revision_inputs=lambda ctx: (ctx.running, ctx.desired_state),
     ),
     "stop": ActionPolicy(
         action_id="stop",

@@ -8192,9 +8192,9 @@ export interface components {
             /**
              * Execution Mode
              * @default paper
-             * @constant
+             * @enum {string}
              */
-            execution_mode?: "paper";
+            execution_mode?: "paper" | "dry_run";
             /** Explanation */
             explanation: string;
             /** Message */
@@ -8231,6 +8231,12 @@ export interface components {
              * @enum {string}
              */
             carryover_policy?: "FORBID" | "ALLOW";
+            /**
+             * Execution Mode
+             * @default paper
+             * @enum {string}
+             */
+            execution_mode?: "paper" | "dry_run";
             sizing?: components["schemas"]["AlpacaPaperSizingSelection"];
             /** Strategy Instance Id */
             strategy_instance_id: string;
@@ -8310,7 +8316,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "paper" | "live";
+            mode: "paper" | "dry_run" | "live";
         };
         /**
          * AlpacaPaperSizingOption
@@ -9155,7 +9161,7 @@ export interface components {
              * Desired State
              * @enum {string}
              */
-            desired_state: "RUNNING" | "STOPPED";
+            desired_state: "RUNNING" | "PAUSED" | "STOPPED";
             /** Exposure */
             exposure: {
                 [key: string]: number;
@@ -9168,7 +9174,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "log_only" | "trade";
+            mode: "log_only" | "dry_run" | "trade";
             /** Needs Attention */
             needs_attention: boolean;
             /** Open Pnl */
@@ -9460,8 +9466,8 @@ export interface components {
          * BotHealthCard
          * @description Bot-health card beside the rail (§7.2).
          *
-         *     ``desired_state`` is narrowed to ``RUNNING | STOPPED`` — the panel never
-         *     emits ``PAUSED`` (decision #10; pinned by a contract test).
+         *     ``PAUSED`` means the current process/run remains live while bar delivery
+         *     is held. Continue retains that run identity; Resume is not applicable.
          */
         BotHealthCard: {
             /** Carryover Checkpoint Exposure */
@@ -9474,7 +9480,7 @@ export interface components {
              * Desired State
              * @enum {string}
              */
-            desired_state: "RUNNING" | "STOPPED";
+            desired_state: "RUNNING" | "PAUSED" | "STOPPED";
             /** Desired State Label */
             desired_state_label: string;
             duty_outcome: components["schemas"]["DutyOutcomeView"] | null;
@@ -9639,7 +9645,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "log_only" | "trade";
+            mode: "log_only" | "dry_run" | "trade";
             /** Open Pnl */
             open_pnl: number | null;
             rail: components["schemas"]["TransactionRail"];
@@ -9919,7 +9925,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "log_only" | "trade";
+            mode: "log_only" | "dry_run" | "trade";
             /**
              * Phase
              * @enum {string}
@@ -12904,7 +12910,7 @@ export interface components {
              * @default log_only
              * @enum {string}
              */
-            mode?: "log_only" | "trade";
+            mode?: "log_only" | "dry_run" | "trade";
             /**
              * Quantity
              * @default 1
@@ -20544,7 +20550,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -20571,7 +20577,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -20594,7 +20600,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -20637,7 +20643,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now")[];
+            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now")[];
         };
         /**
          * ParameterStabilityResponse
@@ -21339,7 +21345,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "start" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
+            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
             /** Ready */
             ready: boolean;
             /**
@@ -21506,6 +21512,11 @@ export interface components {
             recorded_at_ms: number;
             /** Seq */
             seq: number;
+            /**
+             * Simulated
+             * @default false
+             */
+            simulated?: boolean;
         };
         /**
          * RecentFillView
@@ -21522,6 +21533,11 @@ export interface components {
             quantity: number | null;
             /** Side */
             side: string;
+            /**
+             * Simulated
+             * @default false
+             */
+            simulated?: boolean;
             /** Symbol */
             symbol: string;
         };
@@ -22043,9 +22059,9 @@ export interface components {
             next_step: string | null;
             /**
              * Operation
-             * @constant
+             * @enum {string}
              */
-            operation: "START";
+            operation: "START" | "RESUME";
             /** Proposed Run Id */
             proposed_run_id: string;
             /** Reason Code */

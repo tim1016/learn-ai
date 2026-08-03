@@ -36,6 +36,8 @@ def confined_wal_path(root: Path, filename: str) -> Path:
 class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 needs 3.12.
     """Canonical append/read discipline for sequenced JSONL WAL files."""
 
+    _TAIL_BLOCK_BYTES = 64 * 1024
+
     def __init__(
         self,
         path: Path,
@@ -94,6 +96,60 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
 
     def read_all(self) -> list[RecordT]:
         return self.read_from(after_seq=0, limit=None)
+
+    def read_tail(self, *, limit: int) -> list[RecordT]:
+        """Read at most ``limit`` complete records from the physical file tail.
+
+        Unlike cold-replay helpers, this request-path primitive never reads the
+        complete WAL merely to return its newest rows. A crash-truncated final
+        line is ignored; the next append remains responsible for truncating it.
+        """
+        if limit <= 0:
+            raise ValueError(f"limit must be positive; got {limit}")
+        path = self.path
+        if not path.exists():
+            return []
+
+        chunks: list[bytes] = []
+        newline_count = 0
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            position = fh.tell()
+            while position > 0 and newline_count <= limit:
+                block_size = min(position, self._TAIL_BLOCK_BYTES)
+                position -= block_size
+                fh.seek(position)
+                chunk = fh.read(block_size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b"\n")
+
+        raw = b"".join(reversed(chunks))
+        if raw and not raw.endswith(b"\n"):
+            last_newline = raw.rfind(b"\n")
+            raw = raw[: last_newline + 1] if last_newline >= 0 else b""
+        byte_lines = raw.split(b"\n")
+        if byte_lines and byte_lines[-1] == b"":
+            byte_lines.pop()
+        byte_lines = byte_lines[-limit:]
+
+        rows: list[RecordT] = []
+        last_seq: int | None = None
+        for idx, bline in enumerate(byte_lines):
+            try:
+                record = self._record_model.model_validate_json(bline)
+            except (ValidationError, ValueError) as exc:
+                raise self._corrupt_error(
+                    path, f"unparseable tail line {idx + 1}: {exc}"
+                ) from exc
+            record_seq = self._seq_of(record)
+            if last_seq is not None and record_seq <= last_seq:
+                raise self._corrupt_error(
+                    path,
+                    f"non-monotonic seq in tail: {record_seq} after {last_seq}",
+                )
+            last_seq = record_seq
+            rows.append(record)
+        return rows
 
     def read_from(self, *, after_seq: int, limit: int | None = None) -> list[RecordT]:
         if after_seq < 0:

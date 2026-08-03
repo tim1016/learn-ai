@@ -34,7 +34,7 @@ const PROFILE: PanelProfile = {
   flatten_supported: false,
   live_bars_supported: false,
   stations: [],
-  supported_action_ids: ['start', 'stop'],
+  supported_action_ids: ['resume', 'stop'],
 };
 
 const PANEL: BotPanelView = {
@@ -193,7 +193,7 @@ const mockService = {
     read_at_ms: 1_753_800_000_000,
   }),
   runBotAction: vi.fn().mockResolvedValue({
-    action_id: 'start',
+    action_id: 'resume',
     outcome: 'success',
     receipt_id: 'receipt-001',
     recorded_at_ms: 1_753_800_000_000,
@@ -323,9 +323,9 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'start',
-          label: 'Start',
-          explanation: 'Start evaluating bars.',
+          action_id: 'resume',
+          label: 'Resume',
+          explanation: 'Resume evaluating bars.',
           enabled: true,
           blockers: [],
           confirmation: null,
@@ -346,14 +346,14 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await fixture.whenStable();
 
     expect(mockService.runBotAction).toHaveBeenCalledWith(
       'alpaca',
       'DUM284968',
       'sid-001',
-      expect.objectContaining({ action_id: 'start' }),
+      expect.objectContaining({ action_id: 'resume' }),
     );
   });
 
@@ -491,9 +491,9 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'start',
-          label: 'Start',
-          explanation: 'Start evaluating bars.',
+          action_id: 'resume',
+          label: 'Resume',
+          explanation: 'Resume evaluating bars.',
           enabled: true,
           blockers: [],
           confirmation: null,
@@ -509,7 +509,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -523,9 +523,9 @@ describe('BotPanelShellComponent', () => {
       health: { ...PANEL.health, running: false },
       actions: [
         {
-          action_id: 'start',
-          label: 'Start',
-          explanation: 'Start evaluating bars.',
+          action_id: 'resume',
+          label: 'Resume',
+          explanation: 'Resume evaluating bars.',
           enabled: true,
           blockers: [],
           confirmation: null,
@@ -539,7 +539,7 @@ describe('BotPanelShellComponent', () => {
         status: 500,
         error: {
           detail: {
-            action_id: 'start',
+            action_id: 'resume',
             outcome: 'unknown',
             receipt_id: 'receipt-unknown',
             recorded_at_ms: 1_753_800_000_000,
@@ -556,7 +556,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
