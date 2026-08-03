@@ -8,6 +8,7 @@ import type {
   BrokerOrderRequest,
   BrokerPosition,
   ClerkStatus,
+  CustodyDiagnosis,
   OrderCancelResult,
   OrderSubmitResult,
 } from '../api/alpaca.types';
@@ -110,6 +111,18 @@ export class BrokersService {
   getClerkStatus(broker = 'alpaca'): Promise<ClerkStatus> {
     return firstValueFrom(
       this.http.get<ClerkStatus>(`${this.base}/${broker}/clerk/status`),
+    );
+  }
+
+  /**
+   * Slice 1 — the structured, backend-authored Clerk↔broker custody diagnosis
+   * the Accounts page renders verbatim. A protected read under `/api/brokers`
+   * (the proxy attaches the shared secret for that prefix), like
+   * {@link getClerkStatus}.
+   */
+  getCustodyDiagnosis(broker = 'alpaca'): Promise<CustodyDiagnosis> {
+    return firstValueFrom(
+      this.http.get<CustodyDiagnosis>(`${this.base}/${broker}/clerk/custody-diagnosis`),
     );
   }
 

@@ -123,6 +123,26 @@ describe('BrokersService', () => {
     await expect(promise).resolves.toMatchObject({ hold: { active: false } });
   });
 
+  it('GETs the custody diagnosis for the named broker', async () => {
+    const promise = service.getCustodyDiagnosis('alpaca');
+
+    const req = httpMock.expectOne('/api/brokers/alpaca/clerk/custody-diagnosis');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      broker: 'alpaca',
+      account_id: 'PA1',
+      in_sync: true,
+      observed_at_ms: 1,
+      snapshot_version: 'x',
+      resolution_posture: 'paper',
+      resolvable: false,
+      divergences: [],
+      resolution_plan: [],
+    });
+
+    await expect(promise).resolves.toMatchObject({ in_sync: true });
+  });
+
   it('POSTs clear-hold to the control-prefixed endpoint', async () => {
     const promise = service.clearHold('alpaca', { operator: 'ops', reason: 'safe' });
 
