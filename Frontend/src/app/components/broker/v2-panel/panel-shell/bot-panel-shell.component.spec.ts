@@ -239,7 +239,7 @@ const mockService = {
     read_by: 'operator:test',
     read_at_ms: 1_753_800_000_000,
   }),
-  runBotActionResilient: vi.fn().mockResolvedValue({
+  runBotAction: vi.fn().mockResolvedValue({
     action_id: 'resume',
     outcome: 'success',
     receipt_id: 'receipt-001',
@@ -400,7 +400,7 @@ describe('BotPanelShellComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await fixture.whenStable();
 
-    expect(mockService.runBotActionResilient).toHaveBeenCalledWith(
+    expect(mockService.runBotAction).toHaveBeenCalledWith(
       'alpaca',
       'DUM284968',
       'sid-001',
@@ -585,7 +585,7 @@ describe('BotPanelShellComponent', () => {
         },
       ],
     }));
-    mockService.runBotActionResilient.mockRejectedValueOnce(
+    mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 500,
         error: {

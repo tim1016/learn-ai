@@ -92,7 +92,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     ({ detail: { message: 'stale' } });
 
   it('refetches a fresh token and retries once when a transient 409 clears', async () => {
-    const promise = service.runBotActionResilient('alpaca', 'acct-1', 'sid-1', staleStop);
+    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleStop);
 
     http
       .expectOne(ACTIONS_URL)
@@ -121,7 +121,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('does NOT retry when the action is disabled after the 409 (state truly changed)', async () => {
-    const promise = service.runBotActionResilient('alpaca', 'acct-1', 'sid-1', staleStop);
+    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleStop);
 
     http
       .expectOne(ACTIONS_URL)
@@ -136,7 +136,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('does NOT retry when the fresh token is unchanged (an availability 409)', async () => {
-    const promise = service.runBotActionResilient('alpaca', 'acct-1', 'sid-1', staleStop);
+    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleStop);
 
     http
       .expectOne(ACTIONS_URL)
@@ -149,7 +149,7 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
   });
 
   it('re-throws a non-409 error without refetching the panel', async () => {
-    const promise = service.runBotActionResilient('alpaca', 'acct-1', 'sid-1', staleStop);
+    const promise = service.runBotAction('alpaca', 'acct-1', 'sid-1', staleStop);
 
     http
       .expectOne(ACTIONS_URL)

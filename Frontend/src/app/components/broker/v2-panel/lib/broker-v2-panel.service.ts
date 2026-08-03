@@ -147,47 +147,33 @@ export class BrokerV2PanelService {
     );
   }
 
-  runBotAction(
-    broker: string,
-    accountId: string,
-    sid: string,
-    action: PanelAction,
-  ): Promise<PanelActionResult> {
-    const request: PanelActionRequest = {
-      action_id: action.action_id,
-      revision: action.revision,
-      concurrency_token: action.concurrency_token,
-      idempotency_key: crypto.randomUUID(),
-      reason: null,
-    };
-    return this.runAction(broker, accountId, sid, request);
-  }
-
   /**
-   * Run a panel action with a bounded fresh-token retry on a 409 conflict.
+   * Run a presented panel action, with a bounded fresh-token retry on a 409.
    *
-   * A presented action carries an optimistic-concurrency token; some actions
-   * (notably Stop) key that token on a single volatile fact (`running`), so a
-   * 409 is usually a transient token change rather than a real state change.
-   * On a 409 we refetch the authoritative panel and retry ONCE with the
-   * current token — but only if the action is still offered, still enabled,
-   * and its token actually changed. If the action is gone, disabled, or the
-   * token is unchanged (the bot's state genuinely changed, e.g. it is already
-   * stopping, or the 409 was an availability rejection), the original error is
-   * re-thrown so the operator sees an honest message instead of a silent
-   * re-post.
+   * Every 409 from the action endpoint is a PRE-EXECUTION rejection
+   * (`StaleRevisionError` / `ActionNotAvailableError` — the mid-flight
+   * `ActionOutcomeUnknownError` is a 500), so the action never ran and a retry
+   * cannot double-fire. Some actions (notably Stop) key their
+   * optimistic-concurrency token on a single volatile fact (`running`), so a
+   * 409 is usually a transient token change. On a 409 we refetch the
+   * authoritative panel and retry ONCE with the current token — but only if the
+   * action is still offered, still enabled, and its token changed; otherwise
+   * the original error is re-thrown so the operator sees an honest message
+   * instead of a silent re-post.
    *
-   * Defect #10: the 2026-07-30 run's Stop-409 storm dead-ended in the UI with
-   * no retry path, forcing a raw `POST .../stop` from the terminal.
+   * This is the single public action entry point, so every caller (the panel
+   * shell AND the fleet list) is resilient and there is no bare, dead-ending
+   * variant to reach by accident. Defect #10: the 2026-07-30 Stop-409 storm
+   * dead-ended the UI and forced a raw `POST .../stop` from the terminal.
    */
-  async runBotActionResilient(
+  async runBotAction(
     broker: string,
     accountId: string,
     sid: string,
     action: PanelAction,
   ): Promise<PanelActionResult> {
     try {
-      return await this.runBotAction(broker, accountId, sid, action);
+      return await this.submitAction(broker, accountId, sid, action);
     } catch (error) {
       if (!(error instanceof HttpErrorResponse) || error.status !== 409) {
         throw error;
@@ -203,8 +189,24 @@ export class BrokerV2PanelService {
       ) {
         throw error;
       }
-      return await this.runBotAction(broker, accountId, sid, fresh);
+      return await this.submitAction(broker, accountId, sid, fresh);
     }
+  }
+
+  private submitAction(
+    broker: string,
+    accountId: string,
+    sid: string,
+    action: PanelAction,
+  ): Promise<PanelActionResult> {
+    const request: PanelActionRequest = {
+      action_id: action.action_id,
+      revision: action.revision,
+      concurrency_token: action.concurrency_token,
+      idempotency_key: crypto.randomUUID(),
+      reason: null,
+    };
+    return this.runAction(broker, accountId, sid, request);
   }
 
   getLiveChart(
