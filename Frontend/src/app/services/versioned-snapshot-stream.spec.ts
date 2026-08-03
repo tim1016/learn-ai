@@ -133,4 +133,26 @@ describe('versioned snapshot stream', () => {
     expect(source.closed).toBe(true);
     expect(onStatus).toHaveBeenLastCalledWith('closed');
   });
+
+  it('keeps an ordinary transport failure separate from a backend error event', () => {
+    const onMalformedSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const stream = openVersionedSnapshotStream(
+      '/api/test-snapshots/stream',
+      isTestSnapshot,
+      'Test stream',
+      {
+        onSnapshot: vi.fn(),
+        onMalformedSnapshot,
+        onStatus,
+      },
+    );
+    const source = StubEventSource.instances[0];
+
+    source.emit('error', '');
+
+    expect(onMalformedSnapshot).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith('error');
+    stream.close();
+  });
 });
