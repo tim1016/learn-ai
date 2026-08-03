@@ -136,6 +136,37 @@ def custody_snapshot_version(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
 
 
+def stale_reconciliation_divergence() -> CustodyDivergence:
+    """The diagnosis-level short-circuit when the broker could not be read fresh."""
+    return CustodyDivergence(
+        kind="stale_reconciliation",
+        state="resolvable_now",
+        explanation=_EXPLANATION["stale_reconciliation"],
+        possible_causes=_CAUSES["stale_reconciliation"],
+        resolution_step="reconcile_now",
+    )
+
+
+def stale_custody_snapshot_version(entries: list[OrderJournalEntry]) -> str:
+    """Snapshot hash for a diagnosis made without a fresh broker read.
+
+    Structurally distinct from ``custody_snapshot_version``'s payload shape
+    (that one always has ``observed``/``hold``/``working_orders`` keys; this
+    one never does) so a stale snapshot version can never alias a real one —
+    load-bearing for the `resolve_custody` 409 concurrency guard: if the
+    broker becomes reachable again between diagnosis and resolve, the
+    operator MUST be forced to re-confirm against the fresh (real) diagnosis,
+    never silently proceed against a snapshot taken while the broker was
+    down.
+    """
+    payload = {
+        "stale_reconciliation": True,
+        "expected": exposure.project_expected_account_exposure(entries),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+
+
 def diagnose_custody(
     entries: list[OrderJournalEntry],
     *,
@@ -159,9 +190,9 @@ def diagnose_custody(
             )
         )
 
+    unresolved = derive.unresolved_intents(entries)
     deltas = _attribution_deltas(entries, positions)
     if deltas:
-        unresolved = derive.unresolved_intents(entries)
         working = [
             o
             for o in orders
@@ -190,6 +221,17 @@ def diagnose_custody(
                 position_deltas=deltas,
                 resolution_step="record_inventory_baseline",
                 prerequisite_detail=prerequisite,
+            )
+        )
+
+    if not deltas and unresolved:
+        divergences.append(
+            CustodyDivergence(
+                kind="needs_review",
+                state="needs_review",
+                explanation=_EXPLANATION["needs_review"],
+                possible_causes=_CAUSES["needs_review"],
+                evidence_refs=tuple(sorted(e.order_ref for e in unresolved if e.order_ref)),
             )
         )
 

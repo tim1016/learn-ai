@@ -505,10 +505,26 @@ class AlpacaClerk(ClerkEffectOperations):
             account_id, journal = await self._ensure_journal()
             entries = journal.read_entries()
             namespaces = self._known_namespaces(journal)
-        orders, positions = await asyncio.gather(
-            self._read.list_orders(status="all", limit=500),
-            self._read.list_positions(),
-        )
+        try:
+            orders, positions = await asyncio.gather(
+                self._read.list_orders(status="all", limit=500),
+                self._read.list_positions(),
+            )
+        except BrokerUnavailable:
+            return diagnosis.CustodyDiagnosis(
+                broker=self.broker_id,
+                account_id=account_id,
+                in_sync=False,
+                observed_at_ms=self._clock(),
+                snapshot_version=diagnosis.stale_custody_snapshot_version(entries),
+                resolvable=True,
+                divergences=(diagnosis.stale_reconciliation_divergence(),),
+                resolution_plan=(
+                    diagnosis.CustodyResolutionStep(
+                        action_id="reconcile_now", scope="account", mutates=False
+                    ),
+                ),
+            )
         divergences = diagnosis.diagnose_custody(
             entries, orders=orders, positions=positions, namespaces=namespaces
         )
