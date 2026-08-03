@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { BrokerOrderGroup, OrderSubmitResult } from '../../../api/alpaca.types';
+import type { BrokerOrderGroup, CustodyDiagnosis, OrderSubmitResult } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
 
@@ -58,6 +58,21 @@ function submittedSpyGroup(): BrokerOrderGroup {
   };
 }
 
+function inSyncDiagnosis(): CustodyDiagnosis {
+  return {
+    broker: 'alpaca',
+    account_id: 'PA1',
+    in_sync: true,
+    observed_at_ms: 1,
+    snapshot_version: 'v1',
+    resolution_posture: 'paper',
+    resolvable: false,
+    blocked_reason: null,
+    divergences: [],
+    resolution_plan: [],
+  };
+}
+
 function brokerService(overrides: Partial<BrokersService> = {}) {
   return {
     getAccount: vi.fn().mockResolvedValue(undefined),
@@ -72,6 +87,7 @@ function brokerService(overrides: Partial<BrokersService> = {}) {
       outstanding_intents: 0,
       observed_at_ms: 1,
     }),
+    getCustodyDiagnosis: vi.fn().mockResolvedValue(inSyncDiagnosis()),
     ...overrides,
   };
 }

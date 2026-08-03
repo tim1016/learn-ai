@@ -1,0 +1,76 @@
+@if (diagnosis.isLoading()) {
+  <p class="m-0 p-3 text-sm text-color-secondary" role="status">Checking clerk and broker custody…</p>
+} @else if (diagnosis.error()) {
+  <p class="m-0 p-3 text-sm text-red-500" role="alert">
+    Couldn't reach Alpaca. Custody status is unavailable right now.
+  </p>
+} @else if (diagnosis.value(); as d) {
+  @if (d.in_sync) {
+    <section class="custody custody--sync" aria-label="Clerk and broker in sync">
+      <span class="custody__ok" aria-hidden="true">✓</span>
+      <p>
+        Clerk and broker are in sync · checked
+        <app-timestamp-display [value]="d.observed_at_ms" mode="local" />
+      </p>
+    </section>
+  } @else {
+    <section class="custody custody--diverged" aria-labelledby="custody-title">
+      <h2 id="custody-title">Clerk and broker out of sync</h2>
+
+      @for (div of divergences(); track div.kind) {
+        <article class="custody__divergence">
+          <div class="custody__divergence-header">
+            <span class="custody__kind">{{ div.kind | receiptLabel }}</span>
+            <span class="custody__state" [class.custody__state--attention]="div.state !== 'resolvable_now'">
+              {{ div.state | receiptLabel }}
+            </span>
+          </div>
+
+          <p class="custody__explanation">{{ div.explanation }}</p>
+
+          @if (positionDeltas(div).length) {
+            <div class="custody__delta-scroll">
+              <table class="custody__delta">
+                <thead>
+                  <tr>
+                    <th scope="col">Symbol</th>
+                    <th scope="col">Clerk attributes</th>
+                    <th scope="col">Broker holds</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (p of positionDeltas(div); track p.symbol) {
+                    <tr>
+                      <td>{{ p.symbol }}</td>
+                      <td>{{ p.clerk_attributed_qty }}</td>
+                      <td>{{ p.broker_observed_qty }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
+
+          @if (div.possible_causes.length) {
+            <details class="custody__causes">
+              <summary>Possible causes</summary>
+              <ul>
+                @for (cause of div.possible_causes; track cause) {
+                  <li>{{ cause }}</li>
+                }
+              </ul>
+            </details>
+          }
+
+          @if (div.prerequisite_detail) {
+            <p class="custody__prereq" role="status">{{ div.prerequisite_detail }}</p>
+          }
+        </article>
+      }
+
+      @if (d.resolvable) {
+        <button type="button" class="custody__resolve" disabled>Resolve &amp; sync to broker</button>
+      }
+    </section>
+  }
+}
