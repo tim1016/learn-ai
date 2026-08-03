@@ -34,6 +34,7 @@ from app.broker.contract.registry import (
 from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
 from app.services.bot_runner import set_bot_task_registry
+from app.services.broker_v2_panel.account_projection_owner import reset_owners_for_testing
 from app.services.broker_v2_panel.evidence_service import PAGE_SIZE_MAX
 from tests.broker.v2panel.fixtures import (
     ACCT,
@@ -111,6 +112,7 @@ def app_and_tmp(tmp_path: Path, monkeypatch):
     reset_clerk_settings_for_testing()
     reset_broker_registry_for_testing()
     reset_alpaca_clerk_for_testing()
+    reset_owners_for_testing()
 
     get_broker_registry().register(_FakeReadPort())  # type: ignore[arg-type]
     set_alpaca_clerk(_FakeClerk())
@@ -126,6 +128,7 @@ def app_and_tmp(tmp_path: Path, monkeypatch):
         set_alpaca_clerk(None)
         reset_broker_registry_for_testing()
         reset_clerk_settings_for_testing()
+        reset_owners_for_testing()
 
 
 def _write_journal(tmp_path: Path, entries: list) -> None:
@@ -165,6 +168,32 @@ async def test_evidence_returns_bot_entries_newest_first(app_and_tmp) -> None:
     # Newest first: i2 before i1.
     assert entries[0]["intent_id"] == "i2"
     assert entries[1]["intent_id"] == "i1"
+
+
+@pytest.mark.asyncio
+async def test_evidence_request_uses_warm_namespace_index_not_full_replay(
+    app_and_tmp,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fast_app, tmp_path = app_and_tmp
+    _write_journal(tmp_path, [intent_entry(sid=SID, intent="i1", ts_ms=_T0)])
+
+    def forbid_full_replay(_journal) -> list:
+        raise AssertionError("request-time evidence must not replay the full journal")
+
+    monkeypatch.setattr(OrderJournal, "read_entries", forbid_full_replay)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app), base_url="http://test"
+    ) as client:
+        first = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/evidence"
+        )
+        second = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/evidence"
+        )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["total_entries"] == second.json()["total_entries"] == 1
 
 
 @pytest.mark.asyncio

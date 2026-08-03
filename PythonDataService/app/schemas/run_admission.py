@@ -44,6 +44,9 @@ class MarketDataAdmissionFact(BaseModel):
     last_bar_ms: int | None = Field(default=None, ge=0)
     observed_at_ms: int = Field(ge=0)
     reason: str | None = None
+    connected: bool | None = None
+    stale: bool | None = None
+    active_subscription_count: int | None = Field(default=None, ge=0)
 
 
 class StartRuntimeAdmissionFact(BaseModel):

@@ -1,10 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { HttpErrorResponse } from '@angular/common/http';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type {
   BotPanelView,
+  BotPanelLiveSnapshot,
   BotRunView,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
@@ -13,7 +14,7 @@ import { provideRouter, Router } from '@angular/router';
 // DualPaneChartComponent -> lightweight-charts: mock for unit tests.
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
-  const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn() });
+  const createMockSeries = () => ({ setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() });
   const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
   const createMockChart = () => ({
     addSeries: vi.fn().mockReturnValue(createMockSeries()),
@@ -47,6 +48,19 @@ const PANEL: BotPanelView = {
   mode: 'log_only',
   updated_at_ms: 1_753_800_000_000,
   revision: 1,
+  market_pulse: {
+    session: 'OPEN',
+    feed_state: 'LIVE',
+    latest_bar_at_ms: 1_700_000_000_000,
+    age_ms: 1_000,
+    source: 'ibkr',
+    expected_cadence_ms: 60_000,
+    headline: 'Market data live',
+    explanation: 'The feed is current.',
+    next_step: null,
+    attention_required: false,
+    observed_at_ms: 1_700_000_001_000,
+  },
   mission_verdict: {
     state: 'working',
     label: 'Working',
@@ -104,6 +118,37 @@ const PANEL: BotPanelView = {
   open_pnl: null,
 };
 
+const LIVE_CHART = {
+  strategy_instance_id: 'sid-001',
+  symbol: 'QQQ',
+  trading_date_open_ms: 1_753_800_000_000,
+  trading_date_close_ms: 1_753_823_400_000,
+  resolution: '5s' as const,
+  bars: [],
+  fill_markers: [],
+  overlay_notices: [],
+  as_of_ms: 1_753_800_000_000,
+};
+
+function liveSnapshot(panel: BotPanelView = PANEL): BotPanelLiveSnapshot {
+  return {
+    stream_epoch: 'test-epoch',
+    surface_version: 1,
+    panel,
+    live_chart: LIVE_CHART,
+  };
+}
+
+class StubEventSource {
+  addEventListener = vi.fn();
+  close = vi.fn();
+
+  constructor(readonly url: string) {}
+}
+
+const originalEventSource = globalThis.EventSource;
+(globalThis as { EventSource?: unknown }).EventSource = StubEventSource;
+
 function makeRun(overrides: Partial<BotRunView> = {}): BotRunView {
   return {
     strategy_instance_id: 'sid-001',
@@ -128,6 +173,8 @@ function makeRun(overrides: Partial<BotRunView> = {}): BotRunView {
 const mockService = {
   getPanelProfile: vi.fn().mockResolvedValue(PROFILE),
   getPanel: vi.fn().mockResolvedValue(PANEL),
+  getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot()),
+  liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),
   getCurrentRun: vi.fn().mockResolvedValue(makeRun()),
   getRunHistory: vi.fn().mockResolvedValue({
     runs: [
@@ -209,6 +256,10 @@ describe('BotPanelShellComponent', () => {
     vi.clearAllMocks();
   });
 
+  afterAll(() => {
+    globalThis.EventSource = originalEventSource;
+  });
+
   it('shows loading state initially then renders the trader lens', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -221,7 +272,7 @@ describe('BotPanelShellComponent', () => {
 
     // Symbol from the loaded panel should appear
     expect(screen.getByRole('heading', { name: 'QQQ', level: 1 })).toBeTruthy();
-    expect(mockService.getLiveChart).toHaveBeenCalledWith(
+    expect(mockService.getLiveSnapshot).toHaveBeenCalledWith(
       'alpaca',
       'DUM284968',
       'sid-001',
@@ -318,7 +369,7 @@ describe('BotPanelShellComponent', () => {
   });
 
   it('keeps lifecycle actions bound to the current instance while viewing history', async () => {
-    mockService.getPanel.mockResolvedValueOnce({
+    mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
       actions: [
@@ -333,7 +384,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-    });
+    }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -359,10 +410,10 @@ describe('BotPanelShellComponent', () => {
 
   it('does not restart a panel request that is still loading', async () => {
     vi.useFakeTimers();
-    const pendingPanel = new Promise<BotPanelView>(() => undefined);
+    const pendingPanel = new Promise<BotPanelLiveSnapshot>(() => undefined);
     const slowService = {
       ...mockService,
-      getPanel: vi.fn().mockReturnValue(pendingPanel),
+      getLiveSnapshot: vi.fn().mockReturnValue(pendingPanel),
     };
 
     try {
@@ -375,9 +426,9 @@ describe('BotPanelShellComponent', () => {
       });
       fixture.detectChanges();
 
-      expect(slowService.getPanel).toHaveBeenCalledTimes(1);
+      expect(slowService.getLiveSnapshot).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(slowService.getPanel).toHaveBeenCalledTimes(1);
+      expect(slowService.getLiveSnapshot).toHaveBeenCalledTimes(1);
       fixture.destroy();
     } finally {
       vi.useRealTimers();
@@ -432,7 +483,7 @@ describe('BotPanelShellComponent', () => {
   });
 
   it('shows an error message when panel load fails', async () => {
-    mockService.getPanel.mockRejectedValueOnce(new Error('Network error'));
+    mockService.getLiveSnapshot.mockRejectedValueOnce(new Error('Network error'));
 
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -442,7 +493,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toBe('Network error');
   });
 
   it('persists keyboard lens changes in the query string', async () => {
@@ -486,7 +537,7 @@ describe('BotPanelShellComponent', () => {
   });
 
   it('renders the durable receipt returned by a bot action', async () => {
-    mockService.getPanel.mockResolvedValueOnce({
+    mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
       actions: [
@@ -501,7 +552,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-    });
+    }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
@@ -518,7 +569,7 @@ describe('BotPanelShellComponent', () => {
   });
 
   it('renders backend-authored remediation for an unknown action outcome', async () => {
-    mockService.getPanel.mockResolvedValueOnce({
+    mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
       ...PANEL,
       health: { ...PANEL.health, running: false },
       actions: [
@@ -533,7 +584,7 @@ describe('BotPanelShellComponent', () => {
           concurrency_token: 'start-token',
         },
       ],
-    });
+    }));
     mockService.runBotAction.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 500,

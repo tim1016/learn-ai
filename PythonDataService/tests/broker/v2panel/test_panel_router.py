@@ -37,8 +37,11 @@ from app.broker.contract.registry import (
     reset_broker_registry_for_testing,
 )
 from app.marketdata.feed import FeedHealth, MarketDataBar
+from app.routers import broker_v2_panel
 from app.routers.broker_v2_panel import router
+from app.schemas.broker_v2_panel import BotPanelLiveSnapshot, ChartLiveResponse
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+from app.services.broker_v2_panel import panel_data_source
 from app.services.broker_v2_panel.action_execution_service import (
     reset_idempotency_store_for_testing,
 )
@@ -307,6 +310,79 @@ async def test_panel_scoped_never_emits_paused(api) -> None:
     assert body["health"]["desired_state"] != "PAUSED"
     assert len(body["rail"]["stations"]) == 6
     assert "revision" in body
+
+
+async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _clerk, registry = api
+    await _deploy_bot(registry)
+    panel = await panel_data_source.get_panel("alpaca", _ACCOUNT_ID, SID)
+    chart = ChartLiveResponse(
+        strategy_instance_id=SID,
+        symbol="SPY",
+        trading_date_open_ms=_T0,
+        trading_date_close_ms=_T0 + 60_000,
+        resolution="5s",
+        bars=[],
+        fill_markers=[],
+        overlay_notices=[],
+        as_of_ms=_T0,
+    )
+    snapshot = BotPanelLiveSnapshot(
+        stream_epoch="epoch-new",
+        surface_version=7,
+        panel=panel,
+        live_chart=chart,
+    )
+
+    class _Hub:
+        async def snapshot(self) -> BotPanelLiveSnapshot:
+            return snapshot
+
+        def subscribe(self) -> asyncio.Queue[BotPanelLiveSnapshot | None]:
+            queue: asyncio.Queue[BotPanelLiveSnapshot | None] = asyncio.Queue(maxsize=2)
+            queue.put_nowait(snapshot)
+            queue.put_nowait(None)
+            return queue
+
+        def unsubscribe(self, _queue: asyncio.Queue[BotPanelLiveSnapshot | None]) -> None:
+            return None
+
+    async def get_hub(*_args: object, **_kwargs: object) -> _Hub:
+        return _Hub()
+
+    monkeypatch.setattr(broker_v2_panel, "get_or_start_live_projection_hub", get_hub)
+    monkeypatch.setattr(broker_v2_panel, "retain_live_projection_hub", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(broker_v2_panel, "release_live_projection_hub", lambda *_args, **_kwargs: None)
+    async with _client(app) as client:
+        bootstrap = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-snapshot",
+            params={"resolution": "5s"},
+        )
+        stale_cursor = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-stream",
+            params={"resolution": "5s", "cursor": "epoch-old:99"},
+        )
+        matching_cursor = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-stream",
+            params={"resolution": "5s", "cursor": "epoch-new:7"},
+        )
+
+    assert bootstrap.status_code == 200
+    assert bootstrap.json()["surface_version"] == 7
+    assert bootstrap.json()["panel"]["market_pulse"]["headline"]
+    assert stale_cursor.status_code == 200
+    assert stale_cursor.headers["content-type"].startswith("text/event-stream")
+    assert stale_cursor.headers["cache-control"] == "no-cache"
+    assert stale_cursor.headers["x-accel-buffering"] == "no"
+    assert "event: reset" in stale_cursor.text
+    assert "id: epoch-new:7" in stale_cursor.text
+    assert "event: snapshot" in stale_cursor.text
+    assert matching_cursor.status_code == 200
+    assert "event: reset" not in matching_cursor.text
+    assert "id: epoch-new:7" in matching_cursor.text
 
 
 # ── §11 presented-action execution ───────────────────────────────────────────

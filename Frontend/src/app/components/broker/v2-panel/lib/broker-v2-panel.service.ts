@@ -5,6 +5,7 @@ import type { components } from '../../../../api/broker.types';
 import type {
   BotCatalogView,
   BotPanelView,
+  BotPanelLiveSnapshot,
   BotRunHistoryPage,
   BotRunView,
   ChartHistoryPreset,
@@ -175,6 +176,33 @@ export class BrokerV2PanelService {
         { params },
       ),
     );
+  }
+
+  getLiveSnapshot(
+    broker: string,
+    accountId: string,
+    sid: string,
+    resolution: ChartLiveResolution,
+  ): Promise<BotPanelLiveSnapshot> {
+    const params = new HttpParams().set('resolution', resolution);
+    return firstValueFrom(
+      this.http.get<BotPanelLiveSnapshot>(
+        `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/live-snapshot`,
+        { params },
+      ),
+    );
+  }
+
+  liveStreamUrl(
+    broker: string,
+    accountId: string,
+    sid: string,
+    resolution: ChartLiveResolution,
+    cursor?: string,
+  ): string {
+    const params = new URLSearchParams({ resolution });
+    if (cursor) params.set('cursor', cursor);
+    return `${this.base(broker, accountId)}/bots/${encodeURIComponent(sid)}/live-stream?${params.toString()}`;
   }
 
   getHistoryChart(

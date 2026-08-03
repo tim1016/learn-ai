@@ -19,7 +19,7 @@ export interface AuthenticatedSseOptions {
 
 /** Own the authenticated native EventSource lifecycle and reconnect status. */
 export function openAuthenticatedSseConnection(
-  url: string,
+  url: string | (() => string),
   eventName: string,
   handlers: AuthenticatedSseHandlers,
   controlEventNames: readonly string[] = [],
@@ -33,7 +33,8 @@ export function openAuthenticatedSseConnection(
   const connect = (): void => {
     if (closed) return;
     handlers.onStatus('connecting');
-    const next = new EventSource(withDataPlaneControlIntent(url));
+    const resolvedUrl = typeof url === 'function' ? url() : url;
+    const next = new EventSource(withDataPlaneControlIntent(resolvedUrl));
     source = next;
     next.addEventListener('open', () => {
       reconnectDelayMs = 500;

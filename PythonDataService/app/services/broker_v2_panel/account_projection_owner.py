@@ -14,13 +14,19 @@ the singleton for an account.
 
 from __future__ import annotations
 
+import logging
+
 from app.broker.alpaca.clerk.decision_journal import DecisionReceipt
 from app.broker.alpaca.clerk.fills import project_instance_fills
+from app.broker.alpaca.clerk.journal import OrderJournal
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.alpaca.clerk.rollup_cache import BotRollup, BotRollupCache
+from app.engine.live.order_identity import build_bot_order_namespace, parse_order_ref
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import BotCatalogView
 from app.services.broker_v2_panel.catalog_projection_service import build_catalog
+
+logger = logging.getLogger(__name__)
 
 
 class AccountProjectionOwner:
@@ -40,6 +46,69 @@ class AccountProjectionOwner:
         # Count of journal entries already folded into the cache.  Entries past
         # this index are the tail to fold on the next sync.
         self._watermark = 0
+        self._entries: list[OrderJournalEntry] = []
+        self._journal_offset = 0
+        self._journal_identity: tuple[int, int] | None = None
+        self._journal_cursor_guard: str | None = None
+        self._journal_reads = 0
+        self._journal_bytes_read = 0
+        self._entries_by_namespace: dict[str, list[OrderJournalEntry]] = {}
+
+    def refresh_journal(self, journal: OrderJournal) -> list[OrderJournalEntry]:
+        """Cold-replay once, then consume only complete appended records."""
+        tail = journal.read_from(
+            self._journal_offset,
+            file_identity=self._journal_identity,
+            cursor_guard=self._journal_cursor_guard,
+        )
+        self._journal_reads += 1
+        self._journal_bytes_read += tail.bytes_read
+        if tail.reset:
+            self._entries = list(tail.entries)
+            self._entries_by_namespace = {}
+            self._index_entries(tail.entries)
+            self._cache = BotRollupCache()
+            self._watermark = 0
+        else:
+            if tail.entries:
+                # Copy-on-append keeps any in-flight projection cut immutable
+                # without copying the full journal on unchanged warm reads.
+                self._entries = [*self._entries, *tail.entries]
+                self._index_entries(tail.entries)
+        self._journal_offset = tail.next_offset
+        self._journal_identity = tail.file_identity
+        self._journal_cursor_guard = tail.cursor_guard
+        # The owner retains mutation authority; projection callers receive the
+        # stable read-only-by-convention view without an O(journal) warm copy.
+        return self._entries
+
+    def entries_for_sid(self, sid: str) -> list[OrderJournalEntry]:
+        """Return in-memory evidence for one bot without an account-wide scan."""
+        return list(self._entries_by_namespace.get(build_bot_order_namespace(sid), ()))
+
+    def _index_entries(self, entries: tuple[OrderJournalEntry, ...]) -> None:
+        for entry in entries:
+            if not entry.order_ref:
+                continue
+            try:
+                namespace, _intent_id = parse_order_ref(entry.order_ref)
+            except ValueError as error:
+                logger.warning(
+                    "invalid Clerk order reference excluded from the bot evidence index",
+                    extra={
+                        "action": "panel_journal_reference_rejected",
+                        "account_id": self._account_id,
+                        "entry_kind": entry.kind.value,
+                        "error_type": type(error).__name__,
+                    },
+                )
+                continue
+            self._entries_by_namespace.setdefault(namespace, []).append(entry)
+
+    @property
+    def journal_read_stats(self) -> tuple[int, int]:
+        """Return ``(read_count, bytes_read)`` for structural tests/metrics."""
+        return self._journal_reads, self._journal_bytes_read
 
     def sync(
         self,

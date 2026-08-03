@@ -94,6 +94,7 @@ describe('versioned snapshot stream', () => {
     }));
     source.emit('snapshot', JSON.stringify({ stream_epoch: 'epoch-a' }));
     source.emit('snapshot', '{');
+    source.emit('error', JSON.stringify({ error: 'The live projection refresh failed.' }));
     stream.close();
 
     expect(onSnapshot).toHaveBeenCalledWith({
@@ -107,6 +108,51 @@ describe('versioned snapshot stream', () => {
     expect(onMalformedSnapshot).toHaveBeenCalledWith(
       expect.stringContaining('Test stream returned malformed JSON:'),
     );
+    expect(onMalformedSnapshot).toHaveBeenCalledWith(
+      'The live projection refresh failed.',
+    );
     expect(source.closed).toBe(true);
+  });
+
+  it('treats an end control event as intentional termination', () => {
+    const onStatus = vi.fn();
+    openVersionedSnapshotStream(
+      '/api/test-snapshots/stream',
+      isTestSnapshot,
+      'Test stream',
+      {
+        onSnapshot: vi.fn(),
+        onMalformedSnapshot: vi.fn(),
+        onStatus,
+      },
+    );
+    const source = StubEventSource.instances[0];
+
+    source.emit('end', '{}');
+
+    expect(source.closed).toBe(true);
+    expect(onStatus).toHaveBeenLastCalledWith('closed');
+  });
+
+  it('keeps an ordinary transport failure separate from a backend error event', () => {
+    const onMalformedSnapshot = vi.fn();
+    const onStatus = vi.fn();
+    const stream = openVersionedSnapshotStream(
+      '/api/test-snapshots/stream',
+      isTestSnapshot,
+      'Test stream',
+      {
+        onSnapshot: vi.fn(),
+        onMalformedSnapshot,
+        onStatus,
+      },
+    );
+    const source = StubEventSource.instances[0];
+
+    source.emit('error', '');
+
+    expect(onMalformedSnapshot).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith('error');
+    stream.close();
   });
 });

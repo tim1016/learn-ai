@@ -59,6 +59,7 @@ export type StationView = components['schemas']['StationView'];
 export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
 export type BotPanelView = components['schemas']['BotPanelView'];
+export type MarketPulseView = components['schemas']['MarketPulseView'];
 
 // ── Run navigation ──────────────────────────────────────────────────────────
 
@@ -154,6 +155,8 @@ export interface ChartHistoryResponse {
   readonly truncated: boolean;
   readonly as_of_ms: number;
 }
+
+export type BotPanelLiveSnapshot = components['schemas']['BotPanelLiveSnapshot'];
 
 // ── §14 Operator-gated evidence ──────────────────────────────────────────────
 

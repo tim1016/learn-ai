@@ -497,6 +497,9 @@ async def lifespan(app: FastAPI):
             await alpaca_trade_updates.stop()
             set_trade_updates_consumer(None)
         set_alpaca_clerk(None)
+        from app.services.broker_v2_panel.live_projection import stop_live_projection_hubs
+
+        await stop_live_projection_hubs()
         await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()
         # Stop the daemon monitor first — its probe traffic stops cleanly

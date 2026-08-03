@@ -9,7 +9,7 @@
 }
 
 @if (isLoaded()) {
-  @let panelData = panel.value()!;
+  @let panelData = panel()!;
   @let profileData = profile.value()!;
 
   <app-panel-header [panel]="panelData" />
@@ -54,9 +54,9 @@
         <app-trader-lens
           [panel]="panelData"
           [profile]="profileData"
-          [liveChart]="liveChart.value() ?? null"
+          [liveChart]="liveChart()"
           [histChart]="histChart.value() ?? null"
-          [liveChartLoading]="liveChart.isLoading()"
+          [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
           [histChartLoading]="histChart.isLoading()"
           [liveResolution]="liveResolution()"
           [selectedPreset]="selectedPreset()"

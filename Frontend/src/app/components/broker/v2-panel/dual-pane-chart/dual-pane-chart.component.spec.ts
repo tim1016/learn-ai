@@ -4,11 +4,13 @@ import {
   DualPaneChartComponent,
   toSeriesMarkers,
 } from './dual-pane-chart.component';
+import type { ChartBar } from '../lib/broker-v2-panel.types';
 
 const chartMocks = vi.hoisted(() => ({
   createChart: vi.fn(),
   setMarkers: vi.fn(),
   setData: vi.fn(),
+  update: vi.fn(),
   fitContent: vi.fn(),
 }));
 
@@ -17,6 +19,7 @@ vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: chartMocks.fitContent };
   const createMockSeries = () => ({
     setData: chartMocks.setData,
+    update: chartMocks.update,
     applyOptions: vi.fn(),
   });
   const createSeriesMarkers = vi.fn().mockReturnValue({
@@ -42,6 +45,7 @@ interface ChartHarness {
   } | null;
   series: {
     setData: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
   } | null;
 }
 
@@ -49,11 +53,25 @@ function chartHarness(component: DualPaneChartComponent): ChartHarness {
   return component as unknown as ChartHarness;
 }
 
+function liveBar(startMs: number, endMs = startMs + 5_000): ChartBar {
+  return {
+    start_ms: startMs,
+    end_ms: endMs,
+    open: '100',
+    high: '102',
+    low: '99',
+    close: '101',
+    volume: 100,
+    source: 'ibkr',
+  };
+}
+
 describe('DualPaneChartComponent', () => {
   beforeEach(() => {
     chartMocks.createChart.mockClear();
     chartMocks.setMarkers.mockClear();
     chartMocks.setData.mockClear();
+    chartMocks.update.mockClear();
     chartMocks.fitContent.mockClear();
   });
 
@@ -235,14 +253,51 @@ describe('DualPaneChartComponent', () => {
     fixture.detectChanges();
 
     await waitFor(() => {
-      expect(series.setData).toHaveBeenLastCalledWith([
-        expect.objectContaining({ time: 1_700_000_000 }),
+      expect(series.update).toHaveBeenLastCalledWith(
         expect.objectContaining({ time: 1_700_000_005 }),
-      ]);
+      );
     });
 
+    expect(series.setData).toHaveBeenCalledTimes(1);
     expect(fitContent).toHaveBeenCalledTimes(fitCount);
   }, 15_000);
+
+  it.each([
+    {
+      name: 'a later appended bar is out of order',
+      appended: [
+        liveBar(1_700_000_005_000),
+        liveBar(1_700_000_004_000),
+      ],
+    },
+    {
+      name: 'a later appended bar has a forward gap',
+      appended: [
+        liveBar(1_700_000_005_000),
+        liveBar(1_700_000_011_000),
+      ],
+    },
+  ])('replaces chart data when $name', async ({ appended }) => {
+    const initial = liveBar(1_700_000_000_000);
+    const { fixture } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'SPY', liveBars: [initial], histBars: [] },
+    });
+    await waitFor(
+      () => expect(chartHarness(fixture.componentInstance).series).not.toBeNull(),
+      { timeout: 5_000 },
+    );
+    const series = chartHarness(fixture.componentInstance).series;
+    if (series === null) throw new Error('chart series did not mount');
+    await waitFor(() => expect(series.setData).toHaveBeenCalled());
+    series.setData.mockClear();
+    series.update.mockClear();
+
+    fixture.componentRef.setInput('liveBars', [initial, ...appended]);
+    fixture.detectChanges();
+
+    await waitFor(() => expect(series.setData).toHaveBeenCalledOnce());
+    expect(series.update).not.toHaveBeenCalled();
+  });
 
   it('projects live fills into candle-series markers', () => {
     const markers = toSeriesMarkers(

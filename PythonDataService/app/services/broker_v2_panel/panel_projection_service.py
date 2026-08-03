@@ -33,6 +33,7 @@ from app.schemas.broker_v2_panel import (
     ChannelHealthView,
     ClerkCard,
     DutyOutcomeView,
+    MarketPulseView,
     MissionVerdictView,
     PanelAction,
     ReadinessCheckView,
@@ -605,6 +606,7 @@ def build_panel(
     recent_decisions: list[DecisionReceipt] | None = None,
     resume_admission: RunAdmissionDecision | None = None,
     dry_run_activity: list[DryRunActivity] | None = None,
+    market_pulse: MarketPulseView,
 ) -> BotPanelView:
     """Build the full panel view for one bot (§7).
 
@@ -688,6 +690,7 @@ def build_panel(
         mode=status.mode,
         updated_at_ms=now_ms,
         revision=revision,
+        market_pulse=market_pulse,
         mission_verdict=_mission_verdict(
             status,
             clerk,

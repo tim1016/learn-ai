@@ -326,6 +326,24 @@ class RecentFillView(BaseModel):
     simulated: bool = False
 
 
+class MarketPulseView(BaseModel):
+    """Header-level market session and data recency authored by the backend."""
+
+    model_config = ConfigDict(frozen=True)
+
+    session: Literal["PRE_MARKET", "OPEN", "AFTER_HOURS", "CLOSED", "UNKNOWN"]
+    feed_state: Literal["LIVE", "IDLE", "STALE", "MISSING"]
+    latest_bar_at_ms: int | None
+    age_ms: int | None
+    source: str | None
+    expected_cadence_ms: int
+    headline: str
+    explanation: str
+    next_step: str | None
+    attention_required: bool
+    observed_at_ms: int
+
+
 class BotPanelView(BaseModel):
     """The full 5s-poll panel projection for one bot (§7).
 
@@ -345,6 +363,7 @@ class BotPanelView(BaseModel):
     mode: Literal["log_only", "dry_run", "trade"]
     updated_at_ms: int
     revision: int
+    market_pulse: MarketPulseView
     mission_verdict: MissionVerdictView
     execution_policy: str
     health: BotHealthCard
@@ -456,7 +475,7 @@ class ChartOverlayNoticeView(BaseModel):
 
     code: str
     message: str
-    source: Literal["polygon"] = "polygon"
+    source: Literal["polygon"]
 
 
 class ChartLiveResponse(BaseModel):
@@ -477,6 +496,35 @@ class ChartLiveResponse(BaseModel):
     fill_markers: list[ChartFillMarker]
     overlay_notices: list[ChartOverlayNoticeView]
     as_of_ms: int
+
+
+class BotPanelLiveSnapshot(BaseModel):
+    """Versioned complete state document used by REST bootstrap and SSE."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stream_epoch: str
+    surface_version: int = Field(ge=0)
+    panel: BotPanelView
+    live_chart: ChartLiveResponse
+
+
+class LiveSnapshotUnavailableDetail(BaseModel):
+    """Retry guidance when a producer has not published its first snapshot."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    message: str
+    why: str
+    next_action: str
+
+
+class LiveSnapshotUnavailableResponse(BaseModel):
+    """Typed 503 envelope for the live-panel bootstrap and stream routes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    detail: LiveSnapshotUnavailableDetail
 
 
 class ChartHistoryResponse(BaseModel):

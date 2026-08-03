@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.models import (
     ReconciliationSummary,
 )
 from app.schemas.broker_bots import BotStatusView
+from app.schemas.broker_v2_panel import MarketPulseView
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
 from app.services.bot_dry_run import DryRunActivity
@@ -35,6 +36,20 @@ from tests.broker.v2panel.fixtures import (
 )
 
 _NOW = 1_700_000_000_000
+
+_MARKET_PULSE = MarketPulseView(
+    session="OPEN",
+    feed_state="LIVE",
+    latest_bar_at_ms=_NOW - 60_000,
+    age_ms=60_000,
+    source="test-feed",
+    expected_cadence_ms=60_000,
+    headline="Market data live",
+    explanation="The test feed is current.",
+    next_step=None,
+    attention_required=False,
+    observed_at_ms=_NOW,
+)
 
 
 def _status(
@@ -167,6 +182,7 @@ def _panel(
         now_ms=_NOW,
         resume_admission=resume_admission,
         dry_run_activity=dry_run_activity,
+        market_pulse=_MARKET_PULSE,
     )
 
 
