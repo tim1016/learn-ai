@@ -1,4 +1,4 @@
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type { components } from '../../../../api/broker.types';
@@ -147,7 +147,76 @@ export class BrokerV2PanelService {
     );
   }
 
-  runBotAction(
+  /**
+   * Run a presented panel action, with a bounded fresh-token retry on a 409.
+   *
+   * Every 409 from the action endpoint is a PRE-EXECUTION rejection
+   * (`StaleRevisionError` / `ActionNotAvailableError` — the mid-flight
+   * `ActionOutcomeUnknownError` is a 500), so the action never ran and a retry
+   * cannot double-fire. On a 409 we refetch the authoritative panel and retry
+   * ONCE with the current token — but only if: the action requires no operator
+   * confirmation, is still offered, is still enabled, and its token changed;
+   * otherwise the original error is re-thrown so the operator sees an honest
+   * message instead of a silent re-post.
+   *
+   * The confirmation guard is load-bearing, not incidental: `flatten_stop`'s
+   * token is derived from live exposure/working-order state
+   * (`action_policy.py`'s `revision_inputs`), and its confirmation text quotes
+   * those exact numbers back to the operator. Silently resubmitting a
+   * refreshed action after that text was shown would let the operator
+   * unknowingly flatten a materially different position than the one they
+   * confirmed. Confirmed actions therefore always re-throw on a 409 — the
+   * operator sees the state changed and must re-confirm explicitly.
+   *
+   * Stop's token, by contrast, is a pure function of `running`
+   * (`action_policy.py:362`) — a single boolean. `enabled` already IS
+   * `running`, so a presented "Stop, enabled" action can only ever recompute
+   * to the SAME token. There is no reachable state where Stop is both
+   * re-offered enabled AND carries a different token, so this retry can never
+   * fire for Stop; it is eligible only because it carries no confirmation, not
+   * because it benefits. Defect #10's fix for the 2026-07-30 Stop-409 storm is
+   * the backend's `panel_action_rejected` log line naming the 409 subclass
+   * (`StaleRevisionError` vs `ActionNotAvailableError`), not this retry —
+   * making Stop itself recoverable needs a real design change (e.g. treating
+   * "refetch shows Stop disabled because already-stopped" as an idempotent
+   * success), tracked separately.
+   *
+   * This is the single public action entry point, so every caller (the panel
+   * shell AND the fleet list) shares the same policy and there is no bare,
+   * dead-ending variant to reach by accident.
+   */
+  async runBotAction(
+    broker: string,
+    accountId: string,
+    sid: string,
+    action: PanelAction,
+  ): Promise<PanelActionResult> {
+    try {
+      return await this.submitAction(broker, accountId, sid, action);
+    } catch (error) {
+      if (
+        !(error instanceof HttpErrorResponse) ||
+        error.status !== 409 ||
+        action.confirmation !== null
+      ) {
+        throw error;
+      }
+      const panel = await this.getPanel(broker, accountId, sid);
+      const fresh = panel.actions.find(
+        (candidate) => candidate.action_id === action.action_id,
+      );
+      if (
+        fresh === undefined ||
+        !fresh.enabled ||
+        fresh.concurrency_token === action.concurrency_token
+      ) {
+        throw error;
+      }
+      return await this.submitAction(broker, accountId, sid, fresh);
+    }
+  }
+
+  private submitAction(
     broker: string,
     accountId: string,
     sid: string,

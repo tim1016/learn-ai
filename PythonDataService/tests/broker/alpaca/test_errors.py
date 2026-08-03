@@ -9,6 +9,7 @@ from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerError,
+    BrokerOrderRejected,
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
@@ -38,6 +39,34 @@ def test_status_maps_to_contract_error(
     assert isinstance(error, expected)
     assert error.broker == "alpaca"
     assert "denied" in error.message
+
+
+def test_conflict_on_order_mutation_maps_to_definitive_order_rejected(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    # A 409 on an order mutation (submit/cancel) is a definitive order
+    # conflict, not a transient outage. It must NOT be a
+    # ``BrokerUnavailable`` — otherwise the Clerk folds it into the S5
+    # uncertain-lookup path instead of a clean, definitive ``SUBMIT_FAILED``.
+    error = map_api_error(make_api_error(409), broker="alpaca", is_order_mutation=True)
+
+    assert isinstance(error, BrokerOrderRejected)
+    assert not isinstance(error, BrokerUnavailable)
+    assert error.http_status == 409
+
+
+def test_conflict_outside_order_mutation_does_not_raise_order_rejected(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    # ``BrokerOrderRejected`` is declared write-only — its own docstring
+    # promises phase-1 read paths never raise it. A 409 on a read (the
+    # default when ``is_order_mutation`` is omitted) must fall through to the
+    # generic ``BrokerUnavailable``, not misreport a broker-read failure as an
+    # order rejection.
+    error = map_api_error(make_api_error(409), broker="alpaca")
+
+    assert isinstance(error, BrokerUnavailable)
+    assert not isinstance(error, BrokerOrderRejected)
 
 
 def test_rate_limited_parses_retry_after_seconds(make_api_error: ApiErrorFactory) -> None:

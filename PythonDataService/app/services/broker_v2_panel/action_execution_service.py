@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import tempfile
 from collections.abc import Awaitable, Callable
@@ -32,6 +33,8 @@ from typing import Literal
 from app.broker.v2panel.vocabulary import ActionId
 from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 
 class ActionExecutionError(Exception):
@@ -352,9 +355,32 @@ async def execute_action(
         # 3. Identity from the channel — the performer receives the configured
         # operator identity, never anything from the request body.
         message = await performer(operator_identity)
-    except ActionExecutionError:
+    except (StaleRevisionError, ActionNotAvailableError) as err:
         # Pre-execution rejection (stale revision / not available): the action
-        # never ran, so free a fresh reservation for a corrected retry.
+        # never ran, so free a fresh reservation for a corrected retry. Scoped
+        # to exactly these two types — NOT the broader ``ActionExecutionError``
+        # — because a performer can also raise ``ActionNotAvailableError``
+        # (e.g. ``_resume``) after it already attempted real work; that case is
+        # legitimately pre-execution too. Any OTHER ``ActionExecutionError``
+        # subclass a performer raises (e.g. ``UnknownActionError``) falls
+        # through to the ``except Exception`` branch below and burns the key,
+        # since the performer ran and its outcome is unknown.
+        # Instrument which 409-class subclass fired so a Stop-409 in the field
+        # is attributable — a stale action token (running flipped) vs the
+        # action being not-available — instead of an ambiguous bare 409
+        # (defect #10: the documented "whole-panel revision" cause is
+        # architecturally impossible for Stop, so the real trigger must be
+        # disambiguated from live evidence).
+        logger.info(
+            "panel action rejected before execution",
+            extra={
+                "action": "panel_action_rejected",
+                "action_id": request.action_id,
+                "sid": sid,
+                "error_class": type(err).__name__,
+                "http_status": err.http_status,
+            },
+        )
         if reserved_fresh:
             await ledger.release(sid, request.action_id, request.idempotency_key)
         raise

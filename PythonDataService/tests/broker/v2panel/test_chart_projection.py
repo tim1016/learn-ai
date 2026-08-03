@@ -199,7 +199,7 @@ async def test_live_chart_before_session_open_is_empty(
             last_transition_at_ms=_NOW - 60_000,
         ),
     )
-    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda account_id: [])
+    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda *_args: [])
     monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: _NOW)
     monkeypatch.setattr(panel_data_source, "live_window", lambda now_ms: (open_ms, close_ms))
     monkeypatch.setattr(panel_data_source, "resolve_chart_window", unexpected_resolver)
@@ -260,7 +260,7 @@ async def test_live_chart_forwards_selected_resolution(
             last_transition_at_ms=_NOW - 60_000,
         ),
     )
-    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda account_id: [])
+    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda *_args: [])
     monkeypatch.setattr(panel_data_source, "now_ms_utc", lambda: _NOW)
     monkeypatch.setattr(panel_data_source, "live_window", lambda now_ms: (open_ms, close_ms))
     monkeypatch.setattr(panel_data_source, "resolve_chart_window", resolver)
