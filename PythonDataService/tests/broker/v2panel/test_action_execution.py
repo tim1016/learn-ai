@@ -402,6 +402,9 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
         def dry_run_activity(self, _broker: str, _sid: str):
             return []
 
+        def binding_for_control(self, _broker: str, _sid: str):
+            return SimpleNamespace(use_rth=True)
+
     class _Owner:
         def sync(self, *_args, **_kwargs) -> None:
             return
@@ -420,11 +423,12 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
     monkeypatch.setattr(panel_data_source, "_validate_account", _account)
     monkeypatch.setattr(panel_data_source, "_bot_status", lambda *_args: status)
     monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
-    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda _account_id: [])
+    monkeypatch.setattr(panel_data_source, "_read_order_journal", lambda *_args: [])
     monkeypatch.setattr(panel_data_source, "_clerk_status", _clerk)
     monkeypatch.setattr(panel_data_source, "_recent_decisions", lambda *_args: [])
     monkeypatch.setattr(panel_data_source, "get_or_create_owner", lambda *_args: _Owner())
     monkeypatch.setattr(panel_data_source, "panel_profile_for", lambda _broker: None)
+    monkeypatch.setattr(panel_data_source, "build_market_pulse", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: sentinel)
 
     panel = await panel_data_source.get_panel("alpaca", "account-1", _SID)
