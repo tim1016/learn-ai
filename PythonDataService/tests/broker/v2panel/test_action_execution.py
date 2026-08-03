@@ -33,20 +33,26 @@ _SID = "bot-alpha"
 
 
 def _request(
-    *, action_id: str = "stop", revision: int = 42, key: str = "k1", token: str = "token"
+    *,
+    action_id: str = "stop",
+    revision: int = 42,
+    key: str = "k1",
+    token: str = "token",
+    reason: str | None = None,
 ) -> PanelActionRequest:
     return PanelActionRequest(
         action_id=action_id,  # type: ignore[arg-type]
         revision=revision,
         concurrency_token=token,
         idempotency_key=key,
+        reason=reason,
     )
 
 
 async def test_action_applies_and_records_identity() -> None:
     seen_identity: list[str] = []
 
-    async def _perform(operator: str) -> str:
+    async def _perform(operator: str, reason: str | None) -> str:
         seen_identity.append(operator)
         return "stopped"
 
@@ -71,8 +77,34 @@ async def test_action_applies_and_records_identity() -> None:
     assert seen_identity == ["desk-operator"]
 
 
+async def test_execute_action_forwards_request_reason_to_performer() -> None:
+    """The executor threads the request's operator-authored reason to the performer.
+
+    Identity is channel-derived (never a request field); reason is the one
+    request-authored value the performer receives alongside it.
+    """
+    seen: list[tuple[str, str | None]] = []
+
+    async def _perform(operator: str, reason: str | None) -> str:
+        seen.append((operator, reason))
+        return "stopped"
+
+    store = IdempotencyStore()
+    await execute_action(
+        _request(key="reason-thread", reason="operator note"),
+        sid=_SID,
+        current_revision=42,
+        current_concurrency_token="token",
+        performers={"stop": _perform},
+        operator_identity="desk-operator",
+        store=store,
+    )
+
+    assert seen == [("desk-operator", "operator note")]
+
+
 async def test_stale_revision_is_409() -> None:
-    async def _perform(operator: str) -> str:  # pragma: no cover - must not run
+    async def _perform(operator: str, reason: str | None) -> str:  # pragma: no cover - must not run
         raise AssertionError("performer must not run on a stale revision")
 
     with pytest.raises(StaleRevisionError) as exc:
@@ -91,7 +123,7 @@ async def test_stale_revision_is_409() -> None:
 async def test_idempotent_repost_is_a_noop() -> None:
     calls = 0
 
-    async def _perform(operator: str) -> str:
+    async def _perform(operator: str, reason: str | None) -> str:
         nonlocal calls
         calls += 1
         return "stopped"
@@ -124,7 +156,7 @@ async def test_idempotent_repost_is_a_noop() -> None:
 
 
 async def test_performer_failure_returns_unknown_and_burns_receipt_key() -> None:
-    async def _perform(_operator: str) -> str:
+    async def _perform(_operator: str, _reason: str | None) -> str:
         raise RuntimeError("connection dropped after dispatch")
 
     store = IdempotencyStore()
@@ -156,7 +188,7 @@ async def test_performer_raised_action_execution_error_burns_key_not_released(
     released) and no ``panel_action_rejected`` pre-execution log fires.
     """
 
-    async def _perform(_operator: str) -> str:
+    async def _perform(_operator: str, _reason: str | None) -> str:
         raise UnknownActionError("performer rejected mid-flight")
 
     store = IdempotencyStore()
@@ -216,7 +248,7 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
 async def test_idempotent_repost_survives_revision_advance() -> None:
     """A retry of an applied action stays a no-op even after the panel advances."""
 
-    async def _perform(operator: str) -> str:
+    async def _perform(operator: str, reason: str | None) -> str:
         return "stopped"
 
     store = IdempotencyStore()
@@ -250,7 +282,7 @@ async def test_unrelated_panel_revision_does_not_stale_an_action_token() -> None
         sid=_SID,
         current_revision=99,
         current_concurrency_token="token",
-        performers={"stop": lambda _operator: _noop()},
+        performers={"stop": lambda _operator, _reason: _noop()},
         operator_identity="op",
         store=IdempotencyStore(),
     )
@@ -260,7 +292,7 @@ async def test_unrelated_panel_revision_does_not_stale_an_action_token() -> None
 async def test_durable_receipt_prevents_reexecution_after_store_restart(tmp_path: Path) -> None:
     calls = 0
 
-    async def _perform(_operator: str) -> str:
+    async def _perform(_operator: str, _reason: str | None) -> str:
         nonlocal calls
         calls += 1
         return "stopped"
@@ -319,7 +351,7 @@ async def test_legacy_durable_success_receipt_upgrades_without_reexecution(
         sid=_SID,
         current_revision=99,
         current_concurrency_token="token",
-        performers={"stop": lambda _operator: _noop()},
+        performers={"stop": lambda _operator, _reason: _noop()},
         operator_identity="op",
         store=DurableIdempotencyStore(path),
     )
@@ -336,7 +368,7 @@ async def test_unwired_action_is_typed_not_available() -> None:
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": lambda op: _noop()},  # retire not wired
+            performers={"stop": lambda op, reason: _noop()},  # retire not wired
             operator_identity="op",
             store=IdempotencyStore(),
         )
@@ -359,7 +391,7 @@ async def test_resume_performer_creates_new_run_from_durable_binding(monkeypatch
         "alpaca",
         _SID,
         idempotency_key="resume-1",
-    )["resume"]("desk-operator")
+    )["resume"]("desk-operator", None)
 
     assert resumed == [("alpaca", _SID)]
     assert message == (
@@ -383,7 +415,7 @@ async def test_resume_performer_returns_known_refusal_when_fresh_admission_chang
 
     with pytest.raises(ActionNotAvailableError) as exc:
         await _action_performers("alpaca", _SID, idempotency_key="resume-2")["resume"](
-            "desk-operator"
+            "desk-operator", None
         )
 
     assert exc.value.http_status == 409
@@ -455,8 +487,8 @@ async def test_pause_and_continue_performers_preserve_run_identity(monkeypatch) 
     )
     performers = _action_performers("alpaca", _SID, idempotency_key="same-run-1")
 
-    paused = await performers["pause"]("desk-operator")
-    continued = await performers["continue"]("desk-operator")
+    paused = await performers["pause"]("desk-operator", None)
+    continued = await performers["continue"]("desk-operator", None)
 
     assert calls == [
         ("pause", "alpaca", _SID),
@@ -498,7 +530,9 @@ async def test_flatten_stop_stops_strategy_before_unprovable_exit(monkeypatch) -
         lambda: _Clerk(),
     )
 
-    message = await _action_performers("alpaca", _SID, idempotency_key="flatten-1")["flatten_stop"]("desk-operator")
+    message = await _action_performers("alpaca", _SID, idempotency_key="flatten-1")["flatten_stop"](
+        "desk-operator", None
+    )
 
     assert events == ["stop", "execute"]
     assert "cannot prove" in message
@@ -523,7 +557,7 @@ async def test_inventory_baseline_performer_uses_channel_identity(monkeypatch) -
 
     message = await _action_performers(
         "alpaca", _SID, idempotency_key="baseline-1"
-    )["record_inventory_baseline"]("desk-operator")
+    )["record_inventory_baseline"]("desk-operator", None)
 
     assert calls == [
         {
@@ -534,6 +568,98 @@ async def test_inventory_baseline_performer_uses_channel_identity(monkeypatch) -
     ]
     assert "SPY 1" in message
     assert "reconciliation is clean" in message
+
+
+async def test_inventory_baseline_performer_forwards_operator_reason(monkeypatch) -> None:
+    calls: list[dict[str, str]] = []
+
+    class _Clerk:
+        async def record_inventory_baseline(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(positions=())
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
+        lambda: _Clerk(),
+    )
+
+    await _action_performers(
+        "alpaca", _SID, idempotency_key="baseline-2"
+    )["record_inventory_baseline"]("desk-operator", "operator note")
+
+    assert calls == [
+        {
+            "operator": "desk-operator",
+            "reason": "operator note",
+            "strategy_instance_id": _SID,
+        }
+    ]
+
+
+async def test_clear_hold_performer_journals_operator_reason(monkeypatch) -> None:
+    """The clear-hold performer forwards the operator's reason to the Clerk.
+
+    ``clerk.clear_hold`` journals this ``reason`` verbatim onto the resulting
+    ``HOLD_CLEARED`` row (see ``AlpacaClerk.clear_hold``); capturing the kwarg
+    it receives pins the exact value that lands on that row.
+    """
+    calls: list[dict[str, str]] = []
+
+    class _Clerk:
+        async def clear_hold(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
+        lambda: _Clerk(),
+    )
+
+    message = await _action_performers(
+        "alpaca", _SID, idempotency_key="clear-hold-1"
+    )["clear_hold"]("desk-operator", "operator note")
+
+    assert calls == [{"operator": "desk-operator", "reason": "operator note"}]
+    assert message == "Exposure hold cleared."
+
+
+async def test_clear_hold_performer_falls_back_to_default_reason_when_none_given(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, str]] = []
+
+    class _Clerk:
+        async def clear_hold(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
+        lambda: _Clerk(),
+    )
+
+    await _action_performers(
+        "alpaca", _SID, idempotency_key="clear-hold-2"
+    )["clear_hold"]("desk-operator", None)
+
+    assert calls == [{"operator": "desk-operator", "reason": "Panel clear-hold"}]
+
+
+async def test_reconcile_performer_ignores_operator_reason(monkeypatch) -> None:
+    """``reconcile_now`` has no operator-authored reason to journal; it ignores one."""
+
+    class _Clerk:
+        async def reconcile_once(self) -> str:
+            return "clean"
+
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.panel_data_source.get_alpaca_clerk",
+        lambda: _Clerk(),
+    )
+
+    message = await _action_performers(
+        "alpaca", _SID, idempotency_key="reconcile-1"
+    )["reconcile_now"]("desk-operator", "this should be ignored")
+
+    assert message == "Reconciliation sweep complete: clean."
 
 
 async def _noop() -> str:
@@ -549,7 +675,7 @@ async def test_stale_revision_releases_key_for_corrected_retry() -> None:
     """
     calls = 0
 
-    async def _perform(operator: str) -> str:
+    async def _perform(operator: str, reason: str | None) -> str:
         nonlocal calls
         calls += 1
         return "stopped"
@@ -593,7 +719,7 @@ async def test_not_available_action_releases_key() -> None:
             sid=_SID,
             current_revision=42,
             current_concurrency_token="token",
-            performers={"stop": lambda op: _noop()},  # retire not wired
+            performers={"stop": lambda op, reason: _noop()},  # retire not wired
             operator_identity="op",
             store=store,
         )
@@ -605,7 +731,7 @@ async def test_duplicate_concurrent_posts_run_mutation_once() -> None:
     """Two concurrent POSTs with the same idempotency_key must fire the mutation once."""
     calls = 0
 
-    async def _slow_perform(operator: str) -> str:
+    async def _slow_perform(operator: str, reason: str | None) -> str:
         nonlocal calls
         calls += 1
         # Yield briefly so the second coroutine can reach reserve_or_get before we finish.
@@ -642,7 +768,7 @@ async def test_timed_out_duplicate_never_refires_in_flight_mutation() -> None:
     performer_started = asyncio.Event()
     release_performer = asyncio.Event()
 
-    async def _blocked_perform(operator: str) -> str:
+    async def _blocked_perform(operator: str, reason: str | None) -> str:
         nonlocal calls
         calls += 1
         performer_started.set()
