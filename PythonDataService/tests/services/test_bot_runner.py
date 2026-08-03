@@ -983,7 +983,7 @@ async def test_resume_does_not_preserve_provisional_stop_outcome(tmp_path: Path)
     managed.finalized = True
     managed.task.cancel()
     await asyncio.wait({managed.task})
-    registry._reap(_SID, binding.run_id)
+    registry._terminal.reap(_SID, binding.run_id)
     registry._desired_repo(_SID).set(
         DesiredState.STOPPED,
         updated_by="test",
@@ -1025,7 +1025,7 @@ async def test_conflicting_terminal_outcome_does_not_mutate_lifecycle(tmp_path: 
     managed.finalized = True
     managed.task.cancel()
     await asyncio.wait({managed.task})
-    registry._reap(_SID, binding.run_id)
+    registry._terminal.reap(_SID, binding.run_id)
     recorded = BotDutyOutcome(
         kind="STOPPED",
         reason_code="OPERATOR_STOP",

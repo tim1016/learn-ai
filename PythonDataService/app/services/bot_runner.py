@@ -30,9 +30,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -43,7 +42,6 @@ from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.config import settings
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import (
-    BotDutyOutcome,
     BotLifecyclePhase,
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
@@ -54,9 +52,8 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.engine.live.identity import strategy_instance_artifact_dir
-from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeed, MarketDataFeedError
+from app.marketdata.feed import MarketDataFeed, MarketDataFeedError
 from app.schemas.broker_bots import (
-    BotDutyOutcomeView,
     BotProcessFact,
     BotRunHistoryPage,
     BotRunView,
@@ -76,10 +73,14 @@ from app.services.bot_binding_repository import (
 from app.services.bot_boot_recovery import BootRecoveryReport, BotBootRecovery
 from app.services.bot_carryover import (
     checkpoint_status,
-    prove_stop_outcome,
     read_checkpoint,
 )
-from app.services.bot_dry_run import DryRunActivity, DryRunActivityJournal
+from app.services.bot_dry_run import DryRunActivity
+from app.services.bot_registry_projection import (
+    project_bot_status,
+    project_process_fact,
+    read_dry_run_activity,
+)
 from app.services.bot_resume_admission import (
     AdmittedBotResume,
     BotResumeAdmission,
@@ -87,6 +88,10 @@ from app.services.bot_resume_admission import (
 from app.services.bot_run_evidence import (
     PROVISIONAL_STOP_REASON_CODE,
     BotRunEvidenceService,
+)
+from app.services.bot_run_terminal import (
+    BotRunTerminalRecorder,
+    prove_terminal_stop_outcome,
 )
 from app.services.bot_runner_errors import (
     BootRecoveryIncompleteError,
@@ -101,6 +106,11 @@ from app.services.bot_runner_errors import (
     UnknownBotError,
     raise_run_refusal,
     require_start_configuration,
+)
+from app.services.bot_runtime import (
+    ManagedBot,
+    execute_bot_run,
+    require_live_managed_bot,
 )
 from app.services.bot_start_admission import (
     AdmittedBotStart,
@@ -138,42 +148,6 @@ _UPDATED_BY = "bot_runner"
 _STOP_TIMEOUT_S = 5.0
 
 
-@dataclass
-class _ManagedBot:
-    """One supervised bot task and its stop bookkeeping."""
-
-    binding: BrokerBotBinding
-    task: asyncio.Task[None] = field(repr=False)
-    # Set BEFORE cancellation by a deliberate stop; a cancel that arrives
-    # without this set is a kill and is finalized as EXITED_UNVERIFIED.
-    stop_reason_code: str | None = None
-    # Exactly one terminal duty outcome per run: set by the first finalize.
-    finalized: bool = False
-    run_gate: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
-
-
-class _PauseAwareFeed:
-    """Hold bar delivery while one live run is durably paused."""
-
-    def __init__(self, source: MarketDataFeed, gate: asyncio.Event) -> None:
-        self._source = source
-        self._gate = gate
-        self.feed_id = source.feed_id
-
-    async def stream_bars(
-        self,
-        symbol: str,
-        *,
-        use_rth: bool = True,
-    ) -> AsyncIterator[MarketDataBar]:
-        async for bar in self._source.stream_bars(symbol, use_rth=use_rth):
-            await self._gate.wait()
-            yield bar
-
-    def health(self) -> FeedHealth:
-        return self._source.health()
-
-
 class BotTaskRegistry:
     """Spawn, track, and reap one supervised asyncio task per bot.
 
@@ -199,7 +173,7 @@ class BotTaskRegistry:
         self._restart_policy = restart_policy or RestartIntensityPolicy()
         self._now_ms = now_ms
         self._registry_generation = uuid4().hex
-        self._bots: dict[str, _ManagedBot] = {}
+        self._bots: dict[str, ManagedBot] = {}
         self._operation_locks: dict[str, asyncio.Lock] = {}
         self._start_history: dict[str, list[int]] = {}
         # S5 (#1263) fail-closed start gate: no bot starts until the boot
@@ -251,6 +225,12 @@ class BotTaskRegistry:
         self._run_evidence = BotRunEvidenceService(
             self._bindings,
             lifecycle_repo_for=self._lifecycle_repo,
+        )
+        self._terminal = BotRunTerminalRecorder(
+            managed_bots=self._bots,
+            desired_repo_for=self._desired_repo,
+            run_evidence=self._run_evidence,
+            now_ms=self._now_ms,
         )
 
     # ── deploy / stop ─────────────────────────────────────────────────
@@ -467,7 +447,7 @@ class BotTaskRegistry:
             reason=f"{reason}_{binding.mode}_bot",
         )
         task = asyncio.create_task(self._supervise(binding, feed), name=f"bot:{binding.strategy_instance_id}")
-        managed = _ManagedBot(
+        managed = ManagedBot(
             binding=binding,
             task=task,
         )
@@ -579,7 +559,8 @@ class BotTaskRegistry:
     ) -> BotStatusView:
         """Pause bar evaluation without ending or replacing the current run."""
         async with self._operation_lock(strategy_instance_id):
-            managed = self._require_live_managed_bot(broker, strategy_instance_id)
+            self._confined_instance_dir(strategy_instance_id)
+            managed = require_live_managed_bot(self._bots, broker, strategy_instance_id)
             current = self._desired_repo(strategy_instance_id).read_state()
             if current is DesiredState.PAUSED:
                 raise RunAdmissionRefusedError(
@@ -609,7 +590,8 @@ class BotTaskRegistry:
     ) -> BotStatusView:
         """Continue one paused live run without changing its run identity."""
         async with self._operation_lock(strategy_instance_id):
-            managed = self._require_live_managed_bot(broker, strategy_instance_id)
+            self._confined_instance_dir(strategy_instance_id)
+            managed = require_live_managed_bot(self._bots, broker, strategy_instance_id)
             current = self._desired_repo(strategy_instance_id).read_state()
             if current is not DesiredState.PAUSED:
                 raise RunAdmissionRefusedError(
@@ -664,32 +646,28 @@ class BotTaskRegistry:
         # Backstop for a coroutine that never entered supervision (cancelled
         # pre-start): _finalize is idempotent, so this is a no-op whenever the
         # supervisor already recorded the outcome.
-        self._finalize(
+        self._terminal.finalize(
             managed.binding,
             kind="STOPPED",
             reason_code=PROVISIONAL_STOP_REASON_CODE,
         )
-        self._reap(strategy_instance_id, managed.binding.run_id)
+        self._terminal.reap(strategy_instance_id, managed.binding.run_id)
         outcome = "OPERATOR_STOP"
         if broker == "alpaca" and managed.binding.mode == "trade":
-            outcome = await self._prove_stop_outcome(managed.binding)
-        terminal_outcome = BotDutyOutcome(
-            kind="STOPPED",
+            outcome = await prove_terminal_stop_outcome(
+                managed.binding,
+                checkpoint_path=self._carryover_checkpoint_path(strategy_instance_id),
+                now_ms=self._now_ms,
+            )
+        self._terminal.replace_provisional_stop(
+            managed.binding,
             reason_code=outcome,
-            recorded_at_ms=self._now_ms(),
-            run_id=managed.binding.run_id,
-        )
-        self._run_evidence.record_terminal(
-            strategy_instance_id,
-            terminal_outcome,
-            updated_by=_UPDATED_BY,
-            reason=outcome,
         )
         return self.status(broker, strategy_instance_id)
 
     async def stop_all(self) -> None:
         """Service shutdown: stop every task without overwriting operator intent."""
-        stopping: list[_ManagedBot] = []
+        stopping: list[ManagedBot] = []
         for managed in self._bots.values():
             if managed.task.done():
                 continue
@@ -700,8 +678,15 @@ class BotTaskRegistry:
             await asyncio.wait([m.task for m in stopping], timeout=_STOP_TIMEOUT_S)
         for managed in stopping:
             # Idempotent backstop, same as stop().
-            self._finalize(managed.binding, kind="STOPPED", reason_code="SERVICE_SHUTDOWN")
-            self._reap(managed.binding.strategy_instance_id, managed.binding.run_id)
+            self._terminal.finalize(
+                managed.binding,
+                kind="STOPPED",
+                reason_code="SERVICE_SHUTDOWN",
+            )
+            self._terminal.reap(
+                managed.binding.strategy_instance_id,
+                managed.binding.run_id,
+            )
 
     # ── S5 boot recovery (container restart is a drilled event) ───────
 
@@ -773,33 +758,10 @@ class BotTaskRegistry:
                 detail="Deploy the bot first; bindings are broker-tagged.",
             )
 
-        lifecycle = self._lifecycle_repo(strategy_instance_id).read()
-        managed = self._bots.get(strategy_instance_id)
-        process_identity: str | None = None
-        state: Literal["STARTING", "RUNNING", "STOPPING", "EXITED", "UNKNOWN"] = "UNKNOWN"
-        if managed is not None and managed.binding.run_id == binding.run_id:
-            process_identity = f"in-process-task:{binding.run_id}"
-            lifecycle_matches = (
-                lifecycle is not None
-                and lifecycle.phase is BotLifecyclePhase.ON_DUTY
-                and lifecycle.active_run_id == binding.run_id
-            )
-            if lifecycle_matches and not managed.task.done():
-                state = "STOPPING" if managed.stop_reason_code is not None else "RUNNING"
-        elif (
-            lifecycle is not None
-            and lifecycle.phase is BotLifecyclePhase.OFF_DUTY
-            and lifecycle.active_run_id is None
-            and lifecycle.duty_outcome is not None
-            and lifecycle.duty_outcome.run_id == binding.run_id
-        ):
-            state = "EXITED"
-
-        return BotProcessFact(
-            strategy_instance_id=strategy_instance_id,
-            run_id=binding.run_id,
-            process_identity=process_identity,
-            state=state,
+        return project_process_fact(
+            binding,
+            self._lifecycle_repo(strategy_instance_id).read(),
+            self._bots.get(strategy_instance_id),
             registry_generation=self._registry_generation,
             observed_at_ms=self._now_ms(),
         )
@@ -860,44 +822,38 @@ class BotTaskRegistry:
     ) -> list[DryRunActivity]:
         """Return bounded, explicitly simulated activity for a dry instance."""
         binding = self.binding_for_control(broker, strategy_instance_id)
-        if binding.mode != "dry_run":
-            return []
-        return DryRunActivityJournal(
-            self._confined_instance_dir(strategy_instance_id)
-        ).tail(limit)
+        return read_dry_run_activity(
+            binding,
+            self._confined_instance_dir(strategy_instance_id),
+            limit=limit,
+        )
 
     # ── supervision ───────────────────────────────────────────────────
 
     async def _supervise(self, binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
         """Run the bot; on ANY exit record a typed durable duty outcome, then reap."""
-        from app.services.bot_trade_strategy import run_dry_run_bot, run_trade_bot
-
         sid = binding.strategy_instance_id
         managed = self._bots.get(sid)
-        run_feed: MarketDataFeed = (
-            _PauseAwareFeed(feed, managed.run_gate)
+        run_gate = (
+            managed.run_gate
             if managed is not None and managed.binding.run_id == binding.run_id
-            else feed
+            else None
         )
         try:
-            if binding.mode == "trade":
-                await run_trade_bot(binding, run_feed)
-            elif binding.mode == "dry_run":
-                await run_dry_run_bot(
-                    binding,
-                    run_feed,
-                    DryRunActivityJournal(self._confined_instance_dir(sid)),
-                )
-            else:
-                await self._run_log_only_bot(binding, run_feed)
+            await execute_bot_run(
+                binding,
+                feed,
+                run_gate=run_gate,
+                instance_dir=self._confined_instance_dir(sid),
+            )
         except asyncio.CancelledError:
             managed = self._bots.get(sid)
             stop_reason = managed.stop_reason_code if managed is not None else None
             if stop_reason is not None:
-                self._finalize(binding, kind="STOPPED", reason_code=stop_reason)
+                self._terminal.finalize(binding, kind="STOPPED", reason_code=stop_reason)
             else:
                 # A cancellation nobody asked for is a kill, not a clean stop.
-                self._finalize(
+                self._terminal.finalize(
                     binding,
                     kind="EXITED_UNVERIFIED",
                     reason_code="CANCELLED_WITHOUT_STOP_INTENT",
@@ -908,7 +864,7 @@ class BotTaskRegistry:
                 "Bot crashed: market-data feed died",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid, "error": str(exc)},
             )
-            self._finalize(binding, kind="CRASHED", reason_code="FEED_DEATH")
+            self._terminal.finalize(binding, kind="CRASHED", reason_code="FEED_DEATH")
         except Exception as exc:
             # Supervision boundary: every crash becomes typed durable evidence
             # plus a logged traceback — deliberately not re-raised, so the
@@ -917,109 +873,25 @@ class BotTaskRegistry:
                 "Bot crashed",
                 extra={"action": "bot_crashed", "strategy_instance_id": sid},
             )
-            self._finalize(binding, kind="CRASHED", reason_code=type(exc).__name__)
+            self._terminal.finalize(
+                binding,
+                kind="CRASHED",
+                reason_code=type(exc).__name__,
+            )
         else:
-            self._finalize(binding, kind="EXITED_UNVERIFIED", reason_code="BAR_STREAM_ENDED")
+            self._terminal.finalize(
+                binding,
+                kind="EXITED_UNVERIFIED",
+                reason_code="BAR_STREAM_ENDED",
+            )
         finally:
-            self._reap(sid, binding.run_id)
-
-    async def _run_log_only_bot(self, binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
-        """Walking skeleton: consume closed bars, log a decision per bar."""
-        sid = binding.strategy_instance_id
-        logger.info(
-            "Log-only bot on duty",
-            extra={
-                "action": "bot_on_duty",
-                "strategy_instance_id": sid,
-                "broker": binding.broker,
-                "symbol": binding.symbol,
-                "run_id": binding.run_id,
-            },
-        )
-        async for bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
-            logger.info(
-                "Log-only bot decision",
-                extra={
-                    "action": "bot_decision",
-                    "strategy_instance_id": sid,
-                    "broker": binding.broker,
-                    "decision": "HOLD",
-                    "symbol": bar.symbol,
-                    "bar_start_ms": bar.start_ms,
-                    "bar_end_ms": bar.end_ms,
-                    "close": str(bar.close),
-                },
-            )
-
-    def _finalize(
-        self,
-        binding: BrokerBotBinding,
-        *,
-        kind: Literal["STOPPED", "CRASHED", "EXITED_UNVERIFIED"],
-        reason_code: str,
-    ) -> None:
-        """Record the terminal duty fact; OFF_DUTY, run-id fenced, idempotent."""
-        managed = self._bots.get(binding.strategy_instance_id)
-        if managed is not None and managed.binding.run_id == binding.run_id:
-            if managed.finalized:
-                return
-            managed.finalized = True
-        now_ms = self._now_ms()
-        if kind in ("CRASHED", "EXITED_UNVERIFIED"):
-            # Unexpected terminal exits are fail-closed.  A RUNNING intent with
-            # no live task strands the bot because proof-gated Start is legal
-            # only from STOPPED; persist the legal recovery state before the
-            # lifecycle terminal so a crash between writes remains conservative.
-            self._desired_repo(binding.strategy_instance_id).set(
-                DesiredState.STOPPED,
-                updated_by=_UPDATED_BY,
-                now_ms=now_ms,
-                reason=f"terminal_outcome:{reason_code}",
-            )
-        outcome = BotDutyOutcome(
-            kind=kind,
-            reason_code=reason_code,
-            recorded_at_ms=now_ms,
-            run_id=binding.run_id,
-        )
-        self._run_evidence.record_terminal(
-            binding.strategy_instance_id,
-            outcome,
-            updated_by=_UPDATED_BY,
-            reason=reason_code,
-            expected_active_run_id=binding.run_id,
-            persist_receipt=reason_code != PROVISIONAL_STOP_REASON_CODE,
-        )
-
-    def _reap(self, strategy_instance_id: str, run_id: str) -> None:
-        managed = self._bots.get(strategy_instance_id)
-        if managed is not None and managed.binding.run_id == run_id:
-            self._bots.pop(strategy_instance_id, None)
+            self._terminal.reap(sid, binding.run_id)
 
     # ── guards and composition ────────────────────────────────────────
 
     def _operation_lock(self, strategy_instance_id: str) -> asyncio.Lock:
         """One lifecycle mutation at a time for a strategy instance."""
         return self._operation_locks.setdefault(strategy_instance_id, asyncio.Lock())
-
-    def _require_live_managed_bot(
-        self,
-        broker: str,
-        strategy_instance_id: str,
-    ) -> _ManagedBot:
-        self._confined_instance_dir(strategy_instance_id)
-        managed = self._bots.get(strategy_instance_id)
-        if managed is None or managed.task.done():
-            raise RunAdmissionRefusedError(
-                "The bot has no authoritatively live run.",
-                detail="Use Resume only after the prior run has terminal evidence.",
-            )
-        if managed.binding.broker != broker:
-            raise UnknownBotError(
-                f"Bot '{strategy_instance_id}' is not bound to broker '{broker}'.",
-                detail=f"The bot's binding carries broker '{managed.binding.broker}'.",
-            )
-        return managed
 
     def _is_running(self, strategy_instance_id: str) -> bool:
         managed = self._bots.get(strategy_instance_id)
@@ -1044,27 +916,6 @@ class BotTaskRegistry:
             )
             return False
         return binding is not None and binding.broker in self._supported_broker_ids
-
-    async def _prove_stop_outcome(self, binding: BrokerBotBinding) -> str:
-        """Cancel entries, obtain fresh custody, and persist the STOP checkpoint."""
-        from app.broker.alpaca.clerk import get_alpaca_clerk
-
-        clerk = get_alpaca_clerk()
-        if clerk is None:
-            logger.error(
-                "Trade bot stopped without an available Alpaca Clerk proof",
-                extra={
-                    "action": "stop_custody_unprovable",
-                    "strategy_instance_id": binding.strategy_instance_id,
-                },
-            )
-            return "STOPPED_CUSTODY_UNPROVABLE"
-        return await prove_stop_outcome(
-            binding,
-            clerk=clerk,
-            checkpoint_path=self._carryover_checkpoint_path(binding.strategy_instance_id),
-            now_ms=self._now_ms,
-        )
 
     def _carryover_checkpoint_path(self, strategy_instance_id: str) -> Path:
         return self._confined_instance_dir(strategy_instance_id) / _CARRYOVER_CHECKPOINT_FILENAME
@@ -1114,37 +965,18 @@ class BotTaskRegistry:
         lifecycle = self._lifecycle_repo(sid).read()
         desired = self._desired_repo(sid).read_state()
         managed = self._bots.get(sid)
-        running = managed is not None and not managed.task.done()
-        duty_outcome = None
-        if lifecycle is not None and lifecycle.duty_outcome is not None:
-            duty_outcome = BotDutyOutcomeView(
-                kind=lifecycle.duty_outcome.kind,
-                reason_code=lifecycle.duty_outcome.reason_code,
-                recorded_at_ms=lifecycle.duty_outcome.recorded_at_ms,
-                run_id=lifecycle.duty_outcome.run_id,
-            )
         checkpoint_exposure, checkpoint_matches = checkpoint_status(
             binding,
             self._carryover_checkpoint_path(sid),
         )
-        return BotStatusView(
-            strategy_instance_id=sid,
-            strategy_key=binding.strategy_key,
-            broker=binding.broker,
-            symbol=binding.symbol,
-            mode=binding.mode,
-            quantity=binding.quantity,
-            carryover_policy=binding.carryover_policy,
+        return project_bot_status(
+            binding,
+            lifecycle,
+            desired,
+            running=managed is not None and not managed.task.done(),
             carryover_account_policy_enabled=self._carryover_allowed,
-            carryover_checkpoint_exposure=checkpoint_exposure,
-            carryover_checkpoint_config_matches=checkpoint_matches,
-            running=running,
-            phase=(lifecycle.phase.value if lifecycle is not None else "OFF_DUTY"),
-            desired_state=desired.value,
-            active_run_id=(lifecycle.active_run_id if lifecycle is not None else None),
-            duty_outcome=duty_outcome,
-            binding_created_at_ms=binding.created_at_ms,
-            last_transition_at_ms=(lifecycle.last_transition_at_ms if lifecycle is not None else None),
+            checkpoint_exposure=checkpoint_exposure,
+            checkpoint_matches=checkpoint_matches,
         )
 
 

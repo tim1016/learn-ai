@@ -427,6 +427,38 @@ def _dry_run_fill_views(
     ]
 
 
+def _execution_policy(mode: str) -> str:
+    policies = {
+        "dry_run": (
+            "Dry Run. Real market data produces clearly simulated decisions "
+            "and fills; broker writes are impossible."
+        ),
+        "log_only": (
+            "Observation only. Decisions are recorded, but the Clerk will not place orders."
+        ),
+        "trade": "Paper execution. Only the Clerk may submit, cancel, or reduce broker orders.",
+    }
+    return policies[mode]
+
+
+def _recent_activity_views(
+    status: BotStatusView,
+    entries: list[OrderJournalEntry],
+    decision_receipts: list[DecisionReceipt],
+    dry_run_activity: list[DryRunActivity],
+) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
+    """Project real or simulated activity behind one explicit mode boundary."""
+    if status.mode == "dry_run":
+        return (
+            _dry_run_decision_views(dry_run_activity),
+            _dry_run_fill_views(dry_run_activity),
+        )
+    return (
+        _recent_decision_views(decision_receipts),
+        _recent_fill_views(status.strategy_instance_id, entries),
+    )
+
+
 def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[ReadinessCheckView]:
     """Project present-tense enforcement checks from the canonical action guards."""
     checks: list[ReadinessCheckView] = []
@@ -618,6 +650,12 @@ def build_panel(
     )
 
     decision_receipts = recent_decisions or ([latest_decision] if latest_decision else [])
+    decision_views, fill_views = _recent_activity_views(
+        status,
+        entries,
+        decision_receipts,
+        dry_run_activity or [],
+    )
 
     return BotPanelView(
         strategy_instance_id=status.strategy_instance_id,
@@ -636,15 +674,7 @@ def build_panel(
             channel_health=channel_health,
             now_ms=now_ms,
         ),
-        execution_policy=(
-            "Dry Run. Real market data produces clearly simulated decisions and fills; broker writes are impossible."
-            if status.mode == "dry_run"
-            else (
-                "Observation only. Decisions are recorded, but the Clerk will not place orders."
-                if status.mode == "log_only"
-                else "Paper execution. Only the Clerk may submit, cancel, or reduce broker orders."
-            )
-        ),
+        execution_policy=_execution_policy(status.mode),
         health=health,
         clerk=clerk,
         rail=TransactionRail(transaction_ref=transaction_ref, stations=stations),
@@ -654,16 +684,8 @@ def build_panel(
         readiness_checks=_readiness_checks(actions, now_ms),
         exposure=exposure,
         working_orders=working_orders,
-        recent_decisions=(
-            _dry_run_decision_views(dry_run_activity or [])
-            if status.mode == "dry_run"
-            else _recent_decision_views(decision_receipts)
-        ),
-        recent_fills=(
-            _dry_run_fill_views(dry_run_activity or [])
-            if status.mode == "dry_run"
-            else _recent_fill_views(status.strategy_instance_id, entries)
-        ),
+        recent_decisions=decision_views,
+        recent_fills=fill_views,
         fills_today=fills_today,
         realized_pnl_today=realized_pnl_today,
         open_pnl=open_pnl,
