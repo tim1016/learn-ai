@@ -1,4 +1,4 @@
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type { components } from '../../../../api/broker.types';
@@ -161,6 +161,50 @@ export class BrokerV2PanelService {
       reason: null,
     };
     return this.runAction(broker, accountId, sid, request);
+  }
+
+  /**
+   * Run a panel action with a bounded fresh-token retry on a 409 conflict.
+   *
+   * A presented action carries an optimistic-concurrency token; some actions
+   * (notably Stop) key that token on a single volatile fact (`running`), so a
+   * 409 is usually a transient token change rather than a real state change.
+   * On a 409 we refetch the authoritative panel and retry ONCE with the
+   * current token — but only if the action is still offered, still enabled,
+   * and its token actually changed. If the action is gone, disabled, or the
+   * token is unchanged (the bot's state genuinely changed, e.g. it is already
+   * stopping, or the 409 was an availability rejection), the original error is
+   * re-thrown so the operator sees an honest message instead of a silent
+   * re-post.
+   *
+   * Defect #10: the 2026-07-30 run's Stop-409 storm dead-ended in the UI with
+   * no retry path, forcing a raw `POST .../stop` from the terminal.
+   */
+  async runBotActionResilient(
+    broker: string,
+    accountId: string,
+    sid: string,
+    action: PanelAction,
+  ): Promise<PanelActionResult> {
+    try {
+      return await this.runBotAction(broker, accountId, sid, action);
+    } catch (error) {
+      if (!(error instanceof HttpErrorResponse) || error.status !== 409) {
+        throw error;
+      }
+      const panel = await this.getPanel(broker, accountId, sid);
+      const fresh = panel.actions.find(
+        (candidate) => candidate.action_id === action.action_id,
+      );
+      if (
+        fresh === undefined ||
+        !fresh.enabled ||
+        fresh.concurrency_token === action.concurrency_token
+      ) {
+        throw error;
+      }
+      return await this.runBotAction(broker, accountId, sid, fresh);
+    }
   }
 
   getLiveChart(

@@ -18,7 +18,12 @@ from alpaca.common.enums import Sort
 from alpaca.trading.enums import AssetStatus, QueryOrderStatus
 from requests.sessions import Session
 
-from app.broker.alpaca.client import AlpacaTradingClient, _install_session_timeout
+from app.broker.alpaca.client import (
+    _MAX_RATE_LIMIT_RETRIES,
+    _RATE_LIMIT_RETRY_CAP_S,
+    AlpacaTradingClient,
+    _install_session_timeout,
+)
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
 from app.broker.contract.errors import (
     BrokerAuthError,
@@ -294,9 +299,148 @@ async def test_api_error_maps_to_contract_error(make_api_error: ApiErrorFactory)
     assert excinfo.value.retry_after_ms == 1000
 
 
-async def test_missing_credentials_map_to_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def _noop_sleep(_seconds: float) -> None:
+    return None
+
+
+_ORDER_BODY = {
+    "symbol": "SPY",
+    "qty": "1",
+    "side": "buy",
+    "type": "market",
+    "client_order_id": "manual/inkant/v1:cb3",
+}
+
+
+async def test_submit_retries_on_rate_limit_then_succeeds(
+    make_api_error: ApiErrorFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A 429 means the order did NOT land, so a retry with the same
+    # client_order_id is safe. One throttle then success → the bar's decision
+    # is not silently lost.
+    fake = _FakeAlpaca()
+    calls = {"n": 0}
+    bodies: list[Any] = []
+
+    def flaky_post(path: str, data: Any = None) -> dict[str, Any]:
+        calls["n"] += 1
+        bodies.append(data)
+        if calls["n"] == 1:
+            raise make_api_error(429, headers={"Retry-After": "1"})
+        return {"id": "o1", "client_order_id": data["client_order_id"], "status": "accepted"}
+
+    fake.post = flaky_post  # type: ignore[method-assign]
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        "app.broker.alpaca.client.anyio.sleep",
+        lambda s: sleeps.append(s) or _noop_sleep(s),
+    )
+
+    payload = await _client(fake).submit_order(_ORDER_BODY)
+
+    assert payload["status"] == "accepted"
+    assert calls["n"] == 2  # one retry
+    assert bodies[0] == bodies[1]  # same body / client_order_id → idempotent
+    assert len(sleeps) == 1
+
+
+async def test_submit_exhausts_rate_limit_retries_with_distinct_signal(
+    make_api_error: ApiErrorFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAlpaca()
+    calls = {"n": 0}
+
+    def always_throttle(path: str, data: Any = None) -> dict[str, Any]:
+        calls["n"] += 1
+        raise make_api_error(429, headers={"Retry-After": "1"})
+
+    fake.post = always_throttle  # type: ignore[method-assign]
+    monkeypatch.setattr("app.broker.alpaca.client.anyio.sleep", _noop_sleep)
+
+    with pytest.raises(BrokerRateLimited) as excinfo:
+        await _client(fake).submit_order(_ORDER_BODY)
+
+    # Bounded: one initial attempt + the retry cap, never an unbounded loop.
+    assert calls["n"] == _MAX_RATE_LIMIT_RETRIES + 1
+    # Distinct operator signal: throttled-then-exhausted, not a plain reject.
+    assert "throttled" in excinfo.value.message.lower()
+
+
+async def test_submit_rate_limit_backoff_is_capped(
+    make_api_error: ApiErrorFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A large Retry-After must never stall a bar: the honored backoff is capped.
+    fake = _FakeAlpaca()
+    calls = {"n": 0}
+
+    def throttle_then_ok(path: str, data: Any = None) -> dict[str, Any]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise make_api_error(429, headers={"Retry-After": "3600"})
+        return {"id": "o1", "client_order_id": data["client_order_id"], "status": "accepted"}
+
+    fake.post = throttle_then_ok  # type: ignore[method-assign]
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        "app.broker.alpaca.client.anyio.sleep",
+        lambda s: sleeps.append(s) or _noop_sleep(s),
+    )
+
+    await _client(fake).submit_order(_ORDER_BODY)
+
+    assert sleeps
+    assert max(sleeps) <= _RATE_LIMIT_RETRY_CAP_S
+
+
+async def test_cancel_retries_on_rate_limit_then_succeeds(
+    make_api_error: ApiErrorFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeAlpaca()
+    calls = {"n": 0}
+
+    def flaky_delete(path: str, data: Any = None) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise make_api_error(429, headers={"Retry-After": "1"})
+        return None
+
+    fake.delete = flaky_delete  # type: ignore[method-assign]
+    monkeypatch.setattr("app.broker.alpaca.client.anyio.sleep", _noop_sleep)
+
+    result = await _client(fake).cancel_order("broker-order-1")
+
+    assert result is None
+    assert calls["n"] == 2
+
+
+async def test_read_path_does_not_retry_on_rate_limit(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    # Only writes retry. A throttled read surfaces immediately so the sweep
+    # cadence is not silently slowed.
+    fake = _FakeAlpaca()
+    calls = {"n": 0}
+
+    def throttle(*_a: Any, **_k: Any) -> dict[str, Any]:
+        calls["n"] += 1
+        raise make_api_error(429, headers={"Retry-After": "1"})
+
+    fake.get_account = throttle  # type: ignore[method-assign]
+
+    with pytest.raises(BrokerRateLimited):
+        await _client(fake).get_account()
+    assert calls["n"] == 1
+
+
+async def test_missing_credentials_map_to_auth_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
     monkeypatch.delenv("ALPACA_API_KEY_ID", raising=False)
     monkeypatch.delenv("ALPACA_API_SECRET_KEY", raising=False)
+    # AlpacaSettings reads ``env_file=".env"`` relative to CWD, so the repo's
+    # real .env would supply credentials and defeat delenv. Run from an empty
+    # dir so the settings genuinely find no credentials — host-independent.
+    monkeypatch.chdir(tmp_path)
     reset_alpaca_settings_for_testing()
     try:
         # No client_factory → default factory reads settings, which raise.

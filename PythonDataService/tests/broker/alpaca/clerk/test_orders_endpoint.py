@@ -289,6 +289,44 @@ async def test_rejected_leg_surfaces_what_why_not_500(_alpaca_clerk: None) -> No
     assert leg["order_ref"].startswith("manual/inkant/v1:")
 
 
+@responses.activate
+async def test_conflict_leg_is_definitive_failure_not_uncertain(
+    _alpaca_clerk: None,
+) -> None:
+    # A 409 order conflict (e.g. duplicate client_order_id) is DEFINITIVE — the
+    # order did not land. The Clerk must journal SUBMIT_FAILED and surface a
+    # typed what/why, exactly like the 422 case, and must NOT enter the S5
+    # uncertain-lookup path (which would hit an unmocked by_client_order_id
+    # GET). Regression for the errors.py gap where 409 mapped to
+    # BrokerUnavailable and was misrouted as a transient outage.
+    responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
+    responses.add(
+        responses.POST,
+        f"{_BASE}/v2/orders",
+        body=json.dumps({"code": 40910000, "message": "potential order conflict"}),
+        status=409,
+    )
+
+    response = await _post(
+        {"operator": "inkant", "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}]}
+    )
+
+    # The request succeeded (200); the leg failed definitively with a what/why.
+    assert response.status_code == 200
+    [leg] = response.json()["results"]
+    assert leg["status"] == "failed"
+    assert leg["order"] is None
+    assert "potential order conflict" in leg["error"]["message"]
+    assert leg["error"]["why"] == "HTTP 409"
+    assert leg["order_ref"].startswith("manual/inkant/v1:")
+    # No uncertain-resolution lookup was attempted: a definitive reject never
+    # queries by_client_order_id.
+    lookup_calls = [
+        call for call in responses.calls if "by_client_order_id" in call.request.url
+    ]
+    assert lookup_calls == []
+
+
 async def test_missing_leg_is_rejected_at_boundary(_alpaca_clerk: None) -> None:
     response = await _post({"operator": "inkant", "legs": []})
 

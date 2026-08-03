@@ -9,6 +9,7 @@ from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerError,
+    BrokerOrderRejected,
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
@@ -24,6 +25,7 @@ from tests.broker.alpaca.conftest import ApiErrorFactory
         (429, BrokerRateLimited),
         (400, BrokerRequestInvalid),
         (422, BrokerRequestInvalid),
+        (409, BrokerOrderRejected),
         (500, BrokerUnavailable),
         (503, BrokerUnavailable),
     ],
@@ -38,6 +40,20 @@ def test_status_maps_to_contract_error(
     assert isinstance(error, expected)
     assert error.broker == "alpaca"
     assert "denied" in error.message
+
+
+def test_conflict_maps_to_definitive_order_rejected_not_unavailable(
+    make_api_error: ApiErrorFactory,
+) -> None:
+    # A 409 is a definitive order conflict (duplicate client_order_id, order
+    # state conflict), not a transient outage. It must NOT be a
+    # ``BrokerUnavailable`` — otherwise the Clerk folds it into the S5
+    # uncertain-lookup path instead of a clean, definitive ``SUBMIT_FAILED``.
+    error = map_api_error(make_api_error(409), broker="alpaca")
+
+    assert isinstance(error, BrokerOrderRejected)
+    assert not isinstance(error, BrokerUnavailable)
+    assert error.http_status == 409
 
 
 def test_rate_limited_parses_retry_after_seconds(make_api_error: ApiErrorFactory) -> None:

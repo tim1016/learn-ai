@@ -22,6 +22,7 @@ broker at startup never needs keys and the service boots credential-free.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from threading import Lock
@@ -47,12 +48,29 @@ from app.broker.alpaca.config import (
 )
 from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
-from app.broker.contract.errors import BrokerAuthError, BrokerUnavailable
+from app.broker.contract.errors import (
+    BrokerAuthError,
+    BrokerRateLimited,
+    BrokerUnavailable,
+)
 
 _DEFAULT_TIMEOUT_S = 15.0
 _DEFAULT_CONNECT_TIMEOUT_S = 3.05
 _MAX_IN_FLIGHT_SYNC_CALLS = 8
 _SUBMIT_VISIBILITY_GRACE_S = 30.0
+
+# Bounded rate-limit retry for the WRITE path (submit / cancel) only. A 429
+# means the request was throttled BEFORE it landed, so retrying with the same
+# client_order_id is safe — a genuine duplicate would come back as a 409 and
+# resolve as a definitive reject. The honored backoff is capped so a large
+# Retry-After can never stall a strategy bar; when retries are exhausted the
+# failure carries a distinct "throttled" message so the operator sees a
+# throttle, not a plain reject. Reads never retry (that would slow the sweep).
+_MAX_RATE_LIMIT_RETRIES = 2
+_RATE_LIMIT_RETRY_CAP_S = 1.0
+_RATE_LIMIT_DEFAULT_BACKOFF_S = 0.5
+
+logger = logging.getLogger(__name__)
 
 
 def _ms_to_utc(after_ms: int) -> datetime:
@@ -249,6 +267,60 @@ class AlpacaTradingClient:
 
     # ── Write methods (phase 2) ─────────────────────────────────────────────
 
+    async def _rate_limit_backoff(self, exc: BrokerRateLimited) -> None:
+        """Sleep the vendor's Retry-After hint, capped so a bar never stalls."""
+        hint_s = (
+            exc.retry_after_ms / 1000
+            if exc.retry_after_ms is not None
+            else _RATE_LIMIT_DEFAULT_BACKOFF_S
+        )
+        await anyio.sleep(min(hint_s, _RATE_LIMIT_RETRY_CAP_S))
+
+    async def _call_write(
+        self,
+        fn: Callable[[Any], Any],
+        *,
+        describe: str,
+        throttle_context: str,
+    ) -> Any:
+        """Run a write call with a bounded rate-limit retry (429 only).
+
+        Every other error (auth, invalid, conflict, unavailable, timeout) flows
+        through :meth:`_call` unchanged — only a ``BrokerRateLimited`` is
+        retried, because only a throttle guarantees the request did not land.
+        """
+        attempt = 0
+        while True:
+            try:
+                return await self._call(fn, describe=describe)
+            except BrokerRateLimited as exc:
+                if attempt >= _MAX_RATE_LIMIT_RETRIES:
+                    logger.warning(
+                        "alpaca write throttled; rate-limit retries exhausted",
+                        extra={
+                            "action": "rate_limit_exhausted",
+                            "describe": describe,
+                            "attempts": attempt + 1,
+                        },
+                    )
+                    raise BrokerRateLimited(
+                        f"Alpaca throttled the {throttle_context} after "
+                        f"{attempt + 1} attempts; it did not land.",
+                        broker=self.broker_id,
+                        detail=exc.detail,
+                        retry_after_ms=exc.retry_after_ms,
+                    ) from exc
+                attempt += 1
+                logger.info(
+                    "alpaca write throttled; retrying",
+                    extra={
+                        "action": "rate_limit_retry",
+                        "describe": describe,
+                        "attempt": attempt,
+                    },
+                )
+                await self._rate_limit_backoff(exc)
+
     async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
         """POST one order to ``/v2/orders`` over the owned capturing session.
 
@@ -262,9 +334,10 @@ class AlpacaTradingClient:
         """
         client_order_id = str(order.get("client_order_id") or "")
         try:
-            result = await self._call(
+            result = await self._call_write(
                 lambda client: client.post("/orders", order),
                 describe="order submission",
+                throttle_context="order",
             )
         except BrokerUnavailable:
             # The synchronous SDK worker may continue after AnyIO returns a
@@ -286,8 +359,10 @@ class AlpacaTradingClient:
         order, which ``map_api_error`` translates to a typed ``BrokerError``.
         Returns nothing; there is no order payload to map.
         """
-        await self._call(
-            lambda c: c.delete(f"/orders/{order_id}"), describe="order cancellation"
+        await self._call_write(
+            lambda c: c.delete(f"/orders/{order_id}"),
+            describe="order cancellation",
+            throttle_context="cancel",
         )
 
     async def get_order_by_client_order_id(

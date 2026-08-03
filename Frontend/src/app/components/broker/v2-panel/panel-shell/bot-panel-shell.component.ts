@@ -318,7 +318,9 @@ export class BotPanelShellComponent {
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     try {
-      const result = await this.panelSvc.runBotAction(
+      // Resilient path: a Stop-409 (transient token flip) is retried once with
+      // a fresh token instead of dead-ending the operator (defect #10).
+      const result = await this.panelSvc.runBotActionResilient(
         this.broker(),
         this.accountId(),
         this.sid(),

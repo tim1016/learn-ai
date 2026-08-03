@@ -36,7 +36,11 @@ ALPACA_PAPER_CAPABILITIES = BrokerCapabilities(
     paper_only=True,
     supports_fractional=True,
     supports_extended_hours=True,
-    supported_order_types=("market", "limit", "stop", "stop_limit", "trailing_stop"),
+    # Advertise only what BrokerOrderLeg can construct today. ``stop`` /
+    # ``stop_limit`` / ``trailing_stop`` are unbuilt (OrderType has no member),
+    # so advertising them was a false "yes" to a caller gating on capability.
+    # Re-add each here in lockstep with its OrderType member + leg Literal.
+    supported_order_types=("market", "limit"),
     data_feed="iex",
     bars_may_gap=True,
     max_stream_symbols=30,

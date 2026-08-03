@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -21,6 +22,7 @@ from typing import Any
 import pytest
 import responses
 
+from app.broker.alpaca.adapter import from_alpaca_trade_update
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk import journal as journal_module
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
@@ -151,6 +153,29 @@ def _filled_broker_order(order_id: str, client_order_id: str) -> BrokerOrder:
             "updated_at_ms": _FIXED_MS,
         }
     )
+
+
+def test_gap_reconciled_fill_carries_execution_qty_and_price() -> None:
+    # A gap-reconciled fill must thread its execution qty/price all the way to
+    # the BrokerOrderEvent. If the synthesized payload only nested them under
+    # ``order`` (never top-level), from_alpaca_trade_update would read
+    # quantity/price = None and the per-instance exposure/FIFO fold would
+    # silently drop the recovered fill while the account-level sweep stayed
+    # clean. Pin the two-function composition so that regression cannot return.
+    order = _filled_broker_order(
+        order_id="61e69015-8549-4bfd-b9c3-01e75843f47d",
+        client_order_id=_OWNED_COID,
+    )
+
+    payload = _order_to_event_payload(order)
+    assert payload is not None
+    event = from_alpaca_trade_update(payload)
+
+    assert event.event_type == "fill"
+    assert event.quantity is not None
+    assert math.isclose(event.quantity, 10.0, abs_tol=1e-9, rel_tol=0.0)
+    assert event.price is not None
+    assert math.isclose(event.price, 135.80, abs_tol=1e-9, rel_tol=0.0)
 
 
 class _FakeBroker:

@@ -5,6 +5,7 @@ The mapping is asserted by tests:
 - 401 / 403 → :class:`BrokerAuthError`
 - 429       → :class:`BrokerRateLimited` (carries the Retry-After hint)
 - 400 / 422 → :class:`BrokerRequestInvalid`
+- 409       → :class:`BrokerOrderRejected` (definitive order conflict)
 - 5xx       → :class:`BrokerUnavailable`
 - network / unknown → :class:`BrokerUnavailable`
 
@@ -21,6 +22,7 @@ from alpaca.common.exceptions import APIError
 from app.broker.contract.errors import (
     BrokerAuthError,
     BrokerError,
+    BrokerOrderRejected,
     BrokerRateLimited,
     BrokerRequestInvalid,
     BrokerUnavailable,
@@ -76,6 +78,16 @@ def map_api_error(exc: APIError, *, broker: str) -> BrokerError:
     if status in (400, 422):
         return BrokerRequestInvalid(
             f"Alpaca rejected the request as invalid: {message}",
+            broker=broker,
+            detail=detail,
+        )
+    if status == 409:
+        # A definitive order conflict (duplicate client_order_id, order-state
+        # conflict), NOT a transient outage. Kept distinct from
+        # BrokerUnavailable so the Clerk classifies it as a clean SUBMIT_FAILED
+        # instead of the S5 uncertain-lookup path.
+        return BrokerOrderRejected(
+            f"Alpaca rejected the order as a conflict: {message}",
             broker=broker,
             detail=detail,
         )
