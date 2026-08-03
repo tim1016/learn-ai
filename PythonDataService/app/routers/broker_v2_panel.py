@@ -62,9 +62,13 @@ from app.services.broker_v2_panel.evidence_service import (
     PAGE_SIZE_DEFAULT,
     read_evidence_page,
 )
-from app.services.broker_v2_panel.live_projection import get_or_start_live_projection_hub
+from app.services.broker_v2_panel.live_projection import (
+    get_or_start_live_projection_hub,
+    release_live_projection_hub,
+    retain_live_projection_hub,
+)
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
-from app.services.surface_hub import SnapshotUnavailableError
+from app.services.surface_hub import SnapshotUnavailableError, SurfaceHubRefreshFailure
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -369,6 +373,12 @@ async def stream_live_snapshot_scoped(
 
     async def event_source() -> AsyncIterator[str]:
         queue = hub.subscribe()
+        retain_live_projection_hub(
+            broker,
+            account_id,
+            sid,
+            resolution=resolution,
+        )
         try:
             if cursor is not None and requested_epoch != current.stream_epoch:
                 payload = json.dumps({"reason": "epoch_changed", "cursor": current_id})
@@ -382,10 +392,21 @@ async def stream_live_snapshot_scoped(
                 if snapshot is None:
                     yield "event: end\ndata: {}\n\n"
                     return
+                if isinstance(snapshot, SurfaceHubRefreshFailure):
+                    payload = json.dumps({"error": snapshot.message})
+                    yield f"event: error\ndata: {payload}\n\n"
+                    return
                 event_id = f"{snapshot.stream_epoch}:{snapshot.surface_version}"
                 yield f"id: {event_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n"
         finally:
             hub.unsubscribe(queue)
+            release_live_projection_hub(
+                broker,
+                account_id,
+                sid,
+                resolution=resolution,
+                hub=hub,
+            )
 
     return StreamingResponse(
         event_source(),

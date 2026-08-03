@@ -10,6 +10,8 @@ from app.services.broker_v2_panel import panel_data_source
 from app.services.surface_hub import SurfaceHub, SurfaceHubRegistry
 
 _HUBS: SurfaceHubRegistry[BotPanelLiveSnapshot] = SurfaceHubRegistry()
+_HUB_RETIREMENT_TASKS: dict[str, asyncio.Task[None]] = {}
+_HUB_IDLE_SECONDS = 30.0
 
 
 def _hub_key(
@@ -32,14 +34,11 @@ async def get_or_start_live_projection_hub(
     key = _hub_key(broker, account_id, sid, resolution)
 
     async def assemble() -> BotPanelLiveSnapshot:
-        panel, chart = await asyncio.gather(
-            panel_data_source.get_panel(broker, account_id, sid),
-            panel_data_source.get_live_chart(
-                broker,
-                account_id,
-                sid,
-                resolution=resolution,
-            ),
+        panel, chart = await panel_data_source.get_live_snapshot_parts(
+            broker,
+            account_id,
+            sid,
+            resolution=resolution,
         )
         return BotPanelLiveSnapshot(
             stream_epoch="",
@@ -54,11 +53,73 @@ async def get_or_start_live_projection_hub(
         refresh_interval_seconds=5.0,
     )
     await hub.start()
+    release_live_projection_hub(
+        broker,
+        account_id,
+        sid,
+        resolution=resolution,
+        hub=hub,
+    )
     return hub
+
+
+def retain_live_projection_hub(
+    broker: str,
+    account_id: str,
+    sid: str,
+    *,
+    resolution: Literal["5s", "1m"],
+) -> None:
+    """Cancel idle retirement while an SSE client owns the hub."""
+    key = _hub_key(broker, account_id, sid, resolution)
+    task = _HUB_RETIREMENT_TASKS.pop(key, None)
+    if task is not None:
+        task.cancel()
+
+
+def release_live_projection_hub(
+    broker: str,
+    account_id: str,
+    sid: str,
+    *,
+    resolution: Literal["5s", "1m"],
+    hub: SurfaceHub[BotPanelLiveSnapshot],
+) -> None:
+    """Retire an unobserved on-demand hub after a short reconnect window."""
+    key = _hub_key(broker, account_id, sid, resolution)
+    previous = _HUB_RETIREMENT_TASKS.pop(key, None)
+    if previous is not None:
+        previous.cancel()
+    _HUB_RETIREMENT_TASKS[key] = asyncio.create_task(
+        _retire_hub_when_idle(key, hub),
+        name=f"live-panel-hub-retirement:{key}",
+    )
+
+
+async def _retire_hub_when_idle(
+    key: str,
+    hub: SurfaceHub[BotPanelLiveSnapshot],
+) -> None:
+    task = asyncio.current_task()
+    try:
+        await asyncio.sleep(_HUB_IDLE_SECONDS)
+        if _HUBS.get(key) is hub and hub.resource_limits.watcher_count == 0:
+            await _HUBS.remove(key)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        if _HUB_RETIREMENT_TASKS.get(key) is task:
+            _HUB_RETIREMENT_TASKS.pop(key, None)
 
 
 async def stop_live_projection_hubs() -> None:
     """Drain every on-demand V2 projection producer during app shutdown."""
+    retirement_tasks = tuple(_HUB_RETIREMENT_TASKS.values())
+    _HUB_RETIREMENT_TASKS.clear()
+    for task in retirement_tasks:
+        task.cancel()
+    if retirement_tasks:
+        await asyncio.gather(*retirement_tasks, return_exceptions=True)
     await _HUBS.stop_all()
 
 
@@ -66,3 +127,4 @@ def reset_live_projection_hubs_for_testing() -> None:
     """Install an empty registry; callers must first stop any running hubs."""
     global _HUBS
     _HUBS = SurfaceHubRegistry()
+    _HUB_RETIREMENT_TASKS.clear()

@@ -18323,7 +18323,7 @@ export interface components {
              * Feed State
              * @enum {string}
              */
-            feed_state: "LIVE" | "STALE" | "MISSING";
+            feed_state: "LIVE" | "IDLE" | "STALE" | "MISSING";
             /** Headline */
             headline: string;
             /** Latest Bar At Ms */

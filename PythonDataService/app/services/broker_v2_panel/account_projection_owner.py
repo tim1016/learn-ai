@@ -49,6 +49,7 @@ class AccountProjectionOwner:
         self._entries: list[OrderJournalEntry] = []
         self._journal_offset = 0
         self._journal_identity: tuple[int, int] | None = None
+        self._journal_cursor_guard: str | None = None
         self._journal_reads = 0
         self._journal_bytes_read = 0
         self._entries_by_namespace: dict[str, list[OrderJournalEntry]] = {}
@@ -58,6 +59,7 @@ class AccountProjectionOwner:
         tail = journal.read_from(
             self._journal_offset,
             file_identity=self._journal_identity,
+            cursor_guard=self._journal_cursor_guard,
         )
         self._journal_reads += 1
         self._journal_bytes_read += tail.bytes_read
@@ -68,10 +70,14 @@ class AccountProjectionOwner:
             self._cache = BotRollupCache()
             self._watermark = 0
         else:
-            self._entries.extend(tail.entries)
-            self._index_entries(tail.entries)
+            if tail.entries:
+                # Copy-on-append keeps any in-flight projection cut immutable
+                # without copying the full journal on unchanged warm reads.
+                self._entries = [*self._entries, *tail.entries]
+                self._index_entries(tail.entries)
         self._journal_offset = tail.next_offset
         self._journal_identity = tail.file_identity
+        self._journal_cursor_guard = tail.cursor_guard
         # The owner retains mutation authority; projection callers receive the
         # stable read-only-by-convention view without an O(journal) warm copy.
         return self._entries

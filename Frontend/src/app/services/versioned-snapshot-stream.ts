@@ -38,6 +38,9 @@ export function openVersionedSnapshotStream<T extends VersionedSnapshot>(
   let connection: AuthenticatedSseConnection | null = null;
   connection = openAuthenticatedSseConnection(url, 'snapshot', {
     onStatus: callbacks.onStatus,
+    onError: (message) => callbacks.onMalformedSnapshot(
+      message ?? `${label} connection failed.`,
+    ),
     onEvent: (message) => {
       try {
         const parsed: unknown = JSON.parse(message.data);

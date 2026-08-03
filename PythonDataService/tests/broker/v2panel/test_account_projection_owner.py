@@ -129,7 +129,10 @@ def test_refresh_journal_does_not_reread_history_on_warm_refresh(tmp_path: Path)
     assert owner.refresh_journal(journal) is cold_entries
     _, bytes_after_unchanged_refresh = owner.journal_read_stats
     journal.append(second)
-    assert owner.refresh_journal(journal) == [first, second]
+    appended_entries = owner.refresh_journal(journal)
+    assert appended_entries == [first, second]
+    assert appended_entries is not cold_entries
+    assert cold_entries == [first]
     _, bytes_after_append = owner.journal_read_stats
 
     assert bytes_after_unchanged_refresh == bytes_after_cold_replay

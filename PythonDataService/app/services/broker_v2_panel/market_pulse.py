@@ -16,6 +16,8 @@ def build_market_pulse(
     feed: MarketDataFeed | None,
     *,
     now_ms: int,
+    use_rth: bool,
+    bot_running: bool,
 ) -> MarketPulseView:
     """Present the same typed market-data fact Start admission consumes."""
     session = session_state_at_ms(now_ms=now_ms)
@@ -27,10 +29,14 @@ def build_market_pulse(
         "CLOSED": "CLOSED",
         "UNKNOWN": "UNKNOWN",
     }[session.phase]
-    bars_expected = session.phase == "RTH"
-    fact = market_data_admission_fact(feed, now_ms, use_rth=True)
+    bars_expected = (
+        session.phase == "RTH"
+        if use_rth
+        else session.phase in {"PRE", "RTH", "POST", "OVERNIGHT"}
+    )
+    fact = market_data_admission_fact(feed, now_ms, use_rth=use_rth)
     feed_state = {
-        "AVAILABLE": "LIVE",
+        "AVAILABLE": "IDLE" if fact.stale else "LIVE",
         "STALE": "STALE",
         "UNAVAILABLE": "MISSING",
         "UNKNOWN": "MISSING",
@@ -55,6 +61,19 @@ def build_market_pulse(
         explanation = "The feed is connected and delivering data within its expected cadence."
         next_step = None
         attention_required = False
+    elif feed_state == "IDLE":
+        headline = (
+            "Market data idle for a running bot"
+            if bot_running
+            else "Market data ready — waiting for the run subscription"
+        )
+        explanation = fact.reason or "The feed is connected but has no active bar subscription."
+        next_step = (
+            "Inspect the bot's market-data subscription before relying on new decisions."
+            if bot_running
+            else None
+        )
+        attention_required = bot_running
     elif feed_state == "STALE":
         headline = "Market data stale"
         explanation = fact.reason or "No current bar arrived within the expected cadence."

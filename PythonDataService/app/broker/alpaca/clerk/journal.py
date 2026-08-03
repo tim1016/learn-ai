@@ -23,11 +23,13 @@ this class serializes the file appends themselves with a ``threading.Lock``).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -43,6 +45,19 @@ _RESERVED_COMPONENTS = frozenset({".", ".."})
 
 INBOX_FILENAME = "order_inbox.jsonl"
 JOURNAL_FILENAME = "order_journal.jsonl"
+_CURSOR_GUARD_BYTES = 64
+
+
+def _cursor_guard(handle: BinaryIO, offset: int) -> str | None:
+    """Hash constant-size prefix and cursor-boundary evidence."""
+    if offset <= 0:
+        return None
+    handle.seek(0)
+    prefix = handle.read(min(_CURSOR_GUARD_BYTES, offset))
+    guard_start = max(0, offset - _CURSOR_GUARD_BYTES)
+    handle.seek(guard_start)
+    boundary = handle.read(offset - guard_start)
+    return hashlib.sha256(prefix + b"\0" + boundary).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -60,6 +75,7 @@ class JournalTailRead:
     file_identity: tuple[int, int] | None
     reset: bool
     bytes_read: int
+    cursor_guard: str | None = None
 
 
 class ClerkSettings(BaseSettings):
@@ -225,12 +241,13 @@ class OrderJournal:
         offset: int,
         *,
         file_identity: tuple[int, int] | None,
+        cursor_guard: str | None = None,
     ) -> JournalTailRead:
         """Read only complete records appended after ``offset``.
 
         This is the warm-projection API. The journal is replayed from byte zero
-        only when the caller has no cursor, or when inode change/truncation
-        proves that the prior cursor no longer names the canonical ledger.
+        only when the caller has no cursor, or when inode, size, or constant-size
+        prefix/boundary evidence proves the cursor no longer names the ledger.
         """
         if offset < 0:
             raise ValueError("journal offset must be non-negative")
@@ -240,23 +257,34 @@ class OrderJournal:
         if not candidate.startswith(root_prefix):
             raise ValueError(f"clerk journal path escapes root: {candidate!r}")
         if not os.path.isfile(candidate):
-            return JournalTailRead((), 0, None, file_identity is not None or offset > 0, 0)
+            return JournalTailRead(
+                (),
+                0,
+                None,
+                file_identity is not None or offset > 0,
+                0,
+                None,
+            )
 
         with self._lock, open(candidate, "rb") as handle:
             stat = os.fstat(handle.fileno())
             identity = (stat.st_dev, stat.st_ino)
+            guard_mismatch = False
+            if cursor_guard is not None and 0 < offset <= stat.st_size:
+                guard_mismatch = _cursor_guard(handle, offset) != cursor_guard
             reset = (
                 (file_identity is not None and identity != file_identity)
                 or offset > stat.st_size
+                or guard_mismatch
             )
             start = 0 if reset else offset
             handle.seek(start)
             payload = handle.read()
+            last_newline = payload.rfind(b"\n")
+            complete = payload[: last_newline + 1] if last_newline >= 0 else b""
+            next_offset = start + len(complete)
+            next_guard = _cursor_guard(handle, next_offset)
 
-        last_newline = payload.rfind(b"\n")
-        if last_newline < 0:
-            return JournalTailRead((), start, identity, reset, len(payload))
-        complete = payload[: last_newline + 1]
         entries = tuple(
             OrderJournalEntry.model_validate_json(line)
             for line in complete.splitlines()
@@ -264,10 +292,11 @@ class OrderJournal:
         )
         return JournalTailRead(
             entries=entries,
-            next_offset=start + len(complete),
+            next_offset=next_offset,
             file_identity=identity,
             reset=reset,
             bytes_read=len(payload),
+            cursor_guard=next_guard,
         )
 
 

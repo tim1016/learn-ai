@@ -32,6 +32,8 @@ def _admission_fact(
     state: str,
     last_bar_ms: int | None,
     reason: str = "",
+    stale: bool = False,
+    active_subscription_count: int = 1,
 ) -> None:
     monkeypatch.setattr(
         market_pulse,
@@ -42,6 +44,8 @@ def _admission_fact(
             last_bar_ms=last_bar_ms,
             observed_at_ms=121_000,
             reason=reason,
+            stale=stale,
+            active_subscription_count=active_subscription_count,
         ),
     )
 
@@ -65,7 +69,12 @@ def test_open_session_stale_feed_requires_attention(monkeypatch: pytest.MonkeyPa
         )
     )
 
-    pulse = market_pulse.build_market_pulse(feed, now_ms=121_000)
+    pulse = market_pulse.build_market_pulse(
+        feed,
+        now_ms=121_000,
+        use_rth=True,
+        bot_running=True,
+    )
 
     assert pulse.session == "OPEN"
     assert pulse.feed_state == "STALE"
@@ -88,7 +97,12 @@ def test_closed_session_does_not_turn_idle_feed_into_false_alarm(monkeypatch: py
         )
     )
 
-    pulse = market_pulse.build_market_pulse(feed, now_ms=121_000)
+    pulse = market_pulse.build_market_pulse(
+        feed,
+        now_ms=121_000,
+        use_rth=True,
+        bot_running=True,
+    )
 
     assert pulse.session == "CLOSED"
     assert pulse.feed_state == "LIVE"
@@ -101,8 +115,92 @@ def test_missing_feed_is_visible_and_blocks_during_open_session(monkeypatch: pyt
     _session(monkeypatch, "RTH")
     _admission_fact(monkeypatch, state="UNAVAILABLE", last_bar_ms=None)
 
-    pulse = market_pulse.build_market_pulse(None, now_ms=121_000)
+    pulse = market_pulse.build_market_pulse(
+        None,
+        now_ms=121_000,
+        use_rth=True,
+        bot_running=False,
+    )
 
     assert pulse.feed_state == "MISSING"
     assert pulse.attention_required is True
     assert pulse.latest_bar_at_ms is None
+
+
+def test_extended_hours_bot_expects_premarket_bars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _session(monkeypatch, "PRE")
+    _admission_fact(
+        monkeypatch,
+        state="STALE",
+        last_bar_ms=1_000,
+        reason="No extended-hours bar arrived.",
+        stale=True,
+    )
+    feed = _Feed(
+        FeedHealth(
+            connected=True,
+            stale=True,
+            last_bar_ms=1_000,
+            reason="No extended-hours bar arrived.",
+            active_subscription_count=1,
+            observed_at_ms=121_000,
+        )
+    )
+
+    pulse = market_pulse.build_market_pulse(
+        feed,
+        now_ms=121_000,
+        use_rth=False,
+        bot_running=True,
+    )
+
+    assert pulse.session == "PRE_MARKET"
+    assert pulse.feed_state == "STALE"
+    assert pulse.attention_required is True
+
+
+def test_idle_feed_does_not_claim_to_be_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _session(monkeypatch, "RTH")
+    _admission_fact(
+        monkeypatch,
+        state="AVAILABLE",
+        last_bar_ms=None,
+        reason="The connected feed is idle.",
+        stale=True,
+        active_subscription_count=0,
+    )
+    feed = _Feed(
+        FeedHealth(
+            connected=True,
+            stale=True,
+            last_bar_ms=None,
+            reason="The connected feed is idle.",
+            active_subscription_count=0,
+            observed_at_ms=121_000,
+        )
+    )
+
+    pulse = market_pulse.build_market_pulse(
+        feed,
+        now_ms=121_000,
+        use_rth=True,
+        bot_running=False,
+    )
+
+    assert pulse.feed_state == "IDLE"
+    assert pulse.headline == "Market data ready — waiting for the run subscription"
+    assert pulse.attention_required is False
+
+    running_pulse = market_pulse.build_market_pulse(
+        feed,
+        now_ms=121_000,
+        use_rth=True,
+        bot_running=True,
+    )
+    assert running_pulse.feed_state == "IDLE"
+    assert running_pulse.headline == "Market data idle for a running bot"
+    assert running_pulse.attention_required is True

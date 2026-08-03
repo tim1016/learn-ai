@@ -28144,6 +28144,7 @@
           "feed_state": {
             "enum": [
               "LIVE",
+              "IDLE",
               "STALE",
               "MISSING"
             ],

@@ -518,8 +518,14 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     return row_actions
 
 
-async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: str | None = None) -> BotPanelView:
-    """Build the 5s-poll panel projection for one bot (§7)."""
+async def _get_panel_with_entries(
+    broker: str,
+    account_id: str,
+    sid: str,
+    *,
+    transaction_ref: str | None = None,
+) -> tuple[BotPanelView, list[OrderJournalEntry]]:
+    """Build one panel and return the immutable journal cut it consumed."""
     resolved = await _validate_account(broker, account_id)
     status = _bot_status(broker, sid)
     registry = get_bot_task_registry()
@@ -559,7 +565,8 @@ async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: 
     now_ms = now_ms_utc()
     from app.marketdata.ibkr_feed import get_market_data_feed
 
-    return build_panel(
+    binding = registry.binding_for_control(broker, sid)
+    panel = build_panel(
         status,
         clerk_status,
         entries,
@@ -578,30 +585,43 @@ async def get_panel(broker: str, account_id: str, sid: str, *, transaction_ref: 
         recent_decisions=decisions,
         resume_admission=resume_admission,
         dry_run_activity=registry.dry_run_activity(broker, sid),
-        market_pulse=build_market_pulse(get_market_data_feed(), now_ms=now_ms),
+        market_pulse=build_market_pulse(
+            get_market_data_feed(),
+            now_ms=now_ms,
+            use_rth=binding.use_rth,
+            bot_running=status.running,
+        ),
     )
+    return panel, entries
 
 
-async def get_live_chart(
+async def get_panel(
     broker: str,
     account_id: str,
     sid: str,
     *,
-    resolution: Literal["5s", "1m"] = "1m",
+    transaction_ref: str | None = None,
+) -> BotPanelView:
+    """Build the current panel projection for one bot (§7)."""
+    panel, _entries = await _get_panel_with_entries(
+        broker,
+        account_id,
+        sid,
+        transaction_ref=transaction_ref,
+    )
+    return panel
+
+
+async def _build_live_chart_from_entries(
+    sid: str,
+    symbol: str,
+    entries: list[OrderJournalEntry],
+    *,
+    resolution: Literal["5s", "1m"],
+    now_ms: int,
 ) -> ChartLiveResponse:
-    """Build the LIVE chart pane for one bot (§8).
-
-    Reuses the existing ``live_chart_window`` resolver — today's session window
-    from the canonical NY calendar, capped at the resolver's untouched 7-day
-    limit — then decorates with this bot's fill markers.
-    """
+    """Build a live chart from one already-captured journal cut."""
     from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-    resolved = await _validate_account(broker, account_id)
-    status = _bot_status(broker, sid)
-    symbol = status.symbol
-    entries = _read_order_journal(broker, resolved)
-    now_ms = now_ms_utc()
 
     window = live_window(now_ms)
     open_ms, close_ms = window
@@ -642,6 +662,45 @@ async def get_live_chart(
         window=window,
         now_ms=now_ms,
     )
+
+
+async def get_live_chart(
+    broker: str,
+    account_id: str,
+    sid: str,
+    *,
+    resolution: Literal["5s", "1m"] = "1m",
+) -> ChartLiveResponse:
+    """Build the LIVE chart pane for one bot (§8)."""
+    resolved = await _validate_account(broker, account_id)
+    status = _bot_status(broker, sid)
+    entries = _read_order_journal(broker, resolved)
+    return await _build_live_chart_from_entries(
+        sid,
+        status.symbol,
+        entries,
+        resolution=resolution,
+        now_ms=now_ms_utc(),
+    )
+
+
+async def get_live_snapshot_parts(
+    broker: str,
+    account_id: str,
+    sid: str,
+    *,
+    resolution: Literal["5s", "1m"],
+) -> tuple[BotPanelView, ChartLiveResponse]:
+    """Build panel and chart from the same immutable account-journal cut."""
+    panel, entries = await _get_panel_with_entries(broker, account_id, sid)
+    chart = await _build_live_chart_from_entries(
+        sid,
+        panel.symbol,
+        entries,
+        resolution=resolution,
+        now_ms=now_ms_utc(),
+    )
+    return panel, chart
 
 
 async def get_history_chart(broker: str, account_id: str, sid: str, preset: ChartHistoryPreset) -> ChartHistoryResponse:

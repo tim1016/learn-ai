@@ -354,6 +354,8 @@ async def test_live_snapshot_bootstrap_and_sse_share_one_versioned_document(
         return _Hub()
 
     monkeypatch.setattr(broker_v2_panel, "get_or_start_live_projection_hub", get_hub)
+    monkeypatch.setattr(broker_v2_panel, "retain_live_projection_hub", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(broker_v2_panel, "release_live_projection_hub", lambda *_args, **_kwargs: None)
     async with _client(app) as client:
         bootstrap = await client.get(
             f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/live-snapshot",

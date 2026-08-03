@@ -174,9 +174,17 @@ def test_cursor_read_consumes_only_appended_bytes(tmp_path: Path) -> None:
     journal.append(_entry(ClerkEntryKind.INTENT_RECORDED))
 
     cold = journal.read_from(0, file_identity=None)
-    warm = journal.read_from(cold.next_offset, file_identity=cold.file_identity)
+    warm = journal.read_from(
+        cold.next_offset,
+        file_identity=cold.file_identity,
+        cursor_guard=cold.cursor_guard,
+    )
     journal.append(_entry(ClerkEntryKind.SUBMIT_ACKED))
-    appended = journal.read_from(warm.next_offset, file_identity=warm.file_identity)
+    appended = journal.read_from(
+        warm.next_offset,
+        file_identity=warm.file_identity,
+        cursor_guard=warm.cursor_guard,
+    )
 
     assert [entry.kind for entry in cold.entries] == [ClerkEntryKind.INTENT_RECORDED]
     assert warm.entries == ()
@@ -193,6 +201,7 @@ def test_cursor_read_resets_when_offset_is_past_journal_end(tmp_path: Path) -> N
     reset = journal.read_from(
         cold.next_offset + 1,
         file_identity=cold.file_identity,
+        cursor_guard=cold.cursor_guard,
     )
 
     assert reset.reset is True
@@ -209,14 +218,48 @@ def test_cursor_read_waits_for_complete_final_record(tmp_path: Path) -> None:
     with path.open("ab") as handle:
         handle.write(partial)
 
-    incomplete = journal.read_from(cold.next_offset, file_identity=cold.file_identity)
+    incomplete = journal.read_from(
+        cold.next_offset,
+        file_identity=cold.file_identity,
+        cursor_guard=cold.cursor_guard,
+    )
     with path.open("ab") as handle:
         handle.write(b"\n")
-    complete = journal.read_from(incomplete.next_offset, file_identity=incomplete.file_identity)
+    complete = journal.read_from(
+        incomplete.next_offset,
+        file_identity=incomplete.file_identity,
+        cursor_guard=incomplete.cursor_guard,
+    )
 
     assert incomplete.entries == ()
     assert incomplete.next_offset == cold.next_offset
     assert [entry.kind for entry in complete.entries] == [ClerkEntryKind.SUBMIT_ACKED]
+
+
+def test_cursor_read_resets_after_same_inode_rewrite(tmp_path: Path) -> None:
+    journal = OrderJournal(account_id="PA-1", root=tmp_path)
+    journal.append(_entry(ClerkEntryKind.INTENT_RECORDED))
+    cold = journal.read_from(0, file_identity=None)
+    path = journal.account_dir / JOURNAL_FILENAME
+    original_inode = path.stat().st_ino
+    replacement_entries = (
+        _entry(ClerkEntryKind.SUBMIT_ACKED),
+        _entry(ClerkEntryKind.INTENT_RECORDED),
+        _entry(ClerkEntryKind.INTENT_RECORDED),
+    )
+    with path.open("wb") as handle:
+        for entry in replacement_entries:
+            handle.write((entry.model_dump_json() + "\n").encode("utf-8"))
+
+    rewritten = journal.read_from(
+        cold.next_offset,
+        file_identity=cold.file_identity,
+        cursor_guard=cold.cursor_guard,
+    )
+
+    assert path.stat().st_ino == original_inode
+    assert rewritten.reset is True
+    assert rewritten.entries == replacement_entries
 
 
 @pytest.mark.parametrize("account_id", ["../escape", ".", ".."])

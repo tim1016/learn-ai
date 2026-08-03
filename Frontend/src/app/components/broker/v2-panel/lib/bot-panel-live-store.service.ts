@@ -45,6 +45,7 @@ export class BotPanelLiveStore {
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
   private request: LivePanelRequest | null = null;
   private generation = 0;
+  private transactionRequest = 0;
   private selectedRail: BotPanelLiveSnapshot['panel']['rail'] | null = null;
 
   readonly snapshot = this.currentSnapshot.asReadonly();
@@ -59,6 +60,7 @@ export class BotPanelLiveStore {
       || this.request.sid !== request.sid
     );
     if (identityChanged) {
+      this.transactionRequest += 1;
       this.selectedRail = null;
       this.currentSnapshot.set(null);
       this.currentError.set(null);
@@ -68,13 +70,13 @@ export class BotPanelLiveStore {
     this.currentStatus.set('connecting');
     try {
       const bootstrap = await this.fetchSnapshot(request);
-      if (generation !== this.generation) return;
+      if (!this.isCurrent(generation)) return;
       this.adopt(bootstrap);
     } catch (error) {
-      if (generation !== this.generation) return;
+      if (!this.isCurrent(generation)) return;
       this.currentError.set(error instanceof Error ? error.message : 'Live snapshot is unavailable.');
     }
-    if (generation !== this.generation) return;
+    if (!this.isCurrent(generation)) return;
     this.openStream(request);
   }
 
@@ -96,6 +98,7 @@ export class BotPanelLiveStore {
     const request = this.request;
     if (request === null) return;
     const generation = this.generation;
+    const transactionRequest = ++this.transactionRequest;
     try {
       const panel = await this.panelService.getPanel(
         request.broker,
@@ -103,13 +106,13 @@ export class BotPanelLiveStore {
         request.sid,
         transactionRef,
       );
-      if (!this.isCurrent(generation)) return;
+      if (!this.isCurrentTransaction(generation, transactionRequest)) return;
       this.selectedRail = panel.rail;
       this.currentSnapshot.update((current) => current === null
         ? current
         : { ...current, panel: { ...current.panel, rail: panel.rail } });
     } catch (error) {
-      if (!this.isCurrent(generation)) return;
+      if (!this.isCurrentTransaction(generation, transactionRequest)) return;
       this.currentError.set(
         error instanceof Error ? error.message : 'Transaction evidence is unavailable.',
       );
@@ -118,12 +121,14 @@ export class BotPanelLiveStore {
 
   clearSelectedTransaction(): void {
     if (this.selectedRail === null) return;
+    this.transactionRequest += 1;
     this.selectedRail = null;
     void this.refresh();
   }
 
   stop(): void {
     this.generation += 1;
+    this.transactionRequest += 1;
     this.request = null;
     this.stopTransport();
     this.currentStatus.set('closed');
@@ -180,6 +185,10 @@ export class BotPanelLiveStore {
 
   private isCurrent(generation: number): boolean {
     return generation === this.generation;
+  }
+
+  private isCurrentTransaction(generation: number, transactionRequest: number): boolean {
+    return this.isCurrent(generation) && transactionRequest === this.transactionRequest;
   }
 
   private startFallback(): void {

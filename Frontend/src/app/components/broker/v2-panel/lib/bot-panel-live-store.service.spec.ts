@@ -211,4 +211,32 @@ describe('BotPanelLiveStore', () => {
 
     expect(store.snapshot()?.panel.rail.transaction_ref).toBeNull();
   });
+
+  it('keeps the latest transaction when selections resolve out of order', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({
+      broker: 'alpaca',
+      accountId: 'PA-1',
+      sid: 'sid-1',
+      resolution: '5s',
+    });
+    const first = deferred<BotPanelLiveSnapshot['panel']>();
+    const second = deferred<BotPanelLiveSnapshot['panel']>();
+    service.getPanel
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    const selectingFirst = store.selectTransaction('tx-first');
+    const selectingSecond = store.selectTransaction('tx-second');
+    second.resolve({
+      rail: { transaction_ref: 'tx-second', stations: [] },
+    } as unknown as BotPanelLiveSnapshot['panel']);
+    await selectingSecond;
+    first.resolve({
+      rail: { transaction_ref: 'tx-first', stations: [] },
+    } as unknown as BotPanelLiveSnapshot['panel']);
+    await selectingFirst;
+
+    expect(store.snapshot()?.panel.rail.transaction_ref).toBe('tx-second');
+  });
 });

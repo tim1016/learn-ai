@@ -8,8 +8,14 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
+from app.services.broker_v2_panel import live_projection
 from app.services.live_instance_surface_assembler import VisibleRunsSnapshotCache
-from app.services.surface_hub import SnapshotUnavailableError, SurfaceHub, SurfaceHubRegistry
+from app.services.surface_hub import (
+    SnapshotUnavailableError,
+    SurfaceHub,
+    SurfaceHubRefreshFailure,
+    SurfaceHubRegistry,
+)
 
 
 class _Snapshot(BaseModel):
@@ -20,6 +26,21 @@ class _Snapshot(BaseModel):
     generated_at_ms: int
     source_state: str
     evidence_at_ms: int
+
+
+class _MarketPulse(BaseModel):
+    age_ms: int
+    observed_at_ms: int
+
+
+class _Panel(BaseModel):
+    market_pulse: _MarketPulse
+
+
+class _PanelSnapshot(BaseModel):
+    stream_epoch: str = ""
+    surface_version: int = 0
+    panel: _Panel
 
 
 def _snapshot(*, generated_at_ms: int, source_state: str = "FRESH") -> _Snapshot:
@@ -215,6 +236,80 @@ async def test_concurrent_refreshes_share_one_assembly_cycle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_starters_wait_for_the_same_initial_cycle() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def assemble() -> _Snapshot:
+        started.set()
+        await release.wait()
+        return _snapshot(generated_at_ms=1_700_000_000_100)
+
+    hub = SurfaceHub(
+        strategy_instance_id="bot-a",
+        assemble=assemble,
+        refresh_interval_seconds=3_600,
+    )
+    first = asyncio.create_task(hub.start())
+    await started.wait()
+    second = asyncio.create_task(hub.start())
+    await asyncio.sleep(0)
+
+    assert second.done() is False
+    release.set()
+    await asyncio.gather(first, second)
+    assert (await hub.snapshot()).surface_version == 1
+    await hub.stop(timeout_seconds=0.1)
+
+
+@pytest.mark.asyncio
+async def test_refresh_failure_notifies_watchers_and_invalidates_snapshot() -> None:
+    should_fail = False
+
+    async def assemble() -> _Snapshot:
+        if should_fail:
+            raise RuntimeError("private source detail")
+        return _snapshot(generated_at_ms=1_700_000_000_100)
+
+    hub = SurfaceHub(strategy_instance_id="bot-a", assemble=assemble)
+    await hub.refresh()
+    queue = hub.subscribe()
+    await queue.get()
+    should_fail = True
+
+    with pytest.raises(RuntimeError, match="private source detail"):
+        await hub.refresh()
+
+    failure = await queue.get()
+    assert failure == SurfaceHubRefreshFailure()
+    assert "private source detail" not in failure.message
+    with pytest.raises(SnapshotUnavailableError):
+        await hub.snapshot()
+
+
+@pytest.mark.asyncio
+async def test_market_pulse_age_advances_surface_version() -> None:
+    age_ms = 5_000
+
+    async def assemble() -> _PanelSnapshot:
+        return _PanelSnapshot(
+            panel=_Panel(
+                market_pulse=_MarketPulse(
+                    age_ms=age_ms,
+                    observed_at_ms=1_700_000_000_000 + age_ms,
+                )
+            )
+        )
+
+    hub = SurfaceHub(strategy_instance_id="bot-a", assemble=assemble)
+    first = await hub.refresh()
+    age_ms = 10_000
+    second = await hub.refresh()
+
+    assert second.surface_version == first.surface_version + 1
+
+
+@pytest.mark.asyncio
 async def test_snapshot_observer_is_producer_owned_and_stop_is_bounded() -> None:
     observations = 0
 
@@ -318,6 +413,53 @@ async def test_registry_remove_stops_and_forgets_hub() -> None:
     await registry.remove("bot-a")
 
     assert registry.get("bot-a") is None
+    assert hub.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_live_projection_hub_retires_after_last_client_leaves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await live_projection.stop_live_projection_hubs()
+    live_projection.reset_live_projection_hubs_for_testing()
+    monkeypatch.setattr(live_projection, "_HUB_IDLE_SECONDS", 0)
+    key = "alpaca:PA-1:sid-1:5s"
+    hub = live_projection._HUBS.get_or_create(
+        key,
+        assemble=lambda: asyncio.sleep(
+            0,
+            result=_snapshot(generated_at_ms=1_700_000_000_100),
+        ),
+        refresh_interval_seconds=3_600,
+    )
+    await hub.start()
+    queue = hub.subscribe()
+
+    live_projection.release_live_projection_hub(
+        "alpaca",
+        "PA-1",
+        "sid-1",
+        resolution="5s",
+        hub=hub,
+    )
+    retirement = live_projection._HUB_RETIREMENT_TASKS[key]
+    await retirement
+
+    assert live_projection._HUBS.get(key) is hub
+    assert hub.is_running is True
+
+    hub.unsubscribe(queue)
+    live_projection.release_live_projection_hub(
+        "alpaca",
+        "PA-1",
+        "sid-1",
+        resolution="5s",
+        hub=hub,
+    )
+    retirement = live_projection._HUB_RETIREMENT_TASKS[key]
+    await retirement
+
+    assert live_projection._HUBS.get(key) is None
     assert hub.is_running is False
 
 

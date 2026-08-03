@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 from typing import Generic, TypeVar
 from uuid import uuid4
 
@@ -56,6 +57,13 @@ class SnapshotUnavailableError(RuntimeError):
     """The producer has not completed a successful assembly yet."""
 
 
+@dataclass(frozen=True)
+class SurfaceHubRefreshFailure:
+    """Operator-safe signal that the latest complete projection failed."""
+
+    message: str = "The live projection refresh failed."
+
+
 class SurfaceHubResourceLimits(BaseModel):
     """Bounded resources owned by one SurfaceHub producer."""
 
@@ -67,11 +75,14 @@ class SurfaceHubResourceLimits(BaseModel):
 
 def _semantic_value(value: object, *, path: tuple[str, ...] = ()) -> object:
     if isinstance(value, dict):
-        return {
-            key: _semantic_value(item, path=(*path, key))
-            for key, item in value.items()
-            if not _is_transport_only_entry(value, path=path, key=key)
-        }
+        semantic: dict[str, object] = {}
+        for key, item in value.items():
+            if _is_transport_only_entry(value, path=path, key=key):
+                continue
+            if path == ("panel", "market_pulse") and key == "age_ms" and isinstance(item, int):
+                item = (item // 5_000) * 5_000
+            semantic[key] = _semantic_value(item, path=(*path, key))
+        return semantic
     if isinstance(value, list):
         return [_semantic_value(item, path=path) for item in value]
     return value
@@ -85,7 +96,7 @@ def _is_transport_only_entry(
 ) -> bool:
     full_path = (*path, key)
     if full_path in _TRANSPORT_ONLY_PATHS or key in _DERIVED_AGE_FIELDS:
-        return True
+        return not (path == ("panel", "market_pulse") and key == "age_ms")
     if key == "evidence_at_ms" and ("gate_result" in path or "gate_results" in path):
         return True
     return key == "ts_ms" and container.get("label") in _EVALUATION_RECEIPT_LABELS
@@ -131,10 +142,13 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         self._stop_event = asyncio.Event()
         self._producer_task: asyncio.Task[None] | None = None
         self._producer_started_once = False
+        self._last_refresh_failed = False
         self._generation = 0
         self._initial_cycle_done = asyncio.Event()
         self._client_queue_maxsize = _CLIENT_QUEUE_MAXSIZE
-        self._watchers: set[asyncio.Queue[SnapshotT | None]] = set()
+        self._watchers: set[
+            asyncio.Queue[SnapshotT | SurfaceHubRefreshFailure | None]
+        ] = set()
 
     @property
     def latest(self) -> SnapshotT | None:
@@ -164,21 +178,21 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         """
 
         async with self._lifecycle_guard:
-            if self._producer_task is not None and not self._producer_task.done():
-                return
-            if self._producer_started_once:
-                self.stream_epoch = self._new_stream_epoch()
-                self._surface_version = 0
-                self._fingerprint = None
-                self._latest = None
-            self._producer_started_once = True
-            self._generation += 1
-            self._stop_event = asyncio.Event()
-            self._initial_cycle_done = asyncio.Event()
-            self._producer_task = asyncio.create_task(
-                self._producer_loop(self._generation),
-                name=f"surface-hub:{self.strategy_instance_id}",
-            )
+            if self._producer_task is None or self._producer_task.done():
+                if self._producer_started_once:
+                    self.stream_epoch = self._new_stream_epoch()
+                    self._surface_version = 0
+                    self._fingerprint = None
+                    self._latest = None
+                self._producer_started_once = True
+                self._last_refresh_failed = False
+                self._generation += 1
+                self._stop_event = asyncio.Event()
+                self._initial_cycle_done = asyncio.Event()
+                self._producer_task = asyncio.create_task(
+                    self._producer_loop(self._generation),
+                    name=f"surface-hub:{self.strategy_instance_id}",
+                )
             initial_cycle_done = self._initial_cycle_done
         await initial_cycle_done.wait()
 
@@ -187,7 +201,7 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
 
         if refresh:
             return await self.refresh()
-        if self._latest is None:
+        if self._latest is None or self._last_refresh_failed:
             raise SnapshotUnavailableError(self.strategy_instance_id)
         return self._latest
 
@@ -205,10 +219,12 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
             task = self._refresh_task
         return await asyncio.shield(task)
 
-    def subscribe(self) -> asyncio.Queue[SnapshotT | None]:
+    def subscribe(
+        self,
+    ) -> asyncio.Queue[SnapshotT | SurfaceHubRefreshFailure | None]:
         """Subscribe to latest-wins snapshots with a bounded queue of one."""
 
-        queue: asyncio.Queue[SnapshotT | None] = asyncio.Queue(
+        queue: asyncio.Queue[SnapshotT | SurfaceHubRefreshFailure | None] = asyncio.Queue(
             maxsize=self._client_queue_maxsize
         )
         if self._stop_event.is_set():
@@ -219,7 +235,10 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         self._watchers.add(queue)
         return queue
 
-    def unsubscribe(self, queue: asyncio.Queue[SnapshotT | None]) -> None:
+    def unsubscribe(
+        self,
+        queue: asyncio.Queue[SnapshotT | SurfaceHubRefreshFailure | None],
+    ) -> None:
         self._watchers.discard(queue)
 
     async def stop(self, *, timeout_seconds: float = 2.0) -> None:
@@ -253,9 +272,18 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         return f"{self._process_epoch}:{uuid4().hex}"
 
     async def _assemble_and_store(self, *, generation: int, epoch: str) -> SnapshotT:
-        candidate = await self._assemble()
+        try:
+            candidate = await self._assemble()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if generation == self._generation and epoch == self.stream_epoch:
+                self._last_refresh_failed = True
+                self._publish_failure_to_watchers()
+            raise
         if generation != self._generation or epoch != self.stream_epoch:
             raise asyncio.CancelledError
+        self._last_refresh_failed = False
         fingerprint = semantic_surface_fingerprint(candidate)
         semantic_changed = fingerprint != self._fingerprint
         if semantic_changed:
@@ -277,6 +305,13 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
             if queue.full():
                 queue.get_nowait()
             queue.put_nowait(snapshot)
+
+    def _publish_failure_to_watchers(self) -> None:
+        failure = SurfaceHubRefreshFailure()
+        for queue in tuple(self._watchers):
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(failure)
 
     def _close_watchers(self) -> None:
         for queue in tuple(self._watchers):
@@ -370,6 +405,7 @@ class SurfaceHubRegistry(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runti
 __all__ = [
     "SnapshotUnavailableError",
     "SurfaceHub",
+    "SurfaceHubRefreshFailure",
     "SurfaceHubRegistry",
     "SurfaceHubResourceLimits",
     "semantic_surface_fingerprint",

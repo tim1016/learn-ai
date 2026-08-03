@@ -332,7 +332,7 @@ class MarketPulseView(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     session: Literal["PRE_MARKET", "OPEN", "AFTER_HOURS", "CLOSED", "UNKNOWN"]
-    feed_state: Literal["LIVE", "STALE", "MISSING"]
+    feed_state: Literal["LIVE", "IDLE", "STALE", "MISSING"]
     latest_bar_at_ms: int | None
     age_ms: int | None
     source: str | None

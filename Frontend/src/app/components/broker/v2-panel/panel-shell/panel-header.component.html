@@ -42,7 +42,7 @@
   >
     <div class="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-3 md:grid-cols-[auto_minmax(0,1fr)_auto]">
       <p-tag
-        [severity]="panel().market_pulse.attention_required ? 'danger' : 'success'"
+        [severity]="panel().market_pulse.attention_required ? 'danger' : (panel().market_pulse.feed_state === 'IDLE' ? 'info' : 'success')"
         [value]="panel().market_pulse.feed_state | receiptLabel"
       />
       <div class="min-w-0">

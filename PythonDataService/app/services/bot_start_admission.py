@@ -325,7 +325,7 @@ def market_data_admission_fact(
     reason = health.reason or None
     if health.connected and health.stale and not stalled_subscription:
         reason = (
-            "The connected feed is idle; Start may establish the candidate subscription."
+            "The connected feed is idle; a new run may establish the candidate subscription."
             if health.active_subscription_count == 0
             else f"No {'RTH ' if use_rth else ''}bar is expected during {session.phase}."
         )
@@ -335,4 +335,7 @@ def market_data_admission_fact(
         last_bar_ms=health.last_bar_ms,
         observed_at_ms=health.observed_at_ms,
         reason=reason,
+        connected=health.connected,
+        stale=health.stale,
+        active_subscription_count=health.active_subscription_count,
     )
