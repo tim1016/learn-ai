@@ -9,6 +9,7 @@ import type {
   BrokerPosition,
   ClerkStatus,
   CustodyDiagnosis,
+  CustodyResolutionReceipt,
   OrderCancelResult,
   OrderSubmitResult,
 } from '../api/alpaca.types';
@@ -138,6 +139,28 @@ export class BrokersService {
   ): Promise<ClerkStatus> {
     return firstValueFrom(
       this.http.post<ClerkStatus>(`${this.base}/${broker}/clerk/clear-hold`, body),
+    );
+  }
+
+  /**
+   * Slice 2 (Task 2.4) — resolve a Clerk↔broker custody divergence: run the
+   * diagnosed plan and journal the operator's reason. A control mutation
+   * (POST under the registered `/api/brokers` control prefix, so the
+   * interceptor marks it and the proxy authenticates). A stale
+   * `snapshot_version` or a blocked prerequisite comes back as a 409; the
+   * caller re-diagnoses rather than resubmitting.
+   */
+  resolveCustody(
+    broker: string,
+    body: {
+      reason: string;
+      snapshot_version: string;
+      confirmation_token: string;
+      idempotency_key: string;
+    },
+  ): Promise<CustodyResolutionReceipt> {
+    return firstValueFrom(
+      this.http.post<CustodyResolutionReceipt>(`${this.base}/${broker}/clerk/resolve`, body),
     );
   }
 }

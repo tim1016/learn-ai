@@ -136,11 +136,11 @@
 .custody__resolve {
   justify-self: start;
   padding: 0.5rem 0.9rem;
-  border: 1px solid var(--border-light);
+  border: 1px solid var(--accent);
   border-radius: var(--radius);
-  background: var(--bg-elevated);
-  color: var(--text-muted);
-  cursor: not-allowed;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  cursor: pointer;
   font: inherit;
   font-size: var(--fs-xs);
   font-weight: var(--fw-semi);

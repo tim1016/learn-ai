@@ -69,8 +69,29 @@
       }
 
       @if (d.resolvable) {
-        <button type="button" class="custody__resolve" disabled>Resolve &amp; sync to broker</button>
+        <button
+          type="button"
+          class="custody__resolve"
+          (click)="confirmOpen.set(true)"
+        >
+          Resolve &amp; sync to broker
+        </button>
       }
     </section>
   }
+}
+
+@if (confirmOpen() && diagnosis.value(); as d) {
+  <app-custody-resolution-confirm-dialog
+    [open]="confirmOpen()"
+    [diagnosis]="d"
+    [busy]="busy()"
+    [errorMessage]="resolveError()"
+    (confirmed)="onConfirmed($event)"
+    (cancelled)="confirmOpen.set(false)"
+  />
+}
+
+@if (receipt(); as r) {
+  <app-panel-action-receipt [receipt]="r" (dismissed)="dismissReceipt()" />
 }

@@ -35,7 +35,7 @@ export type ReconciliationSummary = components['schemas']['ReconciliationSummary
 export type CustodyDiagnosis = components['schemas']['CustodyDiagnosis'];
 export type CustodyDivergence = components['schemas']['CustodyDivergence'];
 export type CustodyPositionDelta = components['schemas']['CustodyPositionDelta'];
-// CustodyResolutionReceipt is not aliased yet: it backs the POST .../clerk/resolve
-// response (plan Task 2.2), which hasn't landed, so it isn't a generated schema in
-// broker.types.ts yet (`components['schemas']['CustodyResolutionReceipt']` fails
-// tsc with TS2339). Add the alias when Task 2.2 lands and regenerates the contract.
+// POST .../clerk/resolve request/response (Task 2.2, landed).
+export type CustodyResolutionRequest = components['schemas']['CustodyResolutionRequest'];
+export type CustodyResolutionReceipt = components['schemas']['CustodyResolutionReceipt'];
+export type CustodyResolutionStepResult = components['schemas']['CustodyResolutionStepResult'];

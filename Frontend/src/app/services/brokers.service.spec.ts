@@ -143,6 +143,33 @@ describe('BrokersService', () => {
     await expect(promise).resolves.toMatchObject({ in_sync: true });
   });
 
+  it('POSTs resolve-custody to the control-prefixed endpoint', async () => {
+    const body = {
+      reason: 'Bot process was terminated mid-run.',
+      snapshot_version: 'v1',
+      confirmation_token: 'RESOLVE',
+      idempotency_key: 'idem-1',
+    };
+    const promise = service.resolveCustody('alpaca', body);
+
+    const req = httpMock.expectOne('/api/brokers/alpaca/clerk/resolve');
+    expect(req.request.method).toBe('POST');
+    // POST under /api/brokers is a control mutation — the interceptor marks it.
+    expect(req.request.body).toEqual(body);
+    req.flush({
+      broker: 'alpaca',
+      account_id: 'PA1',
+      resolved: true,
+      receipt_id: 'receipt-1',
+      recorded_at_ms: 3,
+      in_sync: true,
+      steps_executed: [{ action_id: 'record_inventory_baseline', message: 'Baseline recorded.' }],
+      remaining_divergences: [],
+    });
+
+    await expect(promise).resolves.toMatchObject({ resolved: true, receipt_id: 'receipt-1' });
+  });
+
   it('POSTs clear-hold to the control-prefixed endpoint', async () => {
     const promise = service.clearHold('alpaca', { operator: 'ops', reason: 'safe' });
 
