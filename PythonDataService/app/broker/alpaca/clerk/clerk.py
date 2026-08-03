@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from app.broker.alpaca.clerk import derive, reconcile, recovery
+from app.broker.alpaca.clerk import derive, diagnosis, reconcile, recovery
 from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
 from app.broker.alpaca.clerk.custody import (
     CustodyReconciliationResult,
@@ -494,6 +494,40 @@ class AlpacaClerk(ClerkEffectOperations):
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
             return self._status_from(account_id, journal.read_entries())
+
+    async def custody_diagnosis(self) -> diagnosis.CustodyDiagnosis:
+        """Read-only Clerk↔broker custody diagnosis (no journal/broker mutation).
+
+        Reads the journal and a fresh broker snapshot, then projects the
+        structured divergences, the resolution plan, and the snapshot guard.
+        """
+        async with self._intake_lock:
+            account_id, journal = await self._ensure_journal()
+            entries = journal.read_entries()
+            namespaces = self._known_namespaces(journal)
+        orders, positions = await asyncio.gather(
+            self._read.list_orders(status="all", limit=500),
+            self._read.list_positions(),
+        )
+        divergences = diagnosis.diagnose_custody(
+            entries, orders=orders, positions=positions, namespaces=namespaces
+        )
+        plan = diagnosis.resolution_plan(divergences)
+        blocked = next(
+            (d.prerequisite_detail for d in divergences if d.state == "blocked_on_prerequisite"),
+            None,
+        )
+        return diagnosis.CustodyDiagnosis(
+            broker=self.broker_id,
+            account_id=account_id,
+            in_sync=not divergences,
+            observed_at_ms=self._clock(),
+            snapshot_version=diagnosis.custody_snapshot_version(entries, orders, positions),
+            resolvable=bool(plan),
+            blocked_reason=blocked,
+            divergences=divergences,
+            resolution_plan=plan,
+        )
 
     async def clear_hold(self, *, operator: str, reason: str) -> ClerkStatus:
         """Clear the active hold (operator exit); journal ``HOLD_CLEARED``.

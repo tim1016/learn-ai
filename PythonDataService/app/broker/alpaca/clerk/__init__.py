@@ -24,6 +24,15 @@ from app.broker.alpaca.clerk.clerk import (
     reset_alpaca_clerk_for_testing,
     set_alpaca_clerk,
 )
+from app.broker.alpaca.clerk.diagnosis import (
+    CustodyDiagnosis,
+    CustodyDivergence,
+    CustodyPositionDelta,
+    CustodyResolutionReceipt,
+    CustodyResolutionRequest,
+    CustodyResolutionStep,
+    CustodyResolutionStepResult,
+)
 from app.broker.alpaca.clerk.exposure import (
     FlattenRefusedError,
     InstanceExposure,
@@ -70,6 +79,13 @@ __all__ = [
     "ClerkAdmissionSnapshotChangedError",
     "ClerkEntryKind",
     "ClerkStatus",
+    "CustodyDiagnosis",
+    "CustodyDivergence",
+    "CustodyPositionDelta",
+    "CustodyResolutionReceipt",
+    "CustodyResolutionRequest",
+    "CustodyResolutionStep",
+    "CustodyResolutionStepResult",
     "FlattenRefusedError",
     "HoldState",
     "InstanceCustodyProof",

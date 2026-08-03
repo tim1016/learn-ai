@@ -108,14 +108,16 @@ def _order(
     )
 
 
-def _position() -> BrokerPosition:
+def _position(
+    *, symbol: str = "SPY", quantity: float = 1.0, side: str = "long"
+) -> BrokerPosition:
     return BrokerPosition(
         broker="alpaca",
-        symbol="SPY",
+        symbol=symbol,
         asset_id="asset-1",
         asset_class="us_equity",
-        quantity=1.0,
-        side="long",
+        quantity=quantity,
+        side=side,
         average_entry_price=100.0,
         market_value=101.0,
         cost_basis=100.0,

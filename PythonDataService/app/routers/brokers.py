@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.broker.alpaca.clerk import (
     AlpacaClerk,
     ClerkStatus,
+    CustodyDiagnosis,
     OrderCancelResult,
     OrderSubmitResult,
     get_alpaca_clerk,
@@ -273,6 +274,21 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
     clerk = _require_trade_clerk(broker)
     try:
         return await clerk.status()
+    except BrokerError as error:
+        _raise_http(error)
+
+
+@router.get("/{broker}/clerk/custody-diagnosis", response_model=CustodyDiagnosis)
+async def get_custody_diagnosis(broker: str) -> CustodyDiagnosis:
+    """Diagnose Clerk↔broker custody divergence (read-only).
+
+    Transport only: resolve the account-scoped Clerk and delegate. The Clerk
+    reads a fresh broker snapshot and projects the structured, backend-authored
+    diagnosis the Accounts page renders verbatim.
+    """
+    clerk = _require_trade_clerk(broker)
+    try:
+        return await clerk.custody_diagnosis()
     except BrokerError as error:
         _raise_http(error)
 
