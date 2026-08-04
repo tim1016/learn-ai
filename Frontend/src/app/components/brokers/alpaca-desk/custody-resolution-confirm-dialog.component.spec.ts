@@ -28,7 +28,7 @@ function divergedDiagnosis(overrides: Partial<CustodyDiagnosis> = {}): CustodyDi
     ],
     resolution_plan: [{ action_id: 'record_inventory_baseline', scope: 'account', mutates: true }],
     ...overrides,
-  } as CustodyDiagnosis;
+  };
 }
 
 describe('CustodyResolutionConfirmDialogComponent', () => {

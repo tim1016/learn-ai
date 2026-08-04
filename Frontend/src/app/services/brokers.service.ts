@@ -10,6 +10,7 @@ import type {
   ClerkStatus,
   CustodyDiagnosis,
   CustodyResolutionReceipt,
+  CustodyResolutionRequest,
   OrderCancelResult,
   OrderSubmitResult,
 } from '../api/alpaca.types';
@@ -152,12 +153,7 @@ export class BrokersService {
    */
   resolveCustody(
     broker: string,
-    body: {
-      reason: string;
-      snapshot_version: string;
-      confirmation_token: string;
-      idempotency_key: string;
-    },
+    body: CustodyResolutionRequest,
   ): Promise<CustodyResolutionReceipt> {
     return firstValueFrom(
       this.http.post<CustodyResolutionReceipt>(`${this.base}/${broker}/clerk/resolve`, body),

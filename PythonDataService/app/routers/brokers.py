@@ -20,7 +20,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.broker.alpaca.clerk import (
     AlpacaClerk,
     ClerkStatus,
+    CustodyConflictResponse,
     CustodyDiagnosis,
+    CustodyResolutionOutcomeUnknownError,
     CustodyResolutionReceipt,
     CustodyResolutionRequest,
     CustodySnapshotChangedError,
@@ -321,6 +323,7 @@ async def clear_clerk_hold(broker: str, request: ClearHoldRequest) -> ClerkStatu
 @router.post(
     "/{broker}/clerk/resolve",
     response_model=CustodyResolutionReceipt,
+    responses={409: {"model": CustodyConflictResponse}},
     dependencies=[Depends(require_data_plane_control_secret)],
 )
 async def resolve_custody(
@@ -343,10 +346,13 @@ async def resolve_custody(
             operator=settings.PANEL_OPERATOR_IDENTITY,
             reason=request.reason,
             snapshot_version=request.snapshot_version,
+            idempotency_key=request.idempotency_key,
         )
     except CustodySnapshotChangedError as error:
         raise HTTPException(status_code=409, detail={"message": str(error), "why": error.detail})
     except InventoryBaselineRefusedError as error:
+        raise HTTPException(status_code=409, detail={"message": str(error), "why": error.detail})
+    except CustodyResolutionOutcomeUnknownError as error:
         raise HTTPException(status_code=409, detail={"message": str(error), "why": error.detail})
     except BrokerError as error:
         _raise_http(error)

@@ -32,7 +32,7 @@ function diagnosis(overrides: Partial<CustodyDiagnosis> = {}): CustodyDiagnosis 
     broker: 'alpaca', account_id: 'PA1', in_sync: true, observed_at_ms: 1,
     snapshot_version: 'v1', resolution_posture: 'paper', resolvable: false,
     blocked_reason: null, divergences: [], resolution_plan: [], ...overrides,
-  } as CustodyDiagnosis;
+  };
 }
 
 function divergedResolvable(): CustodyDiagnosis {
@@ -58,7 +58,7 @@ function receiptOf(overrides: Partial<CustodyResolutionReceipt> = {}): CustodyRe
     steps_executed: [{ action_id: 'record_inventory_baseline', message: 'Baseline recorded.' }],
     remaining_divergences: [],
     ...overrides,
-  } as CustodyResolutionReceipt;
+  };
 }
 
 function svc(d: CustodyDiagnosis) {
@@ -109,6 +109,33 @@ describe('AlpacaCustodyResolutionComponent', () => {
       providers: [{ provide: BrokersService, useValue: svc(diverged) }],
     });
     expect(await screen.findByText('order-ref-abc123')).toBeTruthy();
+  });
+
+  it('presents a reconciliation prerequisite as an actionable recovery step', async () => {
+    const diverged = diagnosis({
+      in_sync: false,
+      resolvable: true,
+      divergences: [{
+        kind: 'exposure_attribution_mismatch',
+        state: 'blocked_on_prerequisite',
+        explanation: 'An unresolved submission must be reconciled first.',
+        possible_causes: [],
+        position_deltas: [{ symbol: 'SPY', clerk_attributed_qty: 0, broker_observed_qty: 1 }],
+        resolution_step: 'record_inventory_baseline',
+        prerequisite_step: 'reconcile_now',
+        prerequisite_detail: 'Reconcile the unresolved submission.',
+        evidence_refs: [],
+      }],
+      resolution_plan: [{ action_id: 'reconcile_now', scope: 'account', mutates: false }],
+    });
+
+    await render(AlpacaCustodyResolutionComponent, {
+      providers: [{ provide: BrokersService, useValue: svc(diverged) }],
+    });
+
+    expect(
+      await screen.findByRole('button', { name: /run reconciliation prerequisite/i }),
+    ).toBeTruthy();
   });
 
   it('opens the confirm dialog when "Resolve & sync" is clicked', async () => {

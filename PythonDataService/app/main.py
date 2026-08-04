@@ -179,6 +179,12 @@ async def lifespan(app: FastAPI):
     if _alpaca_clerk_configuration_is_valid():
         from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
+        def _alpaca_bot_running() -> bool:
+            from app.services.bot_runner import get_bot_task_registry
+
+            registry = get_bot_task_registry()
+            return registry is not None and registry.any_running()
+
         alpaca_broker = AlpacaBroker()
         # S4 (#1262): the dual-health submission gate — market-data feed (S1)
         # AND trade_updates execution channel must both be healthy for a new
@@ -187,6 +193,7 @@ async def lifespan(app: FastAPI):
             read=alpaca_broker,
             trade=alpaca_broker,
             stream_health=build_default_stream_health_gate(),
+            bot_running_probe=_alpaca_bot_running,
         )
 
         # Alpaca crash-safety recovery (phase 2, S5) — replay the order journal

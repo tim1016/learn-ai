@@ -25,7 +25,11 @@ from app.broker.alpaca.clerk.clerk import (
     reset_alpaca_clerk_for_testing,
     set_alpaca_clerk,
 )
+from app.broker.alpaca.clerk.custody_resolution_store import (
+    CustodyResolutionOutcomeUnknownError,
+)
 from app.broker.alpaca.clerk.diagnosis import (
+    CustodyConflictResponse,
     CustodyDiagnosis,
     CustodyDivergence,
     CustodyPositionDelta,
@@ -81,9 +85,11 @@ __all__ = [
     "ClerkAdmissionSnapshotChangedError",
     "ClerkEntryKind",
     "ClerkStatus",
+    "CustodyConflictResponse",
     "CustodyDiagnosis",
     "CustodyDivergence",
     "CustodyPositionDelta",
+    "CustodyResolutionOutcomeUnknownError",
     "CustodyResolutionReceipt",
     "CustodyResolutionRequest",
     "CustodyResolutionStep",

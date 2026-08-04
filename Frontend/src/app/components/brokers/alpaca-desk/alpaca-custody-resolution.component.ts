@@ -56,6 +56,10 @@ export class AlpacaCustodyResolutionComponent {
   protected readonly divergences = computed<CustodyDivergence[]>(
     () => this.diagnosis.value()?.divergences ?? [],
   );
+  protected readonly reconcileOnly = computed(() => {
+    const plan = this.diagnosis.value()?.resolution_plan ?? [];
+    return plan.length > 0 && plan.every((step) => !step.mutates);
+  });
 
   // A fresh resolve attempt must never carry over a prior attempt's stale
   // error or receipt — both are part of the audited flow and would otherwise
@@ -82,7 +86,7 @@ export class AlpacaCustodyResolutionComponent {
         reason,
         snapshot_version: d.snapshot_version,
         confirmation_token: 'RESOLVE',
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: this.newIdempotencyKey(),
       });
       this.receipt.set(this.toReceiptView(receipt));
       this.confirmOpen.set(false);
@@ -137,5 +141,12 @@ export class AlpacaCustodyResolutionComponent {
     const message = detail?.['message'];
     if (typeof message === 'string') return message;
     return 'Resolve failed. Try again.';
+  }
+
+  private newIdempotencyKey(): string {
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+      return globalThis.crypto.randomUUID();
+    }
+    return `custody-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 }

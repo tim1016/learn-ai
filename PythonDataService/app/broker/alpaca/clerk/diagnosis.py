@@ -14,14 +14,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.broker.alpaca.clerk import derive, exposure, reconcile
-from app.broker.alpaca.clerk.models import OrderJournalEntry
+from app.broker.alpaca.clerk.models import EpochMs, OrderJournalEntry
 from app.broker.contract.models import BrokerOrder, BrokerPosition
+from app.engine.live.order_identity import order_ref_namespace_matches
 
 CustodyDivergenceKind = Literal[
     "exposure_attribution_mismatch",
     "exposure_hold",
     "stale_reconciliation",
     "needs_review",
+    "foreign_working_order",
 ]
 CustodyDivergenceState = Literal[
     "resolvable_now", "blocked_on_prerequisite", "needs_review"
@@ -44,6 +46,7 @@ class CustodyDivergence(BaseModel):
     possible_causes: tuple[str, ...]
     position_deltas: tuple[CustodyPositionDelta, ...] = ()
     resolution_step: CustodyActionId | None = None
+    prerequisite_step: CustodyActionId | None = None
     prerequisite_detail: str | None = None
     evidence_refs: tuple[str, ...] = ()
 
@@ -60,7 +63,7 @@ class CustodyDiagnosis(BaseModel):
     broker: str
     account_id: str
     in_sync: bool
-    observed_at_ms: int
+    observed_at_ms: EpochMs
     snapshot_version: str
     resolution_posture: Literal["paper", "live"] = "paper"
     resolvable: bool = False
@@ -90,6 +93,10 @@ _CAUSES: dict[CustodyDivergenceKind, tuple[str, ...]] = {
         "The Clerk submitted an order the broker reports neither as working nor "
         "filled — its true outcome cannot be proven automatically.",
     ),
+    "foreign_working_order": (
+        "An order was submitted outside every namespace recorded by this Clerk.",
+        "A manual or third-party broker client submitted directly to this account.",
+    ),
 }
 _EXPLANATION: dict[CustodyDivergenceKind, str] = {
     "exposure_attribution_mismatch": (
@@ -109,6 +116,10 @@ _EXPLANATION: dict[CustodyDivergenceKind, str] = {
         "An unresolved submission cannot be mapped to any broker outcome. This "
         "needs manual review before any custody cutover."
     ),
+    "foreign_working_order": (
+        "The broker has a working order that this Clerk does not own. Cancel or "
+        "settle it before changing the account custody baseline or clearing a hold."
+    ),
 }
 
 
@@ -116,8 +127,13 @@ def custody_snapshot_version(
     entries: list[OrderJournalEntry],
     orders: list[BrokerOrder],
     positions: list[BrokerPosition],
+    *,
+    namespaces: frozenset[str] = frozenset(),
+    channel_fresh: bool = True,
+    bot_running: bool = False,
 ) -> str:
     """Stable hash of the salient custody state (the resolve concurrency guard)."""
+    latest_reconciliation = derive.latest_reconciliation(entries)
     payload = {
         "expected": exposure.project_expected_account_exposure(entries),
         "observed": {
@@ -126,8 +142,23 @@ def custody_snapshot_version(
             if p.quantity != 0
         },
         "hold": derive.hold_state(entries).active,
+        "freeze": derive.account_freeze_state(entries).category,
+        "latest_reconciliation": (
+            None
+            if latest_reconciliation is None
+            else {
+                "verdict": latest_reconciliation.verdict,
+                "recorded_at_ms": latest_reconciliation.recorded_at_ms,
+            }
+        ),
+        "namespaces": sorted(namespaces),
+        "channel_fresh": channel_fresh,
+        "bot_running": bot_running,
+        "unresolved_intents": sorted(
+            entry.order_ref for entry in derive.unresolved_intents(entries)
+        ),
         "working_orders": sorted(
-            o.order_id
+            (o.order_id, o.client_order_id or "", o.status.lower())
             for o in orders
             if o.status.lower() not in reconcile.RECONCILIATION_TERMINAL_ORDER_STATUSES
         ),
@@ -162,6 +193,11 @@ def stale_custody_snapshot_version(entries: list[OrderJournalEntry]) -> str:
     payload = {
         "stale_reconciliation": True,
         "expected": exposure.project_expected_account_exposure(entries),
+        "hold": derive.hold_state(entries).active,
+        "freeze": derive.account_freeze_state(entries).category,
+        "unresolved_intents": sorted(
+            entry.order_ref for entry in derive.unresolved_intents(entries)
+        ),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
@@ -173,45 +209,87 @@ def diagnose_custody(
     orders: list[BrokerOrder],
     positions: list[BrokerPosition],
     namespaces: frozenset[str],
+    channel_fresh: bool = True,
+    bot_running: bool = False,
 ) -> tuple[CustodyDivergence, ...]:
     """Project current Clerk↔broker divergences (pure; no mutation)."""
     divergences: list[CustodyDivergence] = []
 
-    hold = derive.hold_state(entries)
-    if hold.active:
+    working = [
+        order
+        for order in orders
+        if order.status.lower() not in reconcile.RECONCILIATION_TERMINAL_ORDER_STATUSES
+    ]
+    foreign_working = [
+        order
+        for order in working
+        if not order_ref_namespace_matches(order.client_order_id, namespaces)
+    ]
+    if foreign_working:
         divergences.append(
             CustodyDivergence(
-                kind="exposure_hold",
-                state="resolvable_now",
-                explanation=_EXPLANATION["exposure_hold"],
-                possible_causes=_CAUSES["exposure_hold"],
-                resolution_step="clear_hold",
-                evidence_refs=tuple(sorted(derive.unexplained_order_ids(entries))),
+                kind="foreign_working_order",
+                state="blocked_on_prerequisite",
+                explanation=_EXPLANATION["foreign_working_order"],
+                possible_causes=_CAUSES["foreign_working_order"],
+                prerequisite_detail=(
+                    f"{len(foreign_working)} unowned working order(s) must be cancelled "
+                    "or settled before custody can be resolved."
+                ),
+                evidence_refs=tuple(sorted(order.order_id for order in foreign_working)),
             )
         )
 
     unresolved = derive.unresolved_intents(entries)
+    hold = derive.hold_state(entries)
+    if hold.active:
+        hold_prerequisites: list[str] = []
+        if not channel_fresh:
+            hold_prerequisites.append(
+                "Restore both submission channels and reconcile before clearing the hold."
+            )
+        if foreign_working:
+            hold_prerequisites.append(
+                "Cancel or settle every unowned working order before clearing the hold."
+            )
+        if unresolved:
+            hold_prerequisites.append(
+                "Reconcile every unresolved submission before clearing the hold."
+            )
+        divergences.append(
+            CustodyDivergence(
+                kind="exposure_hold",
+                state=("blocked_on_prerequisite" if hold_prerequisites else "resolvable_now"),
+                explanation=_EXPLANATION["exposure_hold"],
+                possible_causes=_CAUSES["exposure_hold"],
+                resolution_step="clear_hold",
+                prerequisite_detail=" ".join(hold_prerequisites) or None,
+                evidence_refs=tuple(sorted(derive.unexplained_order_ids(entries))),
+            )
+        )
+
     deltas = _attribution_deltas(entries, positions)
     if deltas:
-        working = [
-            o
-            for o in orders
-            if o.status.lower() not in reconcile.RECONCILIATION_TERMINAL_ORDER_STATUSES
-        ]
         state: CustodyDivergenceState = "resolvable_now"
-        prerequisite: str | None = None
+        prerequisites: list[str] = []
+        prerequisite_step: CustodyActionId | None = None
+        if bot_running:
+            prerequisites.append(
+                "Stop every running bot before adopting an account inventory baseline."
+            )
         if working:
-            state = "blocked_on_prerequisite"
-            prerequisite = (
+            prerequisites.append(
                 f"{len(working)} working order(s) are open. Cancel or settle them "
                 "before adopting a baseline."
             )
-        elif unresolved:
-            state = "blocked_on_prerequisite"
-            prerequisite = (
+        if unresolved:
+            prerequisites.append(
                 f"{len(unresolved)} unresolved submission(s) must reconcile before "
                 "a baseline cutover."
             )
+            prerequisite_step = "reconcile_now"
+        if prerequisites:
+            state = "blocked_on_prerequisite"
         divergences.append(
             CustodyDivergence(
                 kind="exposure_attribution_mismatch",
@@ -220,7 +298,8 @@ def diagnose_custody(
                 possible_causes=_CAUSES["exposure_attribution_mismatch"],
                 position_deltas=deltas,
                 resolution_step="record_inventory_baseline",
-                prerequisite_detail=prerequisite,
+                prerequisite_step=prerequisite_step,
+                prerequisite_detail=" ".join(prerequisites) or None,
             )
         )
 
@@ -232,6 +311,26 @@ def diagnose_custody(
                 explanation=_EXPLANATION["needs_review"],
                 possible_causes=_CAUSES["needs_review"],
                 evidence_refs=tuple(sorted(e.order_ref for e in unresolved if e.order_ref)),
+            )
+        )
+
+    freeze = derive.account_freeze_state(entries)
+    if freeze.active and not any(
+        divergence.resolution_step == "reconcile_now"
+        or divergence.prerequisite_step == "reconcile_now"
+        for divergence in divergences
+    ):
+        divergences.append(
+            CustodyDivergence(
+                kind="stale_reconciliation",
+                state="resolvable_now",
+                explanation=(
+                    "The latest durable reconciliation still freezes account admission, "
+                    "even though this read-only broker snapshot currently matches the Clerk."
+                ),
+                possible_causes=_CAUSES["stale_reconciliation"],
+                resolution_step="reconcile_now",
+                prerequisite_detail=freeze.next_step,
             )
         )
 
@@ -271,7 +370,7 @@ class CustodyResolutionReceipt(BaseModel):
     account_id: str
     resolved: bool
     receipt_id: str
-    recorded_at_ms: int
+    recorded_at_ms: EpochMs
     steps_executed: tuple[CustodyResolutionStepResult, ...] = ()
     in_sync: bool = False
     remaining_divergences: tuple[CustodyDivergence, ...] = ()
@@ -301,16 +400,36 @@ class CustodyResolutionRequest(BaseModel):
         return normalized
 
 
+class CustodyConflictDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message: str
+    why: str | None = None
+
+
+class CustodyConflictResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    detail: CustodyConflictDetail
+
+
 def resolution_plan(
     divergences: tuple[CustodyDivergence, ...],
 ) -> tuple[CustodyResolutionStep, ...]:
     """Ordered plan for the resolvable divergences: reconcile → baseline → clear-hold."""
     steps: list[CustodyResolutionStep] = []
-    kinds = {d.kind for d in divergences if d.state == "resolvable_now"}
-    if kinds & {"exposure_attribution_mismatch"}:
+    actionable = [d for d in divergences if d.state == "resolvable_now"]
+    prerequisite_steps = {
+        d.prerequisite_step for d in divergences if d.prerequisite_step is not None
+    }
+    kinds = {d.kind for d in actionable}
+    if "reconcile_now" in prerequisite_steps or "stale_reconciliation" in kinds:
         steps.append(
             CustodyResolutionStep(action_id="reconcile_now", scope="account", mutates=False)
         )
+    if kinds & {"exposure_attribution_mismatch"}:
+        if not any(step.action_id == "reconcile_now" for step in steps):
+            steps.append(
+                CustodyResolutionStep(action_id="reconcile_now", scope="account", mutates=False)
+            )
         steps.append(
             CustodyResolutionStep(
                 action_id="record_inventory_baseline", scope="account", mutates=True

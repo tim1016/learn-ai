@@ -834,7 +834,10 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         clerk = get_alpaca_clerk()
         if clerk is None:
             raise PanelUnavailableError("Alpaca order management is not configured.")
-        await clerk.clear_hold(operator=operator, reason=reason or "Panel clear-hold")
+        try:
+            await clerk.clear_hold(operator=operator, reason=reason or "Panel clear-hold")
+        except InventoryBaselineRefusedError as exc:
+            raise ActionNotAvailableError(str(exc), detail=exc.detail) from exc
         return "Exposure hold cleared."
 
     async def _record_inventory_baseline(operator: str, reason: str | None) -> str:

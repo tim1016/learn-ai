@@ -1487,66 +1487,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/alpaca/fault-injection/arm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Arm Fault
-         * @description Arm one fault; refuses (403) unless the seam is permitted (paper only).
-         */
-        post: operations["arm_fault_api_brokers_alpaca_fault_injection_arm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/fault-injection/disarm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Disarm Faults
-         * @description Clear every armed fault.
-         */
-        post: operations["disarm_faults_api_brokers_alpaca_fault_injection_disarm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/fault-injection/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fault Injection Status
-         * @description Report whether the seam is permitted and what is currently armed.
-         */
-        get: operations["fault_injection_status_api_brokers_alpaca_fault_injection_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/account": {
         parameters: {
             query?: never;
@@ -8579,48 +8519,6 @@ export interface components {
             worst_slices?: Record<string, never>[];
         };
         /**
-         * ArmFaultRequest
-         * @description Arm one fault against the running data plane.
-         *
-         *     ``kind`` must be a known write or frame fault. ``target`` scopes it — for a
-         *     write fault it is matched (substring) against the submit ``client_order_id``
-         *     or the cancel ``order_id``; for a frame fault it is the ``client_order_id``
-         *     the crafted frame is attributed to. ``count`` bounds how many times the
-         *     fault fires. ``params`` carries frame-shaping overrides (``symbol`` / ``qty``
-         *     / ``price`` / ``execution_id``) and is ignored for write faults.
-         */
-        ArmFaultRequest: {
-            /**
-             * Count
-             * @default 1
-             */
-            count?: number;
-            /** Kind */
-            kind: components["schemas"]["WriteFaultKind"] | components["schemas"]["FrameFaultKind"];
-            /** Params */
-            params?: {
-                [key: string]: string;
-            };
-            /** Target */
-            target?: string | null;
-        };
-        /**
-         * ArmedFaultView
-         * @description One currently-armed fault.
-         */
-        ArmedFaultView: {
-            /** Kind */
-            kind: string;
-            /** Params */
-            params: {
-                [key: string]: string;
-            };
-            /** Remaining */
-            remaining: number;
-            /** Target */
-            target: string | null;
-        };
-        /**
          * ArtifactFile
          * @description Metadata for a single artifact file.
          */
@@ -11609,12 +11507,18 @@ export interface components {
             journal_sequence: number;
             /** Next Step */
             next_step?: string | null;
-            /** Observed At Ms */
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
             observed_at_ms: number;
             pending_orders: components["schemas"]["CustodyCountFact"];
             /** Reason Code */
             reason_code: string;
-            /** Reconciled At Ms */
+            /**
+             * Reconciled At Ms
+             * Format: int64
+             */
             reconciled_at_ms: number;
             /** Reconciliation Fresh */
             reconciliation_fresh: boolean;
@@ -12431,6 +12335,17 @@ export interface components {
              */
             theoretical_value: number;
         };
+        /** CustodyConflictDetail */
+        CustodyConflictDetail: {
+            /** Message */
+            message: string;
+            /** Why */
+            why?: string | null;
+        };
+        /** CustodyConflictResponse */
+        CustodyConflictResponse: {
+            detail: components["schemas"]["CustodyConflictDetail"];
+        };
         /**
          * CustodyCountFact
          * @description Count whose zero/non-zero/unknown meaning is explicit.
@@ -12459,7 +12374,10 @@ export interface components {
             divergences?: components["schemas"]["CustodyDivergence"][];
             /** In Sync */
             in_sync: boolean;
-            /** Observed At Ms */
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
             observed_at_ms: number;
             /**
              * Resolution Plan
@@ -12493,7 +12411,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "exposure_attribution_mismatch" | "exposure_hold" | "stale_reconciliation" | "needs_review";
+            kind: "exposure_attribution_mismatch" | "exposure_hold" | "stale_reconciliation" | "needs_review" | "foreign_working_order";
             /**
              * Position Deltas
              * @default []
@@ -12503,6 +12421,8 @@ export interface components {
             possible_causes: string[];
             /** Prerequisite Detail */
             prerequisite_detail?: string | null;
+            /** Prerequisite Step */
+            prerequisite_step?: ("reconcile_now" | "record_inventory_baseline" | "clear_hold") | null;
             /** Resolution Step */
             resolution_step?: ("reconcile_now" | "record_inventory_baseline" | "clear_hold") | null;
             /**
@@ -12548,7 +12468,10 @@ export interface components {
             in_sync?: boolean;
             /** Receipt Id */
             receipt_id: string;
-            /** Recorded At Ms */
+            /**
+             * Recorded At Ms
+             * Format: int64
+             */
             recorded_at_ms: number;
             /**
              * Remaining Divergences
@@ -14164,26 +14087,6 @@ export interface components {
             ts_ms: number;
         };
         /**
-         * FaultInjectionDisarmResult
-         * @description How many armed faults were cleared.
-         */
-        FaultInjectionDisarmResult: {
-            /** Cleared */
-            cleared: number;
-        };
-        /**
-         * FaultInjectionStatus
-         * @description Whether the seam is permitted plus every currently-armed fault.
-         */
-        FaultInjectionStatus: {
-            /** Frame */
-            frame: components["schemas"]["ArmedFaultView"][];
-            /** Permitted */
-            permitted: boolean;
-            /** Write */
-            write: components["schemas"]["ArmedFaultView"][];
-        };
-        /**
          * FeatureInfoResponse
          * @description Feature metadata for the information panel.
          */
@@ -14675,12 +14578,6 @@ export interface components {
             /** Train Start Ms */
             train_start_ms: number;
         };
-        /**
-         * FrameFaultKind
-         * @description Inbound ``trade_updates`` frames the frame-source hook can interleave.
-         * @enum {string}
-         */
-        FrameFaultKind: "redeliver_last" | "halt_suspended" | "halt_stopped" | "partial_fill";
         /** FreshCross */
         FreshCross: {
             /**
@@ -26328,12 +26225,6 @@ export interface components {
             symbol: string;
         };
         /**
-         * WriteFaultKind
-         * @description Vendor responses the write-path hook can simulate for a submit/cancel.
-         * @enum {string}
-         */
-        WriteFaultKind: "reject_422" | "conflict_409" | "throttle_429" | "timeout";
-        /**
          * _BarsSpecModel
          * @description Pydantic shape for the ``BarsSpec`` block inside ``DataPolicy``.
          */
@@ -29070,103 +28961,6 @@ export interface operations {
             };
         };
     };
-    arm_fault_api_brokers_alpaca_fault_injection_arm_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ArmFaultRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FaultInjectionStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    disarm_faults_api_brokers_alpaca_fault_injection_disarm_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FaultInjectionDisarmResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fault_injection_status_api_brokers_alpaca_fault_injection_status_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FaultInjectionStatus"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_account_api_brokers__broker__account_get: {
         parameters: {
             query?: never;
@@ -30277,6 +30071,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustodyResolutionReceipt"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustodyConflictResponse"];
                 };
             };
             /** @description Validation Error */

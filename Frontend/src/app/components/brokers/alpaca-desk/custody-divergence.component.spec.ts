@@ -15,7 +15,7 @@ function divergence(overrides: Partial<CustodyDivergence> = {}): CustodyDivergen
     prerequisite_detail: null,
     evidence_refs: [],
     ...overrides,
-  } as CustodyDivergence;
+  };
 }
 
 describe('CustodyDivergenceComponent', () => {

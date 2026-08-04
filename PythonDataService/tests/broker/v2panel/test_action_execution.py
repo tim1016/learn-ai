@@ -571,7 +571,9 @@ async def test_inventory_baseline_performer_uses_channel_identity(monkeypatch) -
     assert "reconciliation is clean" in message
 
 
-async def test_inventory_baseline_performer_forwards_operator_reason(monkeypatch) -> None:
+async def test_inventory_baseline_performer_forwards_operator_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[dict[str, str]] = []
 
     class _Clerk:
@@ -597,7 +599,9 @@ async def test_inventory_baseline_performer_forwards_operator_reason(monkeypatch
     ]
 
 
-async def test_clear_hold_performer_journals_operator_reason(monkeypatch) -> None:
+async def test_clear_hold_performer_journals_operator_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The clear-hold performer forwards the operator's reason to the Clerk.
 
     ``clerk.clear_hold`` journals this ``reason`` verbatim onto the resulting
@@ -624,7 +628,7 @@ async def test_clear_hold_performer_journals_operator_reason(monkeypatch) -> Non
 
 
 async def test_clear_hold_performer_falls_back_to_default_reason_when_none_given(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, str]] = []
 
@@ -644,7 +648,9 @@ async def test_clear_hold_performer_falls_back_to_default_reason_when_none_given
     assert calls == [{"operator": "desk-operator", "reason": "Panel clear-hold"}]
 
 
-async def test_reconcile_performer_ignores_operator_reason(monkeypatch) -> None:
+async def test_reconcile_performer_ignores_operator_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``reconcile_now`` has no operator-authored reason to journal; it ignores one."""
 
     class _Clerk:

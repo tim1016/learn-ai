@@ -19,6 +19,23 @@ function action(overrides: Partial<PanelAction> = {}): PanelAction {
 }
 
 describe('PanelActionButtonComponent', () => {
+  it('does not mount a closed confirmation dialog', async () => {
+    const view = await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({
+          confirmation: {
+            title: 'Stop bot',
+            body: 'This stops the bot.',
+            consequence: 'The bot will stop evaluating bars.',
+            confirm_label: 'Stop',
+          },
+        }),
+      },
+    });
+
+    expect(view.fixture.nativeElement.querySelector('dialog')).toBeNull();
+  });
+
   it('emits the presented action when enabled', async () => {
     const triggered = vi.fn();
     const presented = action();

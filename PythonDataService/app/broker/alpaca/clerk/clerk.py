@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -33,6 +33,11 @@ from app.broker.alpaca.clerk.custody import (
     project_custody_snapshot,
     project_instance_custody_proof,
 )
+from app.broker.alpaca.clerk.custody_resolution import (
+    ClerkCustodyResolutionOperations,
+    InventoryBaselineRefusedError,
+)
+from app.broker.alpaca.clerk.custody_resolution_store import CustodyResolutionStore
 from app.broker.alpaca.clerk.effects import ClerkEffectOperations
 from app.broker.alpaca.clerk.exposure import (
     project_expected_account_exposure,
@@ -71,6 +76,7 @@ from app.broker.contract.models import (
     BrokerOrderEvent,
     BrokerOrderLeg,
     BrokerOrderRequest,
+    BrokerPosition,
 )
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.account_clerk_journal_models import (
@@ -89,19 +95,11 @@ from app.engine.live.order_identity import (
 logger = logging.getLogger(__name__)
 
 
-class InventoryBaselineRefusedError(Exception):
-    """The account is not in a safe state for an inventory cutover."""
-
-    def __init__(self, message: str, *, detail: str) -> None:
-        super().__init__(message)
-        self.detail = detail
-
-
 class ClerkAdmissionSnapshotChangedError(Exception):
     """Clerk evidence changed before the Start admission fence was acquired."""
 
 
-class AlpacaClerk(ClerkEffectOperations):
+class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
     """Single-writer order-submission facade for one Alpaca account.
 
     ``read`` supplies ``get_account`` (to resolve + cache the account id used
@@ -119,12 +117,14 @@ class AlpacaClerk(ClerkEffectOperations):
         clock: Clock = default_clock,
         stream_health: StreamHealthGate | None = None,
         clerk_generation: str | None = None,
+        bot_running_probe: Callable[[], bool] | None = None,
     ) -> None:
         self._read = read
         self._trade = trade
         self._clock = clock
         self._stream_health = stream_health
         self._clerk_generation = clerk_generation or uuid4().hex
+        self._bot_running_probe = bot_running_probe
         self._intake_lock = asyncio.Lock()
         self.activity_recovery = AlpacaActivityRecovery(
             intake_lock=self._intake_lock, ensure_journal=self._ensure_journal, clock=clock
@@ -134,6 +134,7 @@ class AlpacaClerk(ClerkEffectOperations):
         self._recovery_lock = asyncio.Lock()
         self._account_id: str | None = None
         self._journal: OrderJournal | None = None
+        self._custody_resolution_store: CustodyResolutionStore | None = None
         # Observable counter: unexplained (foreign/absent-coid) lifecycle
         # events; the hold path reads the UNEXPLAINED_ORDER lines themselves.
         self._unexplained_order_count = 0
@@ -505,6 +506,8 @@ class AlpacaClerk(ClerkEffectOperations):
             account_id, journal = await self._ensure_journal()
             entries = journal.read_entries()
             namespaces = self._known_namespaces(journal)
+            channel_fresh = self._channel_fresh()
+            bot_running = self._bot_running()
         try:
             orders, positions = await asyncio.gather(
                 self._read.list_orders(status="all", limit=500),
@@ -526,7 +529,12 @@ class AlpacaClerk(ClerkEffectOperations):
                 ),
             )
         divergences = diagnosis.diagnose_custody(
-            entries, orders=orders, positions=positions, namespaces=namespaces
+            entries,
+            orders=orders,
+            positions=positions,
+            namespaces=namespaces,
+            channel_fresh=channel_fresh,
+            bot_running=bot_running,
         )
         plan = diagnosis.resolution_plan(divergences)
         blocked = next(
@@ -538,55 +546,18 @@ class AlpacaClerk(ClerkEffectOperations):
             account_id=account_id,
             in_sync=not divergences,
             observed_at_ms=self._clock(),
-            snapshot_version=diagnosis.custody_snapshot_version(entries, orders, positions),
+            snapshot_version=diagnosis.custody_snapshot_version(
+                entries,
+                orders,
+                positions,
+                namespaces=namespaces,
+                channel_fresh=channel_fresh,
+                bot_running=bot_running,
+            ),
             resolvable=bool(plan),
             blocked_reason=blocked,
             divergences=divergences,
             resolution_plan=plan,
-        )
-
-    async def resolve_custody(
-        self, *, operator: str, reason: str, snapshot_version: str
-    ) -> diagnosis.CustodyResolutionReceipt:
-        """Execute the diagnosed resolution plan, journaling the operator reason.
-
-        Snapshot-guarded: rejects a stale token so the operator never resolves
-        against evidence that changed after they looked. Idempotent: an already
-        in-sync account resolves to a benign no-op.
-        """
-        diag = await self.custody_diagnosis()
-        if diag.snapshot_version != snapshot_version:
-            raise diagnosis.CustodySnapshotChangedError()
-        if diag.in_sync:
-            return diagnosis.CustodyResolutionReceipt(
-                broker=self.broker_id, account_id=diag.account_id, resolved=True,
-                receipt_id=uuid4().hex, recorded_at_ms=self._clock(),
-                in_sync=True,
-            )
-        steps: list[diagnosis.CustodyResolutionStepResult] = []
-        for step in diag.resolution_plan:
-            if step.action_id == "reconcile_now":
-                verdict = await self.reconcile_once()
-                steps.append(diagnosis.CustodyResolutionStepResult(
-                    action_id="reconcile_now", message=f"Reconciliation sweep: {verdict}."))
-            elif step.action_id == "record_inventory_baseline":
-                baseline = await self.record_inventory_baseline(operator=operator, reason=reason)
-                positions = ", ".join(
-                    f"{p.symbol} {p.signed_quantity:g}" for p in baseline.positions
-                )
-                steps.append(diagnosis.CustodyResolutionStepResult(
-                    action_id="record_inventory_baseline",
-                    message=f"Adopted broker inventory as baseline: {positions or 'flat'}."))
-            elif step.action_id == "clear_hold":
-                await self.clear_hold(operator=operator, reason=reason)
-                steps.append(diagnosis.CustodyResolutionStepResult(
-                    action_id="clear_hold", message="Exposure hold cleared."))
-        after = await self.custody_diagnosis()
-        return diagnosis.CustodyResolutionReceipt(
-            broker=self.broker_id, account_id=diag.account_id,
-            resolved=after.in_sync, receipt_id=uuid4().hex, recorded_at_ms=self._clock(),
-            steps_executed=tuple(steps), in_sync=after.in_sync,
-            remaining_divergences=after.divergences,
         )
 
     async def clear_hold(self, *, operator: str, reason: str) -> ClerkStatus:
@@ -596,36 +567,56 @@ class AlpacaClerk(ClerkEffectOperations):
         Returns the updated status for a one-round-trip render.
         """
         async with self._intake_lock:
+            if not self._channel_fresh():
+                raise InventoryBaselineRefusedError(
+                    "Exposure hold cannot be cleared while submission channels are unhealthy.",
+                    detail="Restore both channels and reconcile before clearing the hold.",
+                )
             account_id, journal = await self._ensure_journal()
-            entries = journal.read_entries()
-            hold = derive.hold_state(entries)
-            if hold.active:
-                await journal.append_async(
-                    OrderJournalEntry(
-                        kind=ClerkEntryKind.HOLD_CLEARED,
-                        account_id=account_id,
-                        operator=operator,
-                        reason_code=hold.reason_code or UNEXPLAINED_ORDER_HOLD_CODE,
-                        reason=reason,
-                        recorded_at_ms=self._clock(),
-                    )
-                )
-                logger.info(
-                    "alpaca clerk cleared the exposure hold",
-                    extra={
-                        "action": "hold_cleared",
-                        "account_id": account_id,
-                        "operator": operator,
-                        "reason_code": hold.reason_code,
-                    },
-                )
-                entries = journal.read_entries()
-            else:
-                logger.info(
-                    "alpaca clerk clear-hold was a no-op: no active hold",
-                    extra={"action": "hold_clear_noop", "account_id": account_id},
-                )
+            entries = await self._clear_hold_locked(
+                journal=journal,
+                account_id=account_id,
+                operator=operator,
+                reason=reason,
+            )
             return self._status_from(account_id, entries)
+
+    async def _clear_hold_locked(
+        self,
+        *,
+        journal: OrderJournal,
+        account_id: str,
+        operator: str,
+        reason: str,
+    ) -> list[OrderJournalEntry]:
+        entries = journal.read_entries()
+        hold = derive.hold_state(entries)
+        if hold.active:
+            await journal.append_async(
+                OrderJournalEntry(
+                    kind=ClerkEntryKind.HOLD_CLEARED,
+                    account_id=account_id,
+                    operator=operator,
+                    reason_code=hold.reason_code or UNEXPLAINED_ORDER_HOLD_CODE,
+                    reason=reason,
+                    recorded_at_ms=self._clock(),
+                )
+            )
+            logger.info(
+                "alpaca clerk cleared the exposure hold",
+                extra={
+                    "action": "hold_cleared",
+                    "account_id": account_id,
+                    "operator": operator,
+                    "reason_code": hold.reason_code,
+                },
+            )
+            return journal.read_entries()
+        logger.info(
+            "alpaca clerk clear-hold was a no-op: no active hold",
+            extra={"action": "hold_clear_noop", "account_id": account_id},
+        )
+        return entries
 
     async def record_inventory_baseline(
         self,
@@ -651,112 +642,137 @@ class AlpacaClerk(ClerkEffectOperations):
 
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
-            entries = journal.read_entries()
-            latest = derive.latest_reconciliation(entries)
-            missing_intent_recovery = (
-                latest is not None and latest.verdict == "missing_intent"
-            )
-            stale_attribution_recovery = False
-            if (
-                latest is not None
-                and latest.verdict == "clean"
-                and strategy_instance_id is not None
-                and not project_expected_account_exposure(entries)
-            ):
-                namespace = build_bot_order_namespace(strategy_instance_id)
-                stale_attribution_recovery = bool(
-                    project_instance_exposure(entries, namespace=namespace)
-                )
-            if not missing_intent_recovery and not stale_attribution_recovery:
-                raise InventoryBaselineRefusedError(
-                    "Inventory baseline recovery is not available.",
-                    detail=(
-                        "Run reconciliation first. Recovery requires a current "
-                        "missing-intent freeze or stale bot attribution on a "
-                        "reconciled flat account."
-                    ),
-                )
-            if derive.unresolved_intents(entries):
-                raise InventoryBaselineRefusedError(
-                    "Inventory baseline recovery is blocked by unresolved intents.",
-                    detail="Resolve every uncertain submit before adopting broker inventory.",
-                )
-
             orders, positions = await asyncio.gather(
                 self._read.list_orders(status="open", limit=500),
                 self._read.list_positions(),
             )
-            working_orders = [
-                order
-                for order in orders
-                if order.status.lower() not in reconcile.RECONCILIATION_TERMINAL_ORDER_STATUSES
-            ]
-            if working_orders:
-                raise InventoryBaselineRefusedError(
-                    "Inventory baseline recovery is blocked by working orders.",
-                    detail=(
-                        "Cancel or settle every working order, then reconcile before "
-                        "recording a baseline."
-                    ),
-                )
-            if stale_attribution_recovery and any(
-                position.quantity != 0 for position in positions
-            ):
-                raise InventoryBaselineRefusedError(
-                    "Inventory baseline recovery requires a freshly flat account.",
-                    detail=(
-                        "Broker inventory changed after the clean reconciliation. "
-                        "Reconcile again before retiring bot attribution."
-                    ),
-                )
-
-            observed_at_ms = self._clock()
-            baseline = AccountClerkBrokerEvidenceBaseline(
+            return await self._record_inventory_baseline_locked(
+                journal=journal,
                 account_id=account_id,
-                observed_at_ms=observed_at_ms,
-                positions=tuple(
-                    AccountClerkPositionEvidence(
-                        symbol=position.symbol.upper(),
-                        signed_quantity=signed_broker_position_quantity(position),
-                        evidence_observed_at_ms=position.observed_at_ms,
-                    )
-                    for position in positions
-                    if position.quantity != 0
+                operator=operator,
+                reason=reason,
+                strategy_instance_id=strategy_instance_id,
+                orders=orders,
+                positions=positions,
+            )
+
+    async def _record_inventory_baseline_locked(
+        self,
+        *,
+        journal: OrderJournal,
+        account_id: str,
+        operator: str,
+        reason: str,
+        strategy_instance_id: str | None,
+        orders: list[BrokerOrder],
+        positions: list[BrokerPosition],
+    ) -> AccountClerkBrokerEvidenceBaseline:
+        if self._bot_running():
+            raise InventoryBaselineRefusedError(
+                "Inventory baseline recovery is blocked while a bot is running.",
+                detail="Stop every running bot before adopting broker inventory.",
+            )
+
+        entries = journal.read_entries()
+        latest = derive.latest_reconciliation(entries)
+        missing_intent_recovery = latest is not None and latest.verdict == "missing_intent"
+        stale_attribution_recovery = False
+        if (
+            latest is not None
+            and latest.verdict == "clean"
+            and strategy_instance_id is not None
+            and not project_expected_account_exposure(entries)
+        ):
+            namespace = build_bot_order_namespace(strategy_instance_id)
+            stale_attribution_recovery = bool(
+                project_instance_exposure(entries, namespace=namespace)
+            )
+        if not missing_intent_recovery and not stale_attribution_recovery:
+            raise InventoryBaselineRefusedError(
+                "Inventory baseline recovery is not available.",
+                detail=(
+                    "Run reconciliation first. Recovery requires a current "
+                    "missing-intent freeze or stale bot attribution on a "
+                    "reconciled flat account."
                 ),
             )
-            await journal.append_async(
-                OrderJournalEntry(
-                    kind=ClerkEntryKind.BROKER_EVIDENCE_BASELINE,
-                    account_id=account_id,
-                    operator=operator,
-                    reason=reason,
-                    recorded_at_ms=observed_at_ms,
-                    broker_evidence_baseline=baseline,
-                )
+        if derive.unresolved_intents(entries):
+            raise InventoryBaselineRefusedError(
+                "Inventory baseline recovery is blocked by unresolved intents.",
+                detail="Resolve every uncertain submit before adopting broker inventory.",
             )
-            plan = reconcile.plan(
-                journal.read_entries(),
-                [],
-                positions,
-                self._known_namespaces(journal),
+
+        working_orders = [
+            order
+            for order in orders
+            if order.status.lower() not in reconcile.RECONCILIATION_TERMINAL_ORDER_STATUSES
+        ]
+        if working_orders:
+            raise InventoryBaselineRefusedError(
+                "Inventory baseline recovery is blocked by working orders.",
+                detail=(
+                    "Cancel or settle every working order, then reconcile before "
+                    "recording a baseline."
+                ),
+            )
+        if stale_attribution_recovery and any(
+            position.quantity != 0 for position in positions
+        ):
+            raise InventoryBaselineRefusedError(
+                "Inventory baseline recovery requires a freshly flat account.",
+                detail=(
+                    "Broker inventory changed after the clean reconciliation. "
+                    "Reconcile again before retiring bot attribution."
+                ),
+            )
+
+        observed_at_ms = self._clock()
+        baseline = AccountClerkBrokerEvidenceBaseline(
+            account_id=account_id,
+            observed_at_ms=observed_at_ms,
+            positions=tuple(
+                AccountClerkPositionEvidence(
+                    symbol=position.symbol.upper(),
+                    signed_quantity=signed_broker_position_quantity(position),
+                    evidence_observed_at_ms=position.observed_at_ms,
+                )
+                for position in positions
+                if position.quantity != 0
+            ),
+        )
+        await journal.append_async(
+            OrderJournalEntry(
+                kind=ClerkEntryKind.BROKER_EVIDENCE_BASELINE,
                 account_id=account_id,
-                now_ms=observed_at_ms,
+                operator=operator,
+                reason=reason,
+                recorded_at_ms=observed_at_ms,
+                broker_evidence_baseline=baseline,
             )
-            if plan.verdict != "clean":
-                raise RuntimeError(
-                    "the durable inventory baseline did not reconcile to its broker snapshot"
-                )
-            await self._apply_reconcile_plan(journal, account_id, plan)
-            logger.info(
-                "alpaca clerk recorded an operator-confirmed inventory baseline",
-                extra={
-                    "action": "broker_evidence_baseline",
-                    "account_id": account_id,
-                    "operator": operator,
-                    "position_count": len(baseline.positions),
-                },
+        )
+        plan = reconcile.plan(
+            journal.read_entries(),
+            [],
+            positions,
+            self._known_namespaces(journal),
+            account_id=account_id,
+            now_ms=observed_at_ms,
+        )
+        if plan.verdict != "clean":
+            raise RuntimeError(
+                "the durable inventory baseline did not reconcile to its broker snapshot"
             )
-            return baseline
+        await self._apply_reconcile_plan(journal, account_id, plan)
+        logger.info(
+            "alpaca clerk recorded an operator-confirmed inventory baseline",
+            extra={
+                "action": "broker_evidence_baseline",
+                "account_id": account_id,
+                "operator": operator,
+                "position_count": len(baseline.positions),
+            },
+        )
+        return baseline
 
     def _status_from(
         self, account_id: str, entries: list[OrderJournalEntry]

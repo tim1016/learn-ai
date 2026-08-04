@@ -27,7 +27,7 @@
           class="custody__resolve"
           (click)="requestResolve()"
         >
-          Resolve &amp; sync to broker
+          {{ reconcileOnly() ? 'Run reconciliation prerequisite' : 'Resolve & sync to broker' }}
         </button>
       }
     </section>

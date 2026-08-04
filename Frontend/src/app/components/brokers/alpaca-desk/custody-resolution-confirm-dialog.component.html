@@ -7,7 +7,9 @@
   <header>
     <div>
       <p class="eyebrow">Clerk recovery confirmation</p>
-      <h2 id="custody-resolve-confirm-title">Resolve custody divergence</h2>
+      <h2 id="custody-resolve-confirm-title">
+        {{ reconcileOnly() ? 'Run custody reconciliation' : 'Resolve custody divergence' }}
+      </h2>
     </div>
     <button
       type="button"
@@ -59,7 +61,7 @@
     ></textarea>
     @if (reason().trim().length === 0) {
       <p class="custody-resolve-confirm__blocking" role="status">
-        Enter a reason to enable Resolve &amp; sync.
+        Enter a reason to enable the recovery action.
       </p>
     }
   </section>
@@ -89,7 +91,11 @@
       (click)="confirm()"
       [disabled]="!canConfirm() || busy()"
     >
-      {{ busy() ? 'Resolving…' : 'Resolve & sync to broker' }}
+      @if (busy()) {
+        {{ reconcileOnly() ? 'Reconciling…' : 'Resolving…' }}
+      } @else {
+        {{ reconcileOnly() ? 'Run reconciliation' : 'Resolve & sync to broker' }}
+      }
     </button>
   </footer>
 </dialog>

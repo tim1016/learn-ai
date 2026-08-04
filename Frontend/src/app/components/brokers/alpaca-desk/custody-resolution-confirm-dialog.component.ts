@@ -50,6 +50,10 @@ export class CustodyResolutionConfirmDialogComponent {
     () => this.diagnosis().divergences ?? [],
   );
   protected readonly resolutionPlan = computed(() => this.diagnosis().resolution_plan ?? []);
+  protected readonly reconcileOnly = computed(() => {
+    const plan = this.resolutionPlan();
+    return plan.length > 0 && plan.every((step) => !step.mutates);
+  });
 
   constructor() {
     effect(() => {

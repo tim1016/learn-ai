@@ -8,11 +8,16 @@ from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
+from app.engine.live.account_clerk_journal_models import (
+    AccountClerkBrokerEvidenceBaseline,
+    AccountClerkPositionEvidence,
+)
 from tests.broker.alpaca.clerk.test_clerk_reconciliation import (
     _FIXED_MS,
     _clerk_root,  # noqa: F401 -- autouse fixture, imported for its side effect
     _FakeBroker,
     _fixed_clock,
+    _order,
     _position,
 )
 
@@ -55,6 +60,150 @@ def test_attribution_mismatch_reports_per_symbol_delta() -> None:
 
 def test_flat_and_reconciled_account_has_no_divergence() -> None:
     assert diagnosis.diagnose_custody([], orders=[], positions=[], namespaces=frozenset()) == ()
+
+
+def test_exposure_delta_golden_cases_pin_aggregation_inflight_and_tolerance() -> None:
+    """Pin the account exposure contract at strict-float ``atol=1e-9, rtol=0``.
+
+    Reference and rationale: ``docs/references/clerk-custody-exposure-deltas.md``.
+    """
+
+    baseline = OrderJournalEntry(
+        kind=ClerkEntryKind.BROKER_EVIDENCE_BASELINE,
+        account_id="A",
+        operator="ops",
+        reason="fixture",
+        recorded_at_ms=_FIXED_MS,
+        broker_evidence_baseline=AccountClerkBrokerEvidenceBaseline(
+            account_id="A",
+            observed_at_ms=_FIXED_MS,
+            positions=(
+                AccountClerkPositionEvidence(
+                    symbol="SPY",
+                    signed_quantity=0.4,
+                    evidence_observed_at_ms=_FIXED_MS,
+                ),
+                AccountClerkPositionEvidence(
+                    symbol="SPY",
+                    signed_quantity=0.6,
+                    evidence_observed_at_ms=_FIXED_MS,
+                ),
+            ),
+        ),
+    )
+    below = diagnosis.diagnose_custody(
+        [baseline],
+        orders=[],
+        positions=[_position(quantity=1.0 + 0.5e-9)],
+        namespaces=frozenset(),
+    )
+    above = diagnosis.diagnose_custody(
+        [baseline],
+        orders=[],
+        positions=[_position(quantity=1.0 + 2e-9)],
+        namespaces=frozenset(),
+    )
+
+    assert below == ()
+    assert above[0].position_deltas[0].clerk_attributed_qty == 1.0
+    assert above[0].position_deltas[0].broker_observed_qty == 1.0 + 2e-9
+
+    order_ref = "manual/ops/v1:i1"
+    inflight_entries = [
+        _intent(order_ref),
+        OrderJournalEntry(
+            kind=ClerkEntryKind.SUBMIT_ACKED,
+            account_id="A",
+            operator="ops",
+            intent_id="i",
+            order_ref=order_ref,
+            client_order_id=order_ref,
+            leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+            order=_order(client_order_id=order_ref),
+            recorded_at_ms=_FIXED_MS,
+        ),
+    ]
+    assert diagnosis.diagnose_custody(
+        inflight_entries,
+        orders=[_order(client_order_id=order_ref)],
+        positions=[_position(quantity=1.0)],
+        namespaces=frozenset({"manual/ops/v1"}),
+    ) == ()
+
+
+def test_foreign_working_order_prevents_false_in_sync() -> None:
+    divergences = diagnosis.diagnose_custody(
+        [],
+        orders=[_order(client_order_id="foreign-client")],
+        positions=[],
+        namespaces=frozenset(),
+    )
+
+    assert [item.kind for item in divergences] == ["foreign_working_order"]
+    assert divergences[0].state == "blocked_on_prerequisite"
+    assert divergences[0].evidence_refs == ("broker-order-1",)
+
+
+def test_snapshot_version_changes_when_order_ownership_namespace_changes() -> None:
+    order = _order(client_order_id="manual/ops/v1:i1")
+
+    foreign = diagnosis.custody_snapshot_version(
+        [], [order], [], namespaces=frozenset()
+    )
+    owned = diagnosis.custody_snapshot_version(
+        [], [order], [], namespaces=frozenset({"manual/ops/v1"})
+    )
+
+    assert owned != foreign
+
+
+def test_running_bot_blocks_account_baseline_plan() -> None:
+    divergences = diagnosis.diagnose_custody(
+        [],
+        orders=[],
+        positions=[_position()],
+        namespaces=frozenset(),
+        bot_running=True,
+    )
+
+    assert divergences[0].state == "blocked_on_prerequisite"
+    assert "running bot" in (divergences[0].prerequisite_detail or "")
+    assert diagnosis.resolution_plan(divergences) == ()
+
+
+def test_unresolved_delta_exposes_reconcile_prerequisite_step() -> None:
+    divergences = diagnosis.diagnose_custody(
+        [_intent("manual/ops/v1:i1")],
+        orders=[],
+        positions=[_position()],
+        namespaces=frozenset({"manual/ops/v1"}),
+    )
+
+    assert divergences[0].state == "blocked_on_prerequisite"
+    assert divergences[0].prerequisite_step == "reconcile_now"
+    assert [step.action_id for step in diagnosis.resolution_plan(divergences)] == [
+        "reconcile_now"
+    ]
+
+
+def test_durable_reconciliation_freeze_prevents_false_in_sync() -> None:
+    entries = [
+        OrderJournalEntry(
+            kind=ClerkEntryKind.RECONCILIATION,
+            account_id="A",
+            verdict="stale",
+            recorded_at_ms=_FIXED_MS,
+        )
+    ]
+
+    divergences = diagnosis.diagnose_custody(
+        entries, orders=[], positions=[], namespaces=frozenset()
+    )
+
+    assert [item.kind for item in divergences] == ["stale_reconciliation"]
+    assert [step.action_id for step in diagnosis.resolution_plan(divergences)] == [
+        "reconcile_now"
+    ]
 
 
 def test_needs_review_reported_when_no_deltas_but_unresolved_intent() -> None:

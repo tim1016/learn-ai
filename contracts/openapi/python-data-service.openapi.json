@@ -5996,92 +5996,6 @@
         "title": "ArbitrageDetail",
         "type": "object"
       },
-      "ArmFaultRequest": {
-        "additionalProperties": false,
-        "description": "Arm one fault against the running data plane.\n\n``kind`` must be a known write or frame fault. ``target`` scopes it \u2014 for a\nwrite fault it is matched (substring) against the submit ``client_order_id``\nor the cancel ``order_id``; for a frame fault it is the ``client_order_id``\nthe crafted frame is attributed to. ``count`` bounds how many times the\nfault fires. ``params`` carries frame-shaping overrides (``symbol`` / ``qty``\n/ ``price`` / ``execution_id``) and is ignored for write faults.",
-        "properties": {
-          "count": {
-            "default": 1,
-            "maximum": 100.0,
-            "minimum": 1.0,
-            "title": "Count",
-            "type": "integer"
-          },
-          "kind": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/WriteFaultKind"
-              },
-              {
-                "$ref": "#/components/schemas/FrameFaultKind"
-              }
-            ],
-            "title": "Kind"
-          },
-          "params": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Params",
-            "type": "object"
-          },
-          "target": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "title": "ArmFaultRequest",
-        "type": "object"
-      },
-      "ArmedFaultView": {
-        "description": "One currently-armed fault.",
-        "properties": {
-          "kind": {
-            "title": "Kind",
-            "type": "string"
-          },
-          "params": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Params",
-            "type": "object"
-          },
-          "remaining": {
-            "title": "Remaining",
-            "type": "integer"
-          },
-          "target": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target"
-          }
-        },
-        "required": [
-          "kind",
-          "target",
-          "remaining",
-          "params"
-        ],
-        "title": "ArmedFaultView",
-        "type": "object"
-      },
       "ArtifactFile": {
         "description": "Metadata for a single artifact file.",
         "properties": {
@@ -13096,6 +13010,7 @@
             "title": "Next Step"
           },
           "observed_at_ms": {
+            "format": "int64",
             "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Observed At Ms",
@@ -13109,6 +13024,7 @@
             "type": "string"
           },
           "reconciled_at_ms": {
+            "format": "int64",
             "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Reconciled At Ms",
@@ -15109,6 +15025,44 @@
         "title": "CurrentCurvePoint",
         "type": "object"
       },
+      "CustodyConflictDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "CustodyConflictDetail",
+        "type": "object"
+      },
+      "CustodyConflictResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/CustodyConflictDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "CustodyConflictResponse",
+        "type": "object"
+      },
       "CustodyCountFact": {
         "additionalProperties": false,
         "description": "Count whose zero/non-zero/unknown meaning is explicit.",
@@ -15175,6 +15129,9 @@
             "type": "boolean"
           },
           "observed_at_ms": {
+            "format": "int64",
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
             "title": "Observed At Ms",
             "type": "integer"
           },
@@ -15234,7 +15191,8 @@
               "exposure_attribution_mismatch",
               "exposure_hold",
               "stale_reconciliation",
-              "needs_review"
+              "needs_review",
+              "foreign_working_order"
             ],
             "title": "Kind",
             "type": "string"
@@ -15264,6 +15222,22 @@
               }
             ],
             "title": "Prerequisite Detail"
+          },
+          "prerequisite_step": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reconcile_now",
+                  "record_inventory_baseline",
+                  "clear_hold"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prerequisite Step"
           },
           "resolution_step": {
             "anyOf": [
@@ -15377,6 +15351,9 @@
             "type": "string"
           },
           "recorded_at_ms": {
+            "format": "int64",
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
             "title": "Recorded At Ms",
             "type": "integer"
           },
@@ -18874,50 +18851,6 @@
         "title": "FailureRecord",
         "type": "object"
       },
-      "FaultInjectionDisarmResult": {
-        "description": "How many armed faults were cleared.",
-        "properties": {
-          "cleared": {
-            "title": "Cleared",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "cleared"
-        ],
-        "title": "FaultInjectionDisarmResult",
-        "type": "object"
-      },
-      "FaultInjectionStatus": {
-        "description": "Whether the seam is permitted plus every currently-armed fault.",
-        "properties": {
-          "frame": {
-            "items": {
-              "$ref": "#/components/schemas/ArmedFaultView"
-            },
-            "title": "Frame",
-            "type": "array"
-          },
-          "permitted": {
-            "title": "Permitted",
-            "type": "boolean"
-          },
-          "write": {
-            "items": {
-              "$ref": "#/components/schemas/ArmedFaultView"
-            },
-            "title": "Write",
-            "type": "array"
-          }
-        },
-        "required": [
-          "permitted",
-          "write",
-          "frame"
-        ],
-        "title": "FaultInjectionStatus",
-        "type": "object"
-      },
       "FeatureInfoResponse": {
         "description": "Feature metadata for the information panel.",
         "properties": {
@@ -19775,17 +19708,6 @@
         ],
         "title": "FoldResult",
         "type": "object"
-      },
-      "FrameFaultKind": {
-        "description": "Inbound ``trade_updates`` frames the frame-source hook can interleave.",
-        "enum": [
-          "redeliver_last",
-          "halt_suspended",
-          "halt_stopped",
-          "partial_fill"
-        ],
-        "title": "FrameFaultKind",
-        "type": "string"
       },
       "FreshCross": {
         "additionalProperties": false,
@@ -45555,17 +45477,6 @@
         "title": "WorkingOrderView",
         "type": "object"
       },
-      "WriteFaultKind": {
-        "description": "Vendor responses the write-path hook can simulate for a submit/cancel.",
-        "enum": [
-          "reject_422",
-          "conflict_409",
-          "throttle_429",
-          "timeout"
-        ],
-        "title": "WriteFaultKind",
-        "type": "string"
-      },
       "_BarsSpecModel": {
         "additionalProperties": false,
         "description": "Pydantic shape for the ``BarsSpec`` block inside ``DataPolicy``.",
@@ -50967,166 +50878,6 @@
         ]
       }
     },
-    "/api/brokers/alpaca/fault-injection/arm": {
-      "post": {
-        "description": "Arm one fault; refuses (403) unless the seam is permitted (paper only).",
-        "operationId": "arm_fault_api_brokers_alpaca_fault_injection_arm_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ArmFaultRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FaultInjectionStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Arm Fault",
-        "tags": [
-          "alpaca-fault-injection"
-        ]
-      }
-    },
-    "/api/brokers/alpaca/fault-injection/disarm": {
-      "post": {
-        "description": "Clear every armed fault.",
-        "operationId": "disarm_faults_api_brokers_alpaca_fault_injection_disarm_post",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FaultInjectionDisarmResult"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Disarm Faults",
-        "tags": [
-          "alpaca-fault-injection"
-        ]
-      }
-    },
-    "/api/brokers/alpaca/fault-injection/status": {
-      "get": {
-        "description": "Report whether the seam is permitted and what is currently armed.",
-        "operationId": "fault_injection_status_api_brokers_alpaca_fault_injection_status_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FaultInjectionStatus"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Fault Injection Status",
-        "tags": [
-          "alpaca-fault-injection"
-        ]
-      }
-    },
     "/api/brokers/{broker}/account": {
       "get": {
         "operationId": "get_account_api_brokers__broker__account_get",
@@ -53597,6 +53348,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustodyConflictResponse"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
