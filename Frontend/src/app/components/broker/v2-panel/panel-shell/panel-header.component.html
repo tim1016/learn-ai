@@ -28,44 +28,55 @@
     </div>
   </div>
 
-  <div class="control-header__status-strip">
+  <div class="grid min-w-0 gap-3 lg:grid-cols-[minmax(14rem,0.75fr)_minmax(0,1.25fr)]">
     <div
-      class="mission-verdict"
+      class="min-w-0 border-l-4 border-l-[var(--bull)]"
+      [class.border-l-[var(--bear)]]="panel().mission_verdict.state === 'blocked' || panel().mission_verdict.state === 'retired'"
+      [class.border-l-[var(--warn)]]="panel().mission_verdict.state === 'off_duty'"
       [attr.data-state]="panel().mission_verdict.state"
       role="status"
       aria-live="polite"
     >
-      <span class="status-kicker">Mission</span>
-      <strong class="mission-verdict__label">{{ panel().mission_verdict.label }}</strong>
-      <span>{{ panel().mission_verdict.explanation }}</span>
-      @if (panel().mission_verdict.next_action) {
-        <small>Next: {{ panel().mission_verdict.next_action }}</small>
-      }
+      <p-card styleClass="h-full">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="status-kicker">Mission</span>
+          <p-tag [severity]="missionSeverity()" [value]="panel().mission_verdict.label" />
+        </div>
+        <p class="mt-2 mb-0 text-sm text-[var(--text-secondary)]">{{ panel().mission_verdict.explanation }}</p>
+        @if (panel().mission_verdict.next_action) {
+          <small class="mt-2 block text-[var(--text-subtle)]">Next: {{ panel().mission_verdict.next_action }}</small>
+        }
+      </p-card>
     </div>
 
     <div
-      class="market-pulse"
-      [class.market-pulse--attention]="panel().market_pulse.attention_required"
+      class="min-w-0"
       role="status"
       aria-live="polite"
     >
-      <span class="market-pulse__signal" aria-hidden="true"></span>
-      <div class="market-pulse__copy">
-        <span class="status-kicker">Market · {{ panel().market_pulse.feed_state | receiptLabel }}</span>
-        <strong>{{ panel().market_pulse.headline }}</strong>
-        <span>{{ panel().market_pulse.explanation }}</span>
-      </div>
-      <dl>
-        <div>
-          <dt>Latest</dt>
-          <dd><app-timestamp-display [value]="panel().market_pulse.latest_bar_at_ms" mode="et" granularity="time" /></dd>
+      <p-card styleClass="h-full">
+        <div class="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="status-kicker">Market</span>
+              <p-tag [severity]="marketSeverity()" [value]="panel().market_pulse.feed_state | receiptLabel" />
+            </div>
+            <strong class="mt-2 block text-sm text-[var(--text-primary)]">{{ panel().market_pulse.headline }}</strong>
+            <p class="mt-1 mb-0 whitespace-normal text-xs leading-relaxed text-[var(--text-secondary)]">{{ panel().market_pulse.explanation }}</p>
+          </div>
+          <dl class="market-pulse__facts">
+            <div>
+              <dt>Latest</dt>
+              <dd><app-timestamp-display [value]="panel().market_pulse.latest_bar_at_ms" mode="et" granularity="time" /></dd>
+            </div>
+            <div><dt>Age</dt><dd>{{ formatAge(panel().market_pulse.age_ms) }}</dd></div>
+            <div><dt>Source</dt><dd>{{ panel().market_pulse.source ? (panel().market_pulse.source | receiptLabel) : 'Unavailable' }}</dd></div>
+          </dl>
         </div>
-        <div><dt>Age</dt><dd>{{ formatAge(panel().market_pulse.age_ms) }}</dd></div>
-        <div><dt>Source</dt><dd>{{ panel().market_pulse.source ? (panel().market_pulse.source | receiptLabel) : 'Unavailable' }}</dd></div>
-      </dl>
-      @if (panel().market_pulse.next_step) {
-        <small>Next: {{ panel().market_pulse.next_step }}</small>
-      }
+        @if (panel().market_pulse.next_step) {
+          <small class="mt-2 block text-[var(--text-subtle)]">Next: {{ panel().market_pulse.next_step }}</small>
+        }
+      </p-card>
     </div>
   </div>
 </header>

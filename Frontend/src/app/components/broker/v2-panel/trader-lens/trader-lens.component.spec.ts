@@ -115,6 +115,8 @@ const BASE_PANEL: BotPanelView = {
     },
   ],
   readiness_checks: [],
+  readiness_ready_count: 0,
+  readiness_blocked_count: 0,
   exposure: {},
   working_orders: [],
   recent_decisions: [],
@@ -169,24 +171,114 @@ describe('TraderLensComponent — log-only degradation', () => {
   });
 });
 
-describe('TraderLensComponent — focused trader information', () => {
-  it('keeps operator evidence out of the trader lens', async () => {
+describe('TraderLensComponent — trader evidence', () => {
+  it('keeps current run and non-trade decision evidence in the trader lens', async () => {
+    const panel: BotPanelView = {
+      ...BASE_PANEL,
+      recent_decisions: [
+        {
+          seq: 7,
+          bar_ref: 'bar-7',
+          order_ref: null,
+          outcome: 'no_action',
+          reason_code: 'NO_SIGNAL',
+          recorded_at_ms: 1_753_800_000_000,
+          simulated: false,
+        },
+      ],
+    };
     await render(TraderLensComponent, {
-      inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
+      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
     });
 
-    expect(screen.queryByText('Run evidence')).toBeNull();
-    expect(screen.queryByText('Strategy evidence')).toBeNull();
-    expect(screen.queryByText('Clerk evidence')).toBeNull();
+    expect(screen.getByText('Run evidence')).toBeTruthy();
+    expect(screen.getByText('Strategy evidence')).toBeTruthy();
+    expect(screen.getByText('Recent decisions')).toBeTruthy();
+    expect(screen.getByText(/No signal/i)).toBeTruthy();
+    expect(screen.getByText('Clerk evidence')).toBeTruthy();
   });
 
   it('shows P&L before the compact bot snapshot', async () => {
+    const { container } = await render(TraderLensComponent, {
+      inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    const pnl = screen.getByLabelText('Profit and loss summary');
+    const snapshot = screen.getByRole('table', { name: 'Bot snapshot' });
+    expect(pnl).toBeTruthy();
+    expect(snapshot).toBeTruthy();
+    expect(
+      pnl.compareDocumentPosition(snapshot) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(container.querySelector('.trader-rail app-trader-metrics')).not.toBeNull();
+  });
+
+  it('labels and styles realized-today and current-open P&L independently', async () => {
+    const panel: BotPanelView = {
+      ...BASE_PANEL,
+      realized_pnl_today: 12.5,
+      open_pnl: -4.25,
+    };
+    await render(TraderLensComponent, {
+      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    const realized = screen.getByLabelText('Realized profit and loss today');
+    const open = screen.getByLabelText('Current open profit and loss');
+    expect(realized.textContent).toContain('$12.50');
+    expect(realized.querySelector('strong')?.classList.contains('positive')).toBe(true);
+    expect(open.textContent).toContain('-$4.25');
+    expect(open.querySelector('strong')?.classList.contains('negative')).toBe(true);
+  });
+
+  it('renders unavailable open P&L without assigning a gain or loss class', async () => {
     await render(TraderLensComponent, {
       inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
     });
 
-    expect(screen.getByLabelText('Profit and loss today')).toBeTruthy();
-    expect(screen.getByRole('table', { name: 'Bot snapshot' })).toBeTruthy();
+    const open = screen.getByLabelText('Current open profit and loss');
+    expect(open.textContent).toContain('Mark unavailable');
+    expect(open.querySelector('.positive, .negative')).toBeNull();
+  });
+
+  it('renders Unix epoch timestamps instead of treating zero as missing', async () => {
+    const panel: BotPanelView = {
+      ...BASE_PANEL,
+      health: {
+        ...BASE_PANEL.health,
+        last_decision_at_ms: 0,
+        last_bar_at_ms: 0,
+      },
+    };
+    const { container } = await render(TraderLensComponent, {
+      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    expect(container.querySelectorAll('app-trader-metrics app-timestamp-display')).toHaveLength(2);
+    expect(screen.queryByText('None yet')).toBeNull();
+  });
+
+  it('shows simulated fill evidence in dry-run mode', async () => {
+    const panel: BotPanelView = {
+      ...BASE_PANEL,
+      mode: 'dry_run',
+      recent_fills: [
+        {
+          order_ref: 'sim-1',
+          symbol: 'SPY',
+          side: 'buy',
+          quantity: 2,
+          price: 500,
+          filled_at_ms: 1_753_800_000_000,
+          simulated: true,
+        },
+      ],
+    };
+    await render(TraderLensComponent, {
+      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    expect(screen.getByText(/Simulated fill/)).toBeTruthy();
   });
 
   it('places fills today in the right-hand trader rail', async () => {

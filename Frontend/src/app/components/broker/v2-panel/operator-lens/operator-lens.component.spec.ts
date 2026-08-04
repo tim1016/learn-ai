@@ -111,6 +111,8 @@ function makePanel(): BotPanelView {
     journal_tail_seq: null,
     actions: [],
     readiness_checks: [],
+    readiness_ready_count: 0,
+    readiness_blocked_count: 0,
     exposure: {},
     working_orders: [],
     recent_decisions: [],
@@ -148,6 +150,14 @@ function makeProfile(): PanelProfile {
     stations: [],
     supported_action_ids: [],
   };
+}
+
+function expandReadiness(label: string): HTMLElement {
+  const header = screen.getByRole('button', {
+    name: new RegExp(`(?:Ready|Blocked) ${label}`, 'i'),
+  });
+  if (header.getAttribute('aria-expanded') !== 'true') fireEvent.click(header);
+  return header;
 }
 
 function makeEvidencePage(): EvidencePage {
@@ -188,6 +198,29 @@ function makeFakePanelService(evidencePage?: EvidencePage) {
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe('OperatorLensComponent', () => {
+  it('renders server-authored readiness totals without recomputing them', async () => {
+    const fakeSvc = makeFakePanelService();
+    const panel: BotPanelView = {
+      ...makePanel(),
+      readiness_ready_count: 7,
+      readiness_blocked_count: 3,
+    };
+
+    await render(OperatorLensComponent, {
+      inputs: {
+        panel,
+        profile: makeProfile(),
+        actionPending: false,
+        broker: 'alpaca',
+        accountId: 'acc-1',
+        sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
+    });
+
+    expect(screen.getByText(/7 ready · 3 blocked/)).toBeTruthy();
+  });
+
   it('renders the health card phase label', async () => {
     const fakeSvc = makeFakePanelService();
 
@@ -331,6 +364,7 @@ describe('OperatorLensComponent', () => {
       ...makePanel(),
       actions: [flattenAction],
       readiness_checks: [makeReadinessCheck(flattenAction)],
+      readiness_ready_count: 1,
     };
 
     await render(OperatorLensComponent, {
@@ -345,7 +379,8 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getByRole('button', { name: /flatten & stop/i })).toBeTruthy();
+    expandReadiness('Flatten & Stop');
+    expect(await screen.findByRole('button', { name: 'Flatten & Stop' })).toBeTruthy();
   });
 
   it('flatten-stop button is disabled when action is disabled', async () => {
@@ -364,6 +399,7 @@ describe('OperatorLensComponent', () => {
       ...makePanel(),
       actions: [flattenAction],
       readiness_checks: [makeReadinessCheck(flattenAction)],
+      readiness_blocked_count: 1,
     };
 
     await render(OperatorLensComponent, {
@@ -378,7 +414,8 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    const btn = screen.getByRole('button', { name: /flatten & stop/i });
+    expandReadiness('Flatten & Stop');
+    const btn = await screen.findByRole('button', { name: 'Flatten & Stop' });
     expect((btn as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -401,6 +438,7 @@ describe('OperatorLensComponent', () => {
       ...makePanel(),
       actions: [flattenAction],
       readiness_checks: [makeReadinessCheck(flattenAction)],
+      readiness_ready_count: 1,
     };
 
     const { fixture } = await render(OperatorLensComponent, {
@@ -416,7 +454,8 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /flatten & stop/i }));
+    expandReadiness('Flatten & Stop');
+    fireEvent.click(await screen.findByRole('button', { name: 'Flatten & Stop' }));
     await fixture.whenStable();
 
     expect(onActionRequested).toHaveBeenCalledWith({ action: flattenAction, reason: null });
@@ -462,6 +501,7 @@ describe('OperatorLensComponent', () => {
       ...makePanel(),
       actions: [flattenAction],
       readiness_checks: [makeReadinessCheck(flattenAction)],
+      readiness_ready_count: 1,
     };
 
     await render(OperatorLensComponent, {
@@ -476,7 +516,8 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Flatten & Stop' }));
+    expandReadiness('Flatten & Stop');
+    fireEvent.click(await screen.findByRole('button', { name: 'Flatten & Stop' }));
     expect(screen.getByText('This will close all open positions.')).toBeTruthy();
   });
 
@@ -502,6 +543,7 @@ describe('OperatorLensComponent', () => {
       ...makePanel(),
       actions: [recoveryAction],
       readiness_checks: [makeReadinessCheck(recoveryAction)],
+      readiness_ready_count: 1,
     };
 
     await render(OperatorLensComponent, {
@@ -516,8 +558,9 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
+    expandReadiness('Recover inventory baseline');
     fireEvent.click(
-      screen.getByRole('button', { name: 'Recover inventory baseline' }),
+      await screen.findByRole('button', { name: 'Recover inventory baseline' }),
     );
     expect(screen.getByText('Reads the current Alpaca positions.')).toBeTruthy();
     expect(screen.getByText('BASELINE')).toBeTruthy();
@@ -578,6 +621,7 @@ describe('OperatorLensComponent', () => {
           cure: 'No flatten command is necessary.',
         }),
       ],
+      readiness_blocked_count: 1,
     };
 
     await render(OperatorLensComponent, {
@@ -603,18 +647,13 @@ describe('OperatorLensComponent', () => {
       screen.getAllByText(/No flatten command is necessary\./),
     ).toHaveLength(1);
 
-    const disclosureLabel = screen
-      .getAllByText('Flatten & stop')
-      .find((element) => element.closest('summary'));
-    const disclosure = disclosureLabel?.closest('details');
-    const disclosureSummary = disclosure?.querySelector('summary');
-    expect(disclosure?.hasAttribute('open')).toBe(false);
-    if (!disclosureSummary) throw new Error('Expected a readiness disclosure summary.');
-    fireEvent.click(disclosureSummary);
-    expect(disclosure?.hasAttribute('open')).toBe(true);
+    const disclosure = screen.getByRole('button', { name: /Blocked Flatten & stop/ });
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(disclosure);
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
 
     expect(
-      screen.getByRole('alert').textContent,
+      (await screen.findByRole('alert')).textContent,
     ).toContain('The Clerk cannot prove the exposure to flatten.');
     expect(screen.getByRole('button', { name: 'Flatten & stop' })).toBeTruthy();
     expect(screen.queryByLabelText('Operator commands')).toBeNull();

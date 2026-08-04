@@ -9744,8 +9744,12 @@ export interface components {
             /** Open Pnl */
             open_pnl: number | null;
             rail: components["schemas"]["TransactionRail"];
+            /** Readiness Blocked Count */
+            readiness_blocked_count: number;
             /** Readiness Checks */
             readiness_checks: components["schemas"]["ReadinessCheckView"][];
+            /** Readiness Ready Count */
+            readiness_ready_count: number;
             /** Realized Pnl Today */
             realized_pnl_today: number;
             /** Recent Decisions */

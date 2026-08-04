@@ -679,6 +679,8 @@ def build_panel(
         decision_receipts,
         activity,
     )
+    readiness_checks = _readiness_checks(actions, now_ms)
+    readiness_ready_count = sum(check.ready for check in readiness_checks)
 
     return BotPanelView(
         strategy_instance_id=status.strategy_instance_id,
@@ -705,7 +707,9 @@ def build_panel(
         journal_tail_ref=journal_tail_ref,
         journal_tail_seq=journal_tail_seq,
         actions=actions,
-        readiness_checks=_readiness_checks(actions, now_ms),
+        readiness_checks=readiness_checks,
+        readiness_ready_count=readiness_ready_count,
+        readiness_blocked_count=len(readiness_checks) - readiness_ready_count,
         exposure=exposure,
         working_orders=working_orders,
         recent_decisions=decision_views,

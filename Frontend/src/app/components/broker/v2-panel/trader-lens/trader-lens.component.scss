@@ -20,7 +20,8 @@
   gap: var(--space-3);
 }
 
-.trader-command {
+.trader-command,
+.activity-card {
   display: grid;
   gap: var(--space-3);
   padding: var(--space-3);
@@ -32,6 +33,20 @@
   h2 { margin: 0.15rem 0; font-size: var(--fs-lg); }
   p { margin: 0; color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.45; }
 }
+
+.trader-activity {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.activity-card__heading { margin-bottom: var(--space-3); }
+.activity-card h2 { margin: 0.1rem 0 0; font-size: var(--fs-lg); }
+.activity-card ul { display: grid; gap: 1px; padding: 0; list-style: none; background: var(--border); }
+.activity-card li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2); background: var(--bg-elevated); font-size: var(--fs-xs); }
+.activity-card li div { display: flex; min-width: 0; flex-direction: column; }
+.activity-card li span { color: var(--text-secondary); }
+.empty-copy { margin: 0; color: var(--text-secondary); font-size: var(--fs-sm); }
 
 .trader-command__actions {
   display: flex;
@@ -94,4 +109,5 @@
   .trader-command__actions { align-items: stretch; flex-direction: column; }
   .trader-command__manual-link { text-align: center; }
   .observation-note { align-items: flex-start; flex-direction: column; }
+  .trader-activity { grid-template-columns: 1fr; }
 }

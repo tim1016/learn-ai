@@ -1,19 +1,19 @@
 <section class="trader-metrics" aria-label="Bot attributed trading summary">
   <header class="trader-metrics__heading">
-    <span>Today</span>
-    <small>{{ panel().fills_today }} fill{{ panel().fills_today === 1 ? '' : 's' }}</small>
+    <span>Trading summary</span>
+    <small>{{ panel().fills_today }} fill{{ panel().fills_today === 1 ? '' : 's' }} today</small>
   </header>
 
-  <div class="pnl-grid" aria-label="Profit and loss today">
+  <div class="pnl-grid" aria-label="Profit and loss summary">
     @let openPnl = panel().open_pnl;
-    <article>
-      <span>Realized</span>
+    <article aria-label="Realized profit and loss today">
+      <span>Realized today</span>
       <strong [class.positive]="panel().realized_pnl_today > 0" [class.negative]="panel().realized_pnl_today < 0">
         {{ panel().realized_pnl_today | currency:'USD':'symbol':'1.2-2' }}
       </strong>
     </article>
-    <article>
-      <span>Open P&amp;L</span>
+    <article aria-label="Current open profit and loss">
+      <span>Open now</span>
       @if (openPnl === null) {
         <strong class="unavailable">—</strong>
         <small>Mark unavailable</small>
@@ -46,7 +46,7 @@
       <tr>
         <th scope="row">Last decision</th>
         <td>
-          @if (panel().health.last_decision_at_ms) {
+          @if (panel().health.last_decision_at_ms !== null) {
             <app-timestamp-display [value]="panel().health.last_decision_at_ms" mode="local" />
             <span class="freshness" [class.freshness--stale]="panel().health.decision_stale">
               {{ panel().health.decision_stale ? 'Stale' : 'Current' }}
@@ -59,7 +59,7 @@
       <tr>
         <th scope="row">Last bar</th>
         <td>
-          @if (panel().health.last_bar_at_ms) {
+          @if (panel().health.last_bar_at_ms !== null) {
             <app-timestamp-display [value]="panel().health.last_bar_at_ms" mode="local" />
           } @else {
             None yet

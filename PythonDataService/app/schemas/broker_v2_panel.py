@@ -375,6 +375,10 @@ class BotPanelView(BaseModel):
     journal_tail_seq: int | None
     actions: list[PanelAction]
     readiness_checks: list[ReadinessCheckView]
+    # Server-authored presentation aggregate. Consumers render these counts
+    # verbatim so every surface reports the same command-gate posture.
+    readiness_ready_count: int
+    readiness_blocked_count: int
     exposure: dict[str, float]
     working_orders: list[WorkingOrderView]
     recent_decisions: list[RecentDecisionView]

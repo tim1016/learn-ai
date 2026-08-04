@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/angular';
 import { HttpErrorResponse } from '@angular/common/http';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
+import { PanelHeaderComponent } from './panel-header.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type {
   BotPanelView,
@@ -109,6 +110,8 @@ const PANEL: BotPanelView = {
   journal_tail_seq: null,
   actions: [],
   readiness_checks: [],
+  readiness_ready_count: 0,
+  readiness_blocked_count: 0,
   exposure: {},
   working_orders: [],
   recent_decisions: [],
@@ -260,6 +263,28 @@ describe('BotPanelShellComponent', () => {
     globalThis.EventSource = originalEventSource;
   });
 
+  it('renders the complete market explanation with PrimeNG status cards', async () => {
+    const explanation = 'Market data is degraded because the newest bar missed the expected cadence; restore the feed before trusting another decision.';
+    const panel: BotPanelView = {
+      ...PANEL,
+      market_pulse: {
+        ...PANEL.market_pulse,
+        explanation,
+        attention_required: true,
+      },
+    };
+    const { container } = await render(PanelHeaderComponent, {
+      inputs: { panel },
+      providers: [provideRouter([])],
+    });
+
+    const explanationElement = screen.getByText(explanation);
+    expect(explanationElement.classList.contains('whitespace-normal')).toBe(true);
+    expect(explanationElement.classList.contains('truncate')).toBe(false);
+    expect(container.querySelectorAll('p-card')).toHaveLength(2);
+    expect(container.querySelectorAll('p-tag')).toHaveLength(2);
+  });
+
   it('shows loading state initially then renders the trader lens', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -278,7 +303,7 @@ describe('BotPanelShellComponent', () => {
       'sid-001',
       '5s',
     );
-    expect(screen.queryByText('run-current')).toBeNull();
+    expect(screen.getByText('run-current')).toBeTruthy();
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
@@ -300,9 +325,6 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -318,8 +340,6 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
-    await fixture.whenStable();
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
     fixture.detectChanges();
