@@ -1,7 +1,7 @@
 <!-- Journal tail (spec §7.4). Newest-first, filterable by kind. -->
 <section class="journal-tail" aria-label="Order journal tail">
   <header class="journal-tail__header">
-    <h3 class="journal-tail__title">Journal</h3>
+    <span class="journal-tail__count">{{ entries().length }} events</span>
 
     @if (availableKinds().length > 0) {
       <div class="journal-tail__filters" role="group" aria-label="Filter by kind">
@@ -39,30 +39,19 @@
 
   <ul class="journal-tail__list" aria-label="Journal entries">
     @for (entry of entries(); track trackEntry($index, entry)) {
-      <li
-        class="journal-entry"
-        [class.journal-entry--expanded]="isExpanded(entry.seq)"
-      >
-        <button
-          type="button"
-          class="journal-entry__row"
-          [attr.aria-expanded]="isExpanded(entry.seq)"
-          [attr.aria-label]="entryAriaLabel(entry)"
-          (click)="toggleExpand(entry.seq)"
-        >
-          <span class="journal-entry__kind">{{ entry.kind_label }}</span>
-          <span class="journal-entry__ts">
-            <app-timestamp-display [value]="entry.recorded_at_ms" mode="local" />
-          </span>
-          <span class="journal-entry__expand-icon" aria-hidden="true">
-            {{ isExpanded(entry.seq) ? '▲' : '▼' }}
-          </span>
-        </button>
+      <li class="journal-entry">
+        <span class="journal-entry__marker" aria-hidden="true"></span>
+        <details>
+          <summary role="button" [attr.aria-label]="entryAriaLabel(entry)">
+            <span class="journal-entry__kind">{{ entry.kind_label }}</span>
+            <span class="journal-entry__ts">
+              <app-timestamp-display [value]="entry.recorded_at_ms" mode="local" />
+            </span>
+            <span class="journal-entry__summary">{{ entry.summary }}</span>
+            <span class="journal-entry__expand-icon" aria-hidden="true">⌄</span>
+          </summary>
 
-        @if (isExpanded(entry.seq)) {
           <div class="journal-entry__detail">
-            <p class="journal-entry__summary">{{ entry.summary }}</p>
-
             @if (entry.intent_id) {
               <p class="journal-entry__meta">Intent: <code>{{ entry.intent_id }}</code></p>
             }
@@ -91,7 +80,7 @@
               }
             </div>
           </div>
-        }
+        </details>
       </li>
     }
   </ul>

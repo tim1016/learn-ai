@@ -492,6 +492,35 @@ describe('BotPanelShellComponent', () => {
     fixture.destroy();
   }, 10_000);
 
+  it('does not poll immutable current-run evidence while the bot is off duty', async () => {
+    mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
+      ...PANEL,
+      health: {
+        ...PANEL.health,
+        phase: 'OFF_DUTY',
+        phase_label: 'Off duty',
+        desired_state: 'STOPPED',
+        desired_state_label: 'Stopped',
+        running: false,
+      },
+    }));
+
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
+    fixture.destroy();
+  }, 10_000);
+
   it('shows log-only degradation panel after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },

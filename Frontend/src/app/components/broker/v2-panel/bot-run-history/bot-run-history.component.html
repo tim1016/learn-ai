@@ -20,6 +20,20 @@
     </div>
   </div>
 
+  @if (displayedRun() && evidenceUpdatedAtMs(); as updatedAtMs) {
+    <p
+      class="run-history__freshness"
+      [class.run-history__freshness--live]="state().mode === 'current' && botRunning()"
+      role="status"
+    >
+      <span class="run-history__freshness-icon" aria-hidden="true">
+        {{ state().mode === 'current' && botRunning() ? '●' : '✓' }}
+      </span>
+      <span>{{ evidenceStatus() }}</span>
+      <app-timestamp-display [value]="updatedAtMs" mode="local" />
+    </p>
+  }
+
   @if (state().mode === 'history') {
     <p class="run-history__notice" role="status">
       Viewing history — controls apply to the current run.
@@ -27,13 +41,17 @@
   }
 
   @if (
-    (state().mode === 'current' && state().currentLoading) ||
-    (state().mode === 'history' && state().historyLoading)
+    !displayedRun() && (
+      (state().mode === 'current' && state().currentLoading) ||
+      (state().mode === 'history' && state().historyLoading)
+    )
   ) {
     <p class="run-history__message" role="status">Loading run evidence…</p>
   } @else if (
-    (state().mode === 'current' && state().currentFailed) ||
-    (state().mode === 'history' && state().historyFailed)
+    !displayedRun() && (
+      (state().mode === 'current' && state().currentFailed) ||
+      (state().mode === 'history' && state().historyFailed)
+    )
   ) {
     <p class="run-history__message run-history__message--error" role="alert">
       Run evidence is unavailable. Live controls still apply only to the current run.

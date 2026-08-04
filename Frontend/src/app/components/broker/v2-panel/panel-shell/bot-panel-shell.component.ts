@@ -149,14 +149,18 @@ export class BotPanelShellComponent {
 
   protected readonly runHistoryState = computed<RunHistoryState>(() => {
     const location = this.runHistoryLocation();
+    const current = this.currentRun.value() ?? null;
+    const history = this.previousRun.value() ?? null;
     return {
       mode: location.mode,
-      current: this.currentRun.value() ?? null,
-      history: this.previousRun.value() ?? null,
-      currentLoading: this.currentRun.isLoading(),
-      historyLoading: this.previousRun.isLoading(),
-      currentFailed: this.currentRun.error() !== undefined,
-      historyFailed: this.previousRun.error() !== undefined,
+      current,
+      history,
+      // A background refresh must not replace stable evidence with a loading
+      // placeholder. Loading is only a first-load state for each view.
+      currentLoading: current === null && this.currentRun.isLoading(),
+      historyLoading: history === null && this.previousRun.isLoading(),
+      currentFailed: current === null && this.currentRun.error() !== undefined,
+      historyFailed: history === null && this.previousRun.error() !== undefined,
       canViewNewer: location.newerCursors.length > 0,
     };
   });
@@ -196,8 +200,25 @@ export class BotPanelShellComponent {
         resolution: this.liveResolution(),
       });
     });
+    let previousRunning: boolean | null = null;
+    effect(() => {
+      const running = this.panel()?.health.running ?? null;
+      if (
+        previousRunning === true
+        && running === false
+        && !this.currentRun.isLoading()
+      ) {
+        // Capture terminal evidence once when a live run goes off duty, then
+        // leave that immutable result alone until the next lifecycle change.
+        this.currentRun.reload();
+      }
+      previousRunning = running;
+    });
     const pollTimer = setInterval(() => {
-      if (!this.currentRun.isLoading()) {
+      // Off-duty evidence is immutable until another lifecycle action starts a
+      // run. The live panel reports that transition, and explicit actions also
+      // reload the resource, so polling an idle run only creates visual churn.
+      if (this.panel()?.health.running && !this.currentRun.isLoading()) {
         this.currentRun.reload();
       }
     }, 5_000);

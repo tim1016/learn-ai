@@ -312,6 +312,7 @@ describe('OperatorLensComponent', () => {
     // The journal tail renders the kind_label from the entry.
     const matches = await screen.findAllByText('Order submitted');
     expect(matches.length).toBeGreaterThan(0);
+    expect(screen.getByText('BUY 10 SPY @ market')).toBeTruthy();
   });
 
   it('flatten-stop button is present when the action is in the panel', async () => {

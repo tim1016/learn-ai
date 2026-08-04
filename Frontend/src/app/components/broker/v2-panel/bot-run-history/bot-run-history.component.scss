@@ -27,6 +27,24 @@
 
 h2 { margin: 0.1rem 0 0; font-size: var(--fs-lg); }
 
+.run-history__freshness {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: fit-content;
+  margin: var(--space-3) 0 0;
+  padding: 0.3rem 0.55rem;
+  border-radius: 999px;
+  background: var(--bull-soft);
+  color: var(--text-secondary);
+  font-size: var(--fs-xxs);
+
+  &--live { background: var(--accent-soft); }
+}
+
+.run-history__freshness-icon { color: var(--bull); font-weight: var(--fw-bold); }
+.run-history__freshness--live .run-history__freshness-icon { color: var(--accent-text); }
+
 .run-history__tabs {
   display: flex;
   padding: 0.2rem;

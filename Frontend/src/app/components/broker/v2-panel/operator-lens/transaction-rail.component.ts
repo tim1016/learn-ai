@@ -59,6 +59,13 @@ export class TransactionRailComponent {
     return `${station.label}: ${station.state_label}`;
   }
 
+  /** Waiting, blocked, and stale stations start open so exceptions cannot hide. */
+  protected needsAttention(station: StationView): boolean {
+    return station.state === 'waiting'
+      || station.state === 'blocked'
+      || station.state === 'unknown_stale';
+  }
+
   protected onEvidenceClick(_station: StationView): void {
     // Prefer the transaction_ref on the rail; fall back to nothing if absent.
     const ref = this.transactionRef();

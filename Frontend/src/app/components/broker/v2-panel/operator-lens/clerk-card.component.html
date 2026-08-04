@@ -12,79 +12,88 @@
   </header>
 
   <dl class="clerk-card__facts">
-    <dt>Account</dt>
-    <dd>{{ clerk().account_id }}</dd>
+    <div>
+      <dt>Account</dt>
+      <dd>{{ clerk().account_id }}</dd>
+    </div>
 
-    <dt>Hold</dt>
-    <dd [class.clerk-card__hold--active]="clerk().hold_active">
-      @if (clerk().hold_active) {
-        {{ clerk().hold_reason_label }}
-        @if (clerk().hold_since_ms) {
-          <span class="clerk-card__sub">since <app-timestamp-display [value]="clerk().hold_since_ms" mode="local" /></span>
+    <div>
+      <dt>Uncertain intents</dt>
+      <dd>{{ clerk().outstanding_intents }}</dd>
+    </div>
+
+    <div [class.clerk-card__fact--attention]="clerk().hold_active">
+      <dt>Hold</dt>
+      <dd [class.clerk-card__hold--active]="clerk().hold_active">
+        @if (clerk().hold_active) {
+          {{ clerk().hold_reason_label }}
+          @if (clerk().hold_since_ms) {
+            <span class="clerk-card__sub">since <app-timestamp-display [value]="clerk().hold_since_ms" mode="local" /></span>
+          }
+          <span class="clerk-card__badge clerk-card__badge--warn">Active</span>
+        } @else {
+          <span class="clerk-card__none">None</span>
         }
-        <span class="clerk-card__badge clerk-card__badge--warn">Active</span>
-      } @else {
-        <span class="clerk-card__none">None</span>
-      }
-    </dd>
+      </dd>
+    </div>
 
-    <dt>Account freeze</dt>
-    <dd [class.clerk-card__hold--active]="clerk().freeze_active">
-      @if (clerk().freeze_active) {
-        {{ clerk().freeze_label }}
-        @if (clerk().freeze_observed_at_ms) {
+    <div>
+      <dt>Reconciliation</dt>
+      <dd>
+        @if (clerk().reconciliation_verdict_label) {
+          {{ clerk().reconciliation_verdict_label }}
+        } @else {
+          <span class="clerk-card__none">No sweep yet</span>
+        }
+        @if (clerk().last_sweep_at_ms) {
           <span class="clerk-card__sub">
-            observed
-            <app-timestamp-display
-              [value]="clerk().freeze_observed_at_ms"
-              mode="local"
-            />
+            <app-timestamp-display [value]="clerk().last_sweep_at_ms" mode="local" />
           </span>
         }
-        <span class="clerk-card__sub">{{ clerk().freeze_explanation }}</span>
-        @if (clerk().freeze_next_step) {
-          <span class="clerk-card__sub">{{ clerk().freeze_next_step }}</span>
-        }
-        <span class="clerk-card__badge clerk-card__badge--warn">Frozen</span>
-      } @else {
-        <span class="clerk-card__none">{{ clerk().freeze_label }}</span>
-      }
-    </dd>
+      </dd>
+    </div>
 
-    <dt>Reconciliation</dt>
-    <dd>
-      @if (clerk().reconciliation_verdict_label) {
-        {{ clerk().reconciliation_verdict_label }}
-      } @else {
-        <span class="clerk-card__none">No sweep yet</span>
-      }
-      @if (clerk().last_sweep_at_ms) {
-        <span class="clerk-card__sub">
-          <app-timestamp-display [value]="clerk().last_sweep_at_ms" mode="local" />
-        </span>
-      }
-    </dd>
-
-    <dt>Uncertain intents</dt>
-    <dd>{{ clerk().outstanding_intents }}</dd>
-
-    <dt>Channels</dt>
-    <dd>
-      <ul class="clerk-card__channels" aria-label="Channel health">
-        @for (ch of clerk().channels; track trackChannel($index, ch)) {
-          <li class="clerk-card__channel" [class]="'clerk-card__channel--' + ch.state">
-            <span class="clerk-card__channel-icon" aria-hidden="true">
-              {{ channelIcon[ch.state] }}
+    <div class="clerk-card__fact--wide" [class.clerk-card__fact--attention]="clerk().freeze_active">
+      <dt>Account freeze</dt>
+      <dd [class.clerk-card__hold--active]="clerk().freeze_active">
+        @if (clerk().freeze_active) {
+          {{ clerk().freeze_label }}
+          @if (clerk().freeze_observed_at_ms) {
+            <span class="clerk-card__sub">
+              observed
+              <app-timestamp-display [value]="clerk().freeze_observed_at_ms" mode="local" />
             </span>
-            <span class="clerk-card__channel-label">{{ ch.label }}</span>
-            <span class="clerk-card__channel-state">{{ ch.explanation }}</span>
-          </li>
+          }
+          <span class="clerk-card__sub">{{ clerk().freeze_explanation }}</span>
+          @if (clerk().freeze_next_step) {
+            <span class="clerk-card__sub">{{ clerk().freeze_next_step }}</span>
+          }
+          <span class="clerk-card__badge clerk-card__badge--warn">Frozen</span>
+        } @else {
+          <span class="clerk-card__none">{{ clerk().freeze_label }}</span>
         }
-        @if (clerk().channels.length === 0) {
-          <li class="clerk-card__none">No channels reported</li>
-        }
-      </ul>
-    </dd>
+      </dd>
+    </div>
+
+    <div class="clerk-card__fact--wide">
+      <dt>Channels</dt>
+      <dd>
+        <ul class="clerk-card__channels" aria-label="Channel health">
+          @for (ch of clerk().channels; track trackChannel($index, ch)) {
+            <li class="clerk-card__channel" [class]="'clerk-card__channel--' + ch.state">
+              <span class="clerk-card__channel-icon" aria-hidden="true">
+                {{ channelIcon[ch.state] }}
+              </span>
+              <span class="clerk-card__channel-label">{{ ch.label }}</span>
+              <span class="clerk-card__channel-state">{{ ch.explanation }}</span>
+            </li>
+          }
+          @if (clerk().channels.length === 0) {
+            <li class="clerk-card__none">No channels reported</li>
+          }
+        </ul>
+      </dd>
+    </div>
   </dl>
 
   <div class="clerk-card__actions">
