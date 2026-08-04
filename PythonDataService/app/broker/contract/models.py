@@ -209,6 +209,7 @@ class BrokerOrder(_ContractModel):
     expired_at_ms: int | None
     events: list[BrokerOrderEvent] = Field(default_factory=list)
     observed_at_ms: int
+    fill_latency_seconds: float | None = None
 
 
 class BrokerOrderGroup(_ContractModel):

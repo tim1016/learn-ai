@@ -43,6 +43,7 @@ def test_filled_order_maps_every_field_and_synthesizes_fill_event(
     assert order.status == "filled"
     assert order.submitted_at_ms == rfc3339_to_ms("2026-07-24T14:42:49.356957709Z")
     assert order.filled_at_ms == rfc3339_to_ms("2026-07-24T14:42:50.129256359Z")
+    assert order.fill_latency_seconds == pytest.approx(0.772, abs=1e-12, rel=0)
     assert order.canceled_at_ms is None
     assert order.observed_at_ms == _OBSERVED
 
@@ -67,7 +68,20 @@ def test_open_order_has_no_events_and_nullable_prices(
     assert order.filled_quantity == 0.0
     assert order.filled_avg_price is None
     assert order.filled_at_ms is None
+    assert order.fill_latency_seconds is None
     assert order.events == []
+
+
+def test_fill_latency_is_unknown_until_both_broker_clocks_exist(
+    load_alpaca_fixture: AlpacaFixtureLoader,
+) -> None:
+    filled = dict(load_alpaca_fixture("orders", "orders.json")[0])
+    filled["submitted_at"] = None
+
+    order = from_alpaca_order(filled, observed_at_ms=_OBSERVED)
+
+    assert order.filled_at_ms is not None
+    assert order.fill_latency_seconds is None
 
 
 def test_to_alpaca_order_request_maps_equity_market_leg() -> None:

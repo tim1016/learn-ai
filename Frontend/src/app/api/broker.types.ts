@@ -10420,6 +10420,8 @@ export interface components {
             events?: components["schemas"]["BrokerOrderEvent"][];
             /** Expired At Ms */
             expired_at_ms: number | null;
+            /** Fill Latency Seconds */
+            fill_latency_seconds?: number | null;
             /** Filled At Ms */
             filled_at_ms: number | null;
             /** Filled Avg Price */

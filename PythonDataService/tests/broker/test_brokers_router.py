@@ -313,6 +313,7 @@ def _order(**overrides: Any) -> BrokerOrder:
         expired_at_ms=None,
         events=[],
         observed_at_ms=1_700_000_000_000,
+        fill_latency_seconds=0.5,
     )
     base.update(overrides)
     return BrokerOrder(**base)
@@ -344,6 +345,7 @@ async def test_orders_endpoint_returns_list_and_forwards_query_params() -> None:
 
     assert response.status_code == 200
     assert response.json()[0]["order_id"] == "o-9"
+    assert response.json()[0]["fill_latency_seconds"] == 0.5
     assert port.orders_call == {"status": "open", "limit": 5, "after_ms": 123}
 
 
