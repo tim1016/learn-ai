@@ -743,6 +743,25 @@ async def test_stop_of_unknown_bot_is_404(tmp_path: Path) -> None:
         await registry.stop("alpaca", "never-deployed")
 
 
+# ── desired_state: public accessor for durable operator intent ────────
+
+
+@pytest.mark.asyncio
+async def test_desired_state_reports_durable_intent(tmp_path: Path) -> None:
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    await registry.deploy_with_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        symbol="SPY",
+        mode="log_only",
+    )
+    assert registry.desired_state(_SID) is DesiredState.RUNNING
+
+    await registry.stop(broker="alpaca", strategy_instance_id=_SID)
+    assert registry.desired_state(_SID) is DesiredState.STOPPED
+
+
 # ── crash: typed durable evidence distinct from a clean stop ──────────
 
 

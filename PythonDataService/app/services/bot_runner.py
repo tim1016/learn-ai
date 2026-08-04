@@ -968,6 +968,10 @@ class BotTaskRegistry:
     def _desired_repo(self, strategy_instance_id: str) -> DesiredStateRepo:
         return DesiredStateRepo(stable_desired_state_path(self._artifacts_root, strategy_instance_id))
 
+    def desired_state(self, strategy_instance_id: str) -> DesiredState:
+        """This instance's durable operator intent (defaults to RUNNING)."""
+        return self._desired_repo(strategy_instance_id).read_state()
+
     def _read_binding(self, strategy_instance_id: str) -> BrokerBotBinding | None:
         return self._bindings.read(strategy_instance_id)
 

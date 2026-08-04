@@ -42,6 +42,7 @@ from app.broker.contract.models import (
     BrokerOrderEvent,
     BrokerOrderLeg,
 )
+from app.engine.live.desired_state import DesiredState
 from app.engine.live.journal_exposure import (
     ExecutionExposureEffect,
     fold_execution_exposure,
@@ -865,3 +866,18 @@ async def test_effect_exit_recovers_partial_fill_after_clerk_restart() -> None:
         quantity=2,
     )
     assert completed.state is EffectOperationState.FLAT
+
+
+# ── desired-state probe: Clerk stores the injected dependency ─────────
+
+
+async def test_clerk_stores_desired_state_probe() -> None:
+    broker = _FakeBroker()
+    calls: list[str] = []
+
+    def probe(sid: str) -> DesiredState:
+        calls.append(sid)
+        return DesiredState.RUNNING
+
+    clerk = AlpacaClerk(read=broker, trade=broker, desired_state_probe=probe)
+    assert clerk._desired_state_probe is probe

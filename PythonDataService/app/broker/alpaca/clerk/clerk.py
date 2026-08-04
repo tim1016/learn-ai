@@ -83,6 +83,7 @@ from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerEvidenceBaseline,
     AccountClerkPositionEvidence,
 )
+from app.engine.live.desired_state import DesiredState
 from app.engine.live.order_identity import (
     build_bot_order_namespace,
     build_manual_order_namespace,
@@ -118,6 +119,7 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
         stream_health: StreamHealthGate | None = None,
         clerk_generation: str | None = None,
         bot_running_probe: Callable[[], bool] | None = None,
+        desired_state_probe: Callable[[str], DesiredState] | None = None,
     ) -> None:
         self._read = read
         self._trade = trade
@@ -125,6 +127,7 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
         self._stream_health = stream_health
         self._clerk_generation = clerk_generation or uuid4().hex
         self._bot_running_probe = bot_running_probe
+        self._desired_state_probe = desired_state_probe
         self._intake_lock = asyncio.Lock()
         self.activity_recovery = AlpacaActivityRecovery(
             intake_lock=self._intake_lock, ensure_journal=self._ensure_journal, clock=clock
