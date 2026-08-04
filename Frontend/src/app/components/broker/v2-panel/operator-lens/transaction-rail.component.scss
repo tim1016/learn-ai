@@ -28,32 +28,41 @@
 
 .rail__stations {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
-  gap: 1px;
+  gap: var(--space-1);
   list-style: none;
   margin: 0;
   padding: 0;
-  background: var(--border);
 }
 
 // ── Station states (icon + text + color — never color alone per AXE §7) ─────
 
 .station {
   min-width: 0;
-  padding: 0.75rem 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
   border-left: 3px solid transparent;
+  border-radius: var(--radius);
   background: var(--bg-surface);
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
 
-  &:not(:first-child) {
-    border-left-color: var(--border-light);
+  details[open] .station__chevron { transform: rotate(180deg); }
+
+  summary {
+    display: grid;
+    grid-template-columns: 1.25rem minmax(0, 1fr) auto 1rem;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 2.85rem;
+    padding: 0.45rem var(--space-2);
+    cursor: pointer;
+    list-style: none;
+
+    &::-webkit-details-marker { display: none; }
+    &:hover { background: var(--bg-elevated); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   }
 
   &--satisfied {
     border-left-color: var(--bull);
-    background: var(--bull-soft);
 
     .station__icon { color: var(--bull); }
     .station__state-label { color: var(--bull); }
@@ -61,7 +70,6 @@
 
   &--waiting {
     border-left-color: var(--accent);
-    background: var(--accent-soft);
 
     .station__icon { color: var(--accent-text); }
     .station__state-label { color: var(--accent-text); }
@@ -69,7 +77,6 @@
 
   &--blocked {
     border-left-color: var(--bear);
-    background: var(--bear-soft);
 
     .station__icon { color: var(--bear); }
     .station__state-label { color: var(--bear); }
@@ -77,14 +84,13 @@
 
   &--unknown_stale {
     border-left-color: var(--warn);
-    background: var(--warn-soft);
 
     .station__icon { color: var(--warn); }
     .station__state-label { color: var(--warn); }
   }
 
   &--not_applicable {
-    opacity: 0.45;
+    opacity: 0.6;
   }
 }
 
@@ -94,28 +100,38 @@
   line-height: 1;
 }
 
+.station__identity { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+
 .station__label {
-  font-size: 0.65rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .station__state-label {
-  font-size: 0.75rem;
+  font-size: var(--fs-xxs);
   font-weight: 500;
 }
 
+.station__chevron { color: var(--text-subtle); transition: transform 140ms ease; }
+
+.station__detail {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3) 2.95rem;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+}
+
 .station__receipt {
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-primary);
-  margin: 0.25rem 0 0;
+  margin: var(--space-2) 0 0;
   line-height: 1.4;
 }
 
 .station__evidence-ts {
-  font-size: 0.7rem;
+  font-size: var(--fs-xxs);
   color: var(--text-secondary);
 }
 
@@ -154,4 +170,15 @@
     outline-offset: 2px;
     border-radius: 2px;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .station__chevron { transition: none; }
+}
+
+@media (max-width: 560px) {
+  .station summary { grid-template-columns: 1.25rem minmax(0, 1fr) 1rem; }
+  .station__evidence-ts { display: none; }
+  .station__identity { align-items: flex-start; flex-direction: column; gap: 0.1rem; }
+  .station__detail { padding-left: 2.55rem; }
 }

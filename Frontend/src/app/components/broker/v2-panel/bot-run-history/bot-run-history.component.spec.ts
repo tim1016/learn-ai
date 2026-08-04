@@ -43,7 +43,7 @@ function state(overrides: Partial<RunHistoryState> = {}): RunHistoryState {
 describe('BotRunHistoryComponent', () => {
   it('shows the backend-owned current process evidence without inferring terminal state', async () => {
     await render(BotRunHistoryComponent, {
-      inputs: { state: state() },
+      inputs: { state: state(), botRunning: true },
     });
 
     expect(screen.getByText('run-current')).toBeTruthy();
@@ -54,6 +54,20 @@ describe('BotRunHistoryComponent', () => {
     expect(
       screen.getByRole('button', { name: 'Current Run' }).getAttribute('aria-pressed'),
     ).toBe('true');
+    expect(screen.getByText('Evidence is updating')).toBeTruthy();
+  });
+
+  it('keeps cached idle evidence visible during a background refresh', async () => {
+    await render(BotRunHistoryComponent, {
+      inputs: {
+        state: state({ currentLoading: true }),
+        botRunning: false,
+      },
+    });
+
+    expect(screen.getByText('run-current')).toBeTruthy();
+    expect(screen.getByText('No changes since')).toBeTruthy();
+    expect(screen.queryByText('Loading run evidence…')).toBeNull();
   });
 
   it('labels historical evidence and makes the live-control target explicit', async () => {

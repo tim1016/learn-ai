@@ -39,7 +39,6 @@ export class JournalTailComponent {
   readonly evidenceDrawerRequested = output<string>();
 
   protected readonly kindFilter = signal<string>(ALL_KINDS);
-  protected readonly expandedSeqs = signal<ReadonlySet<number>>(new Set());
 
   protected readonly entries = computed(() => {
     const page = this.evidencePage();
@@ -84,22 +83,6 @@ export class JournalTailComponent {
 
   protected onKindFilter(kind: string): void {
     this.kindFilter.set(kind);
-  }
-
-  protected toggleExpand(seq: number): void {
-    this.expandedSeqs.update((prev) => {
-      const next = new Set(prev);
-      if (next.has(seq)) {
-        next.delete(seq);
-      } else {
-        next.add(seq);
-      }
-      return next;
-    });
-  }
-
-  protected isExpanded(seq: number): boolean {
-    return this.expandedSeqs().has(seq);
   }
 
   protected entryAriaLabel(entry: EvidenceEntry): string {

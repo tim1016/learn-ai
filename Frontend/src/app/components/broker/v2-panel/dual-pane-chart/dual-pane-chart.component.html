@@ -8,7 +8,7 @@
     <div class="instrument-lockup">
       <span class="instrument-kicker">Bot market tape</span>
       <div class="instrument-line">
-        <h2>{{ symbol() }}</h2>
+        <h2><app-asset-identity [symbol]="symbol()" size="sm" /></h2>
         @if (lastPrice(); as price) {
           <span class="last-price">{{ formatPrice(price) }}</span>
         } @else {

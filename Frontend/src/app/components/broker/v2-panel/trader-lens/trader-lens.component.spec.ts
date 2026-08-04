@@ -163,10 +163,42 @@ describe('TraderLensComponent — log-only degradation', () => {
     });
 
     expect(
-      screen.getByText('Observation-only mode does not place orders.'),
+      screen.getByText('This bot records decisions but does not place broker orders.'),
     ).toBeTruthy();
-    // No trade table should exist
-    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByRole('table', { name: 'Fills today' })).toBeNull();
+  });
+});
+
+describe('TraderLensComponent — focused trader information', () => {
+  it('keeps operator evidence out of the trader lens', async () => {
+    await render(TraderLensComponent, {
+      inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    expect(screen.queryByText('Run evidence')).toBeNull();
+    expect(screen.queryByText('Strategy evidence')).toBeNull();
+    expect(screen.queryByText('Clerk evidence')).toBeNull();
+  });
+
+  it('shows P&L before the compact bot snapshot', async () => {
+    await render(TraderLensComponent, {
+      inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    expect(screen.getByLabelText('Profit and loss today')).toBeTruthy();
+    expect(screen.getByRole('table', { name: 'Bot snapshot' })).toBeTruthy();
+  });
+
+  it('places fills today in the right-hand trader rail', async () => {
+    const panel: BotPanelView = { ...BASE_PANEL, mode: 'trade' };
+    const { container } = await render(TraderLensComponent, {
+      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    expect(
+      container.querySelector('.trader-rail app-trades-today-list'),
+    ).not.toBeNull();
+    expect(screen.getByText('Fills today')).toBeTruthy();
   });
 });
 
@@ -206,7 +238,7 @@ describe('TraderLensComponent — primary verb button', () => {
       inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
     });
 
-    const link = screen.getByRole('link', { name: 'Manual order ticket' });
+    const link = screen.getByRole('link', { name: 'Manual order' });
     expect(link.getAttribute('href')).toBe('/brokers/alpaca');
   });
 

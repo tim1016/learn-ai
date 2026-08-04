@@ -3,7 +3,7 @@
     <span>Enforcement posture</span>
     <h2 id="current-readiness-title">Current readiness</h2>
     <p class="section-heading__summary">
-      Active command gates
+      Active command gates · {{ readyCount() }} ready · {{ blockedCount() }} blocked
       <button
         type="button"
         class="section-heading__info"
@@ -16,32 +16,35 @@
     </p>
   </div>
 
-  <div class="readiness-grid">
+  <div class="readiness-list">
     @for (control of readinessControls(); track control.check.operation) {
       @let check = control.check;
-      <article class="readiness-check" [class.readiness-check--blocked]="!check.ready">
-        <div class="readiness-check__heading">
+      <details class="readiness-check" [class.readiness-check--blocked]="!check.ready">
+        <summary>
           <span class="readiness-check__state">{{ check.ready ? 'Ready' : 'Blocked' }}</span>
           <strong>{{ check.label }}</strong>
+          <span class="readiness-check__summary">{{ check.explanation }}</span>
+          <span class="readiness-check__chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="readiness-check__detail">
+          <dl>
+            <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
+            <div><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
+          </dl>
+          @if (check.cure) { <p class="readiness-check__cure">Next: {{ check.cure }}</p> }
+          @if (control.action; as action) {
+            <div class="readiness-check__action">
+              <app-panel-action-button
+                [action]="action"
+                [pending]="actionPending()"
+                [tone]="control.tone"
+                [suppressedBlockerId]="control.suppressedBlockerId"
+                (triggered)="actionRequested.emit($event)"
+              />
+            </div>
+          }
         </div>
-        <p class="readiness-check__explanation">{{ check.explanation }}</p>
-        <dl>
-          <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
-          <div><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
-        </dl>
-        @if (check.cure) { <p class="readiness-check__cure">Next: {{ check.cure }}</p> }
-        @if (control.action; as action) {
-          <div class="readiness-check__action">
-            <app-panel-action-button
-              [action]="action"
-              [pending]="actionPending()"
-              [tone]="control.tone"
-              [suppressedBlockerId]="control.suppressedBlockerId"
-              (triggered)="actionRequested.emit($event)"
-            />
-          </div>
-        }
-      </article>
+      </details>
     }
   </div>
 </section>

@@ -312,6 +312,7 @@ describe('OperatorLensComponent', () => {
     // The journal tail renders the kind_label from the entry.
     const matches = await screen.findAllByText('Order submitted');
     expect(matches.length).toBeGreaterThan(0);
+    expect(screen.getByText('BUY 10 SPY @ market')).toBeTruthy();
   });
 
   it('flatten-stop button is present when the action is in the panel', async () => {
@@ -591,7 +592,7 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    expect(screen.getByText('Active command gates')).toBeTruthy();
+    expect(screen.getByText(/Active command gates/)).toBeTruthy();
     expect(
       screen.queryByText(
         'These checks gate commands now. They are not historical transaction stages.',
@@ -601,6 +602,17 @@ describe('OperatorLensComponent', () => {
     expect(
       screen.getAllByText(/No flatten command is necessary\./),
     ).toHaveLength(1);
+
+    const disclosureLabel = screen
+      .getAllByText('Flatten & stop')
+      .find((element) => element.closest('summary'));
+    const disclosure = disclosureLabel?.closest('details');
+    const disclosureSummary = disclosure?.querySelector('summary');
+    expect(disclosure?.hasAttribute('open')).toBe(false);
+    if (!disclosureSummary) throw new Error('Expected a readiness disclosure summary.');
+    fireEvent.click(disclosureSummary);
+    expect(disclosure?.hasAttribute('open')).toBe(true);
+
     expect(
       screen.getByRole('alert').textContent,
     ).toContain('The Clerk cannot prove the exposure to flatten.');

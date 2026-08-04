@@ -72,4 +72,12 @@ export class OperatorReadinessComponent {
       });
     },
   );
+
+  protected readonly readyCount = computed(
+    () => this.readinessControls().filter((control) => control.check.ready).length,
+  );
+
+  protected readonly blockedCount = computed(
+    () => this.readinessControls().length - this.readyCount(),
+  );
 }

@@ -7,6 +7,7 @@
 
   <app-bot-run-history
     [state]="runHistory()"
+    [botRunning]="health().running"
     (navigationRequested)="runHistoryNavigation.emit($event)"
   />
 
@@ -41,44 +42,54 @@
     </aside>
   </div>
 
-  <section class="working-orders" aria-labelledby="working-orders-title">
-    <div class="section-heading">
-      <span>Clerk custody</span>
-      <h2 id="working-orders-title">Working orders · {{ panel().working_orders.length }}</h2>
-    </div>
-    @if (panel().working_orders.length === 0) {
-      <p class="empty-copy">No Clerk-attributed working orders.</p>
-    } @else {
-      <div class="working-orders__table-wrap">
-        <table>
-          <thead><tr><th>Symbol</th><th>Side</th><th>Quantity</th><th>Filled</th><th>Status</th><th>Order ref</th></tr></thead>
-          <tbody>
-            @for (order of panel().working_orders; track order.order_ref) {
-              <tr>
-                <td>{{ order.symbol }}</td>
-                <td>{{ order.side | receiptLabel }}</td>
-                <td>{{ order.quantity ?? 'Not reported' }}</td>
-                <td>{{ order.filled_quantity }}</td>
-                <td>{{ order.status | receiptLabel }}</td>
-                <td><code>{{ order.order_ref }}</code></td>
-              </tr>
-            }
-          </tbody>
-        </table>
+  <div class="operator-lens__support-grid">
+    <section class="working-orders" aria-labelledby="working-orders-title">
+      <div class="section-heading section-heading--row">
+        <div>
+          <span>Clerk custody</span>
+          <h2 id="working-orders-title">Working orders</h2>
+        </div>
+        <strong class="section-count" [attr.aria-label]="panel().working_orders.length + ' working orders'">
+          {{ panel().working_orders.length }}
+        </strong>
       </div>
-    }
-  </section>
+      @if (panel().working_orders.length === 0) {
+        <p class="empty-copy"><span aria-hidden="true">✓</span> No Clerk-attributed working orders.</p>
+      } @else {
+        <ul class="working-orders__grid" aria-label="Clerk-attributed working orders">
+          @for (order of panel().working_orders; track order.order_ref) {
+            <li class="working-order">
+              <div class="working-order__heading">
+                <strong>{{ order.symbol }}</strong>
+                <span>{{ order.side | receiptLabel }}</span>
+                <span class="working-order__status">{{ order.status | receiptLabel }}</span>
+              </div>
+              <dl>
+                <div><dt>Quantity</dt><dd>{{ order.quantity ?? 'Not reported' }}</dd></div>
+                <div><dt>Filled</dt><dd>{{ order.filled_quantity }}</dd></div>
+              </dl>
+              <code>{{ order.order_ref }}</code>
+            </li>
+          }
+        </ul>
+      }
+    </section>
 
-  <section class="operator-lens__journal" aria-labelledby="journal-title">
-    <div class="section-heading"><span>Audit tail</span><h2 id="journal-title">Journal</h2></div>
-    @if (journalPage.error()) { <p role="alert">Could not load journal evidence.</p> }
-    <app-journal-tail
-      [evidencePage]="journalPage.value() ?? null"
-      [loading]="journalPage.isLoading()"
-      (transactionSelected)="onTransactionSelected($event)"
-      (evidenceDrawerRequested)="onEvidenceRequested($event)"
-    />
-  </section>
+    <section class="operator-lens__journal" aria-labelledby="journal-title">
+      <div class="section-heading">
+        <span>Clerk evidence</span>
+        <h2 id="journal-title">Audit trail</h2>
+        <p>Newest custody events, with raw receipts available on demand.</p>
+      </div>
+      @if (journalPage.error()) { <p role="alert">Could not load journal evidence.</p> }
+      <app-journal-tail
+        [evidencePage]="journalPage.value() ?? null"
+        [loading]="journalPage.isLoading()"
+        (transactionSelected)="onTransactionSelected($event)"
+        (evidenceDrawerRequested)="onEvidenceRequested($event)"
+      />
+    </section>
+  </div>
 </div>
 
 <app-evidence-drawer

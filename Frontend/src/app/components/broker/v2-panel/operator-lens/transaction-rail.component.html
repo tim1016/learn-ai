@@ -13,48 +13,48 @@
 
   <ol class="rail__stations" aria-label="Pipeline stations">
     @for (station of stations(); track trackStation($index, station)) {
-      <li
-        [class]="'station station--' + station.state"
-        [attr.aria-label]="stationAriaLabel(station)"
-      >
-        <!-- Icon + label — two channels: icon is decorative, label carries meaning (AXE) -->
-        <span class="station__icon" aria-hidden="true">{{ stationIcon[station.state] }}</span>
-        <span class="station__label">{{ station.label }}</span>
-        <span class="station__state-label">{{ station.state_label }}</span>
-
-        @if (station.state !== 'not_applicable') {
-          <!-- Receipt text (backend-authored) -->
-          <p class="station__receipt">{{ station.receipt }}</p>
-
-          @if (station.evidence_at_ms !== null) {
-            <span class="station__evidence-ts">
-              <app-timestamp-display
-                [value]="station.evidence_at_ms"
-                mode="local"
-              />
+      <li [class]="'station station--' + station.state">
+        <details [open]="needsAttention(station)">
+          <summary role="button" [attr.aria-label]="stationAriaLabel(station)">
+            <span class="station__icon" aria-hidden="true">{{ stationIcon[station.state] }}</span>
+            <span class="station__identity">
+              <span class="station__label">{{ station.label }}</span>
+              <span class="station__state-label">{{ station.state_label }}</span>
             </span>
-          }
+            @if (station.evidence_at_ms !== null) {
+              <span class="station__evidence-ts">
+                <app-timestamp-display [value]="station.evidence_at_ms" mode="local" />
+              </span>
+            }
+            <span class="station__chevron" aria-hidden="true">⌄</span>
+          </summary>
 
-          @if (station.blocker) {
-            <div class="station__blocker" role="alert" aria-label="Station blocker">
-              <strong class="station__blocker-headline">{{ station.blocker.headline }}</strong>
-              @if (station.blocker.detail) {
-                <p class="station__blocker-detail">{{ station.blocker.detail }}</p>
+          @if (station.state !== 'not_applicable') {
+            <div class="station__detail">
+              <p class="station__receipt">{{ station.receipt }}</p>
+
+              @if (station.blocker) {
+                <div class="station__blocker" role="alert" aria-label="Station blocker">
+                  <strong class="station__blocker-headline">{{ station.blocker.headline }}</strong>
+                  @if (station.blocker.detail) {
+                    <p class="station__blocker-detail">{{ station.blocker.detail }}</p>
+                  }
+                </div>
+              }
+
+              @if (hasTransaction()) {
+                <button
+                  type="button"
+                  class="station__evidence-link"
+                  [attr.aria-label]="'View raw evidence for ' + station.label"
+                  (click)="onEvidenceClick(station)"
+                >
+                  View evidence
+                </button>
               }
             </div>
           }
-
-          @if (hasTransaction()) {
-            <button
-              type="button"
-              class="station__evidence-link"
-              [attr.aria-label]="'View raw evidence for ' + station.label"
-              (click)="onEvidenceClick(station)"
-            >
-              View evidence
-            </button>
-          }
-        }
+        </details>
       </li>
     }
   </ol>

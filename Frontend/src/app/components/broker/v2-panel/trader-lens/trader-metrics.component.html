@@ -1,53 +1,71 @@
 <section class="trader-metrics" aria-label="Bot attributed trading summary">
-  <article>
-    <span>Attributed exposure</span>
-    @if (exposure().length === 0) {
-      <strong>Flat</strong><small>Zero Clerk-attributed quantity</small>
-    } @else {
-      @for (position of exposure(); track position[0]) {
-        <strong>{{ position[0] }} {{ position[1] }}</strong>
-      }
-    }
-  </article>
-  <article>
-    <span>Realized today</span>
-    <strong [class.positive]="panel().realized_pnl_today > 0" [class.negative]="panel().realized_pnl_today < 0">
-      {{ panel().realized_pnl_today | currency:'USD':'symbol':'1.2-2' }}
-    </strong>
-    <small>{{ panel().fills_today }} fills today</small>
-  </article>
-  <article>
-    <span>Open P&amp;L</span>
-    @if (panel().open_pnl === null) {
-      <strong>Not available</strong><small>No complete mark coverage</small>
-    } @else {
-      <strong [class.positive]="panel().open_pnl! > 0" [class.negative]="panel().open_pnl! < 0">
-        {{ panel().open_pnl | currency:'USD':'symbol':'1.2-2' }}
+  <header class="trader-metrics__heading">
+    <span>Today</span>
+    <small>{{ panel().fills_today }} fill{{ panel().fills_today === 1 ? '' : 's' }}</small>
+  </header>
+
+  <div class="pnl-grid" aria-label="Profit and loss today">
+    @let openPnl = panel().open_pnl;
+    <article>
+      <span>Realized</span>
+      <strong [class.positive]="panel().realized_pnl_today > 0" [class.negative]="panel().realized_pnl_today < 0">
+        {{ panel().realized_pnl_today | currency:'USD':'symbol':'1.2-2' }}
       </strong>
-      <small>Backend FIFO attribution</small>
-    }
-  </article>
-  <article>
-    <span>Order custody</span>
-    <strong>{{ panel().working_orders.length }} working</strong>
-    <small>{{ panel().clerk.outstanding_intents }} unresolved intents</small>
-  </article>
-  <article>
-    <span>Latest decision</span>
-    @if (panel().health.last_decision_at_ms) {
-      <strong><app-timestamp-display [value]="panel().health.last_decision_at_ms" mode="local" /></strong>
-      <small>{{ panel().health.decision_stale ? 'Stale decision evidence' : 'Decision evidence current' }}</small>
-    } @else {
-      <strong>None yet</strong><small>No bar decision recorded</small>
-    }
-  </article>
-  <article>
-    <span>Last evaluated bar</span>
-    @if (panel().health.last_bar_at_ms) {
-      <strong><app-timestamp-display [value]="panel().health.last_bar_at_ms" mode="local" /></strong>
-    } @else {
-      <strong>None yet</strong>
-    }
-    <small>{{ panel().health.resume_label }}</small>
-  </article>
+    </article>
+    <article>
+      <span>Open P&amp;L</span>
+      @if (openPnl === null) {
+        <strong class="unavailable">—</strong>
+        <small>Mark unavailable</small>
+      } @else {
+        <strong [class.positive]="openPnl > 0" [class.negative]="openPnl < 0">
+          {{ openPnl | currency:'USD':'symbol':'1.2-2' }}
+        </strong>
+      }
+    </article>
+  </div>
+
+  <table aria-label="Bot snapshot">
+    <tbody>
+      <tr>
+        <th scope="row">Exposure</th>
+        <td>
+          @if (exposure().length === 0) {
+            Flat
+          } @else {
+            @for (position of exposure(); track position[0]) {
+              <span>{{ position[0] }} {{ position[1] }}</span>
+            }
+          }
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Orders</th>
+        <td>{{ panel().working_orders.length }} working · {{ panel().clerk.outstanding_intents }} unresolved</td>
+      </tr>
+      <tr>
+        <th scope="row">Last decision</th>
+        <td>
+          @if (panel().health.last_decision_at_ms) {
+            <app-timestamp-display [value]="panel().health.last_decision_at_ms" mode="local" />
+            <span class="freshness" [class.freshness--stale]="panel().health.decision_stale">
+              {{ panel().health.decision_stale ? 'Stale' : 'Current' }}
+            </span>
+          } @else {
+            None yet
+          }
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">Last bar</th>
+        <td>
+          @if (panel().health.last_bar_at_ms) {
+            <app-timestamp-display [value]="panel().health.last_bar_at_ms" mode="local" />
+          } @else {
+            None yet
+          }
+        </td>
+      </tr>
+    </tbody>
+  </table>
 </section>

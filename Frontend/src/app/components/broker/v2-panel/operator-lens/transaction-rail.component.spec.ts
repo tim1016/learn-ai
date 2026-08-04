@@ -76,6 +76,20 @@ describe('TransactionRailComponent', () => {
     expect(item).not.toBeNull();
   });
 
+  it('opens attention stations and keeps satisfied stations collapsed', async () => {
+    const stations: StationView[] = [
+      makeStation({ station_id: 'SIGNAL', state: 'waiting', label: 'Signal', state_label: 'Waiting' }),
+      makeStation({ station_id: 'INTENT', state: 'satisfied', label: 'Intent', state_label: 'Ready' }),
+    ];
+
+    const { container } = await render(TransactionRailComponent, {
+      inputs: { rail: makeRail(stations) },
+    });
+
+    expect(container.querySelector('.station--waiting details')?.hasAttribute('open')).toBe(true);
+    expect(container.querySelector('.station--satisfied details')?.hasAttribute('open')).toBe(false);
+  });
+
   it('evidence link click emits rail transaction_ref', async () => {
     const onEvidence = vi.fn<(val: string) => void>();
 
@@ -162,7 +176,7 @@ describe('TransactionRailComponent', () => {
       inputs: { rail: makeRail(stations) },
     });
 
-    const li = container.querySelector('li');
-    expect(li?.getAttribute('aria-label')).toMatch(/signal.*ready/i);
+    const summary = container.querySelector('summary');
+    expect(summary?.getAttribute('aria-label')).toMatch(/signal.*ready/i);
   });
 });

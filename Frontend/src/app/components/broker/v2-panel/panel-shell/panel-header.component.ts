@@ -1,15 +1,14 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { MessageModule } from 'primeng/message';
-import { TagModule } from 'primeng/tag';
 import type { BotPanelView } from '../lib/broker-v2-panel.types';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 
 @Component({
   selector: 'app-panel-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [MessageModule, ReceiptLabelPipe, RouterLink, TagModule, TimestampDisplayComponent],
+  imports: [AssetIdentityComponent, ReceiptLabelPipe, RouterLink, TimestampDisplayComponent],
   templateUrl: './panel-header.component.html',
   styleUrl: './panel-header.component.scss',
 })

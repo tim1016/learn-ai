@@ -9,64 +9,78 @@
   </header>
 
   <dl class="health-card__facts">
-    <dt>Phase</dt>
-    <dd>{{ health().phase_label }}</dd>
+    <div>
+      <dt>Phase</dt>
+      <dd>{{ health().phase_label }}</dd>
+    </div>
 
-    <dt>Desired state</dt>
-    <dd>{{ health().desired_state_label }}</dd>
+    <div>
+      <dt>Desired state</dt>
+      <dd>{{ health().desired_state_label }}</dd>
+    </div>
 
-    <dt>Running</dt>
-    <dd>{{ health().running ? 'Yes' : 'No' }}</dd>
+    <div>
+      <dt>Process</dt>
+      <dd>{{ health().running ? 'Running' : 'Not running' }}</dd>
+    </div>
 
-    <dt>Resume custody</dt>
-    <dd>
-      {{ health().resume_label }}
-      <span class="health-card__sub">{{ health().resume_explanation }}</span>
-      @if (health().carryover_checkpoint_exposure | keyvalue; as exposure) {
-        @if (exposure.length > 0) {
-          <span class="health-card__sub">
-            @for (row of exposure; track row.key) {
-              {{ row.key }} {{ row.value }}
-            }
-          </span>
+    <div>
+      <dt>Last bar</dt>
+      <dd>
+        @if (health().last_bar_at_ms) {
+          <app-timestamp-display [value]="health().last_bar_at_ms" mode="local" />
+        } @else {
+          <span class="health-card__none">None</span>
         }
-      }
-    </dd>
+      </dd>
+    </div>
+
+    <div class="health-card__fact--wide">
+      <dt>Resume custody</dt>
+      <dd>
+        {{ health().resume_label }}
+        <span class="health-card__sub">{{ health().resume_explanation }}</span>
+        @if (health().carryover_checkpoint_exposure | keyvalue; as exposure) {
+          @if (exposure.length > 0) {
+            <span class="health-card__sub">
+              @for (row of exposure; track row.key) {
+                {{ row.key }} {{ row.value }}
+              }
+            </span>
+          }
+        }
+      </dd>
+    </div>
 
     @if (health().duty_outcome) {
       @let outcome = health().duty_outcome!;
-      <dt>Duty outcome</dt>
-      <dd>
-        {{ outcome.label }}
-        @if (outcome.explanation) {
-          <span class="health-card__sub">{{ outcome.explanation }}</span>
-        }
-        @if (outcome.recorded_at_ms) {
-          <app-timestamp-display [value]="outcome.recorded_at_ms" mode="local" />
-        }
-      </dd>
+      <div class="health-card__fact--wide">
+        <dt>Duty outcome</dt>
+        <dd>
+          {{ outcome.label }}
+          @if (outcome.explanation) {
+            <span class="health-card__sub">{{ outcome.explanation }}</span>
+          }
+          @if (outcome.recorded_at_ms) {
+            <app-timestamp-display [value]="outcome.recorded_at_ms" mode="local" />
+          }
+        </dd>
+      </div>
     }
 
-    <dt>Last decision</dt>
-    <dd>
-      @if (health().last_decision_at_ms) {
-        <app-timestamp-display [value]="health().last_decision_at_ms" mode="local" />
-        @if (health().decision_stale) {
-          <span class="health-card__stale" role="status" aria-label="Decision data is stale">stale</span>
+    <div class="health-card__fact--wide">
+      <dt>Last decision</dt>
+      <dd>
+        @if (health().last_decision_at_ms) {
+          <app-timestamp-display [value]="health().last_decision_at_ms" mode="local" />
+          @if (health().decision_stale) {
+            <span class="health-card__stale" role="status" aria-label="Decision data is stale">stale</span>
+          }
+        } @else {
+          <span class="health-card__none">None recorded</span>
         }
-      } @else {
-        <span class="health-card__none">None recorded</span>
-      }
-    </dd>
-
-    <dt>Last bar</dt>
-    <dd>
-      @if (health().last_bar_at_ms) {
-        <app-timestamp-display [value]="health().last_bar_at_ms" mode="local" />
-      } @else {
-        <span class="health-card__none">None</span>
-      }
-    </dd>
+      </dd>
+    </div>
   </dl>
 
   @if (retireAction()) {

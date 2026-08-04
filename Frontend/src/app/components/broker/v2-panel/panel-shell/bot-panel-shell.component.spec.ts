@@ -278,8 +278,14 @@ describe('BotPanelShellComponent', () => {
       'sid-001',
       '5s',
     );
-    expect(screen.getByText('run-current')).toBeTruthy();
+    expect(screen.queryByText('run-current')).toBeNull();
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.getByText('run-current')).toBeTruthy();
   });
 
   it('loads previous runs only on demand and preserves the selection across lenses', async () => {
@@ -294,6 +300,9 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -309,6 +318,8 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
+    await fixture.whenStable();
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -352,6 +363,9 @@ describe('BotPanelShellComponent', () => {
       ],
     });
     await fixture.whenStable();
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -393,10 +407,16 @@ describe('BotPanelShellComponent', () => {
       ],
     });
     await fixture.whenStable();
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     await fixture.whenStable();
 
@@ -460,12 +480,44 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
     expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
     await new Promise((resolve) => setTimeout(resolve, 5_100));
     await fixture.whenStable();
     fixture.detectChanges();
 
     expect(screen.getByText('Stopped')).toBeTruthy();
+    fixture.destroy();
+  }, 10_000);
+
+  it('does not poll immutable current-run evidence while the bot is off duty', async () => {
+    mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
+      ...PANEL,
+      health: {
+        ...PANEL.health,
+        phase: 'OFF_DUTY',
+        phase_label: 'Off duty',
+        desired_state: 'STOPPED',
+        desired_state_label: 'Stopped',
+        running: false,
+      },
+    }));
+
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => setTimeout(resolve, 5_100));
+    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
     fixture.destroy();
   }, 10_000);
 
@@ -479,7 +531,7 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(
-      screen.getByText('Observation-only mode does not place orders.'),
+      screen.getByText('This bot records decisions but does not place broker orders.'),
     ).toBeTruthy();
   });
 

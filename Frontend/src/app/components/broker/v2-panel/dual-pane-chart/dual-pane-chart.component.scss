@@ -1,10 +1,14 @@
 :host {
   display: block;
+  height: 100%;
   min-width: 0;
 }
 
 .market-tape {
   --source-accent: var(--info);
+  display: flex;
+  height: 100%;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-lg);
@@ -54,7 +58,7 @@
 
 .instrument-line {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-3);
 
   h2 {
@@ -62,6 +66,7 @@
     font-family: var(--font-mono);
     font-size: 1.45rem;
     letter-spacing: -0.04em;
+    line-height: 1;
   }
 }
 
@@ -106,8 +111,9 @@
 
 .tape-workspace {
   display: grid;
+  flex: 1;
   grid-template-columns: 9.75rem minmax(0, 1fr);
-  min-height: 28rem;
+  min-height: 34rem;
 }
 
 .source-rail {
@@ -276,7 +282,7 @@
 
 .chart-stage {
   position: relative;
-  min-height: 23rem;
+  min-height: 29rem;
   flex: 1;
 }
 
@@ -365,7 +371,7 @@
   to { transform: translateX(225%); }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .tape-header { grid-template-columns: minmax(0, 1fr) auto; }
   .tape-readout { display: none; }
   .tape-workspace { grid-template-columns: 1fr; min-height: 30rem; }
