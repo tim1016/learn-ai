@@ -58,7 +58,7 @@ These are requirements, not unresolved option questions:
    remains under the same `strategy_instance_id`; every Resume creates a new
    `run_id`. Continuing a paused live process is named **Continue**, not Resume.
    Until the new-run behavior exists end to end, the V2 panel must not render a
-   Resume button.
+   Resume button. (Resolved 2026-08-03 — see the A1.1 table.)
 4. **Changing configuration means a new strategy instance.** Symbol, strategy,
    quantity/action plan, submission mode, and other immutable settings cannot
    be edited by Resume.
@@ -167,7 +167,7 @@ Research and prototype these closed semantics:
 | Operation | Identity result | Broker effect | Required UI behavior |
 | --- | --- | --- | --- |
 | Continue | Same instance, same live `run_id` | Existing configured mode | Available only for a paused process that is still authoritatively live |
-| Resume | Same instance, new `run_id` | Existing immutable configured mode | Hidden until new-run creation, Clerk proof, and command recovery work end to end |
+| Resume | Same instance, new `run_id` | Existing immutable configured mode | Resolved 2026-08-03: new-run creation, Clerk proof, and checkpoint carryover all shipped and are tested (`bot_resume_admission.py`, `test_resume_existing_creates_new_run_and_preserves_action_plan`). The panel now renders Resume disabled-with-reason (backend-authored `RunAdmissionDecision` via `action_policy.py`'s `_guard_resume`) rather than hidden, which satisfies this row's original intent now that the precondition is met. |
 | Start Dry Run | New instance when source configuration is not already dry; new run | No broker submission; simulated fills are clearly labelled | Explicit Dry Run CTA and permanent non-live badge |
 
 The existing `shadow`/no-submit engine path is the leading implementation
