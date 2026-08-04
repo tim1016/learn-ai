@@ -233,6 +233,11 @@ async def test_clear_hold_restores_submission(_alpaca_clerk: None) -> None:
     responses.add(responses.GET, f"{_BASE}/v2/positions", body="[]", status=200)
     await _raise_hold_via_sweep()
 
+    # The foreign order is now resolved at the broker — this is what
+    # clear_hold's own internal reconciliation (the P0-2 fix) will read.
+    responses.add(responses.GET, f"{_BASE}/v2/orders", body="[]", status=200)
+    responses.add(responses.GET, f"{_BASE}/v2/positions", body="[]", status=200)
+
     cleared = await _post(
         "/api/brokers/alpaca/clerk/clear-hold",
         {"operator": "ops", "reason": "Verified the account is safe."},

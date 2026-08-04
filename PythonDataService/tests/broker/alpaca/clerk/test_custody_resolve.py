@@ -28,8 +28,8 @@ from app.broker.alpaca.clerk.models import ChannelHealth, ClerkEntryKind
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import AlpacaSettings, reset_alpaca_settings_for_testing
-from app.broker.contract.errors import BrokerUnavailable
-from app.broker.contract.models import BrokerOrderEvent
+from app.broker.contract.errors import BrokerSubmissionHeld, BrokerUnavailable
+from app.broker.contract.models import BrokerOrderEvent, BrokerOrderLeg, BrokerOrderRequest
 from tests.broker.alpaca.clerk.test_clerk_reconciliation import (
     _clerk_root,  # noqa: F401 -- autouse fixture, imported for its side effect
     _FakeBroker,
@@ -296,6 +296,11 @@ async def test_inventory_baseline_execution_rechecks_that_every_bot_is_stopped()
 
 
 async def test_clear_hold_execution_rechecks_channel_health() -> None:
+    # clear_hold's channel-health recheck only applies to a STREAM_HEALTH_HOLD
+    # (P0-2 fix: the required proof is dispatched by the hold's own reason
+    # code) — so this hold must be raised through a genuinely broken channel,
+    # not a foreign lifecycle event (which would journal an
+    # UNEXPLAINED_ORDER_HOLD and take the reconciliation-proof path instead).
     unhealthy = ChannelHealth(
         stream="execution",
         healthy=False,
@@ -312,13 +317,13 @@ async def test_clear_hold_execution_rechecks_channel_health() -> None:
     clerk = AlpacaClerk(
         read=broker, trade=broker, clock=_fixed_clock, stream_health=gate
     )
-    await clerk.record_lifecycle_event(
-        client_order_id="foreign",
-        event=BrokerOrderEvent(
-            event_type="fill", occurred_at_ms=_fixed_clock(), price=1.0, quantity=1.0
-        ),
-        event_key="foreign-health",
-    )
+    with pytest.raises(BrokerSubmissionHeld):
+        await clerk.submit(
+            BrokerOrderRequest(
+                operator="inkant",
+                legs=[BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)],
+            )
+        )
 
     with pytest.raises(InventoryBaselineRefusedError, match="channels are unhealthy"):
         await clerk.clear_hold(operator="ops", reason="unsafe attempt")
