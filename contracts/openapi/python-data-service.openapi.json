@@ -13010,6 +13010,7 @@
             "title": "Next Step"
           },
           "observed_at_ms": {
+            "format": "int64",
             "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Observed At Ms",
@@ -13023,6 +13024,7 @@
             "type": "string"
           },
           "reconciled_at_ms": {
+            "format": "int64",
             "maximum": 9.223372036854776e+18,
             "minimum": 0.0,
             "title": "Reconciled At Ms",
@@ -15023,6 +15025,44 @@
         "title": "CurrentCurvePoint",
         "type": "object"
       },
+      "CustodyConflictDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "CustodyConflictDetail",
+        "type": "object"
+      },
+      "CustodyConflictResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/CustodyConflictDetail"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "CustodyConflictResponse",
+        "type": "object"
+      },
       "CustodyCountFact": {
         "additionalProperties": false,
         "description": "Count whose zero/non-zero/unknown meaning is explicit.",
@@ -15053,6 +15093,185 @@
           "state"
         ],
         "title": "CustodyCountFact",
+        "type": "object"
+      },
+      "CustodyDiagnosis": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "divergences": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CustodyDivergence"
+            },
+            "title": "Divergences",
+            "type": "array"
+          },
+          "in_sync": {
+            "title": "In Sync",
+            "type": "boolean"
+          },
+          "observed_at_ms": {
+            "format": "int64",
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "resolution_plan": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CustodyResolutionStep"
+            },
+            "title": "Resolution Plan",
+            "type": "array"
+          },
+          "resolution_posture": {
+            "default": "paper",
+            "enum": [
+              "paper",
+              "live"
+            ],
+            "title": "Resolution Posture",
+            "type": "string"
+          },
+          "resolvable": {
+            "default": false,
+            "title": "Resolvable",
+            "type": "boolean"
+          },
+          "snapshot_version": {
+            "title": "Snapshot Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "in_sync",
+          "observed_at_ms",
+          "snapshot_version"
+        ],
+        "title": "CustodyDiagnosis",
+        "type": "object"
+      },
+      "CustodyDivergence": {
+        "properties": {
+          "evidence_refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "exposure_attribution_mismatch",
+              "exposure_hold",
+              "stale_reconciliation",
+              "needs_review",
+              "foreign_working_order"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "position_deltas": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CustodyPositionDelta"
+            },
+            "title": "Position Deltas",
+            "type": "array"
+          },
+          "possible_causes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Possible Causes",
+            "type": "array"
+          },
+          "prerequisite_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prerequisite Detail"
+          },
+          "prerequisite_step": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reconcile_now",
+                  "record_inventory_baseline",
+                  "clear_hold"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prerequisite Step"
+          },
+          "resolution_step": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reconcile_now",
+                  "record_inventory_baseline",
+                  "clear_hold"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Step"
+          },
+          "state": {
+            "enum": [
+              "resolvable_now",
+              "blocked_on_prerequisite",
+              "needs_review"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "explanation",
+          "possible_causes"
+        ],
+        "title": "CustodyDivergence",
         "type": "object"
       },
       "CustodyExposureFact": {
@@ -15087,6 +15306,174 @@
           "state"
         ],
         "title": "CustodyExposureFact",
+        "type": "object"
+      },
+      "CustodyPositionDelta": {
+        "properties": {
+          "broker_observed_qty": {
+            "title": "Broker Observed Qty",
+            "type": "number"
+          },
+          "clerk_attributed_qty": {
+            "title": "Clerk Attributed Qty",
+            "type": "number"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "clerk_attributed_qty",
+          "broker_observed_qty"
+        ],
+        "title": "CustodyPositionDelta",
+        "type": "object"
+      },
+      "CustodyResolutionReceipt": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "in_sync": {
+            "default": false,
+            "title": "In Sync",
+            "type": "boolean"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "format": "int64",
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "remaining_divergences": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CustodyDivergence"
+            },
+            "title": "Remaining Divergences",
+            "type": "array"
+          },
+          "resolved": {
+            "title": "Resolved",
+            "type": "boolean"
+          },
+          "steps_executed": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CustodyResolutionStepResult"
+            },
+            "title": "Steps Executed",
+            "type": "array"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "resolved",
+          "receipt_id",
+          "recorded_at_ms"
+        ],
+        "title": "CustodyResolutionReceipt",
+        "type": "object"
+      },
+      "CustodyResolutionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmation_token": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "snapshot_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Snapshot Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "snapshot_version",
+          "confirmation_token",
+          "idempotency_key"
+        ],
+        "title": "CustodyResolutionRequest",
+        "type": "object"
+      },
+      "CustodyResolutionStep": {
+        "properties": {
+          "action_id": {
+            "enum": [
+              "reconcile_now",
+              "record_inventory_baseline",
+              "clear_hold"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "mutates": {
+            "title": "Mutates",
+            "type": "boolean"
+          },
+          "scope": {
+            "enum": [
+              "account",
+              "bot",
+              "broker"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "scope",
+          "mutates"
+        ],
+        "title": "CustodyResolutionStep",
+        "type": "object"
+      },
+      "CustodyResolutionStepResult": {
+        "properties": {
+          "action_id": {
+            "title": "Action Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "message"
+        ],
+        "title": "CustodyResolutionStepResult",
         "type": "object"
       },
       "CustodySpineStep": {
@@ -52846,6 +53233,144 @@
           }
         },
         "summary": "Clear Clerk Hold",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerk/custody-diagnosis": {
+      "get": {
+        "description": "Diagnose Clerk\u2194broker custody divergence (read-only).\n\nTransport only: resolve the account-scoped Clerk and delegate. The Clerk\nreads a fresh broker snapshot and projects the structured, backend-authored\ndiagnosis the Accounts page renders verbatim.",
+        "operationId": "get_custody_diagnosis_api_brokers__broker__clerk_custody_diagnosis_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustodyDiagnosis"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Custody Diagnosis",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerk/resolve": {
+      "post": {
+        "description": "Resolve Clerk\u2194broker divergence: run the diagnosed plan, journal the reason.\n\nA control mutation. The typed token is a UI friction gate; the operator\nidentity is injected server-side. A stale snapshot is a 409; a blocked\nprerequisite is a 409 with the blocker's what/why.",
+        "operationId": "resolve_custody_api_brokers__broker__clerk_resolve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustodyResolutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustodyResolutionReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustodyConflictResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve Custody",
         "tags": [
           "brokers-v2"
         ]

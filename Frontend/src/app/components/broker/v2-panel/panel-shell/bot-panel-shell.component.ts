@@ -19,6 +19,7 @@ import type {
   ChartLiveResolution,
   PanelAction,
   PanelActionResult,
+  PanelActionTrigger,
   RunHistoryNavigation,
   RunHistoryMode,
   RunHistoryState,
@@ -313,7 +314,7 @@ export class BotPanelShellComponent {
     this.actionReceipt.set(null);
   }
 
-  protected async onActionRequested(action: PanelAction): Promise<void> {
+  protected async onActionRequested({ action, reason }: PanelActionTrigger): Promise<void> {
     if (this.actionPending()) return;
     this.actionPending.set(true);
     this.actionReceipt.set(null);
@@ -325,6 +326,7 @@ export class BotPanelShellComponent {
         this.accountId(),
         this.sid(),
         action,
+        reason,
       );
       this.actionReceipt.set(this.successReceipt(result));
       await this.liveStore.refresh();

@@ -14,6 +14,7 @@ import type {
   ChartLiveResponse,
   ChartHistoryResponse,
   PanelAction,
+  PanelActionTrigger,
   PanelProfile,
   RunHistoryNavigation,
   RunHistoryState,
@@ -74,7 +75,7 @@ export class TraderLensComponent {
   readonly presetChange = output<ChartHistoryPreset>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
   /** User clicked the primary verb button (Resume/Stop). */
-  readonly actionRequested = output<PanelAction>();
+  readonly actionRequested = output<PanelActionTrigger>();
   readonly runHistoryNavigation = output<RunHistoryNavigation>();
 
   // ── Derived ───────────────────────────────────────────────────────────────

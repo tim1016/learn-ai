@@ -737,7 +737,7 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
     presenting a fake success.
     """
 
-    async def _resume(operator: str) -> str:
+    async def _resume(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
@@ -753,14 +753,14 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
             "The Clerk remains the only owner of broker order effects."
         )
 
-    async def _stop(operator: str) -> str:
+    async def _stop(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
         await registry.stop(broker, sid, reason=f"Panel stop by {operator}")
         return "Bot stopped. The Clerk cancelled any working entry orders; attributed exposure was left untouched."
 
-    async def _pause(operator: str) -> str:
+    async def _pause(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
@@ -772,7 +772,7 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         )
         return f"Run {status.active_run_id} is paused; its process remains live."
 
-    async def _continue(operator: str) -> str:
+    async def _continue(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
         if registry is None:
             raise PanelUnavailableError("The bot runner is not available.")
@@ -784,14 +784,14 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
         )
         return f"Run {status.active_run_id} continued without changing run identity."
 
-    async def _reconcile(operator: str) -> str:
+    async def _reconcile(operator: str, reason: str | None) -> str:
         clerk = get_alpaca_clerk()
         if clerk is None:
             raise PanelUnavailableError("Alpaca order management is not configured.")
         verdict = await clerk.reconcile_once()
         return f"Reconciliation sweep complete: {verdict}."
 
-    async def _flatten_stop(operator: str) -> str:
+    async def _flatten_stop(operator: str, reason: str | None) -> str:
         registry = get_bot_task_registry()
         clerk = get_alpaca_clerk()
         if registry is None:
@@ -830,21 +830,24 @@ def _action_performers(broker: str, sid: str, *, idempotency_key: str) -> dict[s
             "await its durable fill receipt before treating exposure as flat."
         )
 
-    async def _clear_hold(operator: str) -> str:
+    async def _clear_hold(operator: str, reason: str | None) -> str:
         clerk = get_alpaca_clerk()
         if clerk is None:
             raise PanelUnavailableError("Alpaca order management is not configured.")
-        await clerk.clear_hold(operator=operator, reason="Panel clear-hold")
+        try:
+            await clerk.clear_hold(operator=operator, reason=reason or "Panel clear-hold")
+        except InventoryBaselineRefusedError as exc:
+            raise ActionNotAvailableError(str(exc), detail=exc.detail) from exc
         return "Exposure hold cleared."
 
-    async def _record_inventory_baseline(operator: str) -> str:
+    async def _record_inventory_baseline(operator: str, reason: str | None) -> str:
         clerk = get_alpaca_clerk()
         if clerk is None:
             raise PanelUnavailableError("Alpaca order management is not configured.")
         try:
             baseline = await clerk.record_inventory_baseline(
                 operator=operator,
-                reason="Operator confirmed current Alpaca inventory from the bot panel.",
+                reason=reason or "Operator confirmed current Alpaca inventory from the bot panel.",
                 strategy_instance_id=sid,
             )
         except InventoryBaselineRefusedError as exc:

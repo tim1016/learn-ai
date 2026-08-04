@@ -20,6 +20,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.broker.alpaca.clerk import (
     AlpacaClerk,
     ClerkStatus,
+    CustodyConflictResponse,
+    CustodyDiagnosis,
+    CustodyResolutionOutcomeUnknownError,
+    CustodyResolutionReceipt,
+    CustodyResolutionRequest,
+    CustodySnapshotChangedError,
+    InventoryBaselineRefusedError,
     OrderCancelResult,
     OrderSubmitResult,
     get_alpaca_clerk,
@@ -41,6 +48,7 @@ from app.broker.contract.models import (
 )
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
+from app.config import settings
 from app.security.data_plane_control import require_data_plane_control_secret
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
@@ -277,6 +285,21 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
         _raise_http(error)
 
 
+@router.get("/{broker}/clerk/custody-diagnosis", response_model=CustodyDiagnosis)
+async def get_custody_diagnosis(broker: str) -> CustodyDiagnosis:
+    """Diagnose Clerk↔broker custody divergence (read-only).
+
+    Transport only: resolve the account-scoped Clerk and delegate. The Clerk
+    reads a fresh broker snapshot and projects the structured, backend-authored
+    diagnosis the Accounts page renders verbatim.
+    """
+    clerk = _require_trade_clerk(broker)
+    try:
+        return await clerk.custody_diagnosis()
+    except BrokerError as error:
+        _raise_http(error)
+
+
 @router.post(
     "/{broker}/clerk/clear-hold",
     response_model=ClerkStatus,
@@ -293,5 +316,43 @@ async def clear_clerk_hold(broker: str, request: ClearHoldRequest) -> ClerkStatu
     clerk = _require_trade_clerk(broker)
     try:
         return await clerk.clear_hold(operator=request.operator, reason=request.reason)
+    except BrokerError as error:
+        _raise_http(error)
+
+
+@router.post(
+    "/{broker}/clerk/resolve",
+    response_model=CustodyResolutionReceipt,
+    responses={409: {"model": CustodyConflictResponse}},
+    dependencies=[Depends(require_data_plane_control_secret)],
+)
+async def resolve_custody(
+    broker: str, request: CustodyResolutionRequest
+) -> CustodyResolutionReceipt:
+    """Resolve Clerk↔broker divergence: run the diagnosed plan, journal the reason.
+
+    A control mutation. The typed token is a UI friction gate; the operator
+    identity is injected server-side. A stale snapshot is a 409; a blocked
+    prerequisite is a 409 with the blocker's what/why.
+    """
+    if request.confirmation_token != "RESOLVE":
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Type RESOLVE to confirm.", "why": "Confirmation token mismatch."},
+        )
+    clerk = _require_trade_clerk(broker)
+    try:
+        return await clerk.resolve_custody(
+            operator=settings.PANEL_OPERATOR_IDENTITY,
+            reason=request.reason,
+            snapshot_version=request.snapshot_version,
+            idempotency_key=request.idempotency_key,
+        )
+    except CustodySnapshotChangedError as error:
+        raise HTTPException(status_code=409, detail={"message": str(error), "why": error.detail})
+    except InventoryBaselineRefusedError as error:
+        raise HTTPException(status_code=409, detail={"message": str(error), "why": error.detail})
+    except CustodyResolutionOutcomeUnknownError as error:
+        raise HTTPException(status_code=409, detail={"message": str(error), "why": error.detail})
     except BrokerError as error:
         _raise_http(error)

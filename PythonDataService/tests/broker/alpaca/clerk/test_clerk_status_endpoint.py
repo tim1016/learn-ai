@@ -82,6 +82,28 @@ def _foreign_order_body() -> str:
     )
 
 
+def _one_spy_position_body() -> str:
+    """One open SPY position at Alpaca (drives the custody-diagnosis endpoint)."""
+    return json.dumps(
+        [
+            {
+                "asset_id": "00000000-0000-0000-0000-000000000001",
+                "symbol": "SPY",
+                "exchange": "ARCA",
+                "asset_class": "us_equity",
+                "qty": "1",
+                "avg_entry_price": "100",
+                "side": "long",
+                "market_value": "101",
+                "cost_basis": "100",
+                "unrealized_pl": "1",
+                "unrealized_plpc": "0.01",
+                "current_price": "101",
+            }
+        ]
+    )
+
+
 @pytest.fixture
 def _alpaca_clerk(tmp_path, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
@@ -273,3 +295,20 @@ async def test_status_unconfigured_clerk_returns_503() -> None:
 
     assert response.status_code == 503
     assert "not configured" in response.json()["detail"]["message"]
+
+
+@responses.activate
+async def test_custody_diagnosis_endpoint_reports_mismatch(_alpaca_clerk: None) -> None:
+    responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
+    responses.add(responses.GET, f"{_BASE}/v2/orders", body="[]", status=200)
+    responses.add(
+        responses.GET, f"{_BASE}/v2/positions", body=_one_spy_position_body(), status=200
+    )
+
+    response = await _get("/api/brokers/alpaca/clerk/custody-diagnosis")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["in_sync"] is False
+    assert body["divergences"][0]["kind"] == "exposure_attribution_mismatch"
+    assert body["snapshot_version"]

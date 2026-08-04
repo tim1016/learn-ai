@@ -72,7 +72,9 @@ class ActionOutcomeUnknownError(ActionExecutionError):
 
 
 # A performer runs one action and returns a human-readable outcome message.
-ActionPerformer = Callable[[str], Awaitable[str]]
+# Receives the channel-derived operator identity and the request's
+# operator-authored reason (may be ``None``); most performers ignore reason.
+ActionPerformer = Callable[[str, str | None], Awaitable[str]]
 
 _DEFAULT_IN_FLIGHT_WAIT_SECONDS = 5.0
 
@@ -353,8 +355,10 @@ async def execute_action(
             )
 
         # 3. Identity from the channel — the performer receives the configured
-        # operator identity, never anything from the request body.
-        message = await performer(operator_identity)
+        # operator identity, never anything from the request body. The
+        # request's operator-authored reason is the one request field a
+        # performer may consume.
+        message = await performer(operator_identity, request.reason)
     except (StaleRevisionError, ActionNotAvailableError) as err:
         # Pre-execution rejection (stale revision / not available): the action
         # never ran, so free a fresh reservation for a corrected retry. Scoped

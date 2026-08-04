@@ -904,6 +904,10 @@ class BotTaskRegistry:
         managed = self._bots.get(strategy_instance_id)
         return managed is not None and not managed.task.done()
 
+    def any_running(self) -> bool:
+        """Whether this registry currently owns any live bot task."""
+        return any(not managed.task.done() for managed in self._bots.values())
+
     def _manages_boot_recovery(self, strategy_instance_id: str) -> bool:
         """Keep daemon-owned broker artifacts out of this runner's sweep."""
         if self._supported_broker_ids is None:

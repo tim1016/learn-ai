@@ -1,0 +1,101 @@
+<dialog
+  #dialog
+  class="custody-resolve-confirm"
+  aria-labelledby="custody-resolve-confirm-title"
+  (cancel)="cancel($event)"
+>
+  <header>
+    <div>
+      <p class="eyebrow">Clerk recovery confirmation</p>
+      <h2 id="custody-resolve-confirm-title">
+        {{ reconcileOnly() ? 'Run custody reconciliation' : 'Resolve custody divergence' }}
+      </h2>
+    </div>
+    <button
+      type="button"
+      class="dialog-close"
+      aria-label="Close confirmation"
+      [disabled]="busy()"
+      (click)="cancel()"
+    >
+      <span aria-hidden="true">×</span>
+    </button>
+  </header>
+
+  @for (div of divergences(); track div.kind) {
+    <app-custody-divergence [divergence]="div" />
+  }
+
+  @if (resolutionPlan().length) {
+    <section class="custody-resolve-confirm__plan">
+      <h3>Recovery plan</h3>
+      <ol>
+        @for (step of resolutionPlan(); track step.action_id) {
+          <li>
+            {{ step.action_id | receiptLabel }}
+            <span class="custody-resolve-confirm__plan-scope">({{ step.scope | receiptLabel }})</span>
+          </li>
+        }
+      </ol>
+    </section>
+  }
+
+  <section class="custody-resolve-confirm__reason">
+    <label id="custody-resolve-reason-label" for="custody-resolve-reason">
+      Why did the Clerk and broker fall out of sync?
+    </label>
+    <p class="custody-resolve-confirm__help" id="custody-resolve-reason-help">
+      Required. This becomes part of the audited Clerk recovery record.
+    </p>
+    <textarea
+      pTextarea
+      id="custody-resolve-reason"
+      rows="4"
+      aria-required="true"
+      aria-describedby="custody-resolve-reason-help"
+      [attr.aria-invalid]="reason().trim().length === 0"
+      [invalid]="reason().trim().length === 0"
+      [value]="reason()"
+      autofocus
+      (input)="updateReason($event)"
+    ></textarea>
+    @if (reason().trim().length === 0) {
+      <p class="custody-resolve-confirm__blocking" role="status">
+        Enter a reason to enable the recovery action.
+      </p>
+    }
+  </section>
+
+  <section class="custody-resolve-confirm__token">
+    <label for="custody-resolve-token">Type <code>RESOLVE</code> to confirm</label>
+    <input
+      id="custody-resolve-token"
+      type="text"
+      autocomplete="off"
+      spellcheck="false"
+      [value]="token()"
+      [attr.aria-invalid]="token() !== 'RESOLVE'"
+      (input)="updateToken($event)"
+    />
+  </section>
+
+  @if (errorMessage(); as errorMessage) {
+    <p class="custody-resolve-confirm__error" role="alert">{{ errorMessage }}</p>
+  }
+
+  <footer>
+    <button type="button" class="secondary" (click)="cancel()" [disabled]="busy()">Cancel</button>
+    <button
+      type="button"
+      class="primary"
+      (click)="confirm()"
+      [disabled]="!canConfirm() || busy()"
+    >
+      @if (busy()) {
+        {{ reconcileOnly() ? 'Reconciling…' : 'Resolving…' }}
+      } @else {
+        {{ reconcileOnly() ? 'Run reconciliation' : 'Resolve & sync to broker' }}
+      }
+    </button>
+  </footer>
+</dialog>

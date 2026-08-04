@@ -30,3 +30,12 @@ export type OrderCancelResult = components['schemas']['OrderCancelResult'];
 export type ClerkStatus = components['schemas']['ClerkStatus'];
 export type HoldState = components['schemas']['HoldState'];
 export type ReconciliationSummary = components['schemas']['ReconciliationSummary'];
+
+// Custody resolution (Clerk↔broker reconciliation on the Accounts page).
+export type CustodyDiagnosis = components['schemas']['CustodyDiagnosis'];
+export type CustodyDivergence = components['schemas']['CustodyDivergence'];
+export type CustodyPositionDelta = components['schemas']['CustodyPositionDelta'];
+// POST .../clerk/resolve request/response (Task 2.2, landed).
+export type CustodyResolutionRequest = components['schemas']['CustodyResolutionRequest'];
+export type CustodyResolutionReceipt = components['schemas']['CustodyResolutionReceipt'];
+export type CustodyResolutionStepResult = components['schemas']['CustodyResolutionStepResult'];

@@ -8,6 +8,9 @@ import type {
   BrokerOrderRequest,
   BrokerPosition,
   ClerkStatus,
+  CustodyDiagnosis,
+  CustodyResolutionReceipt,
+  CustodyResolutionRequest,
   OrderCancelResult,
   OrderSubmitResult,
 } from '../api/alpaca.types';
@@ -114,6 +117,18 @@ export class BrokersService {
   }
 
   /**
+   * Slice 1 — the structured, backend-authored Clerk↔broker custody diagnosis
+   * the Accounts page renders verbatim. A protected read under `/api/brokers`
+   * (the proxy attaches the shared secret for that prefix), like
+   * {@link getClerkStatus}.
+   */
+  getCustodyDiagnosis(broker = 'alpaca'): Promise<CustodyDiagnosis> {
+    return firstValueFrom(
+      this.http.get<CustodyDiagnosis>(`${this.base}/${broker}/clerk/custody-diagnosis`),
+    );
+  }
+
+  /**
    * Phase-2 S6 — clear the account exposure hold (operator exit). A control
    * mutation (POST under the registered `/api/brokers` control prefix, so the
    * interceptor marks it and the proxy authenticates). Returns the updated
@@ -125,6 +140,23 @@ export class BrokersService {
   ): Promise<ClerkStatus> {
     return firstValueFrom(
       this.http.post<ClerkStatus>(`${this.base}/${broker}/clerk/clear-hold`, body),
+    );
+  }
+
+  /**
+   * Slice 2 (Task 2.4) — resolve a Clerk↔broker custody divergence: run the
+   * diagnosed plan and journal the operator's reason. A control mutation
+   * (POST under the registered `/api/brokers` control prefix, so the
+   * interceptor marks it and the proxy authenticates). A stale
+   * `snapshot_version` or a blocked prerequisite comes back as a 409; the
+   * caller re-diagnoses rather than resubmitting.
+   */
+  resolveCustody(
+    broker: string,
+    body: CustodyResolutionRequest,
+  ): Promise<CustodyResolutionReceipt> {
+    return firstValueFrom(
+      this.http.post<CustodyResolutionReceipt>(`${this.base}/${broker}/clerk/resolve`, body),
     );
   }
 }

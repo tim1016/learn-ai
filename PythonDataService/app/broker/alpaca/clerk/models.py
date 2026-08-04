@@ -23,7 +23,14 @@ from app.engine.live.account_clerk_journal_models import AccountClerkBrokerEvide
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
 
 MAX_EPOCH_MS = 9_223_372_036_854_775_807
-EpochMs = Annotated[int, Field(ge=0, le=MAX_EPOCH_MS)]
+EpochMs = Annotated[
+    int,
+    Field(
+        ge=0,
+        le=MAX_EPOCH_MS,
+        json_schema_extra={"format": "int64"},
+    ),
+]
 
 
 class EffectPurpose(StrEnum):

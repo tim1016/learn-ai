@@ -19,6 +19,23 @@ function action(overrides: Partial<PanelAction> = {}): PanelAction {
 }
 
 describe('PanelActionButtonComponent', () => {
+  it('does not mount a closed confirmation dialog', async () => {
+    const view = await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({
+          confirmation: {
+            title: 'Stop bot',
+            body: 'This stops the bot.',
+            consequence: 'The bot will stop evaluating bars.',
+            confirm_label: 'Stop',
+          },
+        }),
+      },
+    });
+
+    expect(view.fixture.nativeElement.querySelector('dialog')).toBeNull();
+  });
+
   it('emits the presented action when enabled', async () => {
     const triggered = vi.fn();
     const presented = action();
@@ -29,7 +46,7 @@ describe('PanelActionButtonComponent', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
 
-    expect(triggered).toHaveBeenCalledWith(presented);
+    expect(triggered).toHaveBeenCalledWith({ action: presented, reason: null });
   });
 
   it('does not emit while the action is disabled', async () => {
@@ -162,5 +179,104 @@ describe('PanelActionButtonComponent', () => {
     });
     fireEvent.click(submit);
     expect(triggered).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the comment-capable confirm (not the typed-halt confirm) for a comment-required action', async () => {
+    await render(PanelActionButtonComponent, {
+      inputs: {
+        action: action({
+          action_id: 'record_inventory_baseline',
+          label: 'Recover inventory baseline',
+          confirmation: {
+            title: 'Adopt current broker inventory?',
+            body: 'Reads the current Alpaca positions.',
+            consequence: 'Earlier trades remain in audit history.',
+            confirm_label: 'Recover inventory baseline',
+            required_token: 'BASELINE',
+          },
+        }),
+      },
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Recover inventory baseline' }),
+    );
+
+    expect(
+      screen.getByTestId('panel-action-comment-confirm-reason'),
+    ).toBeTruthy();
+    expect(screen.queryByTestId('typed-halt-confirm-input')).toBeNull();
+  });
+
+  it('requires a non-blank comment AND the typed token before emitting a comment-required action', async () => {
+    const triggered = vi.fn();
+    const recordAction = action({
+      action_id: 'record_inventory_baseline',
+      label: 'Recover inventory baseline',
+      confirmation: {
+        title: 'Adopt current broker inventory?',
+        body: 'Reads the current Alpaca positions.',
+        consequence: 'Earlier trades remain in audit history.',
+        confirm_label: 'Recover inventory baseline',
+        required_token: 'BASELINE',
+      },
+    });
+    await render(PanelActionButtonComponent, {
+      inputs: { action: recordAction },
+      on: { triggered },
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Recover inventory baseline' }),
+    );
+    const submit = screen.getByTestId(
+      'panel-action-comment-confirm-submit',
+    ) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+
+    fireEvent.input(screen.getByTestId('panel-action-comment-confirm-reason'), {
+      target: { value: 'Recovering after a killed process.' },
+    });
+    expect(submit.disabled).toBe(true); // token still empty
+
+    fireEvent.input(screen.getByTestId('panel-action-comment-confirm-token'), {
+      target: { value: 'BASELINE' },
+    });
+    expect(submit.disabled).toBe(false);
+
+    fireEvent.click(submit);
+    expect(triggered).toHaveBeenCalledWith({
+      action: recordAction,
+      reason: 'Recovering after a killed process.',
+    });
+  });
+
+  it('emits the action with a null reason for a clear_hold-style comment-required action with no required_token', async () => {
+    const triggered = vi.fn();
+    const clearHoldAction = action({
+      action_id: 'clear_hold',
+      label: 'Clear hold',
+      confirmation: {
+        title: 'Clear the account hold?',
+        body: 'This clears the hold on the account.',
+        consequence: 'Order submission resumes immediately.',
+        confirm_label: 'Clear hold',
+      },
+    });
+    await render(PanelActionButtonComponent, {
+      inputs: { action: clearHoldAction },
+      on: { triggered },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear hold' }));
+    fireEvent.input(screen.getByTestId('panel-action-comment-confirm-reason'), {
+      target: { value: 'Broker confirms flat; stale hold.' },
+    });
+    fireEvent.click(screen.getByTestId('panel-action-comment-confirm-submit'));
+
+    expect(triggered).toHaveBeenCalledWith({
+      action: clearHoldAction,
+      reason: 'Broker confirms flat; stale hold.',
+    });
   });
 });

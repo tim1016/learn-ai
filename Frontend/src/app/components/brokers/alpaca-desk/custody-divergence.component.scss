@@ -1,0 +1,108 @@
+:host {
+  display: block;
+}
+
+.custody-divergence {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+}
+
+:host + :host .custody-divergence {
+  border-top: 1px solid var(--border);
+}
+
+.custody-divergence__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.custody-divergence__kind {
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+}
+
+.custody-divergence__state {
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--bull-soft);
+  color: var(--bull);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.custody-divergence__state--attention {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.custody-divergence__explanation {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.custody-divergence__delta-scroll {
+  overflow-x: auto;
+}
+
+.custody-divergence__delta {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+}
+
+.custody-divergence__delta th,
+.custody-divergence__delta td {
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.custody-divergence__delta th {
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}
+
+.custody-divergence__delta td {
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.custody-divergence__causes {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.custody-divergence__causes summary {
+  color: var(--accent-text);
+  cursor: pointer;
+  font-weight: var(--fw-semi);
+}
+
+.custody-divergence__causes ul {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.1rem;
+}
+
+.custody-divergence__prereq {
+  margin: 0;
+  color: var(--warn);
+  font-size: var(--fs-xs);
+}
+
+.custody-divergence__evidence {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}

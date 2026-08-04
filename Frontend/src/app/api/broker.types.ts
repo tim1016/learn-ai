@@ -1955,6 +1955,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/clerk/custody-diagnosis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Custody Diagnosis
+         * @description Diagnose Clerk↔broker custody divergence (read-only).
+         *
+         *     Transport only: resolve the account-scoped Clerk and delegate. The Clerk
+         *     reads a fresh broker snapshot and projects the structured, backend-authored
+         *     diagnosis the Accounts page renders verbatim.
+         */
+        get: operations["get_custody_diagnosis_api_brokers__broker__clerk_custody_diagnosis_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerk/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve Custody
+         * @description Resolve Clerk↔broker divergence: run the diagnosed plan, journal the reason.
+         *
+         *     A control mutation. The typed token is a UI friction gate; the operator
+         *     identity is injected server-side. A stale snapshot is a 409; a blocked
+         *     prerequisite is a 409 with the blocker's what/why.
+         */
+        post: operations["resolve_custody_api_brokers__broker__clerk_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/clerk/status": {
         parameters: {
             query?: never;
@@ -11459,12 +11507,18 @@ export interface components {
             journal_sequence: number;
             /** Next Step */
             next_step?: string | null;
-            /** Observed At Ms */
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
             observed_at_ms: number;
             pending_orders: components["schemas"]["CustodyCountFact"];
             /** Reason Code */
             reason_code: string;
-            /** Reconciled At Ms */
+            /**
+             * Reconciled At Ms
+             * Format: int64
+             */
             reconciled_at_ms: number;
             /** Reconciliation Fresh */
             reconciliation_fresh: boolean;
@@ -12281,6 +12335,17 @@ export interface components {
              */
             theoretical_value: number;
         };
+        /** CustodyConflictDetail */
+        CustodyConflictDetail: {
+            /** Message */
+            message: string;
+            /** Why */
+            why?: string | null;
+        };
+        /** CustodyConflictResponse */
+        CustodyConflictResponse: {
+            detail: components["schemas"]["CustodyConflictDetail"];
+        };
         /**
          * CustodyCountFact
          * @description Count whose zero/non-zero/unknown meaning is explicit.
@@ -12293,6 +12358,78 @@ export interface components {
              * @enum {string}
              */
             state: "zero" | "non_zero" | "unknown";
+        };
+        /** CustodyDiagnosis */
+        CustodyDiagnosis: {
+            /** Account Id */
+            account_id: string;
+            /** Blocked Reason */
+            blocked_reason?: string | null;
+            /** Broker */
+            broker: string;
+            /**
+             * Divergences
+             * @default []
+             */
+            divergences?: components["schemas"]["CustodyDivergence"][];
+            /** In Sync */
+            in_sync: boolean;
+            /**
+             * Observed At Ms
+             * Format: int64
+             */
+            observed_at_ms: number;
+            /**
+             * Resolution Plan
+             * @default []
+             */
+            resolution_plan?: components["schemas"]["CustodyResolutionStep"][];
+            /**
+             * Resolution Posture
+             * @default paper
+             * @enum {string}
+             */
+            resolution_posture?: "paper" | "live";
+            /**
+             * Resolvable
+             * @default false
+             */
+            resolvable?: boolean;
+            /** Snapshot Version */
+            snapshot_version: string;
+        };
+        /** CustodyDivergence */
+        CustodyDivergence: {
+            /**
+             * Evidence Refs
+             * @default []
+             */
+            evidence_refs?: string[];
+            /** Explanation */
+            explanation: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "exposure_attribution_mismatch" | "exposure_hold" | "stale_reconciliation" | "needs_review" | "foreign_working_order";
+            /**
+             * Position Deltas
+             * @default []
+             */
+            position_deltas?: components["schemas"]["CustodyPositionDelta"][];
+            /** Possible Causes */
+            possible_causes: string[];
+            /** Prerequisite Detail */
+            prerequisite_detail?: string | null;
+            /** Prerequisite Step */
+            prerequisite_step?: ("reconcile_now" | "record_inventory_baseline" | "clear_hold") | null;
+            /** Resolution Step */
+            resolution_step?: ("reconcile_now" | "record_inventory_baseline" | "clear_hold") | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "resolvable_now" | "blocked_on_prerequisite" | "needs_review";
         };
         /**
          * CustodyExposureFact
@@ -12308,6 +12445,79 @@ export interface components {
              * @enum {string}
              */
             state: "zero" | "non_zero" | "unknown";
+        };
+        /** CustodyPositionDelta */
+        CustodyPositionDelta: {
+            /** Broker Observed Qty */
+            broker_observed_qty: number;
+            /** Clerk Attributed Qty */
+            clerk_attributed_qty: number;
+            /** Symbol */
+            symbol: string;
+        };
+        /** CustodyResolutionReceipt */
+        CustodyResolutionReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Broker */
+            broker: string;
+            /**
+             * In Sync
+             * @default false
+             */
+            in_sync?: boolean;
+            /** Receipt Id */
+            receipt_id: string;
+            /**
+             * Recorded At Ms
+             * Format: int64
+             */
+            recorded_at_ms: number;
+            /**
+             * Remaining Divergences
+             * @default []
+             */
+            remaining_divergences?: components["schemas"]["CustodyDivergence"][];
+            /** Resolved */
+            resolved: boolean;
+            /**
+             * Steps Executed
+             * @default []
+             */
+            steps_executed?: components["schemas"]["CustodyResolutionStepResult"][];
+        };
+        /** CustodyResolutionRequest */
+        CustodyResolutionRequest: {
+            /** Confirmation Token */
+            confirmation_token: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Reason */
+            reason: string;
+            /** Snapshot Version */
+            snapshot_version: string;
+        };
+        /** CustodyResolutionStep */
+        CustodyResolutionStep: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "reconcile_now" | "record_inventory_baseline" | "clear_hold";
+            /** Mutates */
+            mutates: boolean;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "account" | "bot" | "broker";
+        };
+        /** CustodyResolutionStepResult */
+        CustodyResolutionStepResult: {
+            /** Action Id */
+            action_id: string;
+            /** Message */
+            message: string;
         };
         /**
          * CustodySpineStep
@@ -29791,6 +30001,85 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClerkStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_custody_diagnosis_api_brokers__broker__clerk_custody_diagnosis_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustodyDiagnosis"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_custody_api_brokers__broker__clerk_resolve_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustodyResolutionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustodyResolutionReceipt"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustodyConflictResponse"];
                 };
             };
             /** @description Validation Error */

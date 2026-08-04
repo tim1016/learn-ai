@@ -4,6 +4,7 @@ import { DialogModule } from 'primeng/dialog';
 import { TagModule } from 'primeng/tag';
 
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
+import { AlpacaCustodyResolutionComponent } from './alpaca-custody-resolution.component';
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
 import { AlpacaOrdersTableComponent } from './alpaca-orders-table.component';
@@ -19,6 +20,7 @@ import { AlpacaPositionsTableComponent } from './alpaca-positions-table.componen
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AlpacaAccountCardComponent,
+    AlpacaCustodyResolutionComponent,
     AlpacaHoldBannerComponent,
     AlpacaPositionsTableComponent,
     AlpacaOrdersTableComponent,

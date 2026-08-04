@@ -130,6 +130,47 @@ def project_expected_account_exposure(
     }
 
 
+def account_exposure_deltas(
+    entries: Iterable[OrderJournalEntry],
+    positions: Iterable[BrokerPosition],
+    *,
+    inflight_symbols: frozenset[str] = frozenset(),
+) -> dict[str, tuple[float, float]]:
+    """Per-symbol (expected, observed) exposure for symbols whose drift exceeds 1e-9.
+
+    Formula: for every symbol in expected ∪ observed, skipping any symbol in
+      ``inflight_symbols`` (a working/non-terminal order can leave the
+      broker's snapshot ahead of the journal's last fill callback — see
+      ``derive.inflight_order_symbols``), include the pair when
+      ``abs(observed - expected) > 1e-9``.
+    Reference: docs/references/clerk-custody-exposure-deltas.md (ADR 0030
+      account-rooted custody; repository strict-float tolerance policy).
+    Canonical implementation: this function. Shared by
+      ``derive.has_missing_intent``'s position-drift branch (boolean) and
+      ``diagnosis._attribution_deltas`` (concrete per-symbol rows) so the
+      comparison lives in exactly one place.
+    Validated against: tests/broker/alpaca/clerk/test_custody_diagnosis.py::
+      test_exposure_delta_golden_cases_pin_aggregation_inflight_and_tolerance.
+    """
+    expected = project_expected_account_exposure(entries)
+    observed: dict[str, float] = {}
+    for position in positions:
+        symbol = position.symbol.upper()
+        if symbol in inflight_symbols:
+            continue
+        observed[symbol] = observed.get(symbol, 0.0) + signed_broker_position_quantity(position)
+
+    deltas: dict[str, tuple[float, float]] = {}
+    for symbol in sorted(set(expected) | set(observed)):
+        if symbol in inflight_symbols:
+            continue
+        expected_quantity = expected.get(symbol, 0.0)
+        observed_quantity = observed.get(symbol, 0.0)
+        if abs(observed_quantity - expected_quantity) > 1e-9:
+            deltas[symbol] = (expected_quantity, observed_quantity)
+    return deltas
+
+
 def strategy_instance_id_for_namespace(namespace: str) -> str | None:
     """Return the sid for a ``learn-ai/{sid}/v1`` namespace, else ``None``.
 

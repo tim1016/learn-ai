@@ -1,0 +1,50 @@
+@if (diagnosis.isLoading()) {
+  <p class="m-0 p-3 text-sm text-color-secondary" role="status">Checking clerk and broker custody…</p>
+} @else if (diagnosis.error()) {
+  <p class="m-0 p-3 text-sm text-red-500" role="alert">
+    Couldn't reach Alpaca. Custody status is unavailable right now.
+  </p>
+} @else if (diagnosis.value(); as d) {
+  @if (d.in_sync) {
+    <section class="custody custody--sync" aria-label="Clerk and broker in sync">
+      <span class="custody__ok" aria-hidden="true">✓</span>
+      <p>
+        Clerk and broker are in sync · checked
+        <app-timestamp-display [value]="d.observed_at_ms" mode="local" />
+      </p>
+    </section>
+  } @else {
+    <section class="custody custody--diverged" aria-labelledby="custody-title">
+      <h2 id="custody-title">Clerk and broker out of sync</h2>
+
+      @for (div of divergences(); track div.kind) {
+        <app-custody-divergence [divergence]="div" />
+      }
+
+      @if (d.resolvable) {
+        <button
+          type="button"
+          class="custody__resolve"
+          (click)="requestResolve()"
+        >
+          {{ reconcileOnly() ? 'Run reconciliation prerequisite' : 'Resolve & sync to broker' }}
+        </button>
+      }
+    </section>
+  }
+}
+
+@if (confirmOpen() && diagnosis.value(); as d) {
+  <app-custody-resolution-confirm-dialog
+    [open]="confirmOpen()"
+    [diagnosis]="d"
+    [busy]="busy()"
+    [errorMessage]="resolveError()"
+    (confirmed)="onConfirmed($event)"
+    (cancelled)="cancelResolve()"
+  />
+}
+
+@if (receipt(); as r) {
+  <app-panel-action-receipt [receipt]="r" (dismissed)="dismissReceipt()" />
+}

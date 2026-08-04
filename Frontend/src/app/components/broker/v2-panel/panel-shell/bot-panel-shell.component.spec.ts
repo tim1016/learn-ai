@@ -405,6 +405,7 @@ describe('BotPanelShellComponent', () => {
       'DUM284968',
       'sid-001',
       expect.objectContaining({ action_id: 'resume' }),
+      null,
     );
   });
 

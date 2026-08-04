@@ -20,9 +20,24 @@ from __future__ import annotations
 from app.broker.alpaca.clerk.clerk import (
     AlpacaClerk,
     ClerkAdmissionSnapshotChangedError,
+    InventoryBaselineRefusedError,
     get_alpaca_clerk,
     reset_alpaca_clerk_for_testing,
     set_alpaca_clerk,
+)
+from app.broker.alpaca.clerk.custody_resolution_store import (
+    CustodyResolutionOutcomeUnknownError,
+)
+from app.broker.alpaca.clerk.diagnosis import (
+    CustodyConflictResponse,
+    CustodyDiagnosis,
+    CustodyDivergence,
+    CustodyPositionDelta,
+    CustodyResolutionReceipt,
+    CustodyResolutionRequest,
+    CustodyResolutionStep,
+    CustodyResolutionStepResult,
+    CustodySnapshotChangedError,
 )
 from app.broker.alpaca.clerk.exposure import (
     FlattenRefusedError,
@@ -70,10 +85,21 @@ __all__ = [
     "ClerkAdmissionSnapshotChangedError",
     "ClerkEntryKind",
     "ClerkStatus",
+    "CustodyConflictResponse",
+    "CustodyDiagnosis",
+    "CustodyDivergence",
+    "CustodyPositionDelta",
+    "CustodyResolutionOutcomeUnknownError",
+    "CustodyResolutionReceipt",
+    "CustodyResolutionRequest",
+    "CustodyResolutionStep",
+    "CustodyResolutionStepResult",
+    "CustodySnapshotChangedError",
     "FlattenRefusedError",
     "HoldState",
     "InstanceCustodyProof",
     "InstanceExposure",
+    "InventoryBaselineRefusedError",
     "OrderCancelResult",
     "OrderJournalEntry",
     "OrderLegError",
