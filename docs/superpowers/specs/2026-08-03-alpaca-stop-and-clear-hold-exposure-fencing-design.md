@@ -156,3 +156,36 @@ Note: `test_clerk_reconciliation.py:530-543` currently *pins the bug* (asserts t
 - Workstreams B (command state machine), C (causal evidence), D (projection/journal scale), E (durability/security boundary) — untouched by this document; they remain separately gated.
 - IBKR Stop/Clear-Hold fencing — the IBKR Clerk is architecturally distinct (RPC/host-daemon); extending this pattern there is a future slice, not this one.
 - Re-litigating the Dry Run implementation choice (Section 1.2) — functionally proven correct; not being changed to match the doc's original "reuse shadow path" suggestion.
+
+## 8. Addendum (2026-08-03, during plan-writing)
+
+Section 1.3's description of Stop is accurate but incomplete. Current
+`_stop_locked` already calls, after the provisional finalize/reap,
+`prove_terminal_stop_outcome` → `prove_stop_outcome`
+(`app/services/bot_carryover.py:122-171`), which:
+
+1. cancels Clerk-owned working ENTER orders
+   (`clerk.cancel_working_entries_for_instance`);
+2. obtains a fresh custody proof (`clerk.prove_instance_custody`,
+   backed by the same `_reconcile_with_proof` this plan's Clear Hold
+   fix also uses);
+3. records one of `STOPPED_FLAT`, `STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE`,
+   `STOP_REQUIRES_FLATTEN`, or `STOPPED_CUSTODY_UNPROVABLE` as the
+   terminal `reason_code`, persisted as a carryover checkpoint.
+
+This is independent of, and unaffected by, Sections 2.1/2.2's design
+(the ENTER fence and the finalize/reap-on-pending fix) — it runs after
+both, and neither changes its inputs or outputs.
+
+**Flagged, explicitly out of scope:** `BotRunTerminalRecorder
+.replace_provisional_stop` (`bot_run_terminal.py:79-97`) hardcodes
+`kind="STOPPED"` regardless of which `StopCustodyOutcome` reason code
+is passed — so a `STOPPED_CUSTODY_UNPROVABLE` outcome still reports
+`kind="STOPPED"`, only distinguishable by reading `reason_code`. This
+is a real "terminal words require terminal evidence" gap (decision
+principle #4), but fixing it means changing the shared
+`BotDutyOutcomeKind` enum's meaning or adding a new value, which
+ripples into every other consumer of that enum (receipt labels,
+frontend `receiptLabel` mappings, other terminal-state readers). That
+is a broader change than this exposure-fencing slice and is not
+included here. Tracked as a follow-up, not fixed in this plan.
