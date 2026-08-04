@@ -3,11 +3,11 @@ import {
   Component,
   DestroyRef,
   computed,
-  effect,
   inject,
   input,
   linkedSignal,
   resource,
+  signal,
 } from '@angular/core';
 import type {
   RunHistoryMode,
@@ -15,6 +15,7 @@ import type {
   RunHistoryState,
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
+import { OperatorDisclosureCardComponent } from '../operator-lens/operator-disclosure-card.component';
 import { BotRunHistoryComponent } from './bot-run-history.component';
 
 interface RunHistoryLocation {
@@ -27,14 +28,8 @@ interface RunHistoryLocation {
 @Component({
   selector: 'app-operator-run-history',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [BotRunHistoryComponent],
-  template: `
-    <app-bot-run-history
-      [state]="state()"
-      [botRunning]="botRunning()"
-      (navigationRequested)="navigate($event)"
-    />
-  `,
+  imports: [BotRunHistoryComponent, OperatorDisclosureCardComponent],
+  templateUrl: './operator-run-history.component.html',
 })
 export class OperatorRunHistoryComponent {
   private readonly panelSvc = inject(BrokerV2PanelService);
@@ -43,6 +38,8 @@ export class OperatorRunHistoryComponent {
   readonly broker = input.required<string>();
   readonly sid = input.required<string>();
   readonly botRunning = input.required<boolean>();
+  protected readonly expanded = signal(false);
+  private readonly activated = signal(false);
 
   private readonly location = linkedSignal<string, RunHistoryLocation>({
     source: this.sid,
@@ -50,14 +47,16 @@ export class OperatorRunHistoryComponent {
   });
 
   private readonly currentRun = resource({
-    params: () => ({ broker: this.broker(), sid: this.sid() }),
+    params: () => this.activated()
+      ? { broker: this.broker(), sid: this.sid(), running: this.botRunning() }
+      : undefined,
     loader: ({ params }) => this.panelSvc.getCurrentRun(params.broker, params.sid),
   });
 
   private readonly previousRun = resource({
     params: () => {
       const location = this.location();
-      return location.mode === 'history'
+      return this.activated() && location.mode === 'history'
         ? { broker: this.broker(), sid: this.sid(), cursor: location.cursor }
         : undefined;
     },
@@ -82,18 +81,17 @@ export class OperatorRunHistoryComponent {
   });
 
   constructor() {
-    let wasRunning: boolean | null = null;
-    effect(() => {
-      const running = this.botRunning();
-      if (wasRunning === true && !running && !this.currentRun.isLoading()) {
+    const pollTimer = setInterval(() => {
+      if (this.expanded() && this.botRunning() && !this.currentRun.isLoading()) {
         this.currentRun.reload();
       }
-      wasRunning = running;
-    });
-    const pollTimer = setInterval(() => {
-      if (this.botRunning() && !this.currentRun.isLoading()) this.currentRun.reload();
     }, 5_000);
     this.destroyRef.onDestroy(() => clearInterval(pollTimer));
+  }
+
+  protected onExpandedChange(expanded: boolean): void {
+    if (expanded) this.activated.set(true);
+    this.expanded.set(expanded);
   }
 
   protected navigate(destination: RunHistoryNavigation): void {

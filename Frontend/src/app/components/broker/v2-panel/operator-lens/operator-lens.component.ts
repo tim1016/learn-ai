@@ -18,10 +18,10 @@ import { TransactionRailComponent } from './transaction-rail.component';
 import { HealthCardComponent } from './health-card.component';
 import { ClerkCardComponent } from './clerk-card.component';
 import { JournalTailComponent } from './journal-tail.component';
-import { EvidenceDrawerComponent } from './evidence-drawer.component';
 import { OperatorReadinessComponent } from './operator-readiness.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
+import { OperatorDisclosureCardComponent } from './operator-disclosure-card.component';
 
 /**
  * Operator lens (spec §7).
@@ -31,7 +31,7 @@ import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-his
  * - Health card (beside rail): phase, duty outcome, decision freshness, Retire.
  * - Clerk card (beside rail): hold state, reconciliation, channels, Reconcile/Clear hold.
  * - Journal tail (bottom): newest-first, filterable, selects rail transaction.
- * - Evidence drawer: operator-gated, paged, audit-logged raw evidence.
+ * Raw transaction evidence is loaded on demand inside the station accordion.
  *
  * The shell passes `panel` and `profile` as inputs (same as the trader lens).
  * Action execution is handled by the shell's `onActionRequested` output, same as S3.
@@ -44,10 +44,10 @@ import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-his
     HealthCardComponent,
     ClerkCardComponent,
     JournalTailComponent,
-    EvidenceDrawerComponent,
     OperatorReadinessComponent,
     ReceiptLabelPipe,
     OperatorRunHistoryComponent,
+    OperatorDisclosureCardComponent,
   ],
   templateUrl: './operator-lens.component.html',
   styleUrl: './operator-lens.component.scss',
@@ -73,23 +73,22 @@ export class OperatorLensComponent {
 
   // ── Local state ───────────────────────────────────────────────────────────
 
-  /** Whether the evidence drawer is open. */
-  protected readonly evidenceDrawerOpen = signal(false);
-
-  /** The transaction_ref whose evidence the drawer is showing. */
-  protected readonly evidenceDrawerRef = signal<string | null>(null);
+  /** Audit evidence activates on first open, then reloads only for a new server cursor. */
+  protected readonly journalActivated = signal(false);
 
   /** Reloads only when the journal cursor changes; panel polling alone is inert. */
   protected readonly journalPage = resource({
-    params: () =>
-      [
-        this.broker(),
-        this.accountId(),
-        this.sid(),
-        this.panel().journal_tail_seq ?? 'empty',
-      ].join('|'),
+    params: () => this.journalActivated()
+      ? [
+          this.broker(),
+          this.accountId(),
+          this.sid(),
+          this.panel().journal_tail_seq ?? 'empty',
+        ].join('|')
+      : undefined,
     loader: () =>
       this.panelSvc.getEvidence(this.broker(), this.accountId(), this.sid(), {
+        pageSize: 24,
         clientHint: 'operator-lens-journal-tail',
       }),
   });
@@ -106,14 +105,8 @@ export class OperatorLensComponent {
     this.transactionSelected.emit(ref);
   }
 
-  protected onEvidenceRequested(ref: string): void {
-    this.evidenceDrawerRef.set(ref);
-    this.evidenceDrawerOpen.set(true);
-  }
-
-  protected onEvidenceDrawerClose(): void {
-    this.evidenceDrawerOpen.set(false);
-    this.evidenceDrawerRef.set(null);
+  protected onJournalExpanded(expanded: boolean): void {
+    if (expanded) this.journalActivated.set(true);
   }
 
   protected onActionRequested(action: PanelActionTrigger): void {

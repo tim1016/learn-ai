@@ -253,6 +253,13 @@ const mockService = {
   }),
 };
 
+function openDisclosure(label: string): void {
+  const details = screen.getByText(label).closest('details');
+  if (details === null) throw new Error(`Expected ${label} disclosure.`);
+  details.open = true;
+  fireEvent(details, new Event('toggle'));
+}
+
 describe('BotPanelShellComponent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -284,6 +291,10 @@ describe('BotPanelShellComponent', () => {
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    openDisclosure('Run evidence');
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -328,6 +339,9 @@ describe('BotPanelShellComponent', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
     fixture.detectChanges();
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -356,6 +370,9 @@ describe('BotPanelShellComponent', () => {
     expect(screen.queryByText('run-previous')).toBeNull();
     expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
 
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -400,6 +417,9 @@ describe('BotPanelShellComponent', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
     fixture.detectChanges();
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -442,6 +462,9 @@ describe('BotPanelShellComponent', () => {
     });
     await fixture.whenStable();
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    openDisclosure('Run evidence');
     await fixture.whenStable();
     fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
@@ -517,6 +540,9 @@ describe('BotPanelShellComponent', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
     fixture.detectChanges();
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
     expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
     await new Promise((resolve) => setTimeout(resolve, 5_100));
     await fixture.whenStable();
@@ -553,6 +579,10 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
+    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(0);
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => setTimeout(resolve, 5_100));
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
@@ -615,6 +645,9 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
+    openDisclosure('Audit trail');
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: /Submit acknowledged at/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Select transaction tx-001 on rail' }));
     await fixture.whenStable();

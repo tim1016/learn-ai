@@ -20,7 +20,8 @@ const ALL_KINDS = '' as const;
  * Filterable by kind; each row expands to its summarized receipt and selects
  * its transaction on the rail via `transactionSelected`.
  *
- * Evidence raw links are handled by the parent operator lens (evidence drawer).
+ * The list reveals a small batch at a time so the collapsed audit section
+ * remains useful without becoming an unbounded event wall.
  */
 @Component({
   selector: 'app-journal-tail',
@@ -35,18 +36,21 @@ export class JournalTailComponent {
 
   /** Emits when user selects a row — carries the order_ref to select on the rail. */
   readonly transactionSelected = output<string>();
-  /** Emits to request opening the evidence drawer for a specific transaction_ref. */
-  readonly evidenceDrawerRequested = output<string>();
 
   protected readonly kindFilter = signal<string>(ALL_KINDS);
+  protected readonly visibleCount = signal(5);
 
-  protected readonly entries = computed(() => {
+  protected readonly filteredEntries = computed(() => {
     const page = this.evidencePage();
     if (!page) return [];
     const filter = this.kindFilter();
     if (!filter) return [...page.entries];
     return page.entries.filter((e) => e.kind === filter);
   });
+
+  protected readonly entries = computed(() =>
+    this.filteredEntries().slice(0, this.visibleCount()),
+  );
 
   /**
    * Unique kind values present in the current page, as {kind, label} pairs.
@@ -63,9 +67,13 @@ export class JournalTailComponent {
     return [...seen.entries()].map(([kind, label]) => ({ kind, label }));
   });
 
-  protected readonly hasMore = computed(() => {
+  protected readonly hasMoreVisible = computed(() =>
+    this.entries().length < this.filteredEntries().length,
+  );
+
+  protected readonly hasMoreRecorded = computed(() => {
     const page = this.evidencePage();
-    return page !== null && page.next_cursor !== null;
+    return page !== null && !this.hasMoreVisible() && page.next_cursor !== null;
   });
 
   protected onSelectRow(entry: EvidenceEntry): void {
@@ -74,15 +82,13 @@ export class JournalTailComponent {
     }
   }
 
-  protected onEvidenceDrawer(entry: EvidenceEntry): void {
-    const ref = entry.order_ref;
-    if (ref) {
-      this.evidenceDrawerRequested.emit(ref);
-    }
-  }
-
   protected onKindFilter(kind: string): void {
     this.kindFilter.set(kind);
+    this.visibleCount.set(5);
+  }
+
+  protected loadMore(): void {
+    this.visibleCount.update((count) => count + 5);
   }
 
   protected entryAriaLabel(entry: EvidenceEntry): string {
