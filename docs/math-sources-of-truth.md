@@ -22,6 +22,7 @@ Paired with `.claude/skills/learn-ai-validation/SKILL.md` (the Math Provenance C
 | Concept | Canonical | Legacy / duplicates | Reference | Validated against | Status |
 |---|---|---|---|---|---|
 | Broker orders grouped by symbol (gross requested, filled, and working quantities) | `PythonDataService/app/services/broker_order_groups.py` | — | Product read-model formula over absolute broker-reported quantities; decimal arithmetic from the Python standard library. These activity totals are never net position or directional exposure. | `PythonDataService/tests/services/test_broker_order_groups.py` | canonical |
+| Alpaca order submission-to-fill latency (seconds) | `PythonDataService/app/broker/alpaca/adapter.py::fill_latency_seconds` | —; Angular renders the supplied scalar without recomputing it. | Alpaca Trading API order properties (`submitted_at`, `filled_at`): `https://docs.alpaca.markets/us/docs/brokerapi-trading`. Formula: `(filled_at_ms - submitted_at_ms) / 1,000`; unavailable until both broker clocks exist. | `PythonDataService/tests/broker/alpaca/test_adapter_orders.py::test_filled_order_maps_every_field_and_synthesizes_fill_event` and `::test_fill_latency_is_unknown_until_both_broker_clocks_exist` (`atol=1e-12, rtol=0`) | canonical |
 
 ### Indicators — Python-canonical, ported from LEAN
 

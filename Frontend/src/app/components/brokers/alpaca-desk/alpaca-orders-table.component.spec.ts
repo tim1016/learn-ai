@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { BrokerOrder, BrokerOrderGroup, OrderCancelResult } from '../../../api/alpaca.types';
+import type { BrokerOrder, OrderCancelResult } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaOrdersTableComponent } from './alpaca-orders-table.component';
 
@@ -9,7 +9,7 @@ function fakeOrder(overrides: Partial<BrokerOrder> = {}): BrokerOrder {
   return {
     broker: 'alpaca',
     order_id: 'o-1',
-    client_order_id: null,
+    client_order_id: 'manual/desk/v1:abc',
     symbol: 'AAPL',
     asset_class: 'us_equity',
     side: 'buy',
@@ -23,12 +23,13 @@ function fakeOrder(overrides: Partial<BrokerOrder> = {}): BrokerOrder {
     status: 'filled',
     submitted_at_ms: 1_700_000_000_000,
     created_at_ms: 1_700_000_000_000,
-    updated_at_ms: 1_700_000_000_000,
+    updated_at_ms: 1_700_000_000_500,
     filled_at_ms: 1_700_000_000_500,
     canceled_at_ms: null,
     expired_at_ms: null,
     events: [],
     observed_at_ms: 1_700_000_000_000,
+    fill_latency_seconds: 0.5,
     ...overrides,
   };
 }
@@ -46,61 +47,109 @@ function ackedCancel(orderId: string): OrderCancelResult {
 }
 
 async function renderTable(
-  listOrderGroups: () => Promise<BrokerOrderGroup[]>,
+  listOrders: () => Promise<BrokerOrder[]>,
   cancelOrder?: (broker: string, orderId: string) => Promise<OrderCancelResult>,
 ) {
   return render(AlpacaOrdersTableComponent, {
-    providers: [{ provide: BrokersService, useValue: { listOrderGroups, cancelOrder } }],
+    providers: [{ provide: BrokersService, useValue: { listOrders, cancelOrder } }],
   });
-}
-
-function fakeGroup(
-  symbol: string,
-  orders: BrokerOrder[],
-  overrides: Partial<BrokerOrderGroup> = {},
-): BrokerOrderGroup {
-  return {
-    symbol,
-    orders,
-    order_count: orders.length,
-    working_order_count: 0,
-    gross_requested_quantity: 10,
-    gross_filled_quantity: 10,
-    gross_working_quantity: 0,
-    ...overrides,
-  };
 }
 
 describe('AlpacaOrdersTableComponent', () => {
-  it('renders a row per order with the status routed through receiptLabel', async () => {
+  it('renders one searchable table row per order with shared entity identities and fill latency', async () => {
     await renderTable(() =>
       Promise.resolve([
-        fakeGroup('AAPL', [fakeOrder({ order_id: 'o-9', status: 'filled' })]),
+        fakeOrder({ order_id: 'amd-1', symbol: 'AMD' }),
+        fakeOrder({ order_id: 'amzn-1', symbol: 'AMZN', fill_latency_seconds: 1.25 }),
       ]),
     );
 
-    expect(await screen.findByText('AAPL')).toBeTruthy();
-    // receiptLabel title-cases the status code ("filled" → "Filled").
-    expect(screen.getAllByText('Filled').length).toBeGreaterThan(0);
+    expect(await screen.findByRole('table')).toBeTruthy();
+    expect(screen.getByLabelText('Alpaca transaction history, newest orders first')).toBeTruthy();
+    expect(screen.getByText('AMD')).toBeTruthy();
+    expect(screen.getByText('AMZN')).toBeTruthy();
+    expect(screen.getByText('0.500 s')).toBeTruthy();
+    expect(screen.getByText('1.250 s')).toBeTruthy();
   });
 
-  it('renders honest-empty ("no recent orders"), distinct from error', async () => {
+  it('shows the most recently submitted order first by default', async () => {
+    await renderTable(() =>
+      Promise.resolve([
+        fakeOrder({ order_id: 'old', symbol: 'AAPL', submitted_at_ms: 100 }),
+        fakeOrder({ order_id: 'new', symbol: 'AMD', submitted_at_ms: 300 }),
+        fakeOrder({ order_id: 'middle', symbol: 'AMZN', submitted_at_ms: 200 }),
+      ]),
+    );
+
+    await screen.findByText('AMD');
+    const bodyRows = screen.getAllByRole('row').slice(1);
+    expect(within(bodyRows[0]).getByText('AMD')).toBeTruthy();
+    expect(within(bodyRows[1]).getByText('AMZN')).toBeTruthy();
+    expect(within(bodyRows[2]).getByText('AAPL')).toBeTruthy();
+  });
+
+  it('filters by symbol/reference search and by order type', async () => {
+    await renderTable(() =>
+      Promise.resolve([
+        fakeOrder({ order_id: 'amd-market', symbol: 'AMD', order_type: 'market' }),
+        fakeOrder({ order_id: 'amzn-limit', symbol: 'AMZN', order_type: 'limit' }),
+      ]),
+    );
+
+    const searchInput = await screen.findByRole('searchbox', { name: 'Search transactions' });
+    fireEvent.input(searchInput, { target: { value: 'AMZN' } });
+    await waitFor(() => expect(screen.queryByText('AMD')).toBeNull());
+    expect(screen.getByText('AMZN')).toBeTruthy();
+
+    fireEvent.input(searchInput, { target: { value: '' } });
+    const orderType = screen.getByRole('combobox', { name: /Order type/i });
+    fireEvent.change(orderType, { target: { value: 'market' } });
+    await waitFor(() => expect(screen.queryByText('AMZN')).toBeNull());
+    expect(screen.getByText('AMD')).toBeTruthy();
+  });
+
+  it('renders the rows-per-page overlay outside the scrollable table', async () => {
+    await renderTable(() =>
+      Promise.resolve(
+        Array.from({ length: 11 }, (_, index) =>
+          fakeOrder({ order_id: `order-${index}`, symbol: `ASSET${index}` }),
+        ),
+      ),
+    );
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Rows per page' }));
+
+    await waitFor(() => {
+      const overlayRoot = [...document.body.children].find(
+        (element) => element.matches('.p-overlay') && element.querySelector('.p-select-overlay'),
+      );
+      expect(overlayRoot).toBeTruthy();
+    });
+  });
+
+  it('shows broker-verifiable order references in the information popover', async () => {
+    await renderTable(() =>
+      Promise.resolve([
+        fakeOrder({
+          order_id: 'alpaca-order-0009',
+          client_order_id: 'manual/desk/v1:verify-me',
+          symbol: 'AMD',
+        }),
+      ]),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'More information for AMD order' }));
+
+    expect(await screen.findByText('alpaca-order-0009')).toBeTruthy();
+    expect(screen.getByText('manual/desk/v1:verify-me')).toBeTruthy();
+    expect(screen.getByText(/Use the Alpaca order ID to verify/)).toBeTruthy();
+  });
+
+  it('renders honest-empty transaction history, distinct from error', async () => {
     await renderTable(() => Promise.resolve([]));
 
-    expect(await screen.findByText('No recent orders.')).toBeTruthy();
+    expect(await screen.findByText('No recent transactions.')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
-  });
-
-  it('shows three recent orders per symbol until the group is expanded', async () => {
-    const orders = Array.from({ length: 5 }, (_, index) =>
-      fakeOrder({ order_id: `o-${index}`, submitted_at_ms: 1_700_000_000_000 + index }),
-    );
-    await renderTable(() => Promise.resolve([fakeGroup('AAPL', orders)]));
-
-    expect(await screen.findAllByRole('listitem')).toHaveLength(3);
-    fireEvent.click(screen.getByRole('button', { name: 'Show 2 more' }));
-    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(5));
-    expect(screen.getByRole('button', { name: 'Show recent only' })).toBeTruthy();
   });
 
   it('renders an error state when Alpaca is unreachable', async () => {
@@ -110,46 +159,33 @@ describe('AlpacaOrdersTableComponent', () => {
     expect(alert.textContent).toContain("Couldn't reach Alpaca");
   });
 
-  it('offers a Cancel action only on a still-working (cancelable) order', async () => {
+  it('offers Cancel only on still-working orders', async () => {
     await renderTable(() =>
       Promise.resolve([
-        fakeGroup('MSFT', [fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })], {
-          working_order_count: 1,
-          gross_working_quantity: 10,
-        }),
-        fakeGroup('GTC', [fakeOrder({ order_id: 'o-day-end', symbol: 'GTC', status: 'done_for_day' })], {
-          working_order_count: 1,
-          gross_working_quantity: 10,
-        }),
-        fakeGroup('AAPL', [fakeOrder({ order_id: 'o-done', symbol: 'AAPL', status: 'filled' })]),
+        fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' }),
+        fakeOrder({ order_id: 'o-day-end', symbol: 'GTC', status: 'done_for_day' }),
+        fakeOrder({ order_id: 'o-done', symbol: 'AAPL', status: 'filled' }),
       ]),
     );
 
-    // The working order gets a labeled Cancel button; the filled one does not.
     expect(await screen.findByRole('button', { name: 'Cancel order for MSFT' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Cancel order for GTC' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Cancel order for AAPL' })).toBeNull();
   });
 
-  it('cancels by order_id and refreshes the list after success', async () => {
+  it('cancels by order_id and refreshes after success', async () => {
     const cancelOrder = vi
       .fn<(broker: string, orderId: string) => Promise<OrderCancelResult>>()
       .mockResolvedValue(ackedCancel('o-open'));
-    const listOrderGroups = vi
-      .fn<() => Promise<BrokerOrderGroup[]>>()
-      .mockResolvedValue([
-        fakeGroup('MSFT', [fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })]),
-      ]);
+    const listOrders = vi
+      .fn<() => Promise<BrokerOrder[]>>()
+      .mockResolvedValue([fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })]);
 
-    await renderTable(listOrderGroups, cancelOrder);
+    await renderTable(listOrders, cancelOrder);
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel order for MSFT' }));
 
-    const button = await screen.findByRole('button', { name: 'Cancel order for MSFT' });
-    fireEvent.click(button);
-
-    // Cancel is called with the opaque broker order_id.
     expect(cancelOrder).toHaveBeenCalledWith('alpaca', 'o-open');
-    // The list reloads after a successful cancel (initial load + reload).
-    await waitFor(() => expect(listOrderGroups).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(listOrders).toHaveBeenCalledTimes(2));
   });
 
   it('surfaces a typed cancel failure inline without refreshing', async () => {
@@ -162,18 +198,14 @@ describe('AlpacaOrdersTableComponent', () => {
         order_ref: null,
         error: { message: 'order is not cancelable', why: 'HTTP 422' },
       });
-    const listOrderGroups = vi
-      .fn<() => Promise<BrokerOrderGroup[]>>()
-      .mockResolvedValue([
-        fakeGroup('MSFT', [fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })]),
-      ]);
+    const listOrders = vi
+      .fn<() => Promise<BrokerOrder[]>>()
+      .mockResolvedValue([fakeOrder({ order_id: 'o-open', symbol: 'MSFT', status: 'new' })]);
 
-    await renderTable(listOrderGroups, cancelOrder);
-
+    await renderTable(listOrders, cancelOrder);
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel order for MSFT' }));
 
     expect(await screen.findByText('order is not cancelable')).toBeTruthy();
-    // A failed cancel does not reload the list (only the initial load ran).
-    expect(listOrderGroups).toHaveBeenCalledTimes(1);
+    expect(listOrders).toHaveBeenCalledTimes(1);
   });
 });

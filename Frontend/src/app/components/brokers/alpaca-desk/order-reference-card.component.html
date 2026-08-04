@@ -1,0 +1,26 @@
+@let o = order();
+<div class="order-reference-card">
+  <header>
+    <app-asset-identity [symbol]="o.symbol" />
+    <p-tag [severity]="statusSeverity(o.status)" [value]="o.status | receiptLabel" />
+  </header>
+  <p>Use the Alpaca order ID to verify this transaction in Alpaca's Orders view or API.</p>
+  <dl>
+    <div><dt>Alpaca order ID</dt><dd><code>{{ o.order_id }}</code></dd></div>
+    <div><dt>Client order ID</dt><dd><code>{{ o.client_order_id ?? 'Not supplied' }}</code></dd></div>
+    <div><dt>Asset class</dt><dd>{{ (o.asset_class ?? 'unknown') | receiptLabel }}</dd></div>
+    <div>
+      <dt>Filled</dt>
+      <dd>
+        {{ o.filled_quantity | number: '1.0-4' }}
+        @if (o.filled_avg_price !== null) { @ {{ o.filled_avg_price | number: '1.2-4' }} }
+      </dd>
+    </div>
+    @if (o.filled_at_ms !== null) {
+      <div><dt>Filled at</dt><dd><app-timestamp-display [value]="o.filled_at_ms" mode="local" /></dd></div>
+    }
+    @if (o.updated_at_ms !== null) {
+      <div><dt>Last broker update</dt><dd><app-timestamp-display [value]="o.updated_at_ms" mode="local" /></dd></div>
+    }
+  </dl>
+</div>
