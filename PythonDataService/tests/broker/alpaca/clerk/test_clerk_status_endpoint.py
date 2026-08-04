@@ -233,6 +233,11 @@ async def test_clear_hold_restores_submission(_alpaca_clerk: None) -> None:
     responses.add(responses.GET, f"{_BASE}/v2/positions", body="[]", status=200)
     await _raise_hold_via_sweep()
 
+    # The foreign order is now resolved at the broker — this is what
+    # clear_hold's own internal reconciliation (the P0-2 fix) will read.
+    responses.add(responses.GET, f"{_BASE}/v2/orders", body="[]", status=200)
+    responses.add(responses.GET, f"{_BASE}/v2/positions", body="[]", status=200)
+
     cleared = await _post(
         "/api/brokers/alpaca/clerk/clear-hold",
         {"operator": "ops", "reason": "Verified the account is safe."},
@@ -286,6 +291,46 @@ async def test_clear_hold_rejects_a_blank_audit_reason_at_the_boundary(
     )
 
     assert response.status_code == 422
+
+
+@responses.activate
+async def test_clear_hold_refusal_returns_409_not_500(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.broker.alpaca.clerk.models import ChannelHealth
+    from app.broker.alpaca.clerk.stream_health import StreamHealthGate
+
+    monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
+    journal_module.reset_clerk_settings_for_testing()
+    reset_alpaca_settings_for_testing()
+    alpaca_settings = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper")
+    broker = AlpacaBroker(AlpacaTradingClient(settings=alpaca_settings))
+    broken_gate = StreamHealthGate(
+        market_data=lambda: ChannelHealth(
+            stream="market_data", healthy=False, reason="feed down", observed_at_ms=0
+        ),
+        execution=lambda: ChannelHealth(
+            stream="execution", healthy=True, reason="", observed_at_ms=0
+        ),
+    )
+    set_alpaca_clerk(AlpacaClerk(read=broker, trade=broker, stream_health=broken_gate))
+    try:
+        responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
+        responses.add(
+            responses.GET, f"{_BASE}/v2/orders", body=_foreign_order_body(), status=200
+        )
+        responses.add(responses.GET, f"{_BASE}/v2/positions", body="[]", status=200)
+        await _raise_hold_via_sweep()
+
+        response = await _post(
+            "/api/brokers/alpaca/clerk/clear-hold",
+            {"operator": "ops", "reason": "attempting to clear"},
+        )
+    finally:
+        reset_alpaca_clerk_for_testing()
+        journal_module.reset_clerk_settings_for_testing()
+        reset_alpaca_settings_for_testing()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["message"].startswith("Exposure hold cannot be cleared")
 
 
 async def test_status_unconfigured_clerk_returns_503() -> None:

@@ -42,6 +42,7 @@ from app.broker.contract.models import (
     BrokerOrderEvent,
     BrokerOrderLeg,
 )
+from app.engine.live.desired_state import DesiredState
 from app.engine.live.journal_exposure import (
     ExecutionExposureEffect,
     fold_execution_exposure,
@@ -541,6 +542,92 @@ async def test_effect_enter_derives_side_and_replay_never_duplicates_broker_work
     )
 
 
+async def test_effect_enter_is_fenced_by_desired_state() -> None:
+    from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
+    from app.engine.live.desired_state import DesiredState
+
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(
+        read=broker,
+        trade=broker,
+        desired_state_probe=lambda sid: DesiredState.STOPPED,
+    )
+    plan = _effect_plan()
+
+    receipt = await clerk.execute_for_instance(
+        strategy_instance_id=_SID_A,
+        run_id="run-1",
+        decision_id="bar-1700000000000-enter",
+        purpose=EffectPurpose.ENTER,
+        action_plan=plan,
+        quantity=2,
+    )
+
+    assert receipt.state is EffectOperationState.REJECTED
+    assert broker.submit_calls == []
+
+
+async def test_effect_exit_ignores_desired_state_fence() -> None:
+    from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
+
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    plan = _effect_plan()
+    await _submit_and_fill(clerk, _SID_A, quantity=1.0)
+
+    from app.engine.live.desired_state import DesiredState
+
+    clerk._desired_state_probe = lambda sid: DesiredState.STOPPED
+    receipt = await clerk.execute_for_instance(
+        strategy_instance_id=_SID_A,
+        run_id="run-1",
+        decision_id="bar-1700000001000-exit",
+        purpose=EffectPurpose.EXIT,
+        action_plan=plan,
+        quantity=1,
+    )
+
+    assert receipt.state is not EffectOperationState.REJECTED
+
+
+async def test_effect_enter_accepted_before_stop_still_resolves() -> None:
+    from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
+    from app.engine.live.desired_state import DesiredState
+
+    broker = _FakeBroker()
+    desired = {"state": DesiredState.RUNNING}
+    clerk = AlpacaClerk(
+        read=broker, trade=broker, desired_state_probe=lambda sid: desired["state"]
+    )
+    plan = _effect_plan()
+
+    accepted = await clerk.execute_for_instance(
+        strategy_instance_id=_SID_A,
+        run_id="run-1",
+        decision_id="bar-1700000000000-enter",
+        purpose=EffectPurpose.ENTER,
+        action_plan=plan,
+        quantity=2,
+    )
+    assert accepted.state is EffectOperationState.SUBMITTED
+
+    # Stop lands after the first call already resolved (accepted + submitted).
+    desired["state"] = DesiredState.STOPPED
+
+    # A second call with the SAME decision_id is a replay of the already-
+    # accepted effect, not a new decision — it must return the same receipt,
+    # not a fresh REJECTED one.
+    replay = await clerk.execute_for_instance(
+        strategy_instance_id=_SID_A,
+        run_id="run-1",
+        decision_id="bar-1700000000000-enter",
+        purpose=EffectPurpose.ENTER,
+        action_plan=plan,
+        quantity=2,
+    )
+    assert replay == accepted
+
+
 async def test_stop_custody_cancels_only_a_clerk_owned_working_enter() -> None:
     """STOP cancels an ENTER child without inventing an exposure claim."""
     from app.broker.alpaca.clerk.models import EffectPurpose
@@ -865,3 +952,18 @@ async def test_effect_exit_recovers_partial_fill_after_clerk_restart() -> None:
         quantity=2,
     )
     assert completed.state is EffectOperationState.FLAT
+
+
+# ── desired-state probe: Clerk stores the injected dependency ─────────
+
+
+async def test_clerk_stores_desired_state_probe() -> None:
+    broker = _FakeBroker()
+    calls: list[str] = []
+
+    def probe(sid: str) -> DesiredState:
+        calls.append(sid)
+        return DesiredState.RUNNING
+
+    clerk = AlpacaClerk(read=broker, trade=broker, desired_state_probe=probe)
+    assert clerk._desired_state_probe is probe

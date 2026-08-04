@@ -23,6 +23,7 @@ from app.broker.ibkr.client import (
     set_client,
 )
 from app.config import settings
+from app.engine.live.desired_state import DesiredState
 from app.routers import (
     account_reconciliation,
     aggregates,
@@ -185,6 +186,14 @@ async def lifespan(app: FastAPI):
             registry = get_bot_task_registry()
             return registry is not None and registry.any_running()
 
+        def _alpaca_desired_state(strategy_instance_id: str) -> DesiredState:
+            from app.services.bot_runner import get_bot_task_registry
+
+            registry = get_bot_task_registry()
+            if registry is None:
+                return DesiredState.STOPPED
+            return registry.desired_state(strategy_instance_id)
+
         alpaca_broker = AlpacaBroker()
         # S4 (#1262): the dual-health submission gate — market-data feed (S1)
         # AND trade_updates execution channel must both be healthy for a new
@@ -194,6 +203,7 @@ async def lifespan(app: FastAPI):
             trade=alpaca_broker,
             stream_health=build_default_stream_health_gate(),
             bot_running_probe=_alpaca_bot_running,
+            desired_state_probe=_alpaca_desired_state,
         )
 
         # Alpaca crash-safety recovery (phase 2, S5) — replay the order journal

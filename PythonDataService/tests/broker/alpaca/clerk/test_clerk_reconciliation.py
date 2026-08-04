@@ -534,23 +534,134 @@ async def test_persistent_unexplained_order_is_journaled_once_across_sweeps() ->
     assert clerk.is_on_hold() is True
 
 
-async def test_hold_is_re_raised_after_clear_when_foreign_order_persists() -> None:
-    # If an operator clears the hold but the foreign order is still at the broker,
-    # the next sweep must re-raise the hold (safety) — WITHOUT re-journaling a
-    # duplicate UNEXPLAINED_ORDER line (the order was already recorded).
+async def test_clear_hold_refuses_while_foreign_order_persists() -> None:
+    # A foreign order still present at the broker must refuse the clear —
+    # this is the P0-2 fix: reason-specific proof, not a generic channel check.
     broker = _FakeBroker(orders=[_order(client_order_id="foreign")])
     clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
     await clerk.reconcile_once()
-    await clerk.clear_hold(operator="inkant", reason="reviewed")
-    assert clerk.is_on_hold() is False
+    assert clerk.is_on_hold() is True
 
-    await clerk.reconcile_once()  # the foreign order persists
+    with pytest.raises(InventoryBaselineRefusedError):
+        await clerk.clear_hold(operator="inkant", reason="reviewed")
 
     assert clerk.is_on_hold() is True
     kinds = _kinds(clerk)
-    assert kinds.count(ClerkEntryKind.HOLD_SET) == 2  # re-held after the clear
-    assert kinds.count(ClerkEntryKind.UNEXPLAINED_ORDER) == 1  # journaled once
-    assert clerk.unexplained_order_count == 1
+    assert ClerkEntryKind.HOLD_CLEARED not in kinds
+
+
+async def test_clear_hold_succeeds_once_foreign_order_is_gone() -> None:
+    broker = _FakeBroker(orders=[_order(client_order_id="foreign")])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    await clerk.reconcile_once()
+    assert clerk.is_on_hold() is True
+
+    broker._orders = []  # the foreign order is cancelled/resolved at the broker
+    status = await clerk.clear_hold(operator="inkant", reason="reviewed")
+
+    assert clerk.is_on_hold() is False
+    assert status.hold.active is False
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    cleared = [e for e in entries if e.kind is ClerkEntryKind.HOLD_CLEARED]
+    assert len(cleared) == 1
+    # The proof reference (Section 3.3 of the design doc): the reconciliation
+    # verdict that justified the clear rides on the existing `verdict` field
+    # already used by RECONCILIATION lines — no new schema field needed.
+    assert cleared[0].verdict == "clean"
+
+
+async def test_clear_hold_stream_health_reason_still_uses_channel_check() -> None:
+    from app.broker.alpaca.clerk.models import ChannelHealth
+    from app.broker.alpaca.clerk.stream_health import StreamHealthGate
+    from app.broker.contract.errors import BrokerSubmissionHeld
+
+    broker = _FakeBroker()
+    broken_gate = StreamHealthGate(
+        market_data=lambda: ChannelHealth(
+            stream="market_data", healthy=False, reason="feed down", observed_at_ms=_FIXED_MS
+        ),
+        execution=lambda: ChannelHealth(
+            stream="execution", healthy=True, reason="", observed_at_ms=_FIXED_MS
+        ),
+    )
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock, stream_health=broken_gate)
+
+    with pytest.raises(BrokerSubmissionHeld):
+        await clerk.submit(_request())
+    assert clerk.is_on_hold() is True
+
+    healthy_gate = StreamHealthGate(
+        market_data=lambda: ChannelHealth(
+            stream="market_data", healthy=True, reason="", observed_at_ms=_FIXED_MS
+        ),
+        execution=lambda: ChannelHealth(
+            stream="execution", healthy=True, reason="", observed_at_ms=_FIXED_MS
+        ),
+    )
+    clerk._stream_health = healthy_gate
+
+    status = await clerk.clear_hold(operator="inkant", reason="channel restored")
+    assert status.hold.active is False
+
+
+async def test_clear_hold_refuses_unknown_reason_code() -> None:
+    broker = _FakeBroker()
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
+    account_id, journal = await clerk._ensure_journal()
+    await journal.append_async(
+        OrderJournalEntry(
+            kind=ClerkEntryKind.HOLD_SET,
+            account_id=account_id,
+            reason_code="SOME_FUTURE_HOLD_REASON",
+            reason="a reason this clear-admission registry doesn't know",
+            recorded_at_ms=_FIXED_MS,
+        )
+    )
+
+    with pytest.raises(InventoryBaselineRefusedError):
+        await clerk.clear_hold(operator="inkant", reason="attempt")
+
+    assert clerk.is_on_hold() is True
+
+
+async def test_clear_hold_refuses_when_new_foreign_order_arrives_during_reconciliation() -> None:
+    # The file's shared `_fixed_clock` returns a constant and cannot distinguish
+    # before/after, so this test needs its own strictly-incrementing clock to make
+    # the TOCTOU `since_ms` ordering meaningful.
+    ticks = iter(range(_FIXED_MS, _FIXED_MS + 1000, 10))
+
+    def incrementing_clock() -> int:
+        return next(ticks)
+
+    broker = _FakeBroker(orders=[_order(client_order_id="foreign")])
+    clerk = AlpacaClerk(read=broker, trade=broker, clock=incrementing_clock)
+    await clerk.reconcile_once()
+    assert clerk.is_on_hold() is True
+
+    broker._orders = []  # looks clean to the upcoming reconciliation read...
+
+    real_reconcile_once = clerk.reconcile_once
+
+    async def _reconcile_then_inject_new_foreign_order():
+        verdict = await real_reconcile_once()
+        # ...but a second, independent foreign order is journaled between
+        # the reconciliation read and clear_hold's lock-protected re-check.
+        account_id, journal = await clerk._ensure_journal()
+        await journal.append_async(
+            OrderJournalEntry(
+                kind=ClerkEntryKind.UNEXPLAINED_ORDER,
+                account_id=account_id,
+                recorded_at_ms=incrementing_clock(),
+            )
+        )
+        return verdict
+
+    clerk.reconcile_once = _reconcile_then_inject_new_foreign_order
+
+    with pytest.raises(InventoryBaselineRefusedError):
+        await clerk.clear_hold(operator="inkant", reason="reviewed")
+
+    assert clerk.is_on_hold() is True
 
 
 async def test_reconcile_missing_intent_is_observational() -> None:
@@ -765,12 +876,14 @@ async def test_clear_hold_restores_submission() -> None:
     await clerk.reconcile_once()
     assert clerk.is_on_hold() is True
 
+    # The foreign order is now resolved at the broker — this is what
+    # clear_hold's own internal reconciliation (the P0-2 fix) will read.
+    broker._orders = []
     status = await clerk.clear_hold(operator="ops", reason="Verified account safe.")
 
     assert status.hold.active is False
     assert ClerkEntryKind.HOLD_CLEARED in _kinds(clerk)
     # Submission works again once the foreign order is no longer present.
-    broker._orders = []
     result = await clerk.submit(_request())
     assert result.results[0].status == "acked"
 
@@ -784,6 +897,9 @@ async def test_clear_hold_journals_operator_supplied_reason() -> None:
     assert await clerk.reconcile_once() == "unexplained_order"
     assert clerk.is_on_hold() is True
 
+    # The clear's own internal reconciliation (the P0-2 fix) requires the
+    # broker to actually be clean before it will admit the clear.
+    broker._orders = []
     await clerk.clear_hold(operator="desk-operator", reason="operator note")
 
     entries = await clerk.read_journal_entries()
@@ -862,6 +978,9 @@ async def test_double_clear_writes_exactly_one_hold_cleared() -> None:
     clerk = AlpacaClerk(read=broker, trade=broker, clock=_fixed_clock)
     await clerk.reconcile_once()
 
+    # The first clear's own internal reconciliation (the P0-2 fix) requires
+    # the broker to actually be clean before it will admit the clear.
+    broker._orders = []
     await clerk.clear_hold(operator="ops", reason="cleared")
     await clerk.clear_hold(operator="ops", reason="cleared again")
 

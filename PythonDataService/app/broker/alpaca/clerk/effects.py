@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.models import (
 )
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrderLeg, OrderSide
+from app.engine.live.desired_state import DesiredState
 from app.engine.live.order_identity import build_bot_order_namespace, order_ref_namespace_matches
 from app.schemas.action_plan import ActionPlan
 
@@ -240,6 +241,21 @@ class ClerkEffectOperations:
     ) -> EffectOperationReceipt:
         if latest.state is not EffectOperationState.ACCEPTED:
             return latest
+        if (
+            self._desired_state_probe is not None
+            and self._desired_state_probe(operation.strategy_instance_id) is not DesiredState.RUNNING
+        ):
+            receipt = EffectOperationReceipt(
+                operation=operation,
+                state=EffectOperationState.REJECTED,
+                explanation=(
+                    "Entry was blocked because this run's Stop intent was recorded "
+                    "before this decision reached the Clerk."
+                ),
+                next_step="This decision predates Stop; no new order will be submitted for this run.",
+            )
+            await self._append_effect_receipt(journal, account_id, receipt)
+            return receipt
         hold = derive.hold_state(entries)
         if hold.active:
             receipt = EffectOperationReceipt(

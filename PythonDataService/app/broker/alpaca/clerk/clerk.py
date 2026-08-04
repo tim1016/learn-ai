@@ -83,6 +83,7 @@ from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerEvidenceBaseline,
     AccountClerkPositionEvidence,
 )
+from app.engine.live.desired_state import DesiredState
 from app.engine.live.order_identity import (
     build_bot_order_namespace,
     build_manual_order_namespace,
@@ -118,6 +119,7 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
         stream_health: StreamHealthGate | None = None,
         clerk_generation: str | None = None,
         bot_running_probe: Callable[[], bool] | None = None,
+        desired_state_probe: Callable[[str], DesiredState] | None = None,
     ) -> None:
         self._read = read
         self._trade = trade
@@ -125,6 +127,7 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
         self._stream_health = stream_health
         self._clerk_generation = clerk_generation or uuid4().hex
         self._bot_running_probe = bot_running_probe
+        self._desired_state_probe = desired_state_probe
         self._intake_lock = asyncio.Lock()
         self.activity_recovery = AlpacaActivityRecovery(
             intake_lock=self._intake_lock, ensure_journal=self._ensure_journal, clock=clock
@@ -561,23 +564,62 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
         )
 
     async def clear_hold(self, *, operator: str, reason: str) -> ClerkStatus:
-        """Clear the active hold (operator exit); journal ``HOLD_CLEARED``.
+        """Clear the active hold (operator exit) with reason-specific proof.
 
         Idempotent: clearing with no active hold is a journal-free NO-OP.
+        The required proof depends on why the hold exists — a generic
+        channel-health check is not sufficient for an ``UNEXPLAINED_ORDER``
+        hold, which requires a fresh reconciliation proving the foreign
+        order (and any other unresolved custody work) is actually gone.
+        Unregistered reason codes refuse by default (fail closed).
         Returns the updated status for a one-round-trip render.
         """
-        async with self._intake_lock:
+        account_id, journal = await self._ensure_journal()
+        entries = journal.read_entries()
+        hold = derive.hold_state(entries)
+        if not hold.active:
+            return self._status_from(account_id, entries)
+
+        proof_verdict: ReconciliationVerdict | None = None
+        if hold.reason_code == STREAM_HEALTH_HOLD_CODE:
             if not self._channel_fresh():
                 raise InventoryBaselineRefusedError(
                     "Exposure hold cannot be cleared while submission channels are unhealthy.",
                     detail="Restore both channels and reconcile before clearing the hold.",
                 )
-            account_id, journal = await self._ensure_journal()
+            proof_observed_at_ms = self._clock()
+        elif hold.reason_code == UNEXPLAINED_ORDER_HOLD_CODE:
+            proof_observed_at_ms = self._clock()
+            proof_verdict = await self.reconcile_once()
+            if proof_verdict != "clean":
+                raise InventoryBaselineRefusedError(
+                    "Exposure hold cannot be cleared: reconciliation is not clean.",
+                    detail=f"The reconciliation verdict is '{proof_verdict}'.",
+                )
+        else:
+            raise InventoryBaselineRefusedError(
+                "Exposure hold cannot be cleared: no proof is registered for this hold reason.",
+                detail=f"Unrecognized hold reason code '{hold.reason_code}'.",
+            )
+
+        async with self._intake_lock:
+            entries = journal.read_entries()
+            current_hold = derive.hold_state(entries)
+            if (
+                current_hold.active
+                and current_hold.since_ms is not None
+                and current_hold.since_ms > proof_observed_at_ms
+            ):
+                raise InventoryBaselineRefusedError(
+                    "Exposure hold cannot be cleared: new evidence arrived after the proof was obtained.",
+                    detail="A new hold condition was observed during the reconciliation; retry the clear.",
+                )
             entries = await self._clear_hold_locked(
                 journal=journal,
                 account_id=account_id,
                 operator=operator,
                 reason=reason,
+                verdict=proof_verdict,
             )
             return self._status_from(account_id, entries)
 
@@ -588,6 +630,7 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
         account_id: str,
         operator: str,
         reason: str,
+        verdict: ReconciliationVerdict | None = None,
     ) -> list[OrderJournalEntry]:
         entries = journal.read_entries()
         hold = derive.hold_state(entries)
@@ -600,6 +643,7 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
                     reason_code=hold.reason_code or UNEXPLAINED_ORDER_HOLD_CODE,
                     reason=reason,
                     recorded_at_ms=self._clock(),
+                    verdict=verdict,
                 )
             )
             logger.info(
