@@ -10372,6 +10372,17 @@
             ],
             "title": "Expired At Ms"
           },
+          "fill_latency_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill Latency Seconds"
+          },
           "filled_at_ms": {
             "anyOf": [
               {

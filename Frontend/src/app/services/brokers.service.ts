@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 
 import type {
   BrokerAccountSnapshot,
+  BrokerOrder,
   BrokerOrderGroup,
   BrokerOrderRequest,
   BrokerPosition,
@@ -71,6 +72,22 @@ export class BrokersService {
     }
     return firstValueFrom(
       this.http.get<BrokerOrderGroup[]>(`${this.base}/${broker}/order-groups`, { params }),
+    );
+  }
+
+  listOrders(
+    broker = 'alpaca',
+    options: { status?: 'open' | 'closed' | 'all'; limit?: number } = {},
+  ): Promise<BrokerOrder[]> {
+    let params = new HttpParams();
+    if (options.status) {
+      params = params.set('status', options.status);
+    }
+    if (options.limit != null) {
+      params = params.set('limit', options.limit);
+    }
+    return firstValueFrom(
+      this.http.get<BrokerOrder[]>(`${this.base}/${broker}/orders`, { params }),
     );
   }
 

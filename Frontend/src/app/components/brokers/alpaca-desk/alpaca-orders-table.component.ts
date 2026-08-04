@@ -1,9 +1,19 @@
 import { DecimalPipe } from '@angular/common';
-import { ChangeDetectionStrategy, Component, inject, input, resource, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  inject,
+  input,
+  resource,
+  signal,
+} from '@angular/core';
 import { ButtonModule } from 'primeng/button';
-import { TagModule } from 'primeng/tag';
+import { Popover, PopoverModule } from 'primeng/popover';
+import { Table, TableModule } from 'primeng/table';
+import { TagModule, type TagSeverity } from 'primeng/tag';
 
-import type { BrokerOrder, BrokerOrderGroup } from '../../../api/alpaca.types';
+import type { BrokerOrder } from '../../../api/alpaca.types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
@@ -23,10 +33,9 @@ const NON_CANCELABLE_STATUSES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Alpaca recent-orders table. Shows what any channel submitted to the account,
- * and (phase-2 S3) offers a Cancel action on each still-working row. Four
- * distinct renders: loading, error, honest-empty (no recent orders), and the
- * table.
+ * Searchable Alpaca transaction history. Rows preserve the broker's newest-
+ * first order while PrimeNG provides operator sorting, filtering, and paging.
+ * Still-working orders retain the phase-2 S3 Cancel action.
  */
 @Component({
   selector: 'app-alpaca-orders-table',
@@ -36,6 +45,8 @@ const NON_CANCELABLE_STATUSES: ReadonlySet<string> = new Set([
     AssetIdentityComponent,
     ReceiptLabelPipe,
     ButtonModule,
+    PopoverModule,
+    TableModule,
     TagModule,
     TimestampDisplayComponent,
   ],
@@ -49,7 +60,7 @@ export class AlpacaOrdersTableComponent {
 
   protected readonly orders = resource({
     params: () => this.refreshVersion(),
-    loader: () => this.brokers.listOrderGroups('alpaca', { status: 'all', limit: 50 }),
+    loader: () => this.brokers.listOrders('alpaca', { status: 'all', limit: 50 }),
   });
 
   // The order_id currently being canceled (disables its button + shows a
@@ -57,23 +68,59 @@ export class AlpacaOrdersTableComponent {
   protected readonly cancelingId = signal<string | null>(null);
   // A per-order cancel failure message, keyed by order_id, cleared on retry.
   protected readonly cancelError = signal<Record<string, string>>({});
-  protected readonly expandedSymbols = signal<ReadonlySet<string>>(new Set());
+  protected readonly selectedOrder = signal<BrokerOrder | null>(null);
+  protected readonly searchQuery = signal('');
+  protected readonly orderTypeFilter = signal('');
+  protected readonly statusFilter = signal('');
+  protected readonly orderTypes = ['market', 'limit'] as const;
+  protected readonly statusOptions = computed(() =>
+    [...new Set((this.orders.value() ?? []).map((order) => order.status))].sort(),
+  );
 
-  protected visibleOrders(group: BrokerOrderGroup): BrokerOrder[] {
-    return this.expandedSymbols().has(group.symbol) ? group.orders : group.orders.slice(0, 3);
+  protected inputValue(event: Event): string {
+    const target = event.target;
+    return target instanceof HTMLInputElement || target instanceof HTMLSelectElement
+      ? target.value
+      : '';
   }
 
-  protected toggleGroup(symbol: string): void {
-    this.expandedSymbols.update((expanded) => {
-      const next = new Set(expanded);
-      if (next.has(symbol)) next.delete(symbol);
-      else next.add(symbol);
-      return next;
-    });
+  protected search(table: Table, event: Event): void {
+    const value = this.inputValue(event);
+    this.searchQuery.set(value);
+    table.filterGlobal(value, 'contains');
+  }
+
+  protected filterExact(table: Table, field: string, event: Event): void {
+    const value = this.inputValue(event);
+    if (field === 'order_type') this.orderTypeFilter.set(value);
+    if (field === 'status') this.statusFilter.set(value);
+    table.filter(value || null, field, 'equals');
+  }
+
+  protected clearFilters(table: Table): void {
+    this.searchQuery.set('');
+    this.orderTypeFilter.set('');
+    this.statusFilter.set('');
+    table.clear();
+  }
+
+  protected showDetails(order: BrokerOrder, event: Event, popover: Popover): void {
+    this.selectedOrder.set(order);
+    popover.toggle(event);
   }
 
   protected isCancelable(order: BrokerOrder): boolean {
     return !NON_CANCELABLE_STATUSES.has(order.status);
+  }
+
+  protected statusSeverity(status: string): TagSeverity {
+    if (status === 'filled') return 'success';
+    if (status === 'rejected') return 'danger';
+    if (status === 'canceled' || status === 'expired' || status === 'replaced') {
+      return 'secondary';
+    }
+    if (status === 'pending_cancel' || status === 'pending_replace') return 'warn';
+    return 'info';
   }
 
   protected async cancel(order: BrokerOrder): Promise<void> {

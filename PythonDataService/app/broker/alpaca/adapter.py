@@ -218,6 +218,25 @@ def _order_events(payload: Mapping[str, Any]) -> list[BrokerOrderEvent]:
     return []
 
 
+def fill_latency_seconds(
+    submitted_at_ms: int | None,
+    filled_at_ms: int | None,
+) -> float | None:
+    """Return elapsed broker submission-to-fill time in seconds.
+
+    Formula: fill latency seconds = (filled_at_ms - submitted_at_ms) / 1,000.
+    Reference: Alpaca Trading API order properties (``submitted_at`` and
+      ``filled_at``), https://docs.alpaca.markets/us/docs/brokerapi-trading
+    Canonical implementation: this file.
+    Validated against:
+      tests/broker/alpaca/test_adapter_orders.py::test_filled_order_maps_every_field_and_synthesizes_fill_event
+      and ::test_fill_latency_is_unknown_until_both_broker_clocks_exist
+    """
+    if submitted_at_ms is None or filled_at_ms is None:
+        return None
+    return (filled_at_ms - submitted_at_ms) / 1_000
+
+
 def to_alpaca_order_request(leg: BrokerOrderLeg, *, client_order_id: str) -> dict[str, Any]:
     """Build the Alpaca ``POST /v2/orders`` JSON body for one equity leg.
 
@@ -250,6 +269,8 @@ def from_alpaca_order(
     observed_at_ms: int | None = None,
 ) -> BrokerOrder:
     """Map a raw Alpaca order payload to a ``BrokerOrder`` with any fill event."""
+    submitted_at_ms = opt_rfc3339_to_ms(payload.get("submitted_at"))
+    filled_at_ms = opt_rfc3339_to_ms(payload.get("filled_at"))
     return BrokerOrder(
         broker=BROKER_ID,
         order_id=str(payload["id"]),
@@ -265,14 +286,15 @@ def from_alpaca_order(
         stop_price=opt_float(payload.get("stop_price")),
         filled_avg_price=opt_float(payload.get("filled_avg_price")),
         status=str(payload["status"]),
-        submitted_at_ms=opt_rfc3339_to_ms(payload.get("submitted_at")),
+        submitted_at_ms=submitted_at_ms,
         created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
         updated_at_ms=opt_rfc3339_to_ms(payload.get("updated_at")),
-        filled_at_ms=opt_rfc3339_to_ms(payload.get("filled_at")),
+        filled_at_ms=filled_at_ms,
         canceled_at_ms=opt_rfc3339_to_ms(payload.get("canceled_at")),
         expired_at_ms=opt_rfc3339_to_ms(payload.get("expired_at")),
         events=_order_events(payload),
         observed_at_ms=_observed(observed_at_ms),
+        fill_latency_seconds=fill_latency_seconds(submitted_at_ms, filled_at_ms),
     )
 
 
