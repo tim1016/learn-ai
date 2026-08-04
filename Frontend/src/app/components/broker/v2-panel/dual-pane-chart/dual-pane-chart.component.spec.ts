@@ -84,6 +84,17 @@ describe('DualPaneChartComponent', () => {
     expect(screen.getByRole('tab', { name: /Polygon/i })).toBeTruthy();
   });
 
+  it('uses the shared asset identity for the chart symbol', async () => {
+    const { container } = await render(DualPaneChartComponent, {
+      inputs: { symbol: 'NVDA', liveBars: [], histBars: [] },
+    });
+
+    const identity = container.querySelector('app-asset-identity');
+    expect(identity).not.toBeNull();
+    expect(screen.getByText('NVDA')).toBeTruthy();
+    expect(identity?.querySelector('img')?.getAttribute('src')).toContain('/nvidia.svg');
+  });
+
   it('shows overlay notice when liveNotices are provided', async () => {
     const notice = {
       code: 'LIVE_UNAVAILABLE',

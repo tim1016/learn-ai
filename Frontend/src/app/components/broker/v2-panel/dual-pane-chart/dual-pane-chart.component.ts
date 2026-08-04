@@ -31,6 +31,7 @@ import type {
   ChartSource,
 } from '../lib/broker-v2-panel.types';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
+import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 
 type ChartPane = 'live' | 'polygon';
 
@@ -141,7 +142,7 @@ export const LIVE_RESOLUTIONS: readonly ChartLiveResolution[] = ['5s', '1m'];
 @Component({
   selector: 'app-dual-pane-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe],
+  imports: [AssetIdentityComponent, ReceiptLabelPipe],
   templateUrl: './dual-pane-chart.component.html',
   styleUrl: './dual-pane-chart.component.scss',
 })

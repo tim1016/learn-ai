@@ -188,6 +188,18 @@ describe('TraderLensComponent — focused trader information', () => {
     expect(screen.getByLabelText('Profit and loss today')).toBeTruthy();
     expect(screen.getByRole('table', { name: 'Bot snapshot' })).toBeTruthy();
   });
+
+  it('places fills today in the right-hand trader rail', async () => {
+    const panel: BotPanelView = { ...BASE_PANEL, mode: 'trade' };
+    const { container } = await render(TraderLensComponent, {
+      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
+    });
+
+    expect(
+      container.querySelector('.trader-rail app-trades-today-list'),
+    ).not.toBeNull();
+    expect(screen.getByText('Fills today')).toBeTruthy();
+  });
 });
 
 describe('TraderLensComponent — live fallback chip', () => {

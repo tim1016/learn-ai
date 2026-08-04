@@ -11,6 +11,7 @@
 
 .trades-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
   padding: 0.625rem 0.75rem;
@@ -46,6 +47,7 @@
 
 .fills-table {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 0.8rem;
   color: var(--text-color, #f9fafb);
@@ -65,6 +67,16 @@
     border-bottom: 1px solid #1f2937;
     vertical-align: middle;
   }
+
+  th:nth-child(1) { width: 30%; }
+  th:nth-child(2) { width: 20%; }
+  th:nth-child(3) { width: 19%; }
+  th:nth-child(4) { width: 31%; }
+
+  th:nth-child(3),
+  th:nth-child(4),
+  td:nth-child(3),
+  td:nth-child(4) { text-align: right; }
 }
 
 .fill-row {
@@ -81,7 +93,12 @@
 .fill-row--buy .fill-side { color: var(--bull); }
 .fill-row--sell .fill-side { color: var(--bear); }
 
-.fees-note { color: var(--text-muted); font-size: var(--fs-xxs); }
+.fees-note {
+  width: 100%;
+  color: var(--text-muted);
+  font-size: var(--fs-xxs);
+  text-align: right;
+}
 
 .no-trades {
   padding: 1.25rem 0.75rem;

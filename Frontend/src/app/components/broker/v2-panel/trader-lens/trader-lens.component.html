@@ -42,18 +42,18 @@
         }
       </div>
     </section>
+
+    @if (isPaperExecution()) {
+      <app-trades-today-list
+        [fills]="liveFillMarkers()"
+        [feeFidelity]="profile().fee_fidelity"
+        [tradingDateMs]="tradingDateMs()"
+      />
+    } @else if (isLogOnly()) {
+      <section class="observation-note" role="status">
+        <strong>Observation only</strong>
+        <span>This bot records decisions but does not place broker orders.</span>
+      </section>
+    }
   </aside>
 </div>
-
-@if (isPaperExecution()) {
-  <app-trades-today-list
-    [fills]="liveFillMarkers()"
-    [feeFidelity]="profile().fee_fidelity"
-    [tradingDateMs]="tradingDateMs()"
-  />
-} @else if (isLogOnly()) {
-  <section class="observation-note" role="status">
-    <strong>Observation only</strong>
-    <span>This bot records decisions but does not place broker orders.</span>
-  </section>
-}

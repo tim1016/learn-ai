@@ -16,7 +16,7 @@
     <div class="identity-lockup">
       <span class="eyebrow">{{ panel().strategy_label }}</span>
       <div class="identity-lockup__line">
-        <h1>{{ panel().symbol }}</h1>
+        <h1><app-asset-identity [symbol]="panel().symbol" size="md" /></h1>
         <code>{{ panel().strategy_instance_id }}</code>
       </div>
     </div>
