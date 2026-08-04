@@ -316,6 +316,8 @@ async def clear_clerk_hold(broker: str, request: ClearHoldRequest) -> ClerkStatu
     clerk = _require_trade_clerk(broker)
     try:
         return await clerk.clear_hold(operator=request.operator, reason=request.reason)
+    except InventoryBaselineRefusedError as error:
+        raise HTTPException(status_code=409, detail={"message": str(error), "why": error.detail})
     except BrokerError as error:
         _raise_http(error)
 
