@@ -26,7 +26,7 @@
         <span>Order type</span>
         <select [value]="orderTypeFilter()" (change)="filterExact(orderTable, 'order_type', $event)">
           <option value="">All types</option>
-          @for (type of orderTypes; track type) {
+          @for (type of orderTypes(); track type) {
             <option [value]="type">{{ type | receiptLabel }}</option>
           }
         </select>
@@ -134,24 +134,7 @@
 
     <p-popover #orderDetails ariaLabel="Alpaca order references" styleClass="order-reference-popover">
       @if (selectedOrder(); as order) {
-        <div class="order-reference-card">
-          <header><app-asset-identity [symbol]="order.symbol" /><p-tag [severity]="statusSeverity(order.status)" [value]="order.status | receiptLabel" /></header>
-          <p>Use the Alpaca order ID to verify this transaction in Alpaca's Orders view or API.</p>
-          <dl>
-            <div><dt>Alpaca order ID</dt><dd><code>{{ order.order_id }}</code></dd></div>
-            <div><dt>Client order ID</dt><dd><code>{{ order.client_order_id ?? 'Not supplied' }}</code></dd></div>
-            <div><dt>Asset class</dt><dd>{{ (order.asset_class ?? 'unknown') | receiptLabel }}</dd></div>
-            <div>
-              <dt>Filled</dt>
-              <dd>
-                {{ order.filled_quantity | number: '1.0-4' }}
-                @if (order.filled_avg_price !== null) { @ {{ order.filled_avg_price | number: '1.2-4' }} }
-              </dd>
-            </div>
-            @if (order.filled_at_ms !== null) { <div><dt>Filled at</dt><dd><app-timestamp-display [value]="order.filled_at_ms" mode="local" /></dd></div> }
-            @if (order.updated_at_ms !== null) { <div><dt>Last broker update</dt><dd><app-timestamp-display [value]="order.updated_at_ms" mode="local" /></dd></div> }
-          </dl>
-        </div>
+        <app-order-reference-card [order]="order" />
       }
     </p-popover>
   }

@@ -11,13 +11,14 @@ import {
 import { ButtonModule } from 'primeng/button';
 import { Popover, PopoverModule } from 'primeng/popover';
 import { Table, TableModule } from 'primeng/table';
-import { TagModule, type TagSeverity } from 'primeng/tag';
+import { TagModule } from 'primeng/tag';
 
 import type { BrokerOrder } from '../../../api/alpaca.types';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../services/brokers.service';
+import { orderStatusSeverity, OrderReferenceCardComponent } from './order-reference-card.component';
 
 // Hide Cancel only for terminal states and states where Alpaca itself rejects a
 // second cancel. This intentionally leaves `done_for_day` GTC orders eligible:
@@ -49,6 +50,7 @@ const NON_CANCELABLE_STATUSES: ReadonlySet<string> = new Set([
     TableModule,
     TagModule,
     TimestampDisplayComponent,
+    OrderReferenceCardComponent,
   ],
   templateUrl: './alpaca-orders-table.component.html',
   styleUrl: './alpaca-orders-table.component.scss',
@@ -72,7 +74,12 @@ export class AlpacaOrdersTableComponent {
   protected readonly searchQuery = signal('');
   protected readonly orderTypeFilter = signal('');
   protected readonly statusFilter = signal('');
-  protected readonly orderTypes = ['market', 'limit'] as const;
+  // Derived from live data, not a hardcoded allowlist: order_type is an
+  // unconstrained broker-reported string, so a stop/stop_limit/trailing_stop
+  // order placed through another channel must still be filterable.
+  protected readonly orderTypes = computed(() =>
+    [...new Set((this.orders.value() ?? []).map((order) => order.order_type))].sort(),
+  );
   protected readonly statusOptions = computed(() =>
     [...new Set((this.orders.value() ?? []).map((order) => order.status))].sort(),
   );
@@ -113,15 +120,7 @@ export class AlpacaOrdersTableComponent {
     return !NON_CANCELABLE_STATUSES.has(order.status);
   }
 
-  protected statusSeverity(status: string): TagSeverity {
-    if (status === 'filled') return 'success';
-    if (status === 'rejected') return 'danger';
-    if (status === 'canceled' || status === 'expired' || status === 'replaced') {
-      return 'secondary';
-    }
-    if (status === 'pending_cancel' || status === 'pending_replace') return 'warn';
-    return 'info';
-  }
+  protected readonly statusSeverity = orderStatusSeverity;
 
   protected async cancel(order: BrokerOrder): Promise<void> {
     if (this.cancelingId() !== null) return;

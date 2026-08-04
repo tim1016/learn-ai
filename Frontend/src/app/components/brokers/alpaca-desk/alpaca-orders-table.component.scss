@@ -6,8 +6,7 @@
 .transaction-search,
 .quick-filter,
 .order-cell,
-.row-actions,
-.order-reference-card header {
+.row-actions {
   display: flex;
   align-items: center;
 }
@@ -99,8 +98,7 @@
 .order-cell strong,
 .stacked-cell strong,
 .fill-cell strong,
-.timestamp-cell,
-.order-reference-card code {
+.timestamp-cell {
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -181,56 +179,6 @@
 
 .empty-state i {
   font-size: 1.3rem;
-}
-
-.order-reference-card {
-  width: min(29rem, calc(100vw - 3rem));
-}
-
-.order-reference-card header {
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding-bottom: var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-
-.order-reference-card > p {
-  margin: var(--space-3) 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-}
-
-.order-reference-card dl {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-}
-
-.order-reference-card dl div {
-  display: grid;
-  grid-template-columns: 7.5rem minmax(0, 1fr);
-  gap: var(--space-3);
-}
-
-.order-reference-card dt {
-  color: var(--text-muted);
-  font-size: var(--fs-xxs);
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
-}
-
-.order-reference-card dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--text-primary);
-  font-size: var(--fs-xs);
-}
-
-.order-reference-card code {
-  display: block;
-  overflow-wrap: anywhere;
-  white-space: normal;
 }
 
 .sr-only {
