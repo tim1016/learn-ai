@@ -8661,12 +8661,20 @@
           "rail": {
             "$ref": "#/components/schemas/TransactionRail"
           },
+          "readiness_blocked_count": {
+            "title": "Readiness Blocked Count",
+            "type": "integer"
+          },
           "readiness_checks": {
             "items": {
               "$ref": "#/components/schemas/ReadinessCheckView"
             },
             "title": "Readiness Checks",
             "type": "array"
+          },
+          "readiness_ready_count": {
+            "title": "Readiness Ready Count",
+            "type": "integer"
           },
           "realized_pnl_today": {
             "title": "Realized Pnl Today",
@@ -8738,6 +8746,8 @@
           "journal_tail_seq",
           "actions",
           "readiness_checks",
+          "readiness_ready_count",
+          "readiness_blocked_count",
           "exposure",
           "working_orders",
           "recent_decisions",

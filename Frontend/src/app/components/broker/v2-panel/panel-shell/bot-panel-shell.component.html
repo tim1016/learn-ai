@@ -61,9 +61,11 @@
           [liveResolution]="liveResolution()"
           [selectedPreset]="selectedPreset()"
           [actionPending]="actionPending()"
+          [runHistory]="runHistoryState()"
           (presetChange)="onPresetChange($event)"
           (liveResolutionChange)="onLiveResolutionChange($event)"
           (actionRequested)="onActionRequested($event)"
+          (runHistoryNavigation)="onRunHistoryNavigation($event)"
         />
       </div>
     }

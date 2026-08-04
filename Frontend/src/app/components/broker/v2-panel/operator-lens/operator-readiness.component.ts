@@ -6,6 +6,12 @@ import {
   output,
 } from '@angular/core';
 import { Tooltip } from 'primeng/tooltip';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionHeader,
+  AccordionPanel,
+} from 'primeng/accordion';
 import type {
   ActionId,
   BotPanelView,
@@ -41,7 +47,15 @@ const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
 @Component({
   selector: 'app-operator-readiness',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PanelActionButtonComponent, ReceiptLabelPipe, Tooltip],
+  imports: [
+    Accordion,
+    AccordionContent,
+    AccordionHeader,
+    AccordionPanel,
+    PanelActionButtonComponent,
+    ReceiptLabelPipe,
+    Tooltip,
+  ],
   templateUrl: './operator-readiness.component.html',
   styleUrl: './operator-readiness.component.scss',
 })
@@ -71,13 +85,5 @@ export class OperatorReadinessComponent {
         };
       });
     },
-  );
-
-  protected readonly readyCount = computed(
-    () => this.readinessControls().filter((control) => control.check.ready).length,
-  );
-
-  protected readonly blockedCount = computed(
-    () => this.readinessControls().length - this.readyCount(),
   );
 }

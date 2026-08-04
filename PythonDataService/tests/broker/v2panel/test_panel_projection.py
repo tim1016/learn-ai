@@ -221,6 +221,19 @@ def test_panel_composes_cards_rail_and_actions() -> None:
     assert panel.exposure == {"SPY": 100.0}
     assert panel.recent_decisions[0].reason_code == "CROSS_UP"
     assert {check.operation for check in panel.readiness_checks} == action_ids
+    # Golden gate fixture: the eight presented lifecycle actions split evenly.
+    assert panel.readiness_ready_count == 4
+    assert panel.readiness_blocked_count == 4
+    assert panel.readiness_ready_count == sum(
+        check.ready for check in panel.readiness_checks
+    )
+    assert panel.readiness_blocked_count == sum(
+        not check.ready for check in panel.readiness_checks
+    )
+    assert (
+        panel.readiness_ready_count + panel.readiness_blocked_count
+        == len(panel.readiness_checks)
+    )
 
 
 def test_unperformed_actions_are_not_advertised_and_flatten_has_blast_radius() -> None:
