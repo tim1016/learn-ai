@@ -37,12 +37,14 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     InstanceCustodyProof,
 )
+from app.broker.contract.models import BrokerAccountSnapshot
 from app.engine.execution.portfolio import Portfolio
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome
 from app.engine.live.desired_state import DesiredState
 from app.engine.strategy.base import StrategyContext
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
+from app.schemas.action_plan import ActionPlan, CloseLegExit, StockEntryLeg, StockInstrument
 from app.schemas.broker_bots import AlpacaPaperStrategyKey, BotProcessFact
 from app.services.bot_binding_repository import (
     BrokerBotBinding,
@@ -149,6 +151,32 @@ class _StaleFeed(_FakeFeed):
 class _ActiveStaleFeed(_StaleFeed):
     def health(self) -> FeedHealth:
         return super().health().model_copy(update={"active_subscription_count": 1})
+
+
+class _CancellationSuppressingFeed(_FakeFeed):
+    """Simulates a strategy coroutine whose task never terminates on cancel.
+
+    ``stream_bars`` swallows exactly one ``CancelledError`` at its
+    ``await`` suspension point and keeps looping, so ``task.cancel()``
+    never actually finishes the task — reproducing the P0-3 audit
+    finding without a real external dependency.
+    """
+
+    def __init__(self, bars: list[MarketDataBar]) -> None:
+        super().__init__(bars, mode="hold")
+        self.cancellation_suppressed = False
+
+    async def stream_bars(self, symbol: str, *, use_rth: bool = True):
+        for bar in self._bars:
+            self.bars_consumed += 1
+            yield bar
+        while True:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if self.cancellation_suppressed:
+                    raise
+                self.cancellation_suppressed = True
 
 
 class _CustodyClerk:
@@ -741,6 +769,185 @@ async def test_stop_of_unknown_bot_is_404(tmp_path: Path) -> None:
 
     with pytest.raises(UnknownBotError):
         await registry.stop("alpaca", "never-deployed")
+
+
+@pytest.mark.asyncio
+async def test_stop_does_not_finalize_or_reap_a_task_that_survives_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.services.bot_runner._STOP_TIMEOUT_S", 0.05)
+    feed = _CancellationSuppressingFeed(bars=[])
+    registry = _registry(tmp_path, feed=feed)
+    await registry.deploy_with_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        symbol="SPY",
+        mode="log_only",
+    )
+
+    status = await registry.stop(broker="alpaca", strategy_instance_id=_SID)
+
+    assert feed.cancellation_suppressed is True
+    # The task must still be tracked — not reaped — while it's alive.
+    assert _SID in registry._bots
+    assert registry._bots[_SID].task.done() is False
+    # status() must honestly report the bot as still running, since the
+    # task is still alive; desired_state carries the STOPPED intent.
+    assert status.running is True
+    assert registry.desired_state(_SID) is DesiredState.STOPPED
+
+
+@pytest.fixture
+def _isolated_clerk_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the Alpaca clerk journal at this test's tmp dir, not the shared default.
+
+    ``ClerkSettings`` is a process-wide cached singleton
+    (``get_clerk_settings``) — without this, a Clerk instantiated here would
+    journal into the real ``artifacts/alpaca_clerk`` tree, order-dependent on
+    whichever other test last reset the cache.
+    """
+    from app.broker.alpaca.clerk import journal as journal_module
+
+    monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
+    journal_module.reset_clerk_settings_for_testing()
+    yield tmp_path
+    journal_module.reset_clerk_settings_for_testing()
+
+
+class _FenceProbeBroker:
+    """Minimal read+trade double for proving the desired-state ENTER fence.
+
+    Shared by the two stop-x-fence composition tests below. Only
+    ``get_account`` is exercised: ``_resolve_enter`` rejects a fenced ENTER
+    before any submit/list_positions call is reached.
+    """
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        return BrokerAccountSnapshot(
+            broker="alpaca",
+            account_id="paper-account",
+            account_mode="paper",
+            account_status="ACTIVE",
+            currency="USD",
+            cash=1000.0,
+            equity=1000.0,
+            buying_power=2000.0,
+            portfolio_value=1000.0,
+            long_market_value=0.0,
+            short_market_value=0.0,
+            pattern_day_trader=False,
+            trading_blocked=False,
+            account_blocked=False,
+            created_at_ms=0,
+            observed_at_ms=0,
+        )
+
+
+def _fence_probe_action_plan() -> ActionPlan:
+    return ActionPlan(
+        on_enter=[
+            StockEntryLeg(
+                leg_id="primary",
+                instrument=StockInstrument(kind="stock", underlying="SPY"),
+                position="long",
+                qty_ratio=1,
+            )
+        ],
+        on_exit=[CloseLegExit(kind="close_leg", entry_leg_id="primary")],
+    )
+
+
+@pytest.mark.asyncio
+async def test_surviving_task_after_stop_timeout_cannot_place_new_orders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _isolated_clerk_dir: Path
+) -> None:
+    """Task 5's fence and Task 6's honest-stop fix compose end to end.
+
+    A task that survives Stop's cancellation timeout is exactly the scenario
+    Task 5's ENTER fence exists to neutralize: its next decision must be
+    REJECTED by the real Clerk, not merely "still tracked" by the registry.
+    """
+    from app.broker.alpaca.clerk.clerk import AlpacaClerk
+    from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
+
+    monkeypatch.setattr("app.services.bot_runner._STOP_TIMEOUT_S", 0.05)
+    feed = _CancellationSuppressingFeed(bars=[])
+    registry = _registry(tmp_path, feed=feed)
+    await registry.deploy_with_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        symbol="SPY",
+        mode="log_only",
+    )
+    await registry.stop(broker="alpaca", strategy_instance_id=_SID)
+    assert feed.cancellation_suppressed is True
+
+    broker = _FenceProbeBroker()
+    clerk = AlpacaClerk(
+        read=broker,
+        trade=broker,
+        desired_state_probe=lambda sid: registry.desired_state(sid),
+    )
+
+    # The survivor's coroutine "decided" to ENTER after Stop was called.
+    receipt = await clerk.execute_for_instance(
+        strategy_instance_id=_SID,
+        run_id="run-1",
+        decision_id="bar-late-enter",
+        purpose=EffectPurpose.ENTER,
+        action_plan=_fence_probe_action_plan(),
+        quantity=1,
+    )
+
+    assert receipt.state is EffectOperationState.REJECTED
+
+
+@pytest.mark.asyncio
+async def test_stop_intent_and_fence_survive_process_restart(
+    tmp_path: Path, _isolated_clerk_dir: Path
+) -> None:
+    """The fence's correctness after a restart rests only on desired_state.json.
+
+    A brand-new registry instance (no shared in-memory state) reading the
+    same tmp_path must see the same STOPPED intent a first-process registry
+    wrote, and a fresh Clerk wired to it must still reject a post-restart
+    ENTER for that instance.
+    """
+    from app.broker.alpaca.clerk.clerk import AlpacaClerk
+    from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
+
+    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    await registry.deploy_with_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        symbol="SPY",
+        mode="log_only",
+    )
+    await registry.stop(broker="alpaca", strategy_instance_id=_SID)
+
+    # Simulate a process restart: a brand-new registry instance, no shared
+    # in-memory state, reading the same on-disk artifacts.
+    restarted_registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
+    assert restarted_registry.desired_state(_SID) is DesiredState.STOPPED
+
+    broker = _FenceProbeBroker()
+    clerk = AlpacaClerk(
+        read=broker,
+        trade=broker,
+        desired_state_probe=lambda sid: restarted_registry.desired_state(sid),
+    )
+    receipt = await clerk.execute_for_instance(
+        strategy_instance_id=_SID,
+        run_id="run-1",
+        decision_id="bar-post-restart-enter",
+        purpose=EffectPurpose.ENTER,
+        action_plan=_fence_probe_action_plan(),
+        quantity=1,
+    )
+    assert receipt.state is EffectOperationState.REJECTED
 
 
 # ── desired_state: public accessor for durable operator intent ────────

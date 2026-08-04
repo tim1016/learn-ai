@@ -650,7 +650,18 @@ class BotTaskRegistry:
         # once the Clerk returns a fresh proof.
         managed.stop_reason_code = PROVISIONAL_STOP_REASON_CODE
         managed.task.cancel()
-        await asyncio.wait({managed.task}, timeout=_STOP_TIMEOUT_S)
+        _done, pending = await asyncio.wait({managed.task}, timeout=_STOP_TIMEOUT_S)
+        if pending:
+            logger.warning(
+                "Stop cancellation did not terminate within the timeout",
+                extra={
+                    "action": "stop_cancellation_timeout",
+                    "strategy_instance_id": strategy_instance_id,
+                    "run_id": managed.binding.run_id,
+                    "timeout_s": _STOP_TIMEOUT_S,
+                },
+            )
+            return self.status(broker, strategy_instance_id)
         # Backstop for a coroutine that never entered supervision (cancelled
         # pre-start): _finalize is idempotent, so this is a no-op whenever the
         # supervisor already recorded the outcome.
