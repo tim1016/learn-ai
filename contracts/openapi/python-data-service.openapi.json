@@ -10682,6 +10682,12 @@
         "additionalProperties": false,
         "description": "An operator-authored order request: one or more legs to submit.\n\nEach leg is journaled independently. A definitive per-leg failure does not\nblock later legs, but an uncertain outcome stops the batch before it can\ncreate contradictory new exposure. The clerk mints a distinct ``order_ref``\nidentity per submitted leg.",
         "properties": {
+          "expected_account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Expected Account Id",
+            "type": "string"
+          },
           "legs": {
             "items": {
               "$ref": "#/components/schemas/BrokerOrderLeg"
@@ -10701,6 +10707,7 @@
         },
         "required": [
           "operator",
+          "expected_account_id",
           "legs"
         ],
         "title": "BrokerOrderRequest",

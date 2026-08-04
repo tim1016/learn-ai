@@ -196,7 +196,11 @@ async def test_submit_returns_409_reason_code_while_held(_alpaca_clerk: None) ->
 
     response = await _post(
         "/api/brokers/alpaca/orders",
-        {"operator": "inkant", "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}]},
+        {
+            "operator": "inkant",
+            "expected_account_id": "PA-STATUS",
+            "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}],
+        },
     )
 
     assert response.status_code == 409
@@ -276,7 +280,11 @@ async def test_clear_hold_restores_submission(_alpaca_clerk: None) -> None:
     )
     submit = await _post(
         "/api/brokers/alpaca/orders",
-        {"operator": "inkant", "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}]},
+        {
+            "operator": "inkant",
+            "expected_account_id": "PA-STATUS",
+            "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}],
+        },
     )
     assert submit.status_code == 200
     assert submit.json()["results"][0]["status"] == "acked"

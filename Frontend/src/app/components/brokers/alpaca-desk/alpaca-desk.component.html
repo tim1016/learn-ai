@@ -23,6 +23,10 @@
 
   <app-alpaca-hold-banner />
 
+  @if (orderRouteMismatch(); as mismatch) {
+    <p class="order-route-error" role="alert">{{ mismatch }}</p>
+  }
+
   <app-alpaca-custody-resolution />
 
   <div class="desk-grid">
@@ -60,10 +64,16 @@
 >
   <div class="order-dialog-intro">
     <div>
-      <span class="order-dialog-kicker">Paper account · Equities</span>
+      <span class="order-dialog-kicker">
+        {{ ticketAccountId() ?? 'Account unavailable' }} · Equities
+      </span>
       <p>Choose Market for immediate execution or Limit to set the highest buy or lowest sell price.</p>
     </div>
     <span class="order-dialog-safety"><i class="pi pi-shield" aria-hidden="true"></i> Preview required</span>
   </div>
-  <app-alpaca-order-entry (submissionFinished)="refreshOrders()" />
+  <app-alpaca-order-entry
+    [initialSymbol]="orderPrefill()?.symbol ?? ''"
+    [expectedAccountId]="ticketAccountId() ?? ''"
+    (submissionFinished)="refreshOrders()"
+  />
 </p-dialog>

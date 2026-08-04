@@ -109,12 +109,21 @@ def _control_headers() -> dict[str, str]:
     return {CONTROL_SECRET_HEADER: secret} if secret else {}
 
 
-async def _post(body: dict[str, Any]) -> Response:
+async def _post(
+    body: dict[str, Any],
+    *,
+    include_expected_account: bool = True,
+) -> Response:
+    payload = (
+        {"expected_account_id": "PA-ENDPOINT", **body}
+        if include_expected_account
+        else body
+    )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         return await client.post(
-            "/api/brokers/alpaca/orders", json=body, headers=_control_headers()
+            "/api/brokers/alpaca/orders", json=payload, headers=_control_headers()
         )
 
 
@@ -155,6 +164,40 @@ async def test_accepted_leg_returns_acked_result(_alpaca_clerk: None) -> None:
     # client_order_id echoed back equals the minted order_ref.
     assert leg["order"]["client_order_id"] == leg["order_ref"]
     assert leg["order_ref"].startswith("manual/inkant/v1:")
+
+
+@responses.activate
+async def test_expected_account_mismatch_is_rejected_before_order_submit(
+    _alpaca_clerk: None,
+) -> None:
+    responses.add(responses.GET, f"{_BASE}/v2/account", body=_ACCOUNT_BODY, status=200)
+
+    response = await _post(
+        {
+            "operator": "inkant",
+            "expected_account_id": "PA-STALE",
+            "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}],
+        }
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["message"] == (
+        "The order ticket targets a different account."
+    )
+    assert [call for call in responses.calls if call.request.method == "POST"] == []
+
+
+@responses.activate
+async def test_missing_expected_account_is_rejected_before_clerk_resolution(
+    _alpaca_clerk: None,
+) -> None:
+    response = await _post(
+        {"operator": "inkant", "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}]},
+        include_expected_account=False,
+    )
+
+    assert response.status_code == 422
+    assert len(responses.calls) == 0
 
 
 @responses.activate

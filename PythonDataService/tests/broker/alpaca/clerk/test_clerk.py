@@ -155,10 +155,19 @@ def _clerk_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     journal_module.reset_clerk_settings_for_testing()
 
 
-def _request(operator: str = "inkant", **leg: Any) -> BrokerOrderRequest:
+def _request(
+    operator: str = "inkant",
+    *,
+    expected_account_id: str = "PA-TEST",
+    **leg: Any,
+) -> BrokerOrderRequest:
     base: dict[str, Any] = {"symbol": "SPY", "side": "buy", "quantity": 1}
     base.update(leg)
-    return BrokerOrderRequest(operator=operator, legs=[BrokerOrderLeg(**base)])
+    return BrokerOrderRequest(
+        operator=operator,
+        expected_account_id=expected_account_id,
+        legs=[BrokerOrderLeg(**base)],
+    )
 
 
 @pytest.mark.parametrize(
@@ -208,6 +217,23 @@ async def test_intent_is_fsynced_before_broker_submit() -> None:
     await clerk.submit(_request())
 
     assert ClerkEntryKind.INTENT_RECORDED in seen_kinds
+
+
+async def test_submit_refuses_a_stale_expected_account_before_broker_call() -> None:
+    broker = _FakeBroker(account=_account("PA-CONNECTED"))
+    clerk = AlpacaClerk(read=broker, trade=broker)
+    request = BrokerOrderRequest(
+        operator="inkant",
+        expected_account_id="PA-STALE",
+        legs=[BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)],
+    )
+
+    with pytest.raises(BrokerRequestInvalid, match="different account"):
+        await clerk.submit(request)
+
+    assert broker.submit_calls == []
+    assert clerk._journal is not None
+    assert clerk._journal.read_entries() == []
 
 
 async def test_identity_is_client_order_id_equals_order_ref() -> None:
@@ -355,6 +381,7 @@ async def test_bad_operator_fails_typed_without_journal_or_broker_call() -> None
     # value ever reaches it directly.
     bad_request = BrokerOrderRequest.model_construct(
         operator="bad operator",
+        expected_account_id="PA-TEST",
         legs=[BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)],
     )
     result = await clerk.submit(bad_request)
@@ -402,7 +429,7 @@ async def test_journal_path_is_account_scoped_and_separate() -> None:
     broker = _FakeBroker(account=_account("PA-9999"))
     clerk = AlpacaClerk(read=broker, trade=broker)
 
-    await clerk.submit(_request())
+    await clerk.submit(_request(expected_account_id="PA-9999"))
 
     journal_dir = clerk._journal.account_dir  # type: ignore[union-attr]
     assert journal_dir.name == "PA-9999"

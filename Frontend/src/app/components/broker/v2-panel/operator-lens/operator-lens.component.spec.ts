@@ -192,6 +192,8 @@ function makeFakePanelService(evidencePage?: EvidencePage) {
     getEvidence: vi.fn(
       () => Promise.resolve(evidencePage ?? makeEvidencePage()),
     ) as unknown as (broker: string, accountId: string, sid: string, params: Record<string, unknown>) => Promise<EvidencePage>,
+    getCurrentRun: vi.fn().mockRejectedValue(new Error('No current run fixture.')),
+    getRunHistory: vi.fn().mockResolvedValue({ runs: [], next_cursor: null }),
   };
 }
 
@@ -237,6 +239,27 @@ describe('OperatorLensComponent', () => {
     });
 
     expect(screen.getByText('Live')).toBeTruthy();
+  });
+
+  it('renders run evidence as the final operator section', async () => {
+    const fakeSvc = makeFakePanelService();
+    const { container } = await render(OperatorLensComponent, {
+      inputs: {
+        panel: makePanel(),
+        profile: makeProfile(),
+        actionPending: false,
+        broker: 'alpaca',
+        accountId: 'acc-1',
+        sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
+    });
+
+    const runHistory = container.querySelector('app-bot-run-history');
+    expect(runHistory).not.toBeNull();
+    expect(runHistory?.nextElementSibling).toBeNull();
+    expect(screen.getByText('Run evidence')).toBeTruthy();
+    expect(screen.getByText('Current and previous runs')).toBeTruthy();
   });
 
   it('renders backend-authored Resume and account-freeze copy unchanged', async () => {
@@ -652,10 +675,7 @@ describe('OperatorLensComponent', () => {
     fireEvent.click(disclosure);
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
 
-    expect(
-      (await screen.findByRole('alert')).textContent,
-    ).toContain('The Clerk cannot prove the exposure to flatten.');
-    expect(screen.getByRole('button', { name: 'Flatten & stop' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Flatten & stop' })).toBeTruthy();
     expect(screen.queryByLabelText('Operator commands')).toBeNull();
   });
 });

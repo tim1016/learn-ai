@@ -20,9 +20,6 @@ import type {
   PanelAction,
   PanelActionResult,
   PanelActionTrigger,
-  RunHistoryNavigation,
-  RunHistoryMode,
-  RunHistoryState,
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
@@ -35,12 +32,6 @@ import {
 } from './panel-action-receipt.component';
 
 type PanelLens = 'trader' | 'operator';
-
-interface RunHistoryLocation {
-  readonly mode: RunHistoryMode;
-  readonly cursor: string | null;
-  readonly newerCursors: readonly (string | null)[];
-}
 
 /**
  * Panel shell — host for all bot control panel lenses (spec §3, §6, §7).
@@ -105,10 +96,6 @@ export class BotPanelShellComponent {
   protected readonly selectedTransactionRef = signal<string | null>(null);
   protected readonly actionPending = signal(false);
   protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
-  private readonly runHistoryLocation = linkedSignal<string, RunHistoryLocation>({
-    source: this.sid,
-    computation: () => ({ mode: 'current', cursor: null, newerCursors: [] }),
-  });
 
   protected readonly panel = computed(() => this.liveStore.snapshot()?.panel ?? null);
   protected readonly liveChart = computed(() => {
@@ -120,49 +107,6 @@ export class BotPanelShellComponent {
   protected readonly profile = resource({
     params: () => this.broker(),
     loader: ({ params }) => this.panelSvc.getPanelProfile(params),
-  });
-
-  protected readonly currentRun = resource({
-    params: () => ({ broker: this.broker(), sid: this.sid() }),
-    loader: ({ params }) =>
-      this.panelSvc.getCurrentRun(params.broker, params.sid),
-  });
-
-  protected readonly previousRun = resource({
-    params: () => {
-      const location = this.runHistoryLocation();
-      return location.mode === 'history'
-        ? {
-            broker: this.broker(),
-            sid: this.sid(),
-            cursor: location.cursor,
-          }
-        : undefined;
-    },
-    loader: ({ params }) =>
-      this.panelSvc.getRunHistory(
-        params.broker,
-        params.sid,
-        params.cursor ?? undefined,
-      ),
-  });
-
-  protected readonly runHistoryState = computed<RunHistoryState>(() => {
-    const location = this.runHistoryLocation();
-    const current = this.currentRun.value() ?? null;
-    const history = this.previousRun.value() ?? null;
-    return {
-      mode: location.mode,
-      current,
-      history,
-      // A background refresh must not replace stable evidence with a loading
-      // placeholder. Loading is only a first-load state for each view.
-      currentLoading: current === null && this.currentRun.isLoading(),
-      historyLoading: history === null && this.previousRun.isLoading(),
-      currentFailed: current === null && this.currentRun.error() !== undefined,
-      historyFailed: history === null && this.previousRun.error() !== undefined,
-      canViewNewer: location.newerCursors.length > 0,
-    };
   });
 
   protected readonly histChart = resource({
@@ -200,30 +144,7 @@ export class BotPanelShellComponent {
         resolution: this.liveResolution(),
       });
     });
-    let previousRunning: boolean | null = null;
-    effect(() => {
-      const running = this.panel()?.health.running ?? null;
-      if (
-        previousRunning === true
-        && running === false
-        && !this.currentRun.isLoading()
-      ) {
-        // Capture terminal evidence once when a live run goes off duty, then
-        // leave that immutable result alone until the next lifecycle change.
-        this.currentRun.reload();
-      }
-      previousRunning = running;
-    });
-    const pollTimer = setInterval(() => {
-      // Off-duty evidence is immutable until another lifecycle action starts a
-      // run. The live panel reports that transition, and explicit actions also
-      // reload the resource, so polling an idle run only creates visual churn.
-      if (this.panel()?.health.running && !this.currentRun.isLoading()) {
-        this.currentRun.reload();
-      }
-    }, 5_000);
     this.destroyRef.onDestroy(() => {
-      clearInterval(pollTimer);
       this.liveStore.stop();
     });
   }
@@ -288,49 +209,6 @@ export class BotPanelShellComponent {
     void this.liveStore.selectTransaction(transactionRef);
   }
 
-  protected onRunHistoryNavigation(destination: RunHistoryNavigation): void {
-    const location = this.runHistoryLocation();
-    if (destination === 'current') {
-      if (location.mode === 'current') {
-        if (this.currentRun.error() !== undefined) this.currentRun.reload();
-        return;
-      }
-      this.runHistoryLocation.update((current) => ({
-        ...current,
-        mode: 'current',
-      }));
-      return;
-    }
-    if (destination === 'history') {
-      if (location.mode === 'history') {
-        if (this.previousRun.error() !== undefined) this.previousRun.reload();
-        return;
-      }
-      this.runHistoryLocation.update((current) => ({
-        ...current,
-        mode: 'history',
-      }));
-      return;
-    }
-    if (destination === 'older') {
-      const nextCursor = this.previousRun.value()?.next_cursor;
-      if (!nextCursor) return;
-      this.runHistoryLocation.set({
-        mode: 'history',
-        cursor: nextCursor,
-        newerCursors: [...location.newerCursors, location.cursor],
-      });
-      return;
-    }
-    const newerCursor = location.newerCursors.at(-1);
-    if (newerCursor === undefined) return;
-    this.runHistoryLocation.set({
-      mode: 'history',
-      cursor: newerCursor,
-      newerCursors: location.newerCursors.slice(0, -1),
-    });
-  }
-
   protected dismissActionReceipt(): void {
     this.actionReceipt.set(null);
   }
@@ -351,7 +229,6 @@ export class BotPanelShellComponent {
       );
       this.actionReceipt.set(this.successReceipt(result));
       await this.liveStore.refresh();
-      this.currentRun.reload();
     } catch (error) {
       const receipt = this.errorReceipt(error, action);
       this.actionReceipt.set(receipt);
