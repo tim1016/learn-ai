@@ -1,97 +1,48 @@
-<section class="trader-command" aria-labelledby="trader-status-title">
-  <div>
-    <span class="eyebrow">Trader status</span>
-    <h2 id="trader-status-title">{{ headline() }}</h2>
-    <p>{{ panel().execution_policy }}</p>
-    @if (isDryRun()) { <strong>Dry Run · no broker orders</strong> }
-  </div>
-  <div class="trader-command__actions">
-    <a
-      class="trader-command__manual-link"
-      routerLink="/brokers/alpaca"
-      title="Open the account-scoped order ticket; every order intent is recorded before Alpaca is called."
-    >Manual order ticket</a>
-    @if (primaryAction(); as action) {
-      <app-panel-action-button
-        [action]="action"
-        [pending]="actionPending()"
-        [tone]="action.action_id === 'stop' ? 'danger' : 'primary'"
-        (triggered)="actionRequested.emit($event)"
-      />
-    }
-  </div>
-</section>
-
-<app-bot-run-history
-  [state]="runHistory()"
-  (navigationRequested)="runHistoryNavigation.emit($event)"
-/>
-
-<app-trader-metrics [panel]="panel()" />
-
-<section class="chart-section" aria-label="Market and fill charts">
-  <app-dual-pane-chart
-    [symbol]="symbol()"
-    [liveBars]="liveBars()"
-    [liveFillMarkers]="liveFillMarkers()"
-    [liveNotices]="liveNotices()"
-    [liveLoading]="liveChartLoading()"
-    [historyLoading]="histChartLoading()"
-    [liveResolution]="liveResolution()"
-    [histBars]="histBars()"
-    [histFillMarkers]="histFillMarkers()"
-    [selectedPreset]="selectedPreset()"
-    (presetChange)="onPresetChange($event)"
-    (liveResolutionChange)="liveResolutionChange.emit($event)"
-  />
-</section>
-
-<div class="trader-activity">
-  <section class="activity-card" aria-labelledby="recent-decisions-title">
-    <div class="activity-card__heading">
-      <span class="eyebrow">Strategy evidence</span>
-      <h2 id="recent-decisions-title">Recent decisions</h2>
-    </div>
-    @if (panel().recent_decisions.length === 0) {
-      <p class="empty-copy">No decisions recorded yet.</p>
-    } @else {
-      <ul>
-        @for (decision of panel().recent_decisions; track decision.seq) {
-          <li>
-            <div>
-              <strong>{{ decision.outcome | receiptLabel }}</strong>
-              <span>{{ decision.reason_code | receiptLabel }}{{ decision.simulated ? ' · Simulated' : '' }}</span>
-            </div>
-            <app-timestamp-display [value]="decision.recorded_at_ms" mode="local" />
-          </li>
-        }
-      </ul>
-    }
+<div class="trader-workspace">
+  <section class="chart-section" aria-label="Market and fill chart">
+    <app-dual-pane-chart
+      [symbol]="symbol()"
+      [liveBars]="liveBars()"
+      [liveFillMarkers]="liveFillMarkers()"
+      [liveNotices]="liveNotices()"
+      [liveLoading]="liveChartLoading()"
+      [historyLoading]="histChartLoading()"
+      [liveResolution]="liveResolution()"
+      [histBars]="histBars()"
+      [histFillMarkers]="histFillMarkers()"
+      [selectedPreset]="selectedPreset()"
+      (presetChange)="onPresetChange($event)"
+      (liveResolutionChange)="liveResolutionChange.emit($event)"
+    />
   </section>
 
-  <section class="activity-card" aria-labelledby="recent-fills-title">
-    <div class="activity-card__heading">
-      <span class="eyebrow">Clerk evidence</span>
-      <h2 id="recent-fills-title">Recent fills</h2>
-    </div>
-    @if (isLogOnly()) {
-      <p class="empty-copy">Observation-only mode does not place orders.</p>
-    } @else if (panel().recent_fills.length === 0) {
-      <p class="empty-copy">No attributed fills recorded yet.</p>
-    } @else {
-      <ul>
-        @for (fill of panel().recent_fills; track fill.order_ref + fill.filled_at_ms) {
-          <li>
-            <div>
-              <strong>{{ fill.side | receiptLabel }} {{ fill.symbol }}</strong>
-              <span>{{ fill.quantity ?? 'Quantity not reported' }} @ {{ fill.price ?? 'Price pending' }}{{ fill.simulated ? ' · Simulated fill' : '' }}</span>
-            </div>
-            <app-timestamp-display [value]="fill.filled_at_ms" mode="local" />
-          </li>
+  <aside class="trader-rail" aria-label="Trader summary and actions">
+    <app-trader-metrics [panel]="panel()" />
+
+    <section class="trader-command" aria-labelledby="trader-status-title">
+      <div>
+        <span class="eyebrow">Bot status</span>
+        <h2 id="trader-status-title">{{ headline() }}</h2>
+        <p>{{ panel().execution_policy }}</p>
+        @if (isDryRun()) { <strong>Dry Run · no broker orders</strong> }
+      </div>
+      <div class="trader-command__actions">
+        <a
+          class="trader-command__manual-link"
+          routerLink="/brokers/alpaca"
+          title="Open the account-scoped order ticket; every order intent is recorded before Alpaca is called."
+        >Manual order</a>
+        @if (primaryAction(); as action) {
+          <app-panel-action-button
+            [action]="action"
+            [pending]="actionPending()"
+            [tone]="action.action_id === 'stop' ? 'danger' : 'primary'"
+            (triggered)="actionRequested.emit($event)"
+          />
         }
-      </ul>
-    }
-  </section>
+      </div>
+    </section>
+  </aside>
 </div>
 
 @if (isPaperExecution()) {
@@ -99,7 +50,10 @@
     [fills]="liveFillMarkers()"
     [feeFidelity]="profile().fee_fidelity"
     [tradingDateMs]="tradingDateMs()"
-    [realizedPnlToday]="panel().realized_pnl_today"
-    [openPnl]="panel().open_pnl"
   />
+} @else if (isLogOnly()) {
+  <section class="observation-note" role="status">
+    <strong>Observation only</strong>
+    <span>This bot records decisions but does not place broker orders.</span>
+  </section>
 }

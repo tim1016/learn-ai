@@ -6,7 +6,6 @@ import {
   output,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { EMPTY_RUN_HISTORY_STATE } from '../lib/broker-v2-panel.types';
 import type {
   BotPanelView,
   ChartHistoryPreset,
@@ -16,16 +15,11 @@ import type {
   PanelAction,
   PanelActionTrigger,
   PanelProfile,
-  RunHistoryNavigation,
-  RunHistoryState,
 } from '../lib/broker-v2-panel.types';
 import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.component';
 import { TradesTodayListComponent } from './trades-today-list.component';
-import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TraderMetricsComponent } from './trader-metrics.component';
-import { BotRunHistoryComponent } from '../bot-run-history/bot-run-history.component';
 
 /**
  * Trader lens (spec §6).
@@ -45,11 +39,8 @@ import { BotRunHistoryComponent } from '../bot-run-history/bot-run-history.compo
   imports: [
     DualPaneChartComponent,
     TradesTodayListComponent,
-    TimestampDisplayComponent,
     PanelActionButtonComponent,
-    ReceiptLabelPipe,
     TraderMetricsComponent,
-    BotRunHistoryComponent,
     RouterLink,
   ],
   templateUrl: './trader-lens.component.html',
@@ -67,7 +58,6 @@ export class TraderLensComponent {
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly selectedPreset = input<ChartHistoryPreset>('1D');
   readonly actionPending = input(false);
-  readonly runHistory = input<RunHistoryState>(EMPTY_RUN_HISTORY_STATE);
 
   // ── Outputs ───────────────────────────────────────────────────────────────
 
@@ -76,7 +66,6 @@ export class TraderLensComponent {
   readonly liveResolutionChange = output<ChartLiveResolution>();
   /** User clicked the primary verb button (Resume/Stop). */
   readonly actionRequested = output<PanelActionTrigger>();
-  readonly runHistoryNavigation = output<RunHistoryNavigation>();
 
   // ── Derived ───────────────────────────────────────────────────────────────
 

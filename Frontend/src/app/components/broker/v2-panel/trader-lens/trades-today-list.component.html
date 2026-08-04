@@ -1,6 +1,9 @@
-<section class="trades-today" aria-label="Trades today">
+<section class="trades-today" aria-labelledby="fills-today-title">
   <header class="trades-header">
-    <h3 class="trades-title">Trades today</h3>
+    <div>
+      <span class="trades-kicker">Execution</span>
+      <h3 id="fills-today-title" class="trades-title">Fills today</h3>
+    </div>
     @if (tradingDateMs()) {
       <app-timestamp-display
         [value]="tradingDateMs()"
@@ -8,6 +11,9 @@
         class="trading-date"
         aria-label="Trading date"
       />
+    }
+    @if (feesLabel()) {
+      <span class="fees-note">{{ feesLabel() }}</span>
     }
   </header>
 
@@ -43,21 +49,7 @@
       </tbody>
     </table>
 
-    <div class="pnl-summary" aria-label="P&L summary">
-      <span class="pnl-label">Realized today</span>
-      <span [class]="pnlClass(realizedPnlToday())" aria-label="Realized P&L today">
-        {{ fmtSignedCurrency(realizedPnlToday()) }}
-      </span>
-      <span class="pnl-separator" aria-hidden="true">·</span>
-      <span class="pnl-label">Open P&amp;L</span>
-      <span [class]="pnlClass(openPnl())" aria-label="Open P&L">
-        {{ fmtSignedCurrency(openPnl()) }}
-      </span>
-      @if (feesLabel()) {
-        <span class="fees-note">{{ feesLabel() }}</span>
-      }
-    </div>
   } @else {
-    <p class="no-trades" role="status">No trades today.</p>
+    <p class="no-trades" role="status">No fills today.</p>
   }
 </section>

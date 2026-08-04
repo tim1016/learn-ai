@@ -107,7 +107,7 @@
 .tape-workspace {
   display: grid;
   grid-template-columns: 9.75rem minmax(0, 1fr);
-  min-height: 28rem;
+  min-height: 34rem;
 }
 
 .source-rail {
@@ -276,7 +276,7 @@
 
 .chart-stage {
   position: relative;
-  min-height: 23rem;
+  min-height: 29rem;
   flex: 1;
 }
 
@@ -365,7 +365,7 @@
   to { transform: translateX(225%); }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .tape-header { grid-template-columns: minmax(0, 1fr) auto; }
   .tape-readout { display: none; }
   .tape-workspace { grid-template-columns: 1fr; min-height: 30rem; }

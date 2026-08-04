@@ -25,7 +25,7 @@ describe('TradesTodayListComponent', () => {
       inputs: { fills: [], feeFidelity: 'none', tradingDateMs: null },
     });
 
-    expect(screen.getByText('No trades today.')).toBeTruthy();
+    expect(screen.getByText('No fills today.')).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
   });
 
@@ -35,8 +35,6 @@ describe('TradesTodayListComponent', () => {
         fills: [BUY_FILL, SELL_FILL],
         feeFidelity: 'per_fill',
         tradingDateMs: null,
-        realizedPnlToday: 60,
-        openPnl: null,
       },
     });
 
@@ -51,39 +49,10 @@ describe('TradesTodayListComponent', () => {
         fills: [BUY_FILL, SELL_FILL],
         feeFidelity: 'none',
         tradingDateMs: null,
-        realizedPnlToday: 60,
-        openPnl: null,
       },
     });
 
     expect(screen.getByText('Fees not reported')).toBeTruthy();
   });
 
-  it('displays backend-provided realized P&L', async () => {
-    await render(TradesTodayListComponent, {
-      inputs: {
-        fills: [BUY_FILL, SELL_FILL],
-        feeFidelity: 'per_fill',
-        tradingDateMs: null,
-        realizedPnlToday: 60.0,
-        openPnl: null,
-      },
-    });
-
-    expect(screen.getByLabelText('Realized P&L today').textContent).toContain('+$60.00');
-  });
-
-  it('shows em dash for null open P&L', async () => {
-    await render(TradesTodayListComponent, {
-      inputs: {
-        fills: [BUY_FILL],
-        feeFidelity: 'per_fill',
-        tradingDateMs: null,
-        realizedPnlToday: 0,
-        openPnl: null,
-      },
-    });
-
-    expect(screen.getByLabelText('Open P&L').textContent).toContain('—');
-  });
 });
