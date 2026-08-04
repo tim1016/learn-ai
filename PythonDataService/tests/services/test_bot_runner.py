@@ -664,6 +664,36 @@ async def test_deploy_while_running_is_refused(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_deploy_after_stop_with_changed_configuration_is_refused(tmp_path: Path) -> None:
+    feed = _FakeFeed([], mode="hold")
+    registry = _registry(tmp_path, feed)
+    await registry.deploy_with_admission(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        symbol="SPY",
+    )
+    original_binding_bytes = (
+        tmp_path / "live_state" / _SID / "strategy_instance.json"
+    ).read_bytes()
+
+    await registry.stop(broker="alpaca", strategy_instance_id=_SID)
+
+    with pytest.raises(RunAdmissionRefusedError) as excinfo:
+        await registry.deploy_with_admission(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            strategy_key="ema_crossover_signal",
+            symbol="QQQ",
+        )
+    assert excinfo.value.admission_decision.reason_code == "STRATEGY_INSTANCE_ALREADY_EXISTS"
+
+    unchanged_binding_bytes = (
+        tmp_path / "live_state" / _SID / "strategy_instance.json"
+    ).read_bytes()
+    assert unchanged_binding_bytes == original_binding_bytes
+
+
+@pytest.mark.asyncio
 async def test_deploy_without_feed_is_typed_503(tmp_path: Path) -> None:
     registry = _registry(tmp_path, None)
 
