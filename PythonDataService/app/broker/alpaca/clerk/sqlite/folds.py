@@ -69,7 +69,70 @@ def _fold_strategy_instance_registered(conn: sqlite3.Connection, payload: dict[s
     )
 
 
+def _set_command_terminal(
+    conn: sqlite3.Connection, payload: dict[str, Any], *, state: str, with_receipt: bool
+) -> None:
+    """Shared tail for every command-terminal fold (#1376): link a receipt
+    (succeeded/failed only — R3's receipts.terminal_state vocabulary has no
+    'rejected'; an admission-time rejection isn't a proof of outcome) and
+    set the command's final state.
+    """
+    command_id = payload["command_id"]
+    receipt_id = None
+    if with_receipt:
+        receipt_id = f"receipt:{command_id}"
+        conn.execute(
+            "INSERT INTO receipts (receipt_id, command_id, effect_operation_id, terminal_state, "
+            "summary_code, proof_reference, recorded_at_ms, facts_json) "
+            "VALUES (?, ?, NULL, ?, ?, NULL, ?, ?)",
+            (
+                receipt_id,
+                command_id,
+                state,
+                payload["summary_code"],
+                payload["recorded_at_ms"],
+                payload["facts_json"],
+            ),
+        )
+    conn.execute(
+        "UPDATE commands SET state = ?, receipt_id = ?, updated_at_ms = ? WHERE command_id = ?",
+        (state, receipt_id, payload["recorded_at_ms"], command_id),
+    )
+
+
+def _fold_run_started(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    import json
+
+    facts = json.loads(payload["facts_json"])
+    conn.execute(
+        "INSERT INTO runs (run_id, strategy_instance_id, lifecycle_run_id, state, "
+        "started_at_ms, stopped_at_ms) VALUES (?, ?, ?, 'ACTIVE', ?, NULL)",
+        (
+            payload["run_id"],
+            payload["strategy_instance_id"],
+            facts["lifecycle_run_id"],
+            payload["recorded_at_ms"],
+        ),
+    )
+    _set_command_terminal(conn, payload, state="succeeded", with_receipt=True)
+
+
+def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    conn.execute(
+        "UPDATE runs SET state = 'STOPPED', stopped_at_ms = ? WHERE run_id = ?",
+        (payload["recorded_at_ms"], payload["run_id"]),
+    )
+    _set_command_terminal(conn, payload, state="succeeded", with_receipt=True)
+
+
+def _fold_command_rejected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    _set_command_terminal(conn, payload, state="rejected", with_receipt=False)
+
+
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
 DEFAULT_FOLD_REGISTRY.register(
     "STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered
 )
+DEFAULT_FOLD_REGISTRY.register("RUN_STARTED", _fold_run_started)
+DEFAULT_FOLD_REGISTRY.register("RUN_STOPPED", _fold_run_stopped)
+DEFAULT_FOLD_REGISTRY.register("COMMAND_REJECTED", _fold_command_rejected)

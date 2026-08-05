@@ -155,6 +155,85 @@ class ControlMetaSnapshot:
     last_open_at_ms: int
 
 
+@dataclass(frozen=True)
+class CommandResource:
+    """The durable command resource ``GET /commands/{command_id}`` returns (R2)."""
+
+    command_id: str
+    idempotency_key: str
+    payload_hash: str
+    kind: str
+    strategy_instance_id: str
+    run_id: str | None
+    action: str
+    intended_end_state: str | None
+    state: str
+    effect_operation_id: str | None
+    receipt_id: str | None
+    created_at_ms: int
+    updated_at_ms: int
+
+
+@dataclass(frozen=True)
+class RunResource:
+    run_id: str
+    strategy_instance_id: str
+    lifecycle_run_id: str
+    state: str
+    started_at_ms: int
+    stopped_at_ms: int | None
+
+
+@dataclass(frozen=True)
+class ReservedNew:
+    """A fresh idempotency key — no prior command, proceed to admission."""
+
+    command: CommandResource
+
+
+@dataclass(frozen=True)
+class ReservedExisting:
+    """Same key, same hash — transport retry or genuine re-request (R2).
+
+    Both collapse into the same outcome: return the existing resource, no
+    new effect, no error. Its ``state`` (e.g. still non-terminal) is what a
+    caller uses to render "already requested" — there is no separate code
+    path for the two framings, per R2's own closing rule ("a duplicate
+    while IN_PROGRESS/UNKNOWN returns current state and starts no second
+    broker operation").
+    """
+
+    command: CommandResource
+
+
+@dataclass(frozen=True)
+class ReservationConflict:
+    """Same key, different hash — durable conflict, no effect (R2)."""
+
+    command: CommandResource
+
+
+_COMMAND_COLUMNS: tuple[str, ...] = (
+    "command_id",
+    "idempotency_key",
+    "payload_hash",
+    "kind",
+    "strategy_instance_id",
+    "run_id",
+    "action",
+    "intended_end_state",
+    "state",
+    "effect_operation_id",
+    "receipt_id",
+    "created_at_ms",
+    "updated_at_ms",
+)
+
+
+def _row_to_command_resource(row: sqlite3.Row) -> CommandResource:
+    return CommandResource(**{column: row[column] for column in _COMMAND_COLUMNS})
+
+
 def _account_paths(artifacts_root: Path, account_id: str) -> tuple[Path, Path]:
     """Return ``(accounts_root, account_dir)``, both containment-checked."""
     safe_account_id = safe_path_component(account_id, "account_id")
@@ -304,7 +383,11 @@ class ClerkSqliteRepository:
         account_dir.mkdir(parents=True, exist_ok=True)
         fsync_directory_chain(account_dir, artifacts_root)
 
-        conn = sqlite3.connect(db_path, isolation_level=None)
+        # check_same_thread=False: an async FastAPI handler dispatches this
+        # synchronous repository via asyncio.to_thread, so different calls
+        # legitimately arrive on different worker threads. _write_lock (not
+        # SQLite's thread affinity) is what serializes them safely.
+        conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
         schema.configure_connection(conn)
         schema.apply_schema(conn)
 
@@ -390,7 +473,7 @@ class ClerkSqliteRepository:
                 )
             raise FileNotFoundError(f"{db_path} does not exist; use initialize()")
 
-        conn = sqlite3.connect(db_path, isolation_level=None)
+        conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try:
             # Corruption severe enough to break basic statement execution
@@ -618,6 +701,101 @@ class ClerkSqliteRepository:
             raise
 
     # ------------------------------------------------------------------
+    # Command reservation — the generic R2 content-addressed primitive.
+    # This is spine-level (every command of every kind reserves the same
+    # way), not business logic — business orchestration for a specific
+    # command (what to hash, what happens on acceptance) lives in its own
+    # domain module built on top of this and append_transition().
+    # ------------------------------------------------------------------
+
+    def reserve_command(
+        self,
+        *,
+        command_id: str,
+        idempotency_key: str,
+        payload_hash: str,
+        kind: str,
+        strategy_instance_id: str,
+        run_id: str | None,
+        action: str,
+        intended_end_state: str | None,
+    ) -> ReservedNew | ReservedExisting | ReservationConflict:
+        """The pinned §4 'Command reservation' transaction-matrix row: a bare
+        ``commands`` insert, no ``custody_transitions`` row, no mirror fence
+        (reservation alone is not externally visible acceptance).
+
+        R2's three-way idempotency split happens here: a fresh key reserves
+        a new command; the same key with the same hash is a transport retry
+        / genuine re-request (returns the existing resource, no new effect,
+        no error); the same key with a different hash is a durable conflict
+        (no effect). Concurrency safety is the write lock, not a
+        SELECT-then-INSERT race — the pinned one-worker/one-writer topology
+        (§2) means no two callers are ever inside this method at once.
+        """
+        with self._write_lock:
+            authority_generation = self._conn.execute(
+                "SELECT authority_generation FROM control_meta WHERE id = 1"
+            ).fetchone()["authority_generation"]
+            existing = self._conn.execute(
+                f"SELECT {', '.join(_COMMAND_COLUMNS)} FROM commands "
+                f"WHERE authority_generation = ? AND idempotency_key = ?",
+                (authority_generation, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                resource = _row_to_command_resource(existing)
+                if existing["payload_hash"] == payload_hash:
+                    return ReservedExisting(resource)
+                return ReservationConflict(resource)
+
+            now = self._clock()
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.execute(
+                    "INSERT INTO commands (command_id, authority_generation, idempotency_key, "
+                    "payload_hash, kind, strategy_instance_id, run_id, action, intended_end_state, "
+                    "state, effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', NULL, NULL, ?, ?)",
+                    (
+                        command_id,
+                        authority_generation,
+                        idempotency_key,
+                        payload_hash,
+                        kind,
+                        strategy_instance_id,
+                        run_id,
+                        action,
+                        intended_end_state,
+                        now,
+                        now,
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+            row = self._conn.execute(
+                f"SELECT {', '.join(_COMMAND_COLUMNS)} FROM commands WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+            return ReservedNew(_row_to_command_resource(row))
+
+    def get_command(self, command_id: str) -> CommandResource | None:
+        row = self._conn.execute(
+            f"SELECT {', '.join(_COMMAND_COLUMNS)} FROM commands WHERE command_id = ?",
+            (command_id,),
+        ).fetchone()
+        return _row_to_command_resource(row) if row is not None else None
+
+    def active_run(self, strategy_instance_id: str) -> RunResource | None:
+        row = self._conn.execute(
+            "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, "
+            "stopped_at_ms FROM runs WHERE strategy_instance_id = ? AND state = 'ACTIVE'",
+            (strategy_instance_id,),
+        ).fetchone()
+        return RunResource(**dict(row)) if row is not None else None
+
+    # ------------------------------------------------------------------
     # Concrete business use of the spine this slice owns
     # ------------------------------------------------------------------
 
@@ -703,7 +881,7 @@ class ClerkSqliteRepository:
 
         account_dir.mkdir(parents=True, exist_ok=True)
         fsync_directory_chain(account_dir, artifacts_root)
-        conn = sqlite3.connect(db_path, isolation_level=None)
+        conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
         schema.configure_connection(conn)
         schema.apply_schema(conn)
         conn.row_factory = sqlite3.Row
