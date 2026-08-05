@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
+import { MessageService } from 'primeng/api';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
@@ -108,15 +110,18 @@ async function renderPage(
     ),
   };
 
+  const mockMessageService = { add: vi.fn() };
+
   const view = await render(BotsListPageComponent, {
     providers: [
       provideRouter([]),
       { provide: BrokersService, useValue: mockBrokersService },
       { provide: BrokerV2PanelService, useValue: mockPanelService },
+      { provide: MessageService, useValue: mockMessageService },
     ],
     componentInputs: { broker: 'alpaca', accountId: 'PA9' },
   });
-  return { ...view, mockPanelService };
+  return { ...view, mockPanelService, mockMessageService };
 }
 
 describe('BotsListPageComponent', () => {
@@ -229,5 +234,39 @@ describe('BotsListPageComponent', () => {
 
     await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
     expect(view.mockPanelService.getPanel).not.toHaveBeenCalled();
+    expect(view.mockMessageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', detail: 'ok' }),
+    );
+  });
+
+  it('toasts the backend-authored reason and refreshes the fleet on a rejected action', async () => {
+    const bot = fakeBot({ row_action: fakeRowAction('resume') });
+    const view = await renderPage([bot]);
+    view.mockPanelService.runBotAction.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            action_id: 'resume',
+            outcome: 'conflict',
+            receipt_id: null,
+            recorded_at_ms: 1_700_000_000_000,
+            message: 'This bot is no longer ready to resume.',
+            why: 'Its custody state changed after this button was shown.',
+          },
+        },
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume spy-momentum-01' }));
+
+    await vi.waitFor(() => expect(view.mockPanelService.runBotAction).toHaveBeenCalledOnce());
+    expect(view.mockMessageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'warn',
+        detail:
+          'This bot is no longer ready to resume. Its custody state changed after this button was shown.',
+      }),
+    );
   });
 });

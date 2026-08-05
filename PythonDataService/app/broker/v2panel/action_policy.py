@@ -109,13 +109,30 @@ def _stable_admission_evidence_refs(evidence_refs: tuple[str, ...]) -> tuple[str
     """Drop observation-only suffixes from the optimistic-concurrency input.
 
     The complete evidence reference remains on the admission receipt for audit.
-    A fresh health observation is not, by itself, a changed safety decision, so
+    A fresh observation instant is not, by itself, a changed safety decision, so
     its timestamp must not make an already presented Resume action stale.
+
+    Two refs carry only an observation instant that advances every evaluation:
+
+    - ``market-data-feed:<feed_id>:<observed_at_ms>`` — a health probe; keep the
+      feed identity, drop the probe time.
+    - ``alpaca-reconciliation:<observed_at_ms>`` — a Clerk reconciliation pass;
+      keep the constant marker, drop the pass time. Each panel GET and the
+      action POST run their own fresh reconciliation with a fresh clock, so
+      leaving this instant in the token made an unchanged off-duty Resume 409
+      on essentially every click (val-nvda-0804-05, 2026-08-04).
+
+    A genuine custody change is still captured by
+    ``alpaca-clerk-journal:<account>:<journal_sequence>`` (the Clerk appends a
+    line only on change) and by the decision's ``allowed`` / ``reason_code``
+    fields, so normalising these two instants out cannot hide a real change.
     """
     stable: list[str] = []
     for ref in evidence_refs:
         if ref.startswith("market-data-feed:"):
             stable.append(":".join(ref.split(":")[:2]))
+        elif ref.startswith("alpaca-reconciliation:"):
+            stable.append("alpaca-reconciliation")
         else:
             stable.append(ref)
     return tuple(stable)
