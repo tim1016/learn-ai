@@ -207,15 +207,19 @@ async def reconcile_uncertain_order(
 
 def _raise_account_hold(repo: ClerkSqliteRepository, *, foreign_orders: tuple[BrokerOrder, ...]) -> None:
     """Idempotent: a hold already ``ACTIVE`` for this reason code re-raises
-    nothing (bounded growth — see the module docstring)."""
-    if repo.active_hold(scope="ACCOUNT_CLERK", reason_code=UNEXPLAINED_ORDER_REASON_CODE) is not None:
-        return
-    facts = AccountHoldRaisedFacts(
-        reason_code=UNEXPLAINED_ORDER_REASON_CODE,
-        evidence_refs=[order.order_id for order in foreign_orders],
-    )
-    repo.append_transition(
-        TransitionInput(
+    nothing (bounded growth — see the module docstring). The check and the
+    append happen atomically under one continuous lock hold
+    (:meth:`~.repository.ClerkSqliteRepository.raise_hold_if_none_active`)
+    so two genuinely concurrent callers (the sweep and an operator's
+    "Reconcile now" landing at the same instant) can never both observe "no
+    active hold" and both append one."""
+
+    def build_transition() -> TransitionInput:
+        facts = AccountHoldRaisedFacts(
+            reason_code=UNEXPLAINED_ORDER_REASON_CODE,
+            evidence_refs=[order.order_id for order in foreign_orders],
+        )
+        return TransitionInput(
             transition_kind="ACCOUNT_HOLD_RAISED",
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
@@ -224,12 +228,21 @@ def _raise_account_hold(repo: ClerkSqliteRepository, *, foreign_orders: tuple[Br
             summary_code="ACCOUNT_HOLD_RAISED",
             facts_json=facts.to_facts_json(),
         )
+
+    repo.raise_hold_if_none_active(
+        scope="ACCOUNT_CLERK",
+        reason_code=UNEXPLAINED_ORDER_REASON_CODE,
+        build_transition=build_transition,
     )
 
 
 @dataclass(frozen=True)
 class AccountReconciliationResult:
     verdict: AccountVerdict
+    #: Orders that reached a terminal outcome (``RESOLVED_SUCCESS`` or
+    #: ``RESOLVED_FAILURE``) this pass — excludes an order that stayed
+    #: ``STILL_UNKNOWN`` (still within its R4 grace window, or a lookup
+    #: ``BrokerError``) and one skipped this pass for live claim contention.
     resolved_count: int = 0
     foreign_order_count: int = 0
     drifted_symbols: tuple[str, ...] = field(default_factory=tuple)
@@ -276,7 +289,9 @@ async def reconcile_account(
     resolved_count = 0
     for order_row in repo.uncertain_orders():
         try:
-            await reconcile_uncertain_order(repo, order_ref=order_row.order_ref, trigger=trigger, trade=trade)
+            outcome = await reconcile_uncertain_order(
+                repo, order_ref=order_row.order_ref, trigger=trigger, trade=trade
+            )
         except OperationClaimError:
             # A live claim held by a concurrent submit_enter/resolve for this
             # *specific* order is transient contention, not a pass-wide
@@ -294,7 +309,8 @@ async def reconcile_account(
                 },
             )
             continue
-        resolved_count += 1
+        if outcome != "STILL_UNKNOWN":
+            resolved_count += 1
 
     return AccountReconciliationResult(
         verdict=plan.verdict,

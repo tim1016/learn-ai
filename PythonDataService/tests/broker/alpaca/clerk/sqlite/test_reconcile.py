@@ -10,6 +10,7 @@ broker unreachability.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     ReconciliationSweep,
     plan_account_reconciliation,
@@ -180,6 +183,19 @@ class _FakeRead:
         if self._error is not None:
             raise self._error
         return self._positions
+
+
+def _hold_transition(*, reason_code: str) -> TransitionInput:
+    facts = AccountHoldRaisedFacts(reason_code=reason_code, evidence_refs=["bo-1"])
+    return TransitionInput(
+        transition_kind="ACCOUNT_HOLD_RAISED",
+        custody_owner="ACCOUNT_CLERK",
+        execution_authority="ACCOUNT_CLERK",
+        operation_state="succeeded",
+        clerk_observed_at_ms=1,
+        summary_code="ACCOUNT_HOLD_RAISED",
+        facts_json=facts.to_facts_json(),
+    )
 
 
 async def _make_uncertain_order(repo: ClerkSqliteRepository, *, decision_id: str = "d1") -> str:
@@ -390,6 +406,80 @@ async def test_reconcile_account_hold_raise_is_idempotent_across_repeated_passes
     assert len(repo.custody_transitions()) == before  # still one ACTIVE hold, no second raise
 
 
+def test_raise_hold_if_none_active_serializes_two_concurrent_callers(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """``raise_hold_if_none_active``'s check-then-append must be one
+    continuous critical section, not two separately-lockable steps — else
+    two genuinely concurrent callers (an automatic sweep pass and an
+    operator's "Reconcile now" landing at the same instant) could both
+    observe "no active hold" before either appends one.
+
+    Forcing that exact interleaving via a barrier *inside* the critical
+    section (the technique test_enter.py's same-owner-race test uses) isn't
+    possible here: a true mutex makes the interleaving structurally
+    unreachable, so a barrier planted inside it would simply deadlock
+    (thread B can never reach the barrier while genuinely excluded by the
+    lock). Proving mutual exclusion instead: pause thread A *after* its
+    append (still inside the lock, since ``append_transition`` hasn't
+    returned to ``raise_hold_if_none_active`` yet) and confirm thread B —
+    attempting the identical call concurrently — is genuinely blocked
+    (hasn't returned) for as long as thread A holds the lock, then only
+    proceeds once released, at which point it must see A's hold and no-op.
+    """
+    thread_a_appended = threading.Event()
+    release_thread_a = threading.Event()
+    original_append_transition = ClerkSqliteRepository.append_transition
+
+    def paused_append_transition(self: ClerkSqliteRepository, transition):
+        result = original_append_transition(self, transition)
+        thread_a_appended.set()
+        release_thread_a.wait(timeout=5)
+        return result
+
+    def build_transition():
+        return _hold_transition(reason_code="RACE_TEST")
+
+    result_a: list[bool] = []
+    result_b: list[bool] = []
+
+    def worker_a() -> None:
+        result_a.append(
+            repo.raise_hold_if_none_active(
+                scope="ACCOUNT_CLERK", reason_code="RACE_TEST", build_transition=build_transition
+            )
+        )
+
+    def worker_b() -> None:
+        result_b.append(
+            repo.raise_hold_if_none_active(
+                scope="ACCOUNT_CLERK", reason_code="RACE_TEST", build_transition=build_transition
+            )
+        )
+
+    ClerkSqliteRepository.append_transition = paused_append_transition  # type: ignore[method-assign]
+    try:
+        thread_a = threading.Thread(target=worker_a)
+        thread_a.start()
+        assert thread_a_appended.wait(timeout=2)  # A appended; still holding the lock, paused
+
+        thread_b = threading.Thread(target=worker_b)
+        thread_b.start()
+        thread_b.join(timeout=0.2)
+        assert thread_b.is_alive()  # B is genuinely blocked on the lock, not racing ahead
+
+        release_thread_a.set()
+        thread_a.join(timeout=2)
+        thread_b.join(timeout=2)
+    finally:
+        ClerkSqliteRepository.append_transition = original_append_transition  # type: ignore[method-assign]
+
+    assert result_a == [True]
+    assert result_b == [False]
+    raised = [t for t in repo.custody_transitions() if t["transition_kind"] == "ACCOUNT_HOLD_RAISED"]
+    assert len(raised) == 1
+
+
 async def test_reconcile_account_reports_stale_on_broker_read_failure_and_writes_nothing(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -412,6 +502,19 @@ async def test_reconcile_account_resolves_every_uncertain_order_in_one_pass(
     assert result.resolved_count == 2
     assert repo.order(order_ref_1).broker_order_id is not None  # type: ignore[union-attr]
     assert repo.order(order_ref_2).broker_order_id is not None  # type: ignore[union-attr]
+
+
+async def test_reconcile_account_resolved_count_excludes_orders_still_unknown(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """``resolved_count`` must count only orders that actually reached a
+    terminal outcome this pass — an order still within its R4 grace window
+    stays ``unknown`` and must not be miscounted as resolved."""
+    await _make_uncertain_order(repo)  # still within grace; lookup absent
+    read = _FakeRead(orders=[], positions=[])
+
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade(lookup_absent=True))
+    assert result.resolved_count == 0
 
 
 async def test_reconcile_account_skips_a_claim_contended_order_but_still_resolves_the_rest(
@@ -487,14 +590,14 @@ async def test_sweep_survives_a_broker_error_and_continues_to_the_next_pass(
     repo: ClerkSqliteRepository,
 ) -> None:
     read = _FakeRead(error=BrokerUnavailable("down"))
-    passes = 0
+    sleeps = 0
 
     async def fake_sleep(seconds: float) -> None:
-        nonlocal passes
-        passes += 1
+        nonlocal sleeps
+        sleeps += 1
 
     sweep = ReconciliationSweep(
         repo=repo, read=read, trade=_FakeTrade(), sleep=fake_sleep, max_passes=3
     )
     await sweep.run()  # must not raise despite every pass hitting BrokerUnavailable
-    assert passes == 2
+    assert sleeps == 2  # 3 passes, sleeping only between them

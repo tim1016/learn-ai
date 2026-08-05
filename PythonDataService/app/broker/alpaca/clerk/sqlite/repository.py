@@ -849,6 +849,26 @@ class ClerkSqliteRepository:
         with self._write_lock:
             return reads.active_hold(self._conn, scope=scope, reason_code=reason_code)
 
+    def raise_hold_if_none_active(
+        self, *, scope: str, reason_code: str, build_transition: Callable[[], TransitionInput]
+    ) -> bool:
+        """Atomic check-then-raise for a hold (#1378): the ``active_hold``
+        check and the ``ACCOUNT_HOLD_RAISED`` append happen under one
+        continuous hold of the write lock, so two genuinely concurrent
+        callers (an automatic sweep pass and an operator's "Reconcile now"
+        landing at the same instant) can never both observe "no active
+        hold" and both append one — the same class of TOCTOU gap
+        :meth:`commit_first_transition` closes for commands, applied here
+        for holds. Returns ``True`` if a new hold was appended, ``False`` if
+        one was already ``ACTIVE`` (idempotent no-op, matching the bounded
+        growth policy the pre-SQLite Alpaca clerk's ``reconcile.py`` used).
+        """
+        with self._write_lock:
+            if reads.active_hold(self._conn, scope=scope, reason_code=reason_code) is not None:
+                return False
+            self.append_transition(build_transition())
+            return True
+
     # ------------------------------------------------------------------
     # Disaster recovery
     # ------------------------------------------------------------------
