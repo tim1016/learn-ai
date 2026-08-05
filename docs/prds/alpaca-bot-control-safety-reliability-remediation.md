@@ -8,6 +8,13 @@
 - **Builds on:** the Alpaca Account Clerk, broker-v2 panel, existing versioned SSE utilities, the Clerk-governed bot-control PRD, and the fleet/control/deploy redesign PRD
 - **Authority:** the process registry owns process liveness; the Account Clerk owns reconciled broker custody; Python authors admission and receipt meaning; Angular renders those answers.
 
+> **Storage-decision follow-up (2026-08-04):**
+> [`alpaca-account-clerk-sqlite-control-plane.md`](alpaca-account-clerk-sqlite-control-plane.md)
+> proposes replacing this PRD's JSONL-authority and cold-replay requirements
+> with an account-scoped SQLite authority and operation-first custody timeline.
+> JSONL remains the accepted implementation authority until a follow-up ADR
+> supersedes ADRs 0001, 0030, and 0033 and the SQLite cutover qualifies.
+
 ---
 
 ## 1. Executive summary

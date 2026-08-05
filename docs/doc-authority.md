@@ -151,6 +151,7 @@ PRDs were on 2026-07-04). Verify status before trusting them as current.
 | Doc | Domain |
 |---|---|
 | `docs/architecture/operator-notice-prd.md` | Operator notice contract implementation (ADR-0015) |
+| `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` | Proposed Alpaca Account Clerk SQLite authority, operation-first custody timeline, and fail-closed recovery; requires a follow-up ADR before implementation authority |
 
 ---
 
