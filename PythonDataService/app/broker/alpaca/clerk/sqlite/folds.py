@@ -19,6 +19,12 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
+from app.broker.alpaca.clerk.sqlite.facts import (
+    CommandRejectedFacts,
+    RunStartedFacts,
+    RunStoppedFacts,
+)
+
 FoldFn = Callable[[sqlite3.Connection, dict[str, Any]], None]
 
 
@@ -69,65 +75,151 @@ def _fold_strategy_instance_registered(conn: sqlite3.Connection, payload: dict[s
     )
 
 
-_RECEIPT_TERMINAL_STATES = frozenset({"succeeded", "failed"})
-
-
-def _set_command_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, state: str) -> None:
-    """Shared tail for every command-terminal fold (#1376): link a receipt
-    (succeeded/failed only — R3's receipts.terminal_state vocabulary has no
-    'rejected'; an admission-time rejection isn't a proof of outcome) and
-    set the command's final state.
+def _insert_command_row(
+    conn: sqlite3.Connection,
+    *,
+    command_id: str,
+    authority_generation: int,
+    idempotency_key: str,
+    payload_hash: str,
+    kind: str,
+    strategy_instance_id: str,
+    run_id: str | None,
+    action: str,
+    intended_end_state: str | None,
+    state: str,
+    recorded_at_ms: int,
+) -> None:
+    """The one INSERT that creates a ``commands`` row — corrective foundation
+    slice, Scope B: a command first becomes durable as part of the canonical
+    transition whose fold this is, never via a standalone reservation write.
+    Always inserted already in its terminal state; ``reserved`` is never a
+    persisted value under this model.
     """
-    command_id = payload["command_id"]
-    receipt_id = None
-    if state in _RECEIPT_TERMINAL_STATES:
-        receipt_id = f"receipt:{command_id}"
-        conn.execute(
-            "INSERT INTO receipts (receipt_id, command_id, effect_operation_id, terminal_state, "
-            "summary_code, proof_reference, recorded_at_ms, facts_json) "
-            "VALUES (?, ?, NULL, ?, ?, NULL, ?, ?)",
-            (
-                receipt_id,
-                command_id,
-                state,
-                payload["summary_code"],
-                payload["recorded_at_ms"],
-                payload["facts_json"],
-            ),
-        )
     conn.execute(
-        "UPDATE commands SET state = ?, receipt_id = ?, updated_at_ms = ? WHERE command_id = ?",
-        (state, receipt_id, payload["recorded_at_ms"], command_id),
+        "INSERT INTO commands (command_id, authority_generation, idempotency_key, "
+        "payload_hash, kind, strategy_instance_id, run_id, action, intended_end_state, "
+        "state, effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
+        (
+            command_id,
+            authority_generation,
+            idempotency_key,
+            payload_hash,
+            kind,
+            strategy_instance_id,
+            run_id,
+            action,
+            intended_end_state,
+            state,
+            recorded_at_ms,
+            recorded_at_ms,
+        ),
+    )
+
+
+def _attach_command_receipt(
+    conn: sqlite3.Connection, *, command_id: str, terminal_state: str, payload: dict[str, Any]
+) -> None:
+    """Link the durable terminal receipt (R3's ``receipts.terminal_state``
+    vocabulary includes ``rejected`` — an admission-time rejection is itself
+    the accepted record of the decision, not merely a state with no proof).
+    """
+    receipt_id = f"receipt:{command_id}"
+    conn.execute(
+        "INSERT INTO receipts (receipt_id, command_id, effect_operation_id, terminal_state, "
+        "summary_code, proof_reference, recorded_at_ms, facts_json) "
+        "VALUES (?, ?, NULL, ?, ?, NULL, ?, ?)",
+        (
+            receipt_id,
+            command_id,
+            terminal_state,
+            payload["summary_code"],
+            payload["recorded_at_ms"],
+            payload["facts_json"],
+        ),
+    )
+    conn.execute(
+        "UPDATE commands SET receipt_id = ? WHERE command_id = ?",
+        (receipt_id, command_id),
     )
 
 
 def _fold_run_started(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    import json
-
-    facts = json.loads(payload["facts_json"])
+    facts = RunStartedFacts.from_facts_json(payload["facts_json"])
     conn.execute(
         "INSERT INTO runs (run_id, strategy_instance_id, lifecycle_run_id, state, "
         "started_at_ms, stopped_at_ms) VALUES (?, ?, ?, 'ACTIVE', ?, NULL)",
         (
             payload["run_id"],
             payload["strategy_instance_id"],
-            facts["lifecycle_run_id"],
+            facts.lifecycle_run_id,
             payload["recorded_at_ms"],
         ),
     )
-    _set_command_terminal(conn, payload, state="succeeded")
+    _insert_command_row(
+        conn,
+        command_id=payload["command_id"],
+        authority_generation=payload["authority_generation"],
+        idempotency_key=facts.idempotency_key,
+        payload_hash=facts.payload_hash,
+        kind=facts.kind,
+        strategy_instance_id=payload["strategy_instance_id"],
+        run_id=payload["run_id"],
+        action=facts.action,
+        intended_end_state=facts.intended_end_state,
+        state="succeeded",
+        recorded_at_ms=payload["recorded_at_ms"],
+    )
+    _attach_command_receipt(
+        conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload
+    )
 
 
 def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    facts = RunStoppedFacts.from_facts_json(payload["facts_json"])
     conn.execute(
         "UPDATE runs SET state = 'STOPPED', stopped_at_ms = ? WHERE run_id = ?",
         (payload["recorded_at_ms"], payload["run_id"]),
     )
-    _set_command_terminal(conn, payload, state="succeeded")
+    _insert_command_row(
+        conn,
+        command_id=payload["command_id"],
+        authority_generation=payload["authority_generation"],
+        idempotency_key=facts.idempotency_key,
+        payload_hash=facts.payload_hash,
+        kind=facts.kind,
+        strategy_instance_id=payload["strategy_instance_id"],
+        run_id=payload["run_id"],
+        action=facts.action,
+        intended_end_state=facts.intended_end_state,
+        state="succeeded",
+        recorded_at_ms=payload["recorded_at_ms"],
+    )
+    _attach_command_receipt(
+        conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload
+    )
 
 
 def _fold_command_rejected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    _set_command_terminal(conn, payload, state="rejected")
+    facts = CommandRejectedFacts.from_facts_json(payload["facts_json"])
+    _insert_command_row(
+        conn,
+        command_id=payload["command_id"],
+        authority_generation=payload["authority_generation"],
+        idempotency_key=facts.idempotency_key,
+        payload_hash=facts.payload_hash,
+        kind=facts.kind,
+        strategy_instance_id=payload["strategy_instance_id"],
+        run_id=payload["run_id"],
+        action=facts.action,
+        intended_end_state=facts.intended_end_state,
+        state="rejected",
+        recorded_at_ms=payload["recorded_at_ms"],
+    )
+    _attach_command_receipt(
+        conn, command_id=payload["command_id"], terminal_state="rejected", payload=payload
+    )
 
 
 DEFAULT_FOLD_REGISTRY = FoldRegistry()

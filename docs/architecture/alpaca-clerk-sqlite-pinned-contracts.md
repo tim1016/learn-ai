@@ -4,6 +4,13 @@
   Produced alongside ADR 0035, which remains **Proposed** — this document does
   not change the ADR's acceptance status. It exists so Slices 2–10 build
   against one frozen contract instead of re-deriving it from prose each time.
+  **Corrected by the corrective foundation slice** (see
+  `docs/superpowers/plans/2026-08-05-alpaca-clerk-corrective-foundation-slice.md`
+  and `docs/audits/open-pr-review-2026-08-05.md`): §3–§4 no longer describe a
+  standalone command reservation, which directly contradicted PRD §4 goal 3
+  and §9.3; §9 gained per-sequence mirror reconciliation, generation
+  validation, lease renewal, and full path confinement. `SCHEMA_VERSION`
+  bumped 1 → 2 for the DDL changes this correction required.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -137,6 +144,10 @@ CREATE TABLE runs (
 CREATE UNIQUE INDEX ux_runs_one_active_per_instance
     ON runs(strategy_instance_id) WHERE state = 'ACTIVE';
 CREATE UNIQUE INDEX ux_runs_lifecycle_run_id ON runs(strategy_instance_id, lifecycle_run_id);
+-- composite target for commands/effect_operations run ownership below —
+-- run_id is already globally unique (PK), this pins the (instance, run) pair
+-- so a cross-bot FK reference is rejected rather than silently satisfiable:
+CREATE UNIQUE INDEX ux_runs_instance_run ON runs(strategy_instance_id, run_id);
 
 -- ============================================================
 -- commands — content-addressed request identity (R2)
@@ -148,7 +159,7 @@ CREATE TABLE commands (
     payload_hash            TEXT NOT NULL,           -- immutable once first committed
     kind                    TEXT NOT NULL CHECK (kind IN ('strategy_decision','operator_lifecycle')),
     strategy_instance_id    TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
-    run_id                  TEXT REFERENCES runs(run_id),          -- null only for pre-run commands
+    run_id                  TEXT,                    -- null only for pre-run commands; see composite FK below
     action                  TEXT NOT NULL,           -- e.g. START, RESUME, STOP, STOP_AND_FLATTEN, decision replay
     intended_end_state      TEXT,                    -- operator-lifecycle only
     state                   TEXT NOT NULL CHECK (state IN
@@ -156,7 +167,11 @@ CREATE TABLE commands (
     effect_operation_id     TEXT REFERENCES effect_operations(effect_operation_id),
     receipt_id              TEXT REFERENCES receipts(receipt_id),
     created_at_ms           INTEGER NOT NULL,
-    updated_at_ms           INTEGER NOT NULL
+    updated_at_ms           INTEGER NOT NULL,
+    -- cross-bot run link is rejected: a non-null run_id must belong to this
+    -- same strategy_instance_id (SQLite leaves a multi-column FK unchecked
+    -- when any member is NULL, so a pre-run command's null run_id passes):
+    FOREIGN KEY (strategy_instance_id, run_id) REFERENCES runs(strategy_instance_id, run_id)
 );
 -- unique content-addressed command identity within the authority generation (§9.4):
 CREATE UNIQUE INDEX ux_commands_idempotency
@@ -171,7 +186,7 @@ CREATE TABLE effect_operations (
     idempotency_key         TEXT NOT NULL,           -- Clerk effect idempotency identity, distinct from command's
     command_id              TEXT NOT NULL REFERENCES commands(command_id),
     strategy_instance_id    TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
-    run_id                  TEXT REFERENCES runs(run_id),
+    run_id                  TEXT,                    -- see composite FK below
     kind                    TEXT NOT NULL CHECK (kind IN
                              ('ENTER','EXIT','CANCEL','RECONCILE','STOP','STOP_AND_FLATTEN')),
     state                   TEXT NOT NULL CHECK (state IN
@@ -179,11 +194,31 @@ CREATE TABLE effect_operations (
     custody_owner           TEXT NOT NULL DEFAULT 'ACCOUNT_CLERK',
     created_at_ms           INTEGER NOT NULL,
     updated_at_ms           INTEGER NOT NULL,
-    terminal_receipt_id     TEXT REFERENCES receipts(receipt_id)
+    terminal_receipt_id     TEXT REFERENCES receipts(receipt_id),
+    -- operation-claim CAS fields (Scope D): a durable owner + unique fencing
+    -- token claimed before broker contact; all null while unclaimed:
+    claim_owner              TEXT,
+    claim_token              TEXT,
+    claimed_at_ms            INTEGER,
+    claim_expires_at_ms      INTEGER,
+    -- a claim is all-null (unclaimed) or fully populated with a real
+    -- expiry window — never partially populated (open-pr-review-2026-08-05.md
+    -- "Require operation claims to be all-null or complete"):
+    CHECK (
+        (claim_owner IS NULL AND claim_token IS NULL
+            AND claimed_at_ms IS NULL AND claim_expires_at_ms IS NULL)
+        OR
+        (claim_owner IS NOT NULL AND claim_token IS NOT NULL
+            AND claimed_at_ms IS NOT NULL AND claim_expires_at_ms > claimed_at_ms)
+    ),
+    FOREIGN KEY (strategy_instance_id, run_id) REFERENCES runs(strategy_instance_id, run_id)
 );
 -- unique Clerk effect idempotency identity (§9.4):
 CREATE UNIQUE INDEX ux_effect_operations_idempotency
     ON effect_operations(authority_generation, idempotency_key);
+-- unique fencing token while claimed (§9.4 extension, Scope D):
+CREATE UNIQUE INDEX ux_effect_operations_claim_token
+    ON effect_operations(claim_token) WHERE claim_token IS NOT NULL;
 
 -- ============================================================
 -- orders — one row per broker/client order identity (R7)
@@ -241,7 +276,11 @@ CREATE TABLE holds (
     state                     TEXT NOT NULL CHECK (state IN ('ACTIVE','RESOLVED')),
     opened_at_ms               INTEGER NOT NULL,
     resolved_at_ms             INTEGER,
-    evidence_refs_json         TEXT
+    evidence_refs_json         TEXT,
+    -- scope is truthfully coupled to bot identity, not just documented by a
+    -- comment: BOT requires a strategy instance, ACCOUNT_CLERK forbids one.
+    CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
+        OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
 );
 
 -- ============================================================
@@ -265,7 +304,10 @@ CREATE TABLE uncertainties (
     resolved_at_ms            INTEGER,       -- null while active
     evidence_refs_json        TEXT,
     facts_schema_version      INTEGER NOT NULL,
-    facts_json                TEXT NOT NULL
+    facts_json                TEXT NOT NULL,
+    -- same truthful scope/identity coupling as holds, above:
+    CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
+        OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
 );
 
 -- ============================================================
@@ -288,7 +330,7 @@ CREATE TABLE receipts (
     receipt_id                TEXT PRIMARY KEY,
     command_id                 TEXT REFERENCES commands(command_id),
     effect_operation_id        TEXT REFERENCES effect_operations(effect_operation_id),
-    terminal_state              TEXT NOT NULL CHECK (terminal_state IN ('succeeded','failed')),
+    terminal_state              TEXT NOT NULL CHECK (terminal_state IN ('succeeded','failed','rejected')),
     summary_code                 TEXT NOT NULL,          -- stable code; prose comes from the closed registry (§11 rule 5)
     proof_reference               TEXT,
     recorded_at_ms                 INTEGER NOT NULL,
@@ -301,7 +343,7 @@ CREATE TABLE receipts (
 -- ============================================================
 CREATE TABLE custody_transitions (
     sequence                  INTEGER PRIMARY KEY AUTOINCREMENT,   -- serialization order, not broker time
-    prev_hash                 TEXT,                     -- null only for sequence 1
+    prev_hash                 TEXT NOT NULL,            -- literal 'GENESIS' sentinel for sequence 1, never null
     row_hash                  TEXT NOT NULL,
     authority_generation      INTEGER NOT NULL,
     strategy_instance_id      TEXT REFERENCES strategy_instances(strategy_instance_id) DEFERRABLE INITIALLY DEFERRED,
@@ -372,6 +414,25 @@ WHEN OLD.payload_hash IS NOT NULL AND NEW.payload_hash != OLD.payload_hash
 BEGIN
     SELECT RAISE(ABORT, 'commands.payload_hash is immutable once committed');
 END;
+
+-- ============================================================
+-- Terminal-state regression backstops (§9.4 "terminal outcomes cannot
+-- regress to nonterminal"): a DB-enforced floor under the fold's own
+-- discipline, same posture as the immutability triggers above.
+-- ============================================================
+CREATE TRIGGER trg_commands_terminal_state_immutable
+BEFORE UPDATE OF state ON commands
+WHEN OLD.state IN ('succeeded','failed','rejected') AND NEW.state != OLD.state
+BEGIN
+    SELECT RAISE(ABORT, 'commands.state cannot change once terminal');
+END;
+
+CREATE TRIGGER trg_effect_operations_terminal_state_immutable
+BEFORE UPDATE OF state ON effect_operations
+WHEN OLD.state IN ('succeeded','failed','rejected') AND NEW.state != OLD.state
+BEGIN
+    SELECT RAISE(ABORT, 'effect_operations.state cannot change once terminal');
+END;
 ```
 
 Five `custody_transitions` foreign keys (`strategy_instance_id`, `run_id`,
@@ -391,11 +452,18 @@ is exactly where this document already draws the atomicity line (§4).
 
 - **Strategy decision:** `idempotency_key = f"{strategy_instance_id}:{decision_id}"`.
 - **Operator lifecycle:** `idempotency_key = f"{account_id}:{strategy_instance_id}:{lifecycle_run_id}:{action}:{intended_end_state}"`.
-  Start/Resume reserves its proposed `lifecycle_run_id` in `runs` **before**
-  the `commands` row commits its key; Stop resolves and binds the currently
-  `ACTIVE` run's `lifecycle_run_id`. This is why a run-2 lifecycle command
+  **Both** Start/Resume and Stop take a caller-supplied `lifecycle_run_id` —
+  Stop is not exempt. A prior revision of this document had Stop *resolve*
+  `lifecycle_run_id` from the currently `ACTIVE` run instead of taking it from
+  the caller; that made a lost Stop response unrecoverable (a retry could no
+  longer find an active run to resolve against, since the first attempt had
+  already stopped it) and is corrected here (open-pr-review-2026-08-05.md
+  P2 "Stop retry loses the active-run identity"). The existing-command lookup
+  by `idempotency_key` happens **before** admission re-reads the active run,
+  so a lost-response retry replays the already-completed Stop even though the
+  run it targeted is no longer active. This is why a run-2 lifecycle command
   cannot collide with the same action recorded for run 1 — the key embeds the
-  run identity.
+  run identity supplied by the caller for both directions.
 - `payload_hash` canonically hashes: action, target, account, instance, run,
   the immutable semantic payload, and any operator reason that changes
   meaning (R2). Same key + same hash → transport retry (return existing, no
@@ -436,24 +504,66 @@ separate idempotency table. Instead the fold is idempotent by construction:
   table); this document pins only that no separate broker-event-identity
   table is introduced for this purpose.
 
+### 3d. Typed replay facts (corrective foundation slice, Scope A2)
+
+Every registered `transition_kind`'s `facts_json` is a **typed** dataclass, not
+an untyped snapshot bag — `facts_schema_version` selects the parser. A fold
+must be able to rebuild an identical `commands` (and, from #1377 onward,
+`effect_operations`/`orders`) row from a finalized mirror line alone: the
+mirror has only the outer transition payload plus this facts string, never a
+live database or a caller closure to consult. Concretely, any command-only
+field that is *not* already an outer `custody_transitions` column
+(`idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state` —
+`strategy_instance_id`, `run_id`, and `command_id` already are outer columns)
+must round-trip through facts.
+
+| Transition | Required facts beyond the outer transition row |
+| --- | --- |
+| `RUN_STARTED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason` |
+| `COMMAND_REJECTED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `reason_code`, `operator_reason` |
+| `RUN_STOPPED` | `idempotency_key`, `payload_hash`, `kind`, `action`, `intended_end_state`, `lifecycle_run_id`, `operator_reason` |
+| `ENTER_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; complete immutable broker leg/captured order fields |
+
+Implemented in `app/broker/alpaca/clerk/sqlite/facts.py`. `ENTER_ACCEPTED`'s
+dataclass and fold are not implemented in the corrective slice — no command
+flow appends that transition kind yet — but its facts shape is pinned here so
+issue #1377's rebuild has a fixed target rather than inventing one ad hoc.
+
 ## 4. Transaction matrix — which facts commit atomically together
+
+**Corrected in the corrective foundation slice** (open-pr-review-2026-08-05.md,
+"Cross-stack blocker: the source-of-truth contract contradicts the PRD"). A
+prior revision of this table had a standalone "command reservation" row that
+inserted a bare `commands` row with no `custody_transitions` insert and no
+mirror fence — directly contradicting PRD §4 goal 3 and §9.3, both of which
+require reservation, effect creation, custody transition, projection fold, and
+revision advancement in **one** SQLite transaction. There is no longer a
+reservation transaction distinct from the transition that creates the command:
+**a command first becomes durable as part of a canonical custody transition,
+and that transition's fold is what creates every projection it establishes,**
+in the same transaction the transition itself commits in.
 
 | Operation | Atomic SQLite transaction contents | External fence before "accepted"/broker-eligible |
 | --- | --- | --- |
-| Command reservation, strategy decision | insert `commands` (state=`reserved`) | none — reservation alone is not externally visible acceptance |
-| Command reservation, operator Start/Resume | insert `runs` (state=`ACTIVE`, reserving `lifecycle_run_id`) **and** insert `commands` (state=`reserved`, idempotency key embeds that `lifecycle_run_id`) **in the same transaction** — see §3a. This is the one case where a `runs` write and a `commands` write are not independently committable: a crash between them must never happen, so they are never two transactions. | none — reservation alone is not externally visible acceptance |
-| Command reservation, operator Stop | read the `runs` row with `state='ACTIVE'` for the target instance to resolve the active `lifecycle_run_id`, insert `commands` (state=`reserved`) bound to it | none |
-| Command rejection (admission fails before effect, §10.1 `RESERVED → REJECTED`) | update `commands.state = 'rejected'`, insert `custody_transitions` row, advance `control_meta.control_revision`, insert `mirror_fence` PREPARE row | mirror **finalize** fsync (R9 step 3) — required even though no broker contact occurs, because the rejection is still the accepted record of the decision |
-| Command/effect acceptance, local-terminal (admission passes, no broker contact needed) | update `commands.state`, insert `custody_transitions` row, apply fold(s), advance `control_meta.control_revision`, insert `mirror_fence` PREPARE row | mirror **finalize** fsync |
-| Effect operation acceptance + broker-eligible capture (R1) | insert/update `effect_operations`, insert `orders` (order_ref minted), insert `custody_transitions` (with hash link), apply every affected fold (`positions`/`holds`/`uncertainties` as relevant), advance `control_meta.control_revision`, insert `mirror_fence` PREPARE row | mirror **finalize** fsync — this is the acceptance fence; no broker call may occur before it completes (R1) |
+| Command admission, local (Start success, Start rejection, Stop success) | look up the content-addressed `idempotency_key` against `commands` (existing-same/existing-conflict short-circuits with no new transition); if fresh, insert `custody_transitions` row whose fold **atomically creates** `commands` (already in its terminal state — `succeeded` or `rejected`, never observed as `reserved`), any `runs` row/state change, and the linked terminal `receipts` row, advance `control_meta.control_revision`, insert `mirror_fence` PREPARE row | mirror **finalize** fsync (R9 step 3) — required even for a rejection, because the rejection is still the accepted record of the decision |
+| Command/effect admission, broker-eligible (from #1377 onward) | same content-addressed lookup; if fresh, insert `custody_transitions` row whose fold **atomically creates** `commands` (state=`accepted`), `effect_operations` (state=`accepted`), and the captured `orders` row (order_ref minted, no `broker_order_id` yet), advance `control_meta.control_revision`, insert `mirror_fence` PREPARE row | mirror **finalize** fsync — this is the acceptance fence; no broker call may occur before it completes (R1) |
 | Broker evidence fold — fill | insert `fills`, update `orders.broker_state`, insert `custody_transitions`, apply position/hold/uncertainty folds, advance revision, insert `mirror_fence` PREPARE row | mirror finalize fsync before the fold is externally visible as current state |
 | Broker evidence fold — order-state transition (no fill) | update `orders.broker_state` (idempotently, §3c), insert `custody_transitions`, advance revision, insert `mirror_fence` PREPARE row | mirror finalize fsync |
 | Broker evidence fold — reconciliation outcome | insert `reconciliations`, update the resolved `effect_operations`/`orders`/`uncertainties` rows as the outcome dictates, insert `custody_transitions`, advance revision, insert `mirror_fence` PREPARE row | mirror finalize fsync |
 | Reset / new generation (§13) | update `control_meta.authority_generation`, insert `custody_transitions` (generation-reset transition kind), fresh `mirror_fence` sequence restarts at 1 for the new generation | requires the full reset workflow (fresh broker proof, flat/order-free account) — Slice 9 scope, not Slice 1 |
 
+The content-addressed lookup and the transition append are one atomic
+operation from the caller's perspective (`ClerkSqliteRepository.
+commit_first_transition`, held under the repository's private write
+coordinator) — never two separately callable steps. There is no public lock a
+domain module can acquire to compose its own multi-step sequence; the
+generic reservation lookup and the domain-specific admission decision (e.g.
+"is there already an active run?") are unified behind that one repository
+method, which accepts a small typed transition-plan builder rather than
+exposing a lock, cursor, connection, or arbitrary SQL callback.
+
 Every row that carries a `custody_transitions` insert obeys R9's ordered
-fsync fence exactly (reservation-only rows do not — no transition is being
-recorded, so there is nothing to mirror yet):
+fsync fence exactly:
 
 1. **Prepare** — fsync a mirror line (authority generation, sequence,
    canonical transition bytes, predecessor hash, row hash) *before* the
@@ -598,9 +708,15 @@ On every process start, before the Clerk accepts any command:
    now missing; this is `ACCOUNT_CLERK` uncertainty, fails closed, blocks new
    exposure, and requires the explicit recovery/reset workflow — the service
    never silently creates an empty database here (PRD §13, §15.4).
-3. **Database identity** — `control_meta.db_identity_token` exists and was
-   minted by this account's initialization, not copied from another account's
-   database.
+3. **Database identity and generation, together** — `control_meta.
+   db_identity_token` **and** `control_meta.authority_generation` both match
+   the latest entry the established-accounts registry (§1a) has for this
+   account, not just the token alone. Corrected in the corrective foundation
+   slice (open-pr-review-2026-08-05.md P1 "Registry does not validate the
+   active generation"): checking the token without the generation cannot
+   reject a restored older-generation database whose token happens to still
+   be the latest recorded one is a stronger claim than the code proved; both
+   fields must agree with the registry's newest record or this fails closed.
 4. **Account identity** — `control_meta.account_id` matches the requested
    account; mismatch fails closed (§9.1).
 5. **Schema** — `control_meta.schema_version` matches the version this Slice
@@ -608,26 +724,69 @@ On every process start, before the Clerk accepts any command:
    attempting an implicit migration.
 6. **Authority generation** — `control_meta.authority_generation` is read and
    becomes part of every subsequent idempotency key and hash-chain check for
-   this session (generation is not itself re-validated against an external
-   source at this step — that happens only during reset, Slice 9).
+   this session (generation itself was already cross-checked against the
+   registry in check 3 above; reset, Slice 9, is the only path that mints a
+   new one).
 7. **`PRAGMA integrity_check`** — must return `ok`; any other result fails
    closed and preserves the file for diagnosis (never overwrites it).
 8. **Hash-chain verification** — recompute `row_hash` for every
    `custody_transitions` row in sequence order (§7); the first mismatch fails
    closed.
-9. **Mirror reconciliation** — for the highest committed `custody_transitions`
-   sequence, confirm a matching FINALIZE mirror line exists. If the DB shows a
-   commit with no FINALIZE line, finalize it now (crash between steps 2 and 3
-   of §4's fence, DB is intact — this is the one case startup is allowed to
-   complete a fence rather than fail closed, because the DB transaction is
-   the durable fact and the mirror is catching up to it, not the reverse).
-   If the DB is later found corrupt in a way that prevents this comparison,
-   fall back to the full mirror-rebuild recovery workflow (Slice 2 scope)
-   instead of guessing.
+9. **Mirror reconciliation, every committed sequence** — corrected in the
+   corrective foundation slice (open-pr-review-2026-08-05.md P2 "Only the
+   mirror tail is checked"): for **every** committed `custody_transitions`
+   row, not only the highest sequence, confirm a matching FINALIZE mirror
+   record with the same `row_hash` and `authority_generation` exists. A
+   sequence missing its FINALIZE is finalized now from the committed row's
+   own data (crash between steps 2 and 3 of §4's fence, DB is intact — this
+   is the one case startup is allowed to complete a fence rather than fail
+   closed, because the DB transaction is the durable fact and the mirror is
+   catching up to it, not the reverse). A sequence whose FINALIZE disagrees
+   with the committed row (different hash or generation) is genuine
+   corruption and fails closed rather than being silently "caught up." If the
+   DB is later found corrupt in a way that prevents this comparison, fall
+   back to the full mirror-rebuild recovery workflow instead of guessing.
 
 Only after all nine checks pass (or check 2 explicitly clears a genuinely new
 account for initialization) does the process register its execution lease
 (§2) and accept commands.
+
+### 9a. Lease renewal and poison-after-uncertain-finalize (Scope C2/D)
+
+The execution lease acquired at open (§2, `control_meta.execution_lease_owner`
++ `execution_lease_expires_at_ms`) is **not** a one-time acquisition — a lease
+taken once at open and never revisited is not a live-process fence, only a
+"who opened this last" record (open-pr-review-2026-08-05.md P1 "Lease is
+never renewed"). The repository renews and verifies the lease before every
+mutating call (every `commit_first_transition`/`append_transition`, every
+operation claim); an owner whose lease has expired or whose token no longer
+matches loses write authority immediately and cannot silently reacquire it.
+The lease owner is a per-process random token (not a bare PID, which the OS
+can recycle onto an unrelated later process), so the same PID appearing again
+is never mistaken for the same live process.
+
+If a transition's SQLite commit succeeds but its mirror FINALIZE then fails or
+raises, the repository handle is **poisoned**: it rejects every further
+mutating call (and any operation claim) with a typed authority-unavailable
+error until the exact §9 check-9 reconciliation is re-run and finds the fence
+consistent again. A poisoned handle is not automatically reopened — the
+process either re-runs reconciliation explicitly or closes and lets a fresh
+`open()` run the full startup sequence.
+
+### 9b. Filesystem confinement, per path (Scope C3)
+
+Check 1's confinement applies to the **exact** `clerk.db` and mirror file
+paths, not only their containing account directory — a legitimate account
+directory can still contain a `clerk.db` that is itself a symlink escaping
+`artifacts_root` (open-pr-review-2026-08-05.md P2, both "`clerk.db` is not
+itself confined" and "mirror file is not itself confined"). `initialize()`,
+`open()`, and `rebuild_from_mirror()` all resolve and confine the full file
+path, not just its parent directory, before any read, write, or
+`sqlite3.connect`. The first write that creates the mirror file, and the
+first write that creates the established-accounts registry file, each fsync
+their containing directory afterward — the directory-creation fsync that
+already runs when the account directory itself is first created predates
+either file's existence and does not cover their later directory entries.
 
 ## 10. What Slice 2 owes back to this document
 

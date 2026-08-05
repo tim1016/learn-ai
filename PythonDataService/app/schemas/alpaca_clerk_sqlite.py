@@ -7,7 +7,7 @@ as given.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.sqlite.repository import CommandResource
 
@@ -62,13 +62,22 @@ class CommandResponse(BaseModel):
 class StartRunRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    lifecycle_run_id: str
+    # min_length=1: an empty string still passes reject_colon() (which only
+    # blocks ':') and would mint a durable command identity no client could
+    # reproduce intentionally (open-pr-review-2026-08-05.md, "lifecycle_run_id
+    # accepts an empty string at the boundary").
+    lifecycle_run_id: str = Field(min_length=1)
     operator_reason: str | None = None
 
 
 class StopRunRequest(BaseModel):
+    """``lifecycle_run_id`` is required (corrective foundation slice): Stop
+    is no longer resolved from the currently active run, since that made a
+    lost response unrecoverable — see the pinned contract's §3a."""
+
     model_config = ConfigDict(frozen=True)
 
+    lifecycle_run_id: str = Field(min_length=1)
     operator_reason: str | None = None
 
 

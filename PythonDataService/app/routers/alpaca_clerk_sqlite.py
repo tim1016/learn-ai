@@ -1,13 +1,23 @@
-"""SQLite Alpaca Clerk command endpoints (#1376).
+"""SQLite Alpaca Clerk command endpoints (#1376, repaired by the corrective
+foundation slice).
 
 Purely-local operator-lifecycle commands (Start/Stop a run) proving out the
 full R2 content-addressed command lifecycle ahead of the broker-facing
 slices (#1377+). This router is additive and self-contained: it does not
 touch the existing JSONL-backed Alpaca clerk routers, which remain
 canonical until the cutover (#1382).
+
+Every repository call is dispatched via ``asyncio.to_thread`` — the
+repository is synchronous blocking I/O (SQLite + fsync), and calling it
+directly from an ``async def`` handler would stall the FastAPI event loop
+for every other in-flight request for as long as the write takes
+(open-pr-review-2026-08-05.md P2 "Synchronous SQLite/fsync blocks the
+FastAPI event loop").
 """
 
 from __future__ import annotations
+
+import asyncio
 
 from fastapi import APIRouter, HTTPException
 
@@ -16,11 +26,17 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     DurableConflictError,
     InvalidIdentityError,
     NoActiveRunError,
+    UnknownStrategyInstanceError,
     submit_start_run,
     submit_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.process_repositories import get_or_open_repository
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError, ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteError,
+    ClerkSqliteRepository,
+    ExecutionLeaseLost,
+    RepositoryPoisoned,
+)
 from app.schemas.alpaca_clerk_sqlite import (
     CommandResponse,
     StartRunRequest,
@@ -30,7 +46,7 @@ from app.schemas.alpaca_clerk_sqlite import (
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
 
 
-def _repo(account_id: str) -> ClerkSqliteRepository:
+async def _repo(account_id: str) -> ClerkSqliteRepository:
     """Open (or reuse) this process's repository for ``account_id``.
 
     Until the cutover (#1382) runs, most accounts have no ``clerk.db`` yet —
@@ -38,7 +54,9 @@ def _repo(account_id: str) -> ClerkSqliteRepository:
     unhandled 500.
     """
     try:
-        return get_or_open_repository(account_id=account_id, artifacts_root=get_clerk_settings().dir)
+        return await asyncio.to_thread(
+            get_or_open_repository, account_id=account_id, artifacts_root=get_clerk_settings().dir
+        )
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=503,
@@ -70,6 +88,23 @@ def _conflict_response(exc: DurableConflictError) -> HTTPException:
     )
 
 
+def _unavailable_response(exc: ExecutionLeaseLost | RepositoryPoisoned) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={"reason": "sqlite_authority_unavailable", "message": str(exc)},
+    )
+
+
+def _unknown_bot_response(exc: UnknownStrategyInstanceError) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={
+            "reason": "unknown_strategy_instance",
+            "message": f"No bot {exc.strategy_instance_id!r} is registered on this account.",
+        },
+    )
+
+
 @router.post(
     "/accounts/{account_id}/bots/{strategy_instance_id}/runs/start",
     response_model=CommandResponse,
@@ -81,9 +116,10 @@ async def start_run(
     """Reserve and admit a Start command. Idempotent on
     ``(account_id, strategy_instance_id, lifecycle_run_id)`` — the frontend
     mints ``lifecycle_run_id`` once and resends the same value on retry."""
-    repo = _repo(account_id)
+    repo = await _repo(account_id)
     try:
-        submission = submit_start_run(
+        submission = await asyncio.to_thread(
+            submit_start_run,
             repo,
             account_id=account_id,
             strategy_instance_id=strategy_instance_id,
@@ -96,6 +132,10 @@ async def start_run(
         raise HTTPException(
             status_code=400, detail={"reason": "invalid_identity", "message": str(exc)}
         ) from exc
+    except UnknownStrategyInstanceError as exc:
+        raise _unknown_bot_response(exc) from exc
+    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+        raise _unavailable_response(exc) from exc
     return CommandResponse.from_resource(submission.command)
 
 
@@ -107,13 +147,16 @@ async def start_run(
 async def stop_run(
     account_id: str, strategy_instance_id: str, body: StopRunRequest
 ) -> CommandResponse:
-    """Reserve and admit a Stop command against the currently active run."""
-    repo = _repo(account_id)
+    """Reserve and admit a Stop command for ``body.lifecycle_run_id`` —
+    caller-supplied, exactly like Start (corrective foundation slice)."""
+    repo = await _repo(account_id)
     try:
-        submission = submit_stop_run(
+        submission = await asyncio.to_thread(
+            submit_stop_run,
             repo,
             account_id=account_id,
             strategy_instance_id=strategy_instance_id,
+            lifecycle_run_id=body.lifecycle_run_id,
             operator_reason=body.operator_reason,
         )
     except NoActiveRunError as exc:
@@ -127,6 +170,10 @@ async def stop_run(
         raise HTTPException(
             status_code=400, detail={"reason": "invalid_identity", "message": str(exc)}
         ) from exc
+    except UnknownStrategyInstanceError as exc:
+        raise _unknown_bot_response(exc) from exc
+    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+        raise _unavailable_response(exc) from exc
     return CommandResponse.from_resource(submission.command)
 
 
@@ -135,8 +182,8 @@ async def stop_run(
     response_model=CommandResponse,
 )
 async def get_command(account_id: str, command_id: str) -> CommandResponse:
-    repo = _repo(account_id)
-    resource = repo.get_command(command_id)
+    repo = await _repo(account_id)
+    resource = await asyncio.to_thread(repo.get_command, command_id)
     if resource is None:
         raise HTTPException(status_code=404, detail={"reason": "command_not_found"})
     return CommandResponse.from_resource(resource)

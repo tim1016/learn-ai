@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from app.broker.alpaca.paths import fsync_directory
+
 REGISTRY_FILENAME = "_established_generations.jsonl"
 
 
@@ -40,6 +42,7 @@ class EstablishedAccountsRegistry:
 
     def record(self, generation: EstablishedGeneration) -> None:
         """Append one line, fsync'd, for a newly-initialized authority generation."""
+        existed = self._path.is_file()
         line = (
             json.dumps(
                 {
@@ -57,6 +60,11 @@ class EstablishedAccountsRegistry:
             handle.write(line)
             handle.flush()
             os.fsync(handle.fileno())
+        if not existed:
+            # Same durability gap as the mirror's first write, closed for
+            # the same reason (open-pr-review-2026-08-05.md P2 "First
+            # registry creation lacks parent-directory fsync").
+            fsync_directory(self._path.parent)
 
     def is_established(self, account_id: str) -> bool:
         """True if this account has ever had a ``clerk.db`` authority initialized."""

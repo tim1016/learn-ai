@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -12,6 +15,7 @@ from httpx import ASGITransport
 from app.broker.alpaca.clerk.journal import get_clerk_settings, reset_clerk_settings_for_testing
 from app.broker.alpaca.clerk.sqlite import process_repositories
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.routers import alpaca_clerk_sqlite
 from app.routers.alpaca_clerk_sqlite import router
 
 ACCOUNT_ID = "PA-TEST"
@@ -108,10 +112,24 @@ async def test_start_with_colon_in_lifecycle_run_id_returns_typed_400(api: FastA
 
 
 @pytest.mark.asyncio
+async def test_start_with_empty_lifecycle_run_id_returns_422(api: FastAPI) -> None:
+    """reject_colon() only blocks ':' — an empty string would otherwise mint
+    a durable command identity no client could reproduce intentionally.
+    Enforced at the Pydantic boundary, not the domain layer."""
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": ""},
+        )
+        assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_stop_without_active_run_returns_typed_404(api: FastAPI) -> None:
     async with _client(api) as client:
         response = await client.post(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop", json={}
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1"},
         )
         assert response.status_code == 404
         assert response.json()["detail"]["reason"] == "no_active_run"
@@ -125,11 +143,48 @@ async def test_stop_after_start_succeeds(api: FastAPI) -> None:
             json={"lifecycle_run_id": "run-1"},
         )
         stop = await client.post(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop", json={}
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1"},
         )
         assert stop.status_code == 202
         assert stop.json()["state"] == "succeeded"
         assert stop.json()["action"] == "STOP"
+
+
+@pytest.mark.asyncio
+async def test_stop_retry_after_run_stopped_replays_the_completed_result_over_http(
+    api: FastAPI,
+) -> None:
+    """The HTTP-level proof of the corrective foundation slice's central
+    fix: a lost-response retry of Stop, keyed by the caller-stable
+    ``lifecycle_run_id``, returns the original completed command."""
+    async with _client(api) as client:
+        await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        first = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        retry = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        assert first.status_code == 202
+        assert retry.status_code == 202
+        assert first.json()["command_id"] == retry.json()["command_id"]
+
+
+@pytest.mark.asyncio
+async def test_start_on_unknown_bot_returns_typed_404(api: FastAPI) -> None:
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/never-registered/runs/start",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"]["reason"] == "unknown_strategy_instance"
 
 
 @pytest.mark.asyncio
@@ -160,3 +215,61 @@ async def test_uninitialized_account_returns_typed_503(
     finally:
         process_repositories.reset_for_testing()
         reset_clerk_settings_for_testing()
+
+
+@pytest.mark.asyncio
+async def test_blocked_repository_call_does_not_stall_an_unrelated_request(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scope E: repository calls are dispatched via ``asyncio.to_thread``, so
+    a slow Start does not block a concurrent, unrelated GET on the same
+    event loop (open-pr-review-2026-08-05.md P2 "Synchronous SQLite/fsync
+    blocks the FastAPI event loop")."""
+    real_submit_start_run = alpaca_clerk_sqlite.submit_start_run
+    entered = threading.Event()
+
+    def slow_submit_start_run(*args, **kwargs):
+        entered.set()
+        time.sleep(0.2)
+        return real_submit_start_run(*args, **kwargs)
+
+    monkeypatch.setattr(alpaca_clerk_sqlite, "submit_start_run", slow_submit_start_run)
+
+    async with _client(api) as client:
+        start = asyncio.create_task(
+            client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+                json={"lifecycle_run_id": "run-1"},
+            )
+        )
+        # Wait until the worker thread is actually inside the blocking sleep,
+        # rather than guessing a fixed handoff delay (flakes under load).
+        while not entered.is_set():
+            await asyncio.sleep(0.005)
+        began = time.monotonic()
+        unrelated = await client.get(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/commands/cmd:does-not-exist"
+        )
+        unrelated_elapsed = time.monotonic() - began
+
+        assert unrelated.status_code == 404
+        assert unrelated_elapsed < 0.18  # completed before the slow call's 0.2s sleep ended
+        assert (await start).status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_lease_lost_returns_typed_503(api: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
+
+    def raise_lease_lost(*_args, **_kwargs):
+        raise ExecutionLeaseLost("simulated lease loss")
+
+    monkeypatch.setattr(alpaca_clerk_sqlite, "submit_start_run", raise_lease_lost)
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        assert response.status_code == 503
+        assert response.json()["detail"]["reason"] == "sqlite_authority_unavailable"
