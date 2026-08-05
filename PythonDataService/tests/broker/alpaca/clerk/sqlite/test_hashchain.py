@@ -56,13 +56,20 @@ def test_compute_row_hash_matches_manual_sha256_string_concatenation() -> None:
 
 
 def test_compute_row_hash_is_string_not_byte_concatenation() -> None:
-    # If prev_hash were decoded as raw bytes instead of concatenated as a hex
-    # string, this would produce a different digest than the pinned formula.
-    payload = canonical_payload(_ROW)
-    string_concat = hashlib.sha256((GENESIS + payload).encode("utf-8")).hexdigest()
-    byte_concat = hashlib.sha256(GENESIS.encode("utf-8") + payload.encode("utf-8")).hexdigest()
-    assert string_concat == byte_concat  # GENESIS has no multi-byte ambiguity, sanity only
-    assert compute_row_hash(GENESIS, payload) == string_concat
+    """A real prev_hash is a 64-char hex *string*; §7 pins concatenating it as
+    text, not decoding it to its 32 raw bytes first. These genuinely differ
+    (different byte lengths, not just different bytes) for any real hash —
+    unlike GENESIS, which isn't valid hex and so can't discriminate this.
+    """
+    row2 = dict(_ROW, strategy_instance_id="qqq-bot")
+    payload1 = canonical_payload(_ROW)
+    prev_hash = hashlib.sha256((GENESIS + payload1).encode("utf-8")).hexdigest()
+    payload2 = canonical_payload(row2)
+
+    string_concat = hashlib.sha256((prev_hash + payload2).encode("utf-8")).hexdigest()
+    byte_concat = hashlib.sha256(bytes.fromhex(prev_hash) + payload2.encode("utf-8")).hexdigest()
+    assert string_concat != byte_concat  # the two interpretations must diverge
+    assert compute_row_hash(prev_hash, payload2) == string_concat
 
 
 def test_verify_chain_accepts_a_valid_two_row_chain() -> None:

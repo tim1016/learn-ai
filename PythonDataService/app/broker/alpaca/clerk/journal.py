@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,14 +33,16 @@ from typing import BinaryIO
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.broker.alpaca.clerk.models import OrderJournalEntry
+from app.broker.alpaca.paths import (
+    fsync_directory as _shared_fsync_directory,
+)
+from app.broker.alpaca.paths import (
+    resolve_contained_path,
+    safe_path_component,
+)
 
 # PythonDataService/ — app/broker/alpaca/clerk/journal.py → parents[4].
 _SERVICE_ROOT = Path(__file__).resolve().parents[4]
-
-# Traversal-safe path component (the CodeQL-recognised sanitiser): an unsafe
-# account id never reaches the filesystem path.
-_SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
-_RESERVED_COMPONENTS = frozenset({".", ".."})
 
 INBOX_FILENAME = "order_inbox.jsonl"
 JOURNAL_FILENAME = "order_journal.jsonl"
@@ -97,13 +98,6 @@ class ClerkSettings(BaseSettings):
     dir: Path = _SERVICE_ROOT / "artifacts" / "alpaca_clerk"
 
 
-def _safe_component(value: str, kind: str) -> str:
-    """Return a traversal-safe path component or raise."""
-    if value in _RESERVED_COMPONENTS or not _SAFE_COMPONENT.match(value):
-        raise ValueError(f"unsafe {kind} path component: {value!r}")
-    return value
-
-
 class OrderJournal:
     """Single-writer append-only order journal for one Alpaca account.
 
@@ -114,7 +108,7 @@ class OrderJournal:
     """
 
     def __init__(self, *, account_id: str, root: Path) -> None:
-        self._account_id = _safe_component(account_id, "account_id")
+        self._account_id = safe_path_component(account_id, "account_id")
         self._root = Path(root).resolve()
         self._dir = self._account_dir()
         self._lock = threading.Lock()
@@ -133,16 +127,7 @@ class OrderJournal:
 
     def _account_dir(self) -> Path:
         """Resolve this account's journal directory, guaranteeing containment."""
-        # os.path.realpath + rstrip(os.sep)+os.sep startswith is the CodeQL-recognised
-        # path-injection sanitiser (bare str.startswith without realpath is not).
-        root_real = os.path.realpath(os.fspath(self._root))
-        root_prefix = root_real.rstrip(os.sep) + os.sep
-        candidate = os.path.realpath(
-            os.fspath(self._root / "accounts" / "alpaca" / self._account_id)
-        )
-        if candidate != root_real and not candidate.startswith(root_prefix):
-            raise ValueError(f"clerk journal path escapes root: {candidate!r}")
-        return Path(candidate)
+        return resolve_contained_path(self._root, "accounts", "alpaca", self._account_id)
 
     def append(self, entry: OrderJournalEntry) -> None:
         """Append one entry to the inbox and the journal; ``fsync`` each path.
@@ -214,20 +199,14 @@ class OrderJournal:
     @staticmethod
     def _fsync_directory(path: Path) -> None:
         """``fsync`` one POSIX directory, propagating failures fail-closed."""
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        _shared_fsync_directory(path)
 
     def read_entries(self) -> list[OrderJournalEntry]:
         """Replay the canonical ledger into entries (recovery / test seam)."""
-        root_real = os.path.realpath(os.fspath(self._root))
-        root_prefix = root_real.rstrip(os.sep) + os.sep
-        candidate = os.path.realpath(os.fspath(self._dir / JOURNAL_FILENAME))
-        if not candidate.startswith(root_prefix):
-            raise ValueError(f"clerk journal path escapes root: {candidate!r}")
-        if not os.path.isfile(candidate):
+        candidate = resolve_contained_path(
+            self._root, "accounts", "alpaca", self._account_id, JOURNAL_FILENAME
+        )
+        if not candidate.is_file():
             return []
         with self._lock, open(candidate, encoding="utf-8") as handle:
             return [
@@ -251,12 +230,10 @@ class OrderJournal:
         """
         if offset < 0:
             raise ValueError("journal offset must be non-negative")
-        root_real = os.path.realpath(os.fspath(self._root))
-        root_prefix = root_real.rstrip(os.sep) + os.sep
-        candidate = os.path.realpath(os.fspath(self._dir / JOURNAL_FILENAME))
-        if not candidate.startswith(root_prefix):
-            raise ValueError(f"clerk journal path escapes root: {candidate!r}")
-        if not os.path.isfile(candidate):
+        candidate = resolve_contained_path(
+            self._root, "accounts", "alpaca", self._account_id, JOURNAL_FILENAME
+        )
+        if not candidate.is_file():
             return JournalTailRead(
                 (),
                 0,

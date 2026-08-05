@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import secrets
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -235,6 +236,14 @@ class ClerkSqliteRepository:
         self._mirror = mirror
         self._clock = clock
         self._folds = fold_registry
+        # Pinned contracts doc §2: "one application-owned write coordinator
+        # ... belt-and-suspenders, not a substitute for BEGIN IMMEDIATE."
+        # BEGIN IMMEDIATE's lock only protects from the point it's acquired;
+        # append_transition reads next-sequence/prev_hash/authority_generation
+        # before that point, so this lock is what actually closes the window
+        # between that read and the transaction that depends on it — not the
+        # database lock, which starts later.
+        self._write_lock = threading.Lock()
 
     @property
     def account_id(self) -> str:
@@ -302,6 +311,26 @@ class ClerkSqliteRepository:
         now = clock()
         db_identity_token = secrets.token_hex(16)
         owner = lease_owner or f"pid:{os.getpid()}"
+
+        # Registry write happens *before* the DB commit, not after: the
+        # registry is what lets a future open() tell "removed after
+        # establishment" apart from "never established" (§1a). If this
+        # ordering were reversed and the process died between the DB commit
+        # and the registry write, a fully-usable clerk.db would exist with
+        # no registry record of it — exactly the silent-recreate failure the
+        # registry exists to prevent, just deferred one step. Writing the
+        # registry first means any interruption in this window instead fails
+        # toward "registry says established, DB incomplete/missing", which
+        # every startup check in §9 already treats as fail-closed.
+        registry.record(
+            EstablishedGeneration(
+                account_id=account_id,
+                authority_generation=1,
+                db_identity_token=db_identity_token,
+                established_at_ms=now,
+            )
+        )
+
         conn.execute("BEGIN IMMEDIATE")
         try:
             conn.execute(
@@ -325,15 +354,6 @@ class ClerkSqliteRepository:
             conn.rollback()
             conn.close()
             raise
-
-        registry.record(
-            EstablishedGeneration(
-                account_id=account_id,
-                authority_generation=1,
-                db_identity_token=db_identity_token,
-                established_at_ms=now,
-            )
-        )
 
         return cls(
             account_id=account_id,
@@ -494,84 +514,95 @@ class ClerkSqliteRepository:
         no fold ran (R1: "a failed prepare, SQLite commit, or finalization
         produces no broker call" — this method is the fence that guarantees
         that for every caller above it).
+
+        The whole method runs under the process-local write coordinator
+        (§2: "belt-and-suspenders, not a substitute for BEGIN IMMEDIATE").
+        The next-sequence/prev_hash/authority_generation reads below happen
+        *before* BEGIN IMMEDIATE opens (inside ``_commit_transition_row``),
+        so the database lock alone does not protect them — this lock does.
         """
-        last = self._conn.execute(
-            "SELECT sequence, row_hash FROM custody_transitions ORDER BY sequence DESC LIMIT 1"
-        ).fetchone()
-        next_sequence = (last["sequence"] if last else 0) + 1
-        prev_hash = last["row_hash"] if last else GENESIS
-        authority_generation = self._conn.execute(
-            "SELECT authority_generation FROM control_meta WHERE id = 1"
-        ).fetchone()["authority_generation"]
-        recorded_at_ms = self._clock()
+        with self._write_lock:
+            last = self._conn.execute(
+                "SELECT sequence, row_hash FROM custody_transitions ORDER BY sequence DESC LIMIT 1"
+            ).fetchone()
+            next_sequence = (last["sequence"] if last else 0) + 1
+            prev_hash = last["row_hash"] if last else GENESIS
+            authority_generation = self._conn.execute(
+                "SELECT authority_generation FROM control_meta WHERE id = 1"
+            ).fetchone()["authority_generation"]
+            recorded_at_ms = self._clock()
 
-        payload = {
-            "authority_generation": authority_generation,
-            "strategy_instance_id": transition.strategy_instance_id,
-            "run_id": transition.run_id,
-            "command_id": transition.command_id,
-            "effect_operation_id": transition.effect_operation_id,
-            "order_ref": transition.order_ref,
-            "broker_order_id": transition.broker_order_id,
-            "transition_kind": transition.transition_kind,
-            "custody_owner": transition.custody_owner,
-            "execution_authority": transition.execution_authority,
-            "operation_state": transition.operation_state,
-            "broker_state": transition.broker_state,
-            "proof_reference": transition.proof_reference,
-            "source_event_at_ms": transition.source_event_at_ms,
-            "clerk_observed_at_ms": transition.clerk_observed_at_ms,
-            "recorded_at_ms": recorded_at_ms,
-            "summary_code": transition.summary_code,
-            "facts_schema_version": transition.facts_schema_version,
-            "facts_json": transition.facts_json,
-        }
-        payload_canonical = canonical_payload(payload)
-        row_hash = compute_row_hash(prev_hash, payload_canonical)
+            payload = {
+                "authority_generation": authority_generation,
+                "strategy_instance_id": transition.strategy_instance_id,
+                "run_id": transition.run_id,
+                "command_id": transition.command_id,
+                "effect_operation_id": transition.effect_operation_id,
+                "order_ref": transition.order_ref,
+                "broker_order_id": transition.broker_order_id,
+                "transition_kind": transition.transition_kind,
+                "custody_owner": transition.custody_owner,
+                "execution_authority": transition.execution_authority,
+                "operation_state": transition.operation_state,
+                "broker_state": transition.broker_state,
+                "proof_reference": transition.proof_reference,
+                "source_event_at_ms": transition.source_event_at_ms,
+                "clerk_observed_at_ms": transition.clerk_observed_at_ms,
+                "recorded_at_ms": recorded_at_ms,
+                "summary_code": transition.summary_code,
+                "facts_schema_version": transition.facts_schema_version,
+                "facts_json": transition.facts_json,
+            }
+            payload_canonical = canonical_payload(payload)
+            row_hash = compute_row_hash(prev_hash, payload_canonical)
 
-        # Step 1 — PREPARE: fsync the mirror line before the SQLite txn opens.
-        self._mirror.prepare(
-            PendingTransition(
+            # Step 1 — PREPARE: fsync the mirror line before the SQLite txn opens.
+            self._mirror.prepare(
+                PendingTransition(
+                    sequence=next_sequence,
+                    authority_generation=authority_generation,
+                    row_hash=row_hash,
+                    prev_hash=prev_hash,
+                    payload_canonical=payload_canonical,
+                    recorded_at_ms=recorded_at_ms,
+                )
+            )
+
+            # Step 2 — COMMIT: one synchronous=FULL SQLite transaction.
+            control_revision = self._commit_transition_row(
+                sequence=next_sequence,
+                prev_hash=prev_hash,
+                row_hash=row_hash,
+                payload=payload,
+            )
+
+            # Step 3 — FINALIZE: fsync the matching external mirror line. Writes
+            # nothing back into SQLite (see mirror.py's module docstring).
+            self._mirror.finalize(
                 sequence=next_sequence,
                 authority_generation=authority_generation,
                 row_hash=row_hash,
-                prev_hash=prev_hash,
-                payload_canonical=payload_canonical,
-                recorded_at_ms=recorded_at_ms,
+                recorded_at_ms=self._clock(),
             )
-        )
-
-        # Step 2 — COMMIT: one synchronous=FULL SQLite transaction.
-        control_revision = self._commit_transition_row(
-            sequence=next_sequence,
-            prev_hash=prev_hash,
-            row_hash=row_hash,
-            payload=payload,
-        )
-
-        # Step 3 — FINALIZE: fsync the matching external mirror line. Writes
-        # nothing back into SQLite (see mirror.py's module docstring).
-        self._mirror.finalize(
-            sequence=next_sequence,
-            authority_generation=authority_generation,
-            row_hash=row_hash,
-            recorded_at_ms=self._clock(),
-        )
-        return CommittedTransition(
-            sequence=next_sequence,
-            row_hash=row_hash,
-            prev_hash=prev_hash,
-            control_revision=control_revision,
-        )
+            return CommittedTransition(
+                sequence=next_sequence,
+                row_hash=row_hash,
+                prev_hash=prev_hash,
+                control_revision=control_revision,
+            )
 
     def _commit_transition_row(
         self, *, sequence: int, prev_hash: str, row_hash: str, payload: dict
     ) -> int:
+        """Insert order matches the pinned §4 transaction matrix literally:
+        transition insert -> fold -> revision advance -> mirror_fence insert.
+        """
         self._conn.execute("BEGIN IMMEDIATE")
         try:
             _insert_custody_transition_row(
                 self._conn, sequence=sequence, prev_hash=prev_hash, row_hash=row_hash, payload=payload
             )
+            self._folds.apply(self._conn, payload)
             control_revision = _advance_control_revision(self._conn)
             _insert_mirror_fence_prepare_row(
                 self._conn,
@@ -580,7 +611,6 @@ class ClerkSqliteRepository:
                 authority_generation=payload["authority_generation"],
                 recorded_at_ms=payload["recorded_at_ms"],
             )
-            self._folds.apply(self._conn, payload)
             self._conn.commit()
             return control_revision
         except Exception:
@@ -697,6 +727,8 @@ class ClerkSqliteRepository:
                     now,
                 ),
             )
+            # Same order as _commit_transition_row: transition insert -> fold
+            # -> revision advance -> mirror_fence insert (pinned §4).
             for row in rebuilt_rows:
                 payload = dict(row.payload)
                 _insert_custody_transition_row(
@@ -706,6 +738,7 @@ class ClerkSqliteRepository:
                     row_hash=row.row_hash,
                     payload=payload,
                 )
+                fold_registry.apply(conn, payload)
                 _advance_control_revision(conn)
                 _insert_mirror_fence_prepare_row(
                     conn,
@@ -714,7 +747,6 @@ class ClerkSqliteRepository:
                     authority_generation=row.authority_generation,
                     recorded_at_ms=row.recorded_at_ms,
                 )
-                fold_registry.apply(conn, payload)
             conn.commit()
         except Exception:
             conn.rollback()
