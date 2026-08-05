@@ -14107,6 +14107,115 @@
         "title": "CloseLegExit",
         "type": "object"
       },
+      "CommandResponse": {
+        "description": "The durable command resource (R2). Mirrors ``CommandResource`` 1:1,\nplus a backend-authored ``disabled_tooltip`` for a non-terminal command\nso a future UI slice needs no extra round trip to render \"already\nrequested\".",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "disabled_tooltip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Tooltip"
+          },
+          "effect_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect Operation Id"
+          },
+          "idempotency_key": {
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "intended_end_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intended End State"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command_id",
+          "idempotency_key",
+          "kind",
+          "strategy_instance_id",
+          "run_id",
+          "action",
+          "intended_end_state",
+          "state",
+          "effect_operation_id",
+          "receipt_id",
+          "created_at_ms",
+          "updated_at_ms",
+          "disabled_tooltip"
+        ],
+        "title": "CommandResponse",
+        "type": "object"
+      },
       "CommandSummary": {
         "description": "Pending/ack counts + latest verb for a run's command channel.",
         "properties": {
@@ -40552,6 +40661,30 @@
         "title": "StaleBindingRetirementRequest",
         "type": "object"
       },
+      "StartRunRequest": {
+        "properties": {
+          "lifecycle_run_id": {
+            "title": "Lifecycle Run Id",
+            "type": "string"
+          },
+          "operator_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Reason"
+          }
+        },
+        "required": [
+          "lifecycle_run_id"
+        ],
+        "title": "StartRunRequest",
+        "type": "object"
+      },
       "StaticAction": {
         "additionalProperties": false,
         "description": "A deliberately inert action example for the static gallery.",
@@ -41015,6 +41148,31 @@
           }
         },
         "title": "StopBotRequest",
+        "type": "object"
+      },
+      "StopRunRequest": {
+        "description": "``lifecycle_run_id`` is required (corrective foundation slice): Stop\nis no longer resolved from the currently active run, since that made a\nlost response unrecoverable \u2014 see the pinned contract's \u00a73a.",
+        "properties": {
+          "lifecycle_run_id": {
+            "title": "Lifecycle Run Id",
+            "type": "string"
+          },
+          "operator_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operator Reason"
+          }
+        },
+        "required": [
+          "lifecycle_run_id"
+        ],
+        "title": "StopRunRequest",
         "type": "object"
       },
       "StrategyAnalyzeRequest": {
@@ -48545,6 +48703,229 @@
         "summary": "Fetch Aggregates",
         "tags": [
           "aggregates"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/start": {
+      "post": {
+        "description": "Reserve and admit a Start command. Idempotent on\n``(account_id, strategy_instance_id, lifecycle_run_id)`` \u2014 the frontend\nmints ``lifecycle_run_id`` once and resends the same value on retry.",
+        "operationId": "start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Run",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop": {
+      "post": {
+        "description": "Reserve and admit a Stop command for ``body.lifecycle_run_id`` \u2014\ncaller-supplied, exactly like Start (corrective foundation slice).",
+        "operationId": "stop_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_stop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StopRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Run",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/commands/{command_id}": {
+      "get": {
+        "operationId": "get_command_api_alpaca_clerk_sqlite_accounts__account_id__commands__command_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "command_id",
+            "required": true,
+            "schema": {
+              "title": "Command Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Command",
+        "tags": [
+          "alpaca-clerk-sqlite"
         ]
       }
     },

@@ -17,7 +17,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -73,6 +73,10 @@ CREATE TABLE runs (
 CREATE UNIQUE INDEX ux_runs_one_active_per_instance
     ON runs(strategy_instance_id) WHERE state = 'ACTIVE';
 CREATE UNIQUE INDEX ux_runs_lifecycle_run_id ON runs(strategy_instance_id, lifecycle_run_id);
+-- composite target for commands/effect_operations run ownership below —
+-- run_id is already globally unique (PK), this pins the (instance, run) pair
+-- so a cross-bot FK reference is rejected rather than silently satisfiable:
+CREATE UNIQUE INDEX ux_runs_instance_run ON runs(strategy_instance_id, run_id);
 
 -- ============================================================
 -- commands — content-addressed request identity (R2)
@@ -84,7 +88,7 @@ CREATE TABLE commands (
     payload_hash            TEXT NOT NULL,           -- immutable once first committed
     kind                    TEXT NOT NULL CHECK (kind IN ('strategy_decision','operator_lifecycle')),
     strategy_instance_id    TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
-    run_id                  TEXT REFERENCES runs(run_id),          -- null only for pre-run commands
+    run_id                  TEXT,                    -- null only for pre-run commands; see composite FK below
     action                  TEXT NOT NULL,           -- e.g. START, RESUME, STOP, STOP_AND_FLATTEN, decision replay
     intended_end_state      TEXT,                    -- operator-lifecycle only
     state                   TEXT NOT NULL CHECK (state IN
@@ -92,7 +96,11 @@ CREATE TABLE commands (
     effect_operation_id     TEXT REFERENCES effect_operations(effect_operation_id),
     receipt_id              TEXT REFERENCES receipts(receipt_id),
     created_at_ms           INTEGER NOT NULL,
-    updated_at_ms           INTEGER NOT NULL
+    updated_at_ms           INTEGER NOT NULL,
+    -- cross-bot run link is rejected: a non-null run_id must belong to this
+    -- same strategy_instance_id (SQLite leaves a multi-column FK unchecked
+    -- when any member is NULL, so a pre-run command's null run_id passes):
+    FOREIGN KEY (strategy_instance_id, run_id) REFERENCES runs(strategy_instance_id, run_id)
 );
 -- unique content-addressed command identity within the authority generation (§9.4):
 CREATE UNIQUE INDEX ux_commands_idempotency
@@ -107,7 +115,7 @@ CREATE TABLE effect_operations (
     idempotency_key         TEXT NOT NULL,           -- Clerk effect idempotency identity, distinct from command's
     command_id              TEXT NOT NULL REFERENCES commands(command_id),
     strategy_instance_id    TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
-    run_id                  TEXT REFERENCES runs(run_id),
+    run_id                  TEXT,                    -- see composite FK below
     kind                    TEXT NOT NULL CHECK (kind IN
                              ('ENTER','EXIT','CANCEL','RECONCILE','STOP','STOP_AND_FLATTEN')),
     state                   TEXT NOT NULL CHECK (state IN
@@ -115,11 +123,21 @@ CREATE TABLE effect_operations (
     custody_owner           TEXT NOT NULL DEFAULT 'ACCOUNT_CLERK',
     created_at_ms           INTEGER NOT NULL,
     updated_at_ms           INTEGER NOT NULL,
-    terminal_receipt_id     TEXT REFERENCES receipts(receipt_id)
+    terminal_receipt_id     TEXT REFERENCES receipts(receipt_id),
+    -- operation-claim CAS fields (Scope D): a durable owner + unique fencing
+    -- token claimed before broker contact; all null while unclaimed:
+    claim_owner              TEXT,
+    claim_token              TEXT,
+    claimed_at_ms            INTEGER,
+    claim_expires_at_ms      INTEGER,
+    FOREIGN KEY (strategy_instance_id, run_id) REFERENCES runs(strategy_instance_id, run_id)
 );
 -- unique Clerk effect idempotency identity (§9.4):
 CREATE UNIQUE INDEX ux_effect_operations_idempotency
     ON effect_operations(authority_generation, idempotency_key);
+-- unique fencing token while claimed (§9.4 extension, Scope D):
+CREATE UNIQUE INDEX ux_effect_operations_claim_token
+    ON effect_operations(claim_token) WHERE claim_token IS NOT NULL;
 
 -- ============================================================
 -- orders — one row per broker/client order identity (R7)
@@ -177,7 +195,11 @@ CREATE TABLE holds (
     state                     TEXT NOT NULL CHECK (state IN ('ACTIVE','RESOLVED')),
     opened_at_ms               INTEGER NOT NULL,
     resolved_at_ms             INTEGER,
-    evidence_refs_json         TEXT
+    evidence_refs_json         TEXT,
+    -- scope is truthfully coupled to bot identity, not just documented by a
+    -- comment: BOT requires a strategy instance, ACCOUNT_CLERK forbids one.
+    CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
+        OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
 );
 
 -- ============================================================
@@ -201,7 +223,10 @@ CREATE TABLE uncertainties (
     resolved_at_ms            INTEGER,       -- null while active
     evidence_refs_json        TEXT,
     facts_schema_version      INTEGER NOT NULL,
-    facts_json                TEXT NOT NULL
+    facts_json                TEXT NOT NULL,
+    -- same truthful scope/identity coupling as holds, above:
+    CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
+        OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
 );
 
 -- ============================================================
@@ -224,7 +249,7 @@ CREATE TABLE receipts (
     receipt_id                TEXT PRIMARY KEY,
     command_id                 TEXT REFERENCES commands(command_id),
     effect_operation_id        TEXT REFERENCES effect_operations(effect_operation_id),
-    terminal_state              TEXT NOT NULL CHECK (terminal_state IN ('succeeded','failed')),
+    terminal_state              TEXT NOT NULL CHECK (terminal_state IN ('succeeded','failed','rejected')),
     summary_code                 TEXT NOT NULL,          -- stable code; prose comes from the closed registry (§11 rule 5)
     proof_reference               TEXT,
     recorded_at_ms                 INTEGER NOT NULL,
@@ -237,7 +262,7 @@ CREATE TABLE receipts (
 -- ============================================================
 CREATE TABLE custody_transitions (
     sequence                  INTEGER PRIMARY KEY AUTOINCREMENT,   -- serialization order, not broker time
-    prev_hash                 TEXT,                     -- null only for sequence 1
+    prev_hash                 TEXT NOT NULL,            -- literal 'GENESIS' sentinel for sequence 1, never null
     row_hash                  TEXT NOT NULL,
     authority_generation      INTEGER NOT NULL,
     strategy_instance_id      TEXT REFERENCES strategy_instances(strategy_instance_id) DEFERRABLE INITIALLY DEFERRED,
@@ -307,6 +332,25 @@ BEFORE UPDATE OF payload_hash ON commands
 WHEN OLD.payload_hash IS NOT NULL AND NEW.payload_hash != OLD.payload_hash
 BEGIN
     SELECT RAISE(ABORT, 'commands.payload_hash is immutable once committed');
+END;
+
+-- ============================================================
+-- Terminal-state regression backstops (§9.4 "terminal outcomes cannot
+-- regress to nonterminal"): a DB-enforced floor under the fold's own
+-- discipline, same posture as the immutability triggers above.
+-- ============================================================
+CREATE TRIGGER trg_commands_terminal_state_immutable
+BEFORE UPDATE OF state ON commands
+WHEN OLD.state IN ('succeeded','failed','rejected') AND NEW.state != OLD.state
+BEGIN
+    SELECT RAISE(ABORT, 'commands.state cannot change once terminal');
+END;
+
+CREATE TRIGGER trg_effect_operations_terminal_state_immutable
+BEFORE UPDATE OF state ON effect_operations
+WHEN OLD.state IN ('succeeded','failed') AND NEW.state != OLD.state
+BEGIN
+    SELECT RAISE(ABORT, 'effect_operations.state cannot change once terminal');
 END;\
 """
 
