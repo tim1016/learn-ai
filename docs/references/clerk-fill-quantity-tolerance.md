@@ -33,6 +33,18 @@ fixed precision (`:.9f`) rather than the float's raw `str()` repr, so two
 observations of a mathematically-identical cumulative state dedup even if
 their underlying float representations differ by residue.
 
+The two constants are coupled by design, not independently tunable: the
+formatting precision matches the epsilon's decimal place so a cumulative
+quantity at or below `FILL_QTY_EPSILON` (e.g. `4e-10`) formats to the same
+string as a literal zero (`"0.000000000"`). This never collides with a real
+recorded fill, because the order of operations in
+`_fold_order_fill_observed` makes it moot: the `delta_qty < FILL_QTY_EPSILON`
+gate below the dedup check means a sub-epsilon cumulative quantity is never
+inserted into `fills` in the first place — there is no zero-quantity row for
+a later, larger fill's `fill_id` to accidentally match against. Re-observing
+a sub-epsilon quantity repeatedly is simply idempotent (the epsilon gate
+no-ops every time), not a dedup edge case.
+
 ## Delta price
 
 Alpaca's `filled_avg_price` is the volume-weighted average price over the

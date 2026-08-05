@@ -415,6 +415,66 @@ async def test_absence_past_the_grace_window_resolves_failed(tmp_path: Path) -> 
     r.close()
 
 
+async def test_same_owner_concurrent_resolves_fold_the_terminal_outcome_once(
+    tmp_path: Path,
+) -> None:
+    """``claim_effect_operation`` treats a same-owner claim as a renewal
+    (always succeeds), so two overlapping ``resolve_enter_submission`` calls
+    *within the same process* both pass the claim and both pass the grace
+    check. Only the last one to (re-)claim may still hold a live token by
+    the time it reaches the terminal fold — the other must detect its own
+    token went stale and no-op, never raise a duplicate-receipt
+    ``IntegrityError`` or write a second terminal transition."""
+    clock = _clock_at(1_700_000_000_000)
+    r = ClerkSqliteRepository.initialize(
+        account_id="PA-RACE", artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    submit_start_run(r, account_id="PA-RACE", strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    accepted = accept_enter(
+        r,
+        account_id="PA-RACE",
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    )
+    assert accepted.order_ref is not None
+    clock.advance(30_001)  # past the R4 grace window
+
+    class _RacingTrade:
+        def __init__(self) -> None:
+            self.lookup_calls = 0
+
+        async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+            raise NotImplementedError
+
+        async def cancel(self, order_id: str) -> None:
+            raise NotImplementedError
+
+        async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+            self.lookup_calls += 1
+            if self.lookup_calls == 1:
+                # Simulate a second, independent recovery sweep for the same
+                # order completing entirely while this (the first, "outer")
+                # sweep is mid-flight — the same-process analogue of two
+                # overlapping periodic recovery invocations.
+                inner_trade = _FakeTrade(lookup_absent=True)
+                await resolve_enter_submission(r, order_ref=accepted.order_ref, trade=inner_trade)
+            return None
+
+    outer_trade = _RacingTrade()
+    resolved = await resolve_enter_submission(r, order_ref=accepted.order_ref, trade=outer_trade)
+
+    effect = r.effect_operation(resolved.effect_operation_id)
+    assert effect is not None and effect.state == "failed"
+    failed_transitions = [
+        t for t in r.transitions_for_order(accepted.order_ref) if t["transition_kind"] == "ORDER_SUBMIT_FAILED"
+    ]
+    assert len(failed_transitions) == 1  # not duplicated by the losing side of the race
+    r.close()
+
+
 async def test_kill_before_broker_contact_recovery_finds_one_accepted_operation_no_duplicate(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -591,6 +651,36 @@ async def test_out_of_order_broker_state_event_does_not_regress_orders_broker_st
 
     order = repo.order(submission.order_ref)
     assert order is not None and order.broker_state == "accepted"  # not regressed
+
+
+def test_fill_quantity_with_no_avg_price_withholds_ack_and_folds_uncertain(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """A broker snapshot reporting ``filled_quantity > 0`` with no
+    ``filled_avg_price`` can't be recorded as a fill (``fills.price`` is
+    ``NOT NULL``). Acking anyway would close the door on ever re-observing
+    that fill, so both the fill and the ack are withheld and the effect
+    stays ``unknown`` for a later resolution to retry."""
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(quantity=3),
+    )
+    assert accepted.order_ref is not None and accepted.effect_operation_id is not None
+    anomalous = _broker_order(
+        accepted.order_ref, status="partially_filled", filled_quantity=3, filled_avg_price=None
+    )
+    fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=anomalous)
+
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    order = repo.order(accepted.order_ref)
+    assert order is not None and order.broker_order_id is None  # ack withheld
+    assert repo.fills_for_order(accepted.order_ref) == []
+    assert repo.position(SID, "SPY") == 0.0
 
 
 def test_partial_fill_delta_price_is_the_weighted_average_not_the_cumulative_one(
@@ -806,6 +896,77 @@ def test_accept_binds_the_active_run_onto_command_and_effect_operation(
     assert accepted.command.run_id == active.run_id
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.run_id == active.run_id
+
+
+def test_evidence_transitions_carry_the_same_run_id_as_the_accept(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """``ORDER_SUBMIT_ACKED``/``ORDER_FILL_OBSERVED`` must carry the same
+    ``run_id`` as the ``ENTER_ACCEPTED`` transition that created the effect
+    operation — otherwise the hash-chained log loses run attribution for
+    exactly the rows that carry fills and acks (CodeRabbit)."""
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(quantity=3),
+    )
+    assert accepted.order_ref is not None and accepted.effect_operation_id is not None
+    active = repo.active_run(SID)
+    assert active is not None
+
+    filled = _broker_order(accepted.order_ref, status="filled", filled_quantity=3, filled_avg_price=500.0)
+    fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=filled)
+
+    transitions = repo.transitions_for_order(accepted.order_ref)
+    evidence_kinds = {"ORDER_SUBMIT_ACKED", "ORDER_FILL_OBSERVED"}
+    evidence = [t for t in transitions if t["transition_kind"] in evidence_kinds]
+    assert len(evidence) == 2
+    assert all(t["run_id"] == active.run_id for t in evidence)
+
+
+async def test_uncertain_and_failed_transitions_also_carry_the_run_id(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Same fix as the ack/fill case, applied to ``_fold_uncertain`` and
+    ``_fold_failed`` — every evidence-bearing transition for an ENTER
+    attributes back to the run that made the decision, not just the accept."""
+    active = repo.active_run(SID)
+    assert active is not None
+
+    lost = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"), lookup_absent=True)
+    uncertain_submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-uncertain",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        trade=lost,
+    )
+    rejected = _FakeTrade(submit_error=BrokerRequestInvalid("bad request", broker="alpaca"))
+    failed_submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-failed",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        trade=rejected,
+    )
+
+    uncertain_transitions = repo.transitions_for_order(uncertain_submission.order_ref)
+    assert any(
+        t["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN" and t["run_id"] == active.run_id
+        for t in uncertain_transitions
+    )
+    failed_transitions = repo.transitions_for_order(failed_submission.order_ref)
+    assert any(
+        t["transition_kind"] == "ORDER_SUBMIT_FAILED" and t["run_id"] == active.run_id
+        for t in failed_transitions
+    )
 
 
 def test_accept_rejects_when_no_active_run_matches_lifecycle_run_id(

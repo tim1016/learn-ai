@@ -11,6 +11,11 @@
   and §9.3; §9 gained per-sequence mirror reconciliation, generation
   validation, lease renewal, and full path confinement. `SCHEMA_VERSION`
   bumped 1 → 2 for the DDL changes this correction required.
+- Issue #1377 (ENTER) added an index on `custody_transitions(order_ref)` (§3)
+  — no new columns, but a DDL change all the same, so `SCHEMA_VERSION` bumped
+  2 → 3. There is no live database to migrate yet (pre-cutover, #1382); the
+  bump exists so `open()`'s version check rejects a stale on-disk DDL
+  shape with a clear error instead of silently running without the index.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document

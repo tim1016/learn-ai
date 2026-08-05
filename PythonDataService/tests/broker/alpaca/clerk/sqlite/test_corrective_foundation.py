@@ -59,7 +59,7 @@ def repo(tmp_path: Path):
 
 
 def test_schema_version_bumped_for_the_corrective_ddl_changes() -> None:
-    assert schema.SCHEMA_VERSION == 2
+    assert schema.SCHEMA_VERSION == 3
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
