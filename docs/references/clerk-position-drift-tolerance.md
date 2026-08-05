@@ -1,4 +1,4 @@
-# Clerk position-drift tolerance (SQLite spine, #1378)
+# Clerk position-drift tolerance (SQLite spine, #1378/#1379)
 
 This is an internal custody invariant, not a port from external trading
 software. The authority is the pinned contract's reconciliation acceptance
@@ -30,6 +30,15 @@ An absolute tolerance, not relative: share quantities are compared directly, so
 scaling the accepted error with position size would hide real drift on small
 positions — same reasoning as `docs/references/clerk-fill-quantity-tolerance.md`'s
 `FILL_QTY_EPSILON`.
+
+## Reuse (#1379)
+
+`exit.py`'s "is the position flat" checks (has the reducing order closed
+out the attributed exposure? is there anything left to reduce at all?)
+import `POSITION_QTY_EPSILON` from this module rather than redefining it —
+"flat" (`abs(qty) < epsilon`) and "drifted" (`abs(delta) > epsilon`) are the
+same absolute-tolerance policy applied to two different comparisons, not two
+different tolerances.
 
 ## Validation
 

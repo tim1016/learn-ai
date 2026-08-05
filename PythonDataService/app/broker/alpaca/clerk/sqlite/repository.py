@@ -743,6 +743,31 @@ class ClerkSqliteRepository:
                 expires_at_ms=expires_at_ms,
             )
 
+    def claim_before_broker_contact(self, effect_operation_id: str) -> OperationClaim:
+        """Claim under this process's own lease identity — pinned contract §2:
+        "a transactionally claimed operation work item ... acquired before any
+        broker contact." A live ``BEGIN IMMEDIATE`` transaction proves
+        single-writer-at-the-database; it does not prove single-*process*, so
+        an event-loop stall or a slow network call between accepting an
+        operation and its next broker call could otherwise let a stale owner
+        contact the broker after another process has taken over. Fails
+        closed: :class:`OperationClaimError` propagates and no broker call
+        happens if the claim cannot be acquired — this fences a
+        *different*-owner recovery sweep or successor process out entirely.
+
+        A *same*-owner claim is a renewal (always succeeds), so it does not
+        by itself stop two overlapping same-process resolves from both
+        getting past the claim — a caller about to fold a terminal outcome
+        should verify the returned claim's token is still current immediately
+        beforehand via :meth:`verify_operation_claim` (see
+        :func:`~app.broker.alpaca.clerk.sqlite.enter.resolve_enter_submission`);
+        a caller that only needs the claim acquired, not verified later, may
+        discard the return value. Shared by every broker-facing domain module
+        (ENTER, EXIT, reconciliation) — one canonical "claim as myself" call,
+        not a private copy per module.
+        """
+        return self.claim_effect_operation(effect_operation_id=effect_operation_id, owner=self._lease_owner)
+
     def verify_operation_claim(self, *, effect_operation_id: str, token: str) -> bool:
         """True iff ``token`` is the live (unexpired) claim on this operation —
         later operation updates must present it (Scope D)."""
@@ -828,6 +853,10 @@ class ClerkSqliteRepository:
     def order_for_effect_operation(self, effect_operation_id: str) -> OrderResource | None:
         with self._write_lock:
             return reads.order_for_effect_operation(self._conn, effect_operation_id)
+
+    def orders_for_effect_operation(self, effect_operation_id: str) -> list[OrderResource]:
+        with self._write_lock:
+            return reads.orders_for_effect_operation(self._conn, effect_operation_id)
 
     def position(self, strategy_instance_id: str, symbol: str) -> float:
         with self._write_lock:

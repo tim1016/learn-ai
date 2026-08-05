@@ -153,6 +153,59 @@ class OrderSubmitFailedFacts:
 
 
 @dataclass(frozen=True)
+class ExitAcceptedFacts:
+    """``EXIT_ACCEPTED`` (#1379): command idempotency key/hash/kind/action,
+    the decision id, the effect idempotency key, and the ``entry_order_ref``
+    this EXIT targets — everything ``_fold_exit_accepted`` needs to rebuild
+    the ``commands``/``effect_operations`` rows and the entry-order
+    ownership reassignment from a finalized mirror line alone. Unlike
+    ``EnterAcceptedFacts``, no ``leg`` is captured here: the reducing
+    order's side/quantity aren't known at acceptance time (they depend on
+    how the entry's cancellation resolves), so there is nothing immutable
+    about them to snapshot yet — the eventual reducing order's shape is
+    captured by ``ExitReducingOrderCreatedFacts`` once it's actually
+    computed."""
+
+    idempotency_key: str
+    payload_hash: str
+    kind: str
+    action: str
+    intended_end_state: str | None
+    effect_idempotency_key: str
+    effect_kind: str
+    decision_id: str
+    entry_order_ref: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExitAcceptedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ExitReducingOrderCreatedFacts:
+    """``EXIT_REDUCING_ORDER_CREATED`` (#1379): the immutable inputs
+    ``_fold_exit_reducing_order_created`` needs to create the ``orders`` row
+    for the reducing/close order — symbol and side are needed to place the
+    order; ``quantity`` is the Clerk-proven remaining attributed quantity at
+    the moment cancellation resolved (the acceptance criterion this fact
+    exists to prove — see ``docs/references/clerk-exit-reducing-quantity.md``)."""
+
+    symbol: str
+    side: str
+    quantity: float
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExitReducingOrderCreatedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class ReconciliationAttemptedFacts:
     """A reconciliation pass's own attempt to resolve one uncertain order
     (#1378) — beyond the outer transition row (``effect_operation_id``,

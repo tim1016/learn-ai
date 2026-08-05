@@ -18,6 +18,7 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -133,20 +134,25 @@ class _FakeTrade:
         lookup_result: BrokerOrder | None = None,
         lookup_error: Exception | None = None,
         lookup_absent: bool = False,
+        cancel_error: Exception | None = None,
     ) -> None:
         self._submit_error = submit_error
         self._lookup_result = lookup_result
         self._lookup_error = lookup_error
         self._lookup_absent = lookup_absent
+        self._cancel_error = cancel_error
         self.lookup_calls: list[str] = []
+        self.cancel_calls: list[str] = []
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         if self._submit_error is not None:
             raise self._submit_error
         return _broker_order(client_order_id).model_copy(update={"order_id": f"bo-{client_order_id}"})
 
-    async def cancel(self, order_id: str) -> None:  # pragma: no cover - unused
-        raise NotImplementedError
+    async def cancel(self, order_id: str) -> None:
+        self.cancel_calls.append(order_id)
+        if self._cancel_error is not None:
+            raise self._cancel_error
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
         self.lookup_calls.append(client_order_id)
@@ -378,6 +384,61 @@ async def test_reconcile_uncertain_order_records_reconciliations_row(repo: Clerk
     transitions = repo.transitions_for_order(order_ref)
     reconciliation_rows = [t for t in transitions if t["transition_kind"] == "RECONCILIATION_ATTEMPTED"]
     assert len(reconciliation_rows) == 1
+
+
+async def test_reconcile_uncertain_order_delegates_an_exit_owned_entry_to_resolve_exit(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """An entry order reassigned to an EXIT and stuck in cancel-uncertainty
+    must NOT be resolved via the ENTER-style 'already has a broker_order_id'
+    short-circuit — that field was set by the original ENTER submission long
+    before EXIT began and proves nothing about whether EXIT's cancel
+    resolved. Before this dispatch existed, reconcile_uncertain_order
+    short-circuited on it immediately, reporting a false RESOLVED_SUCCESS
+    with zero broker calls and zero audit trail, while the EXIT effect
+    silently stayed unknown forever."""
+    submit_trade = _FakeTrade()
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="enter-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        trade=submit_trade,
+    )
+    entry_ref = submission.order_ref
+    assert entry_ref is not None
+
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    # Put the EXIT into cancel-uncertainty, exactly like a lost cancel
+    # response in production.
+    await resolve_exit(
+        repo, effect_operation_id=accepted.effect_operation_id,
+        trade=_FakeTrade(cancel_error=BrokerUnavailable("timeout")),
+    )
+    effect_stuck = repo.effect_operation(accepted.effect_operation_id)
+    assert effect_stuck is not None and effect_stuck.state == "unknown"
+
+    resolving_trade = _FakeTrade(lookup_result=_broker_order(entry_ref, status="canceled", filled_quantity=0.0))
+    outcome = await reconcile_uncertain_order(
+        repo, order_ref=entry_ref, trigger="AUTOMATIC", trade=resolving_trade
+    )
+
+    # A genuine broker call happened (impossible under the old short-circuit,
+    # which returned before ever calling the trade port).
+    assert resolving_trade.cancel_calls or resolving_trade.lookup_calls
+    assert outcome == "RESOLVED_SUCCESS"
+    effect_after = repo.effect_operation(accepted.effect_operation_id)
+    assert effect_after is not None and effect_after.state == "succeeded"
 
 
 # ── reconcile_account ────────────────────────────────────────────────────────

@@ -556,6 +556,28 @@ inside the fold, safe because the transition row is inserted before the fold
 runs, under the same write lock and `BEGIN IMMEDIATE`) rather than a random
 source — keeps the fold pure/replay-deterministic for mirror rebuild.
 
+### 3f. EXIT transition facts (#1379)
+
+`EXIT_ACCEPTED` follows §3d's rule exactly (it creates/mutates `commands` and
+`effect_operations`, so its facts must be sufficient to rebuild them from a
+finalized mirror line alone) — added to that table's shape here rather than
+duplicating the whole table:
+
+| Transition | Required facts beyond the outer transition row |
+| --- | --- |
+| `EXIT_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; `entry_order_ref` (the targeted entry — no `leg`, unlike `ENTER_ACCEPTED`: the reducing order's side/quantity aren't knowable until the entry's cancellation resolves, so there is nothing immutable about them yet to snapshot) |
+
+`EXIT_REDUCING_ORDER_CREATED` falls outside §3d's table the same way §3e's two
+kinds do — it creates an `orders` row, but that row has no symbol/side/quantity
+columns to rebuild from facts, so there is no command/effect/order-identity
+fidelity concern:
+
+| Transition | Facts | Fold effect |
+| --- | --- | --- |
+| `EXIT_REDUCING_ORDER_CREATED` | `symbol`, `side`, `quantity` (the Clerk-proven final attributed quantity at the moment cancellation resolved — the durable audit proof of the "final attributed-quantity calculation" pinned-contract step, `docs/references/clerk-position-drift-tolerance.md`-adjacent tolerance policy) | Inserts one `role='REDUCING'` `orders` row, owned by the EXIT effect operation. Facts are not read back by the fold (nothing in `orders` to reconstruct from them) — they exist purely as audit. |
+| `ORDER_CANCEL_UNCERTAIN` | `why` | Same fold body as `ORDER_SUBMIT_UNCERTAIN` (registered under both transition_kind names) — a lost cancel-poll response is the identical "effect/command → `unknown`, no receipt" outcome, under a distinct name for audit-trail honesty about which broker call was actually attempted. |
+| `EXIT_ATTRIBUTED_FLAT` | none (`{}`) | Same fold body as the generic terminal-success tail (`_fold_effect_terminal(..., terminal_state="succeeded")`) — EXIT is the first caller to ever reach `succeeded` through it; ENTER never does within its own module (#1377's own docstring defers that to EXIT/reconciliation). |
+
 ## 4. Transaction matrix — which facts commit atomically together
 
 **Corrected in the corrective foundation slice** (open-pr-review-2026-08-05.md,
@@ -649,6 +671,23 @@ from the reducing/close order. The UI may open an individual order, but the
 primary timeline and terminal outcome belong to the effect operation (Slice 8
 reads `custody_transitions` filtered by `effect_operation_id`, ordered by
 `sequence`, to render this).
+
+**Implemented in #1379** (`app/broker/alpaca/clerk/sqlite/exit.py`) via a
+one-column FK reassignment, not a copy: `EXIT_ACCEPTED`'s fold
+(`_fold_exit_accepted`) `UPDATE`s the targeted entry order's
+`orders.effect_operation_id` to the new EXIT's id, atomically with creating
+the EXIT's own `commands`/`effect_operations` rows. `orders.effect_operation_id`
+therefore means "who currently has custody," not "who created this row" — the
+entry's creation-time history is unaffected (its own `ENTER_ACCEPTED`
+`custody_transitions` row is append-only and still names the original ENTER
+effect). Every transition EXIT appends against the entry order from that
+point on (cancel-attempt evidence, the eventual `EXIT_ATTRIBUTED_FLAT` proof)
+carries the EXIT's own `effect_operation_id`, which is what makes "Slice 8
+filters by `effect_operation_id`" produce the correct nested timeline: a scan
+by `order_ref` still shows the entry's pre-EXIT history too (its own
+`ENTER_ACCEPTED` and initial `ORDER_SUBMIT_ACKED`), correctly attributed to
+ENTER, immediately followed by everything EXIT appended, correctly attributed
+to EXIT.
 
 ## 7. Hash-chain row format (PRD §11 rule 2, pinned)
 

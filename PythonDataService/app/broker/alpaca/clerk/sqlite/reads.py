@@ -124,6 +124,23 @@ def order_for_effect_operation(
     return OrderResource(**dict(row)) if row is not None else None
 
 
+def orders_for_effect_operation(
+    conn: sqlite3.Connection, effect_operation_id: str
+) -> list[OrderResource]:
+    """Every order this effect operation currently owns (#1379) — 0 or 1 for
+    ENTER, and up to 2 for EXIT (the reassigned entry, role ``ENTRY``, and
+    the newly-created reducing/close order, role ``REDUCING``). Ordered by
+    ``updated_at_ms`` so the entry (reassigned first) sorts before a later-
+    created reducing order in the common case."""
+    rows = conn.execute(
+        "SELECT order_ref, effect_operation_id, client_order_id, broker_order_id, role, "
+        "broker_state, submitted_at_ms, updated_at_ms FROM orders "
+        "WHERE effect_operation_id = ? ORDER BY updated_at_ms ASC",
+        (effect_operation_id,),
+    ).fetchall()
+    return [OrderResource(**dict(row)) for row in rows]
+
+
 def position(conn: sqlite3.Connection, strategy_instance_id: str, symbol: str) -> float:
     row = conn.execute(
         "SELECT attributed_qty FROM positions WHERE strategy_instance_id = ? AND symbol = ?",

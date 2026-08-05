@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
     CommandRejectedFacts,
     EnterAcceptedFacts,
+    ExitAcceptedFacts,
     OrderFillObservedFacts,
     ReconciliationAttemptedFacts,
     RunStartedFacts,
@@ -324,6 +325,98 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
     )
 
 
+def _fold_exit_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """EXIT's accept fold (#1379) — atomically creates ``commands`` and
+    ``effect_operations`` (kind ``EXIT``, ``accepted``) and reassigns the
+    targeted entry order's custody to this EXIT operation, all before any
+    broker call: no cancel or reducing-order submission is durable yet, so
+    there is nothing here for recovery to duplicate, only to resume (R1).
+
+    Unlike ``_fold_enter_accepted``, no ``orders`` row is created here — the
+    reducing order's shape (side, quantity) isn't known until the entry's
+    cancellation resolves, so its ``orders`` row is created later by
+    ``_fold_exit_reducing_order_created``. The reassignment
+    (``orders.effect_operation_id`` UPDATE) reflects "who currently has
+    custody of this order," not "who created it" — the entry order's
+    creation-time history is preserved unchanged in its own
+    ``ENTER_ACCEPTED`` custody_transitions row (append-only, never
+    rewritten); only the live FK pointer moves. This is what makes the
+    pinned contract's §6 "an EXIT effect_operations row owns ... the
+    cancelled entry" literally true from that moment on, and is why every
+    custody_transitions row this module appends against the entry
+    order — cancel-attempt evidence included — nests under this EXIT's
+    ``effect_operation_id``, exactly as an operation-first timeline requires.
+    """
+    facts = ExitAcceptedFacts.from_facts_json(payload["facts_json"])
+    _insert_command_row(
+        conn,
+        command_id=payload["command_id"],
+        authority_generation=payload["authority_generation"],
+        idempotency_key=facts.idempotency_key,
+        payload_hash=facts.payload_hash,
+        kind=facts.kind,
+        strategy_instance_id=payload["strategy_instance_id"],
+        run_id=payload["run_id"],
+        action=facts.action,
+        intended_end_state=facts.intended_end_state,
+        state="accepted",
+        recorded_at_ms=payload["recorded_at_ms"],
+    )
+    conn.execute(
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+        "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
+        "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'EXIT', 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
+        (
+            payload["effect_operation_id"],
+            payload["authority_generation"],
+            facts.effect_idempotency_key,
+            payload["command_id"],
+            payload["strategy_instance_id"],
+            payload["run_id"],
+            payload["recorded_at_ms"],
+            payload["recorded_at_ms"],
+        ),
+    )
+    conn.execute(
+        "UPDATE orders SET effect_operation_id = ?, updated_at_ms = ? WHERE order_ref = ?",
+        (payload["effect_operation_id"], payload["recorded_at_ms"], facts.entry_order_ref),
+    )
+    conn.execute(
+        "UPDATE commands SET effect_operation_id = ? WHERE command_id = ?",
+        (payload["effect_operation_id"], payload["command_id"]),
+    )
+
+
+def _fold_exit_reducing_order_created(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Creates the ``orders`` row for the reducing/close order (#1379),
+    ``role='REDUCING'``, owned by the EXIT effect operation that computed
+    it. Mirrors ``_fold_enter_accepted``'s order insert, minus the
+    command/effect creation (both already exist from ``EXIT_ACCEPTED``).
+
+    ``ExitReducingOrderCreatedFacts`` (symbol/side/quantity) is not read back
+    here — the ``orders`` table has no columns for them, so this fold has
+    nothing to reconstruct from those fields. They are captured in
+    ``facts_json`` purely as the durable audit proof of "final
+    attributed-quantity calculation" the pinned contract's operation-first
+    timeline requires: a reader of ``custody_transitions`` can see exactly
+    what quantity the Clerk computed and decided to close, without needing
+    to separately reconstruct it from ``positions``' current (mutable)
+    state.
+    """
+    conn.execute(
+        "INSERT INTO orders (order_ref, effect_operation_id, client_order_id, broker_order_id, "
+        "role, broker_state, submitted_at_ms, updated_at_ms) "
+        "VALUES (?, ?, ?, NULL, 'REDUCING', NULL, NULL, ?)",
+        (
+            payload["order_ref"],
+            payload["effect_operation_id"],
+            payload["order_ref"],
+            payload["recorded_at_ms"],
+        ),
+    )
+
+
 def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """§3c: idempotent by construction. The current row is already committed
     to ``custody_transitions`` before this fold runs, so ``MAX(source_event_at_ms)``
@@ -407,6 +500,17 @@ def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any])
     _fold_effect_terminal(conn, payload, terminal_state="failed")
 
 
+def _fold_exit_attributed_flat(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """EXIT's precise terminal-success proof (#1379, pinned contract §6's
+    "terminal EXIT receipt"): the attributed exposure for this operation's
+    symbol has been independently verified flat (see
+    ``exit.resolve_exit``'s verification step) — reuses
+    ``_fold_effect_terminal`` unchanged (ENTER never reaches ``succeeded``
+    in its own module; this is that shared tail's first ``succeeded``
+    caller)."""
+    _fold_effect_terminal(conn, payload, terminal_state="succeeded")
+
+
 def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """A lost/timed-out broker response — never a terminal outcome (R4):
     retains Account Clerk custody at ``unknown`` until resolution proves
@@ -426,6 +530,15 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
 #: ``docs/references/clerk-fill-quantity-tolerance.md`` for the citation and
 #: reasoning (`.claude/rules/numerical-rigor.md`).
 FILL_QTY_EPSILON = 1e-9
+
+#: Numerical-rigor tolerance for "is this position flat/drifted" — same
+#: absolute-tolerance rationale as ``FILL_QTY_EPSILON`` above (see
+#: ``docs/references/clerk-position-drift-tolerance.md``). Lives here, not in
+#: ``reconcile.py`` (its original logical home), so both ``reconcile.py`` and
+#: ``exit.py`` can import it without either depending on the other —
+#: ``reconcile_uncertain_order`` needs to call ``exit.resolve_exit`` for an
+#: EXIT-owned order (#1379), which would otherwise be a circular import.
+POSITION_QTY_EPSILON = 1e-9
 
 
 def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -579,9 +692,16 @@ DEFAULT_FOLD_REGISTRY.register("RUN_STARTED", _fold_run_started)
 DEFAULT_FOLD_REGISTRY.register("RUN_STOPPED", _fold_run_stopped)
 DEFAULT_FOLD_REGISTRY.register("COMMAND_REJECTED", _fold_command_rejected)
 DEFAULT_FOLD_REGISTRY.register("ENTER_ACCEPTED", _fold_enter_accepted)
+DEFAULT_FOLD_REGISTRY.register("EXIT_ACCEPTED", _fold_exit_accepted)
+DEFAULT_FOLD_REGISTRY.register("EXIT_REDUCING_ORDER_CREATED", _fold_exit_reducing_order_created)
+DEFAULT_FOLD_REGISTRY.register("EXIT_ATTRIBUTED_FLAT", _fold_exit_attributed_flat)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_ACKED", _fold_order_submit_acked)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_FAILED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_uncertain)
+# EXIT's cancel-analog (#1379): same generic "effect/command -> unknown, no
+# receipt" fold body — no separate function, see _fold_order_submit_uncertain
+# and order_evidence.fold_uncertain's docstrings.
+DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_UNCERTAIN", _fold_order_submit_uncertain)
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)

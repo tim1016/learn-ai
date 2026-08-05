@@ -46,10 +46,12 @@ from app.broker.alpaca.clerk.exposure import (
     signed_broker_position_quantity,
 )
 from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission
+from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
     ReconciliationAttemptedFacts,
 )
+from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
 from app.broker.contract.errors import BrokerError
@@ -58,12 +60,6 @@ from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, order_ref_namespace_matches
 
 logger = logging.getLogger(__name__)
-
-#: Numerical-rigor tolerance for the position-drift comparison — same
-#: absolute-tolerance rationale as ``folds.FILL_QTY_EPSILON``: share
-#: quantities are absolute, so a relative tolerance would hide real drift on
-#: small positions (see ``docs/references/clerk-fill-quantity-tolerance.md``).
-POSITION_QTY_EPSILON = 1e-9
 
 UNEXPLAINED_ORDER_REASON_CODE = "UNEXPLAINED_ORDER"
 
@@ -143,43 +139,74 @@ async def reconcile_uncertain_order(
 ) -> ReconciliationOutcome:
     """Resolve one uncertain order and record the attempt (#1378).
 
-    Already-resolved (terminal effect, or an order already carrying a
-    ``broker_order_id``) is a true no-op: no broker call, no new transition —
-    "Reconcile now" on an operation that already finished creates no second
-    intent. Otherwise delegates the actual resolution to
-    :func:`~app.broker.alpaca.clerk.sqlite.enter.resolve_enter_submission`
-    (never duplicated here) and derives the outcome from the before/after
-    snapshot rather than threading a new return shape through that function
-    — deliberately, to avoid widening a already-shipped function's return
-    contract for one new caller. This does couple the derivation to
-    ``resolve_enter_submission``'s current, exhaustively-enumerated set of
-    outcomes (found-and-acked, confirmed-absent-past-grace, or unchanged);
-    a future outcome shape it doesn't already know about would read here as
-    ``STILL_UNKNOWN`` rather than fail loudly. Any new transition kind
-    already requires registering a fold and updating the pinned contract, so
-    that expansion is a deliberate, reviewed event, not a silent one.
+    Already-resolved (terminal effect) is a true no-op: no broker call, no
+    new transition — "Reconcile now" on an operation that already finished
+    creates no second intent.
+
+    Dispatches on the owning effect's ``kind`` rather than treating every
+    uncertain order identically, because "resolved" means something
+    different for each (#1379 correction — see
+    ``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`` §6):
+
+    - **EXIT** — delegates to
+      :func:`~app.broker.alpaca.clerk.sqlite.exit.resolve_exit`, which
+      already knows how to advance an EXIT's cancel/reduce/verify state
+      machine from wherever it currently stands (possibly completing the
+      whole operation in this pass). Outcome comes from the EXIT effect's
+      *own* terminal state after that call. Checking
+      ``order.broker_order_id is not None`` here — as the ENTER path below
+      does — would be wrong for the reassigned entry order: that field was
+      set by the *original* ENTER submission long before EXIT ever began,
+      and proves nothing about whether EXIT's cancel has resolved. Before
+      this dispatch existed, that exact conflation made the sweep silently
+      report ``RESOLVED_SUCCESS`` for an entry stuck in cancel-uncertainty,
+      with no broker call and no audit row at all.
+    - **ENTER** (or any other kind) — delegates to
+      :func:`~app.broker.alpaca.clerk.sqlite.enter.resolve_enter_submission`
+      (never duplicated here) and derives the outcome from the before/after
+      snapshot rather than threading a new return shape through that
+      function — deliberately, to avoid widening an already-shipped
+      function's return contract for one new caller. This does couple the
+      derivation to ``resolve_enter_submission``'s current, exhaustively-
+      enumerated set of outcomes (found-and-acked, confirmed-absent-past-
+      grace, or unchanged); a future outcome shape it doesn't already know
+      about would read here as ``STILL_UNKNOWN`` rather than fail loudly.
     """
     order_before = repo.order(order_ref)
     assert order_before is not None
     effect_before = repo.effect_operation(order_before.effect_operation_id)
     assert effect_before is not None
 
-    if effect_before.state in ("succeeded", "failed") or order_before.broker_order_id is not None:
-        return "RESOLVED_SUCCESS" if order_before.broker_order_id is not None else "RESOLVED_FAILURE"
+    if effect_before.state in ("succeeded", "failed"):
+        return "RESOLVED_SUCCESS" if effect_before.state == "succeeded" else "RESOLVED_FAILURE"
 
-    await resolve_enter_submission(repo, order_ref=order_ref, trade=trade)
-
-    order_after = repo.order(order_ref)
-    assert order_after is not None
-    effect_after = repo.effect_operation(order_after.effect_operation_id)
-    assert effect_after is not None
-
-    if order_after.broker_order_id is not None:
-        outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
-    elif effect_after.state == "failed":
-        outcome = "RESOLVED_FAILURE"
+    if effect_before.kind == "EXIT":
+        await resolve_exit(repo, effect_operation_id=effect_before.effect_operation_id, trade=trade)
+        effect_after = repo.effect_operation(effect_before.effect_operation_id)
+        assert effect_after is not None
+        if effect_after.state == "succeeded":
+            outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
+        elif effect_after.state == "failed":
+            outcome = "RESOLVED_FAILURE"
+        else:
+            outcome = "STILL_UNKNOWN"
     else:
-        outcome = "STILL_UNKNOWN"
+        if order_before.broker_order_id is not None:
+            return "RESOLVED_SUCCESS"
+
+        await resolve_enter_submission(repo, order_ref=order_ref, trade=trade)
+
+        order_after = repo.order(order_ref)
+        assert order_after is not None
+        effect_after = repo.effect_operation(order_after.effect_operation_id)
+        assert effect_after is not None
+
+        if order_after.broker_order_id is not None:
+            outcome = "RESOLVED_SUCCESS"
+        elif effect_after.state == "failed":
+            outcome = "RESOLVED_FAILURE"
+        else:
+            outcome = "STILL_UNKNOWN"
 
     facts = ReconciliationAttemptedFacts(
         trigger=trigger,
