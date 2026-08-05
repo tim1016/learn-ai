@@ -140,3 +140,41 @@ def fills_for_order(conn: sqlite3.Connection, order_ref: str) -> list[dict]:
         (order_ref,),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def uncertain_orders(conn: sqlite3.Connection) -> list[OrderResource]:
+    """Every order whose effect operation is still ``unknown`` (#1378) — the
+    reconciliation sweep's own worklist. Joins rather than filtering
+    ``orders`` directly: "uncertain" is a property of the effect operation
+    (R4), not of a column on ``orders`` itself."""
+    rows = conn.execute(
+        "SELECT o.order_ref, o.effect_operation_id, o.client_order_id, o.broker_order_id, "
+        "o.role, o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "WHERE e.state = 'unknown' ORDER BY o.updated_at_ms ASC"
+    ).fetchall()
+    return [OrderResource(**dict(row)) for row in rows]
+
+
+def attributed_positions_by_symbol(conn: sqlite3.Connection) -> dict[str, float]:
+    """Account-wide Clerk-attributed exposure per symbol (#1378) — the sum of
+    every bot's namespace-attributed ``positions`` row, for comparison
+    against the broker's own account-wide position snapshot. Never nets
+    against the raw broker position; this is our side of that comparison."""
+    rows = conn.execute(
+        "SELECT symbol, SUM(attributed_qty) AS qty FROM positions GROUP BY symbol"
+    ).fetchall()
+    return {row["symbol"]: row["qty"] for row in rows}
+
+
+def active_hold(conn: sqlite3.Connection, *, scope: str, reason_code: str) -> dict | None:
+    """The current ``ACTIVE`` hold for this ``(scope, reason_code)``, if any —
+    reconciliation's idempotency check before raising a new one (#1378)."""
+    row = conn.execute(
+        "SELECT hold_id, scope, strategy_instance_id, reason_code, state, opened_at_ms, "
+        "resolved_at_ms, evidence_refs_json FROM holds "
+        "WHERE scope = ? AND reason_code = ? AND state = 'ACTIVE' "
+        "ORDER BY opened_at_ms DESC LIMIT 1",
+        (scope, reason_code),
+    ).fetchone()
+    return dict(row) if row is not None else None

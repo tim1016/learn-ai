@@ -20,12 +20,15 @@ from collections.abc import Callable
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.facts import (
+    AccountHoldRaisedFacts,
     CommandRejectedFacts,
     EnterAcceptedFacts,
     OrderFillObservedFacts,
+    ReconciliationAttemptedFacts,
     RunStartedFacts,
     RunStoppedFacts,
 )
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 
 FoldFn = Callable[[sqlite3.Connection, dict[str, Any]], None]
 
@@ -510,6 +513,64 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     )
 
 
+def _this_transition_sequence(conn: sqlite3.Connection) -> int:
+    """The ``custody_transitions.sequence`` of the row this fold is running
+    for. Safe to read mid-fold: ``_commit_transition_row`` inserts the
+    transition row *before* invoking the fold (§4), and the whole commit runs
+    under the repository's write lock plus a live ``BEGIN IMMEDIATE``, so no
+    other writer can have advanced ``sequence`` in between. Used to mint a
+    globally-unique, replay-deterministic id for a fold's own auxiliary rows
+    without a random source (a fold must stay pure for mirror rebuild)."""
+    return conn.execute("SELECT MAX(sequence) AS seq FROM custody_transitions").fetchone()["seq"]
+
+
+def _fold_reconciliation_attempted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """#1378: durable audit of one reconciliation pass's attempt to resolve a
+    single uncertain order — distinct from (and appended alongside, never
+    instead of) the ``ORDER_SUBMIT_ACKED``/``ORDER_SUBMIT_FAILED`` transition
+    the resolution itself already produced when it found new evidence. This
+    fold only ever inserts into ``reconciliations``; it never touches
+    ``orders``/``effect_operations``/``positions`` — those projections are
+    already correct by the time this transition is appended (see
+    ``reconcile.reconcile_uncertain_order``)."""
+    facts = ReconciliationAttemptedFacts.from_facts_json(payload["facts_json"])
+    reconciliation_id = f"reconciliation:{_this_transition_sequence(conn)}"
+    conn.execute(
+        "INSERT INTO reconciliations (reconciliation_id, effect_operation_id, order_ref, "
+        "trigger, attempted_at_ms, outcome, evidence_refs_json) VALUES (?, ?, ?, ?, ?, ?, NULL)",
+        (
+            reconciliation_id,
+            payload["effect_operation_id"],
+            payload["order_ref"],
+            facts.trigger,
+            payload["recorded_at_ms"],
+            facts.outcome,
+        ),
+    )
+
+
+def _fold_account_hold_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """#1378: raise an ``ACCOUNT_CLERK``-scoped hold. Callers (see
+    ``reconcile._raise_account_hold``) only append this transition after
+    confirming no ``ACTIVE`` hold with the same ``reason_code`` already
+    exists — growth is bounded the same way the pre-SQLite Alpaca clerk's
+    ``reconcile.py`` bounded ``UNEXPLAINED_ORDER`` lines: a persistent
+    foreign order re-raises nothing after the first."""
+    facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    hold_id = f"hold:{_this_transition_sequence(conn)}"
+    conn.execute(
+        "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
+        "opened_at_ms, resolved_at_ms, evidence_refs_json) "
+        "VALUES (?, 'ACCOUNT_CLERK', NULL, ?, 'ACTIVE', ?, NULL, ?)",
+        (
+            hold_id,
+            facts.reason_code,
+            payload["recorded_at_ms"],
+            canonicalize(facts.evidence_refs),
+        ),
+    )
+
+
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
 DEFAULT_FOLD_REGISTRY.register(
     "STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered
@@ -522,3 +583,5 @@ DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_ACKED", _fold_order_submit_acked)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_FAILED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_uncertain)
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
+DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
+DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)

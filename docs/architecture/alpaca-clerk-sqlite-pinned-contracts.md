@@ -537,6 +537,25 @@ dataclass and fold are not implemented in the corrective slice — no command
 flow appends that transition kind yet — but its facts shape is pinned here so
 issue #1377's rebuild has a fixed target rather than inventing one ad hoc.
 
+### 3e. Reconciliation and hold transition facts (#1378)
+
+Two transition kinds added by issue #1378 fall outside §3d's table above
+because neither creates or mutates a `commands` row — they populate the
+auxiliary `reconciliations`/`holds` tables (§3) only, so there is no
+command-rebuild fidelity concern to pin facts against. Documented here for
+discoverability, not because §3d's rule applies to them:
+
+| Transition | Facts | Fold effect |
+| --- | --- | --- |
+| `RECONCILIATION_ATTEMPTED` | `trigger` (`AUTOMATIC` \| `OPERATOR_RECONCILE_NOW`), `outcome` (`STILL_UNKNOWN` \| `RESOLVED_SUCCESS` \| `RESOLVED_FAILURE`), `why` | Inserts one `reconciliations` row. Never touches `orders`/`effect_operations`/`positions` — those are already correct by the time this is appended (see `reconcile.reconcile_uncertain_order`). |
+| `ACCOUNT_HOLD_RAISED` | `reason_code`, `evidence_refs` (foreign orders' broker-assigned `order_id`s) | Inserts one `ACTIVE`, `ACCOUNT_CLERK`-scoped `holds` row. Callers check `active_hold()` first and only append this transition when none is already `ACTIVE` for the same `reason_code` — bounded growth, matching PRD-era `reconcile.py`'s "appends nothing after the first" policy for a persistent foreign order. |
+
+Both mint their own primary key (`reconciliation_id`/`hold_id`) from the
+just-inserted transition's own `custody_transitions.sequence` (read back
+inside the fold, safe because the transition row is inserted before the fold
+runs, under the same write lock and `BEGIN IMMEDIATE`) rather than a random
+source — keeps the fold pure/replay-deterministic for mirror rebuild.
+
 ## 4. Transaction matrix — which facts commit atomically together
 
 **Corrected in the corrective foundation slice** (open-pr-review-2026-08-05.md,

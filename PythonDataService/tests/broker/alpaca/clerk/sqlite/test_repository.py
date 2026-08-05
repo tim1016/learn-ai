@@ -11,13 +11,16 @@ mechanics from §4/§7/§8/§9 of the pinned contracts doc.
 
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorChainBroken, MirrorFile
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.clerk.sqlite.repository import (
     AlreadyInitialized,
@@ -515,3 +518,103 @@ def test_mirror_rebuild_still_fails_closed_on_conflicting_finalize(tmp_path: Pat
 
     with pytest.raises(MirrorChainBroken):
         mirror.rebuild()
+
+
+# ---------------------------------------------------------------------------
+# #1378 primitives: ACCOUNT_HOLD_RAISED fold + active_hold/uncertain_orders/
+# attributed_positions_by_symbol read helpers. Exercised directly through
+# append_transition() here (no ENTER/reconciliation domain flow needed) —
+# the full sweep-driven flow is covered in test_reconcile.py.
+# ---------------------------------------------------------------------------
+
+
+def _hold_transition(*, reason_code: str = "UNEXPLAINED_ORDER", evidence_refs: list[str] | None = None):
+    facts = AccountHoldRaisedFacts(reason_code=reason_code, evidence_refs=evidence_refs or ["bo-1"])
+    return TransitionInput(
+        transition_kind="ACCOUNT_HOLD_RAISED",
+        custody_owner="ACCOUNT_CLERK",
+        execution_authority="ACCOUNT_CLERK",
+        operation_state="succeeded",
+        clerk_observed_at_ms=1,
+        summary_code="ACCOUNT_HOLD_RAISED",
+        facts_json=facts.to_facts_json(),
+    )
+
+
+def test_account_hold_raised_fold_creates_an_active_account_clerk_hold(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    repo.append_transition(_hold_transition(evidence_refs=["bo-1", "bo-2"]))
+
+    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    assert hold is not None
+    assert hold["state"] == "ACTIVE"
+    assert hold["strategy_instance_id"] is None
+    assert json.loads(hold["evidence_refs_json"]) == ["bo-1", "bo-2"]
+    repo.close()
+
+
+def test_active_hold_returns_none_when_no_hold_of_that_reason_exists(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
+    repo.close()
+
+
+def test_two_hold_transitions_each_mint_a_distinct_hold_id(tmp_path: Path) -> None:
+    """Two independent raises (e.g. two different reason codes, or a test
+    directly exercising the fold twice) must never collide on hold_id — the
+    id is minted from the transition's own globally-unique sequence, not
+    from content or a timestamp that a fast test clock could repeat."""
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    repo.append_transition(_hold_transition(reason_code="UNEXPLAINED_ORDER"))
+    repo.append_transition(_hold_transition(reason_code="OTHER_REASON"))
+
+    first = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
+    second = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="OTHER_REASON")
+    assert first is not None and second is not None
+    assert first["hold_id"] != second["hold_id"]
+    repo.close()
+
+
+def test_attributed_positions_by_symbol_sums_across_bots(tmp_path: Path) -> None:
+    """Account-wide comparison needs the sum across every bot's namespace-
+    attributed position, not any single bot's row (schema.py's ``positions``
+    comment: never derived by netting the raw broker position, but the
+    account-wide sweep still needs one number per symbol to compare)."""
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    with repo._write_lock:
+        repo._conn.execute(
+            "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
+            "created_at_ms, retired_at_ms) VALUES ('bot-a', 'SPY', 'h', 1, NULL)"
+        )
+        repo._conn.execute(
+            "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
+            "created_at_ms, retired_at_ms) VALUES ('bot-b', 'SPY', 'h', 1, NULL)"
+        )
+        repo._conn.execute(
+            "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+            "VALUES ('bot-a', 'SPY', 3.0, 1)"
+        )
+        repo._conn.execute(
+            "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+            "VALUES ('bot-b', 'SPY', 2.0, 1)"
+        )
+        repo._conn.commit()
+
+    assert repo.attributed_positions_by_symbol() == {"SPY": 5.0}
+    repo.close()
+
+
+def test_uncertain_orders_is_empty_on_a_fresh_repository(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    assert repo.uncertain_orders() == []
+    repo.close()

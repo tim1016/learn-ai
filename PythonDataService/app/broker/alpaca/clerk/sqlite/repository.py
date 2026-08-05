@@ -837,6 +837,18 @@ class ClerkSqliteRepository:
         with self._write_lock:
             return reads.fills_for_order(self._conn, order_ref)
 
+    def uncertain_orders(self) -> list[OrderResource]:
+        with self._write_lock:
+            return reads.uncertain_orders(self._conn)
+
+    def attributed_positions_by_symbol(self) -> dict[str, float]:
+        with self._write_lock:
+            return reads.attributed_positions_by_symbol(self._conn)
+
+    def active_hold(self, *, scope: str, reason_code: str) -> dict | None:
+        with self._write_lock:
+            return reads.active_hold(self._conn, scope=scope, reason_code=reason_code)
+
     # ------------------------------------------------------------------
     # Disaster recovery
     # ------------------------------------------------------------------

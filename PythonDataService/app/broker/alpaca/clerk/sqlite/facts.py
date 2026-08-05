@@ -153,6 +153,45 @@ class OrderSubmitFailedFacts:
 
 
 @dataclass(frozen=True)
+class ReconciliationAttemptedFacts:
+    """A reconciliation pass's own attempt to resolve one uncertain order
+    (#1378) — beyond the outer transition row (``effect_operation_id``,
+    ``order_ref``), the durable audit needs what drove the attempt and what
+    it concluded; ``why`` carries the human-readable reasoning the paired
+    ``reconciliations`` row's ``outcome`` column doesn't have room for."""
+
+    trigger: str  # 'AUTOMATIC' | 'OPERATOR_RECONCILE_NOW'
+    outcome: str  # 'STILL_UNKNOWN' | 'RESOLVED_SUCCESS' | 'RESOLVED_FAILURE'
+    why: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ReconciliationAttemptedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class AccountHoldRaisedFacts:
+    """An ``ACCOUNT_CLERK``-scoped hold raised by reconciliation (#1378) —
+    currently only the unexplained/foreign-order reason. ``evidence_refs`` is
+    the broker-assigned ``order_id`` of every foreign order observed, not the
+    (possibly absent) ``client_order_id`` — a genuinely foreign order may
+    have no ``client_order_id`` at all."""
+
+    reason_code: str
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> AccountHoldRaisedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class OrderFillObservedFacts:
     """The evidence ``_fold_order_fill_observed`` needs beyond the outer
     transition row: Alpaca's REST-reported *cumulative* ``filled_quantity``
