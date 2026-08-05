@@ -49,6 +49,7 @@ async function renderPanel(
   submitOrder: (broker: string, request: BrokerOrderRequest) => Promise<OrderSubmitResult>,
 ) {
   return render(AlpacaOrderEntryComponent, {
+    inputs: { expectedAccountId: 'PA1' },
     providers: [{ provide: BrokersService, useValue: { submitOrder } }],
   });
 }
@@ -91,6 +92,7 @@ describe('AlpacaOrderEntryComponent', () => {
     // A market leg defaults to DAY and carries no limit_price.
     expect(request).toEqual({
       operator: 'desk',
+      expected_account_id: 'PA1',
       legs: [
         {
           symbol: 'SPY',
@@ -139,6 +141,7 @@ describe('AlpacaOrderEntryComponent', () => {
     const [, request] = submitOrder.mock.calls[0];
     expect(request).toEqual({
       operator: 'desk',
+      expected_account_id: 'PA1',
       legs: [
         {
           symbol: 'SPY',

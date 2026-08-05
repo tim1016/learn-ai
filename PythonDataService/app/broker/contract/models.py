@@ -127,6 +127,7 @@ class BrokerOrderRequest(_ContractModel):
     # uncaught ``ValueError``. Pattern is the source-of-truth from
     # ``app.engine.live.identity`` (kept in lockstep with the path validator).
     operator: str = Field(min_length=1, max_length=64, pattern=INSTANCE_ID_PATTERN)
+    expected_account_id: str = Field(min_length=1, max_length=64)
     legs: list[BrokerOrderLeg] = Field(min_length=1, max_length=32)
 
 
