@@ -294,6 +294,9 @@ CREATE TABLE custody_transitions (
     facts_schema_version      INTEGER NOT NULL,
     facts_json                TEXT NOT NULL
 );
+-- order_ref is scanned by both the §3c ack idempotency guard and recovery's
+-- transitions_for_order (#1377) — an index keeps both O(log n), not O(n):
+CREATE INDEX ix_custody_transitions_order_ref ON custody_transitions(order_ref);
 -- immutable sequence/payload/hash-chain-link after commit (§9.4): enforced by
 -- the triggers below, not just by Slice 2's repository boundary declining to
 -- issue UPDATE/DELETE. A dedicated test asserts both hold.

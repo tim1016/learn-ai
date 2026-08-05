@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 
@@ -111,7 +112,7 @@ class EnterAcceptedFacts:
     # recurses into stdlib dataclasses, not Pydantic models; storing the
     # already-dumped, already-validated leg is the one shape that keeps every
     # facts dataclass here going through the same to/from_facts_json pair.
-    leg: dict
+    leg: dict[str, Any]
 
     def to_facts_json(self) -> str:
         return canonicalize(asdict(self))

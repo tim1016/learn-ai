@@ -168,6 +168,14 @@ class ClerkSqliteRepository:
         return self._account_id
 
     @property
+    def lease_owner(self) -> str:
+        """This process's execution-lease identity — the same owner an
+        operation claim should be acquired under, since a claim is only
+        meaningful as proof that *this* live process is the one about to
+        contact the broker (§2's lease + claim close the same gap)."""
+        return self._lease_owner
+
+    @property
     def db_path(self) -> Path:
         return self._db_path
 

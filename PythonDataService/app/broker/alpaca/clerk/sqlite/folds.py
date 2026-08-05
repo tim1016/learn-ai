@@ -91,24 +91,24 @@ def _insert_command_row(
     intended_end_state: str | None,
     state: str,
     recorded_at_ms: int,
-    effect_operation_id: str | None = None,
 ) -> None:
     """The one INSERT that creates a ``commands`` row — corrective foundation
     slice, Scope B: a command first becomes durable as part of the canonical
     transition whose fold this is, never via a standalone reservation write.
 
-    Not always terminal: the operator-lifecycle folds below insert already in
-    a terminal state (``reserved`` is never persisted), but a broker-facing
-    command (#1377's ENTER) inserts at ``accepted`` — nonterminal — with
-    ``effect_operation_id`` already populated, since the effect and its order
-    are created in this same transaction and the command must reference them
-    immediately.
+    Always inserts with a null ``effect_operation_id``: the operator-lifecycle
+    folds below never populate it at all (no effect operation exists for
+    Start/Stop), and a broker-facing command (#1377's ENTER) can't populate it
+    at insert time either — ``effect_operations.command_id`` is an immediate,
+    non-deferred foreign key, so the effect operation can only be inserted
+    *after* this row exists. ``_fold_enter_accepted`` backfills the link with
+    a separate ``UPDATE`` once its effect operation is created.
     """
     conn.execute(
         "INSERT INTO commands (command_id, authority_generation, idempotency_key, "
         "payload_hash, kind, strategy_instance_id, run_id, action, intended_end_state, "
         "state, effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)",
         (
             command_id,
             authority_generation,
@@ -120,7 +120,6 @@ def _insert_command_row(
             action,
             intended_end_state,
             state,
-            effect_operation_id,
             recorded_at_ms,
             recorded_at_ms,
         ),
@@ -292,13 +291,14 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
         "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
         "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES (?, ?, ?, ?, ?, NULL, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
         (
             payload["effect_operation_id"],
             payload["authority_generation"],
             facts.effect_idempotency_key,
             payload["command_id"],
             payload["strategy_instance_id"],
+            payload["run_id"],
             facts.effect_kind,
             payload["recorded_at_ms"],
             payload["recorded_at_ms"],
@@ -327,6 +327,12 @@ def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) 
     over every ``ORDER_SUBMIT_ACKED`` row for this order (including this one)
     tells whether this observation is the newest seen — an older, out-of-order
     delivery is still logged for audit but does not regress ``orders.broker_state``.
+
+    ``source_event_at_ms`` is nullable (``BrokerOrder.updated_at_ms`` is
+    optional — Alpaca can omit it): a ``None`` observation can never prove
+    itself the newest, so it is always treated as not-newer once a real
+    timestamp has already been recorded, rather than raising on the ``None
+    >= int`` comparison.
     """
     order_ref = payload["order_ref"]
     latest = conn.execute(
@@ -334,7 +340,8 @@ def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) 
         "WHERE order_ref = ? AND transition_kind = 'ORDER_SUBMIT_ACKED'",
         (order_ref,),
     ).fetchone()["latest"]
-    if latest is None or payload["source_event_at_ms"] >= latest:
+    source_event_at_ms = payload["source_event_at_ms"]
+    if latest is None or (source_event_at_ms is not None and source_event_at_ms >= latest):
         conn.execute(
             "UPDATE orders SET broker_order_id = ?, broker_state = ?, submitted_at_ms = ?, "
             "updated_at_ms = ? WHERE order_ref = ?",
@@ -412,6 +419,12 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
     )
 
 
+#: Numerical-rigor tolerance for the fill-quantity delta gate below — see
+#: ``docs/references/clerk-fill-quantity-tolerance.md`` for the citation and
+#: reasoning (`.claude/rules/numerical-rigor.md`).
+FILL_QTY_EPSILON = 1e-9
+
+
 def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Namespace-attributed exposure fold: ``positions`` sums only this
     order's owned fills, keyed by ``strategy_instance_id`` — never derived by
@@ -419,30 +432,57 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     ``exposure.py`` semantics).
 
     The evidence carries Alpaca's REST-reported *cumulative*
-    ``filled_quantity`` for the order, not a per-execution id (no execution
-    id is available outside the trade_updates websocket stream, #1378+
-    territory) — so this fold derives both the delta and its identity itself:
-    ``fill_id = "{order_ref}:{cumulative_filled_quantity}"`` is stable for a
-    repeated observation of the same cumulative state (idempotent dedup) and
-    distinct once that state legitimately advances. ``delta = cumulative -
-    SUM(prior recorded fills' qty)`` is what actually gets credited, so a
-    sequence of partial fills (e.g. 2 then 5) sums to the right total (5),
-    not their cumulative values (7). A stale/regressed observation (delta <=
-    0) folds no fill row at all — out-of-order evidence never double-counts
-    or reverses exposure.
+    ``filled_quantity``/``filled_avg_price`` for the order, not a
+    per-execution id (no execution id is available outside the
+    trade_updates websocket stream, #1378+ territory) — so this fold derives
+    the delta qty, delta price, and a dedup identity itself:
+
+    - ``delta_qty = cumulative_filled_quantity - SUM(prior recorded fills'
+      qty)``, so a sequence of partial fills (e.g. 2 then 5) sums to the
+      right total (5), not their cumulative values (7). Compared against
+      ``FILL_QTY_EPSILON``, not bare ``<= 0`` — quantities are floats
+      (fractional shares), so a re-observation of the same cumulative state
+      can differ from the recorded sum by float64 residue rather than
+      exactly zero (see the tolerance doc).
+    - ``delta_price`` is *not* ``facts.avg_price`` copied verbatim:
+      Alpaca's ``filled_avg_price`` is the volume-weighted average over the
+      *whole* order, so the new delta's own price is
+      ``(cumulative_qty * avg_price - prior_qty * prior_avg_price) /
+      delta_qty`` — derived from ``SUM(qty * price)`` over this order's
+      already-recorded fills, not the raw cumulative average.
+    - ``fill_id`` is built from ``cumulative_filled_quantity`` rounded to
+      the same fixed precision as the epsilon gate, not the float's raw
+      ``str()`` repr — two observations of a mathematically-identical
+      cumulative state must dedup even if their float representations
+      differ by residue.
+
+    A stale/regressed observation (``delta_qty`` at or below the tolerance)
+    folds no fill row at all — out-of-order evidence never double-counts or
+    reverses exposure.
+
+    ``is_correction`` is always recorded ``False`` this slice:
+    :func:`~app.broker.alpaca.clerk.sqlite.enter.fold_order_evidence` never
+    passes ``True``, and a downward correction (a negative ``delta_qty``)
+    returns above before any row is written at all. There is no correction
+    path yet — a broker-issued downward correction permanently overstates
+    attributed exposure until one is built (#1378+ territory).
     """
     facts = OrderFillObservedFacts.from_facts_json(payload["facts_json"])
     order_ref = payload["order_ref"]
-    fill_id = f"{order_ref}:{facts.cumulative_filled_quantity}"
+    fill_id = f"{order_ref}:{facts.cumulative_filled_quantity:.9f}"
     already_recorded = conn.execute("SELECT 1 FROM fills WHERE fill_id = ?", (fill_id,)).fetchone()
     if already_recorded is not None:
         return
-    prior_total = conn.execute(
-        "SELECT COALESCE(SUM(qty), 0) AS total FROM fills WHERE order_ref = ?", (order_ref,)
-    ).fetchone()["total"]
-    delta_qty = facts.cumulative_filled_quantity - prior_total
-    if delta_qty <= 0:
+    prior = conn.execute(
+        "SELECT COALESCE(SUM(qty), 0) AS qty, COALESCE(SUM(qty * price), 0) AS cost "
+        "FROM fills WHERE order_ref = ?",
+        (order_ref,),
+    ).fetchone()
+    delta_qty = facts.cumulative_filled_quantity - prior["qty"]
+    if delta_qty < FILL_QTY_EPSILON:
         return
+    delta_cost = (facts.avg_price * facts.cumulative_filled_quantity) - prior["cost"]
+    delta_price = delta_cost / delta_qty
     conn.execute(
         "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, "
         "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms) "
@@ -451,7 +491,7 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
             fill_id,
             order_ref,
             delta_qty,
-            facts.avg_price,
+            delta_price,
             facts.side,
             1 if facts.is_correction else 0,
             payload["source_event_at_ms"],

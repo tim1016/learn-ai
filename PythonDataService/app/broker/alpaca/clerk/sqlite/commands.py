@@ -35,8 +35,10 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
     InvalidIdentityError,
+    NoActiveRunError,
     UnknownStrategyInstanceError,
     reject_colon,
+    require_active_run,
     require_strategy_instance,
 )
 from app.broker.alpaca.clerk.sqlite.models import (
@@ -67,17 +69,6 @@ INTENDED_END_STATE_ACTIVE = "ACTIVE"
 INTENDED_END_STATE_STOPPED = "STOPPED"
 
 _ALREADY_ACTIVE_REASON = "This bot already has an active run; stop it before starting a new one."
-_NO_ACTIVE_RUN_REASON = "This bot has no active run to stop."
-
-
-class NoActiveRunError(Exception):
-    """Stop was requested but no matching active run exists — there is
-    nothing to bind a content-addressed identity to, so no ``commands`` row
-    is written."""
-
-    def __init__(self, strategy_instance_id: str) -> None:
-        self.strategy_instance_id = strategy_instance_id
-        super().__init__(_NO_ACTIVE_RUN_REASON)
 
 
 @dataclass(frozen=True)
@@ -305,9 +296,7 @@ def submit_stop_run(
         # See submit_start_run's build_transition for why this existence
         # check runs here, under the lock, rather than before it.
         require_strategy_instance(repo, strategy_instance_id)
-        active = repo.active_run(strategy_instance_id)
-        if active is None or active.lifecycle_run_id != lifecycle_run_id:
-            raise NoActiveRunError(strategy_instance_id)
+        active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
         facts = RunStoppedFacts(
             idempotency_key=idempotency_key,
             payload_hash=payload_hash,
