@@ -578,6 +578,41 @@ fidelity concern:
 | `ORDER_CANCEL_UNCERTAIN` | `why` | Same fold body as `ORDER_SUBMIT_UNCERTAIN` (registered under both transition_kind names) — a lost cancel-poll response is the identical "effect/command → `unknown`, no receipt" outcome, under a distinct name for audit-trail honesty about which broker call was actually attempted. |
 | `EXIT_ATTRIBUTED_FLAT` | none (`{}`) | Same fold body as the generic terminal-success tail (`_fold_effect_terminal(..., terminal_state="succeeded")`) — EXIT is the first caller to ever reach `succeeded` through it; ENTER never does within its own module (#1377's own docstring defers that to EXIT/reconciliation). |
 
+### 3g. Uncertainty transition facts (#1380, Part A)
+
+Both kinds fall outside §3d's table the same way §3e's two kinds do — neither
+creates or mutates a `commands` row, only the `uncertainties` table (§3):
+
+| Transition | Facts | Fold effect |
+| --- | --- | --- |
+| `UNCERTAINTY_RAISED` | `severity`, `blocks_new_exposure`, `allows_reduction`, `reason_code`, `headline`, `explanation`, `operator_impact`, `next_step`, `evidence_refs` — the R5 envelope minus `strategy_instance_id`, already an outer transition column | Inserts one `uncertainties` row. `scope` is derived from `strategy_instance_id` being non-null (`BOT`) or null (`ACCOUNT_CLERK`) — the same truthful scope/identity coupling `holds` already uses; never a caller-supplied field. Mints its own primary key from the transition's own `sequence`, same as `ACCOUNT_HOLD_RAISED`/`RECONCILIATION_ATTEMPTED`. |
+| `UNCERTAINTY_RESOLVED` | `uncertainty_id`, `resolution_note` | `UPDATE`s `resolved_at_ms` on the named `uncertainties` row, idempotent on `resolved_at_ms IS NULL` (a second resolve of an already-resolved uncertainty is a no-op). |
+
+Both are raised/resolved exclusively through
+`app/broker/alpaca/clerk/sqlite/uncertainty.py`'s `raise_uncertainty`/
+`resolve_uncertainty` — never appended directly by a domain module, so the
+idempotent check-then-raise
+(`ClerkSqliteRepository.raise_uncertainty_if_none_active`, mirroring
+`raise_hold_if_none_active`) is never bypassed.
+
+**R6 admission** (`uncertainty.admit_new_exposure`/`require_admission`) is
+implemented as one pure function folding both `uncertainties`
+(`blocks_new_exposure`-gated) and `holds` (always-blocking, #1378) behind a
+single admission surface, reused verbatim by `enter.accept_enter`'s
+enforcement and any future preview surface — the acceptance criterion "the
+same policy authors capability and effect." An `ACCOUNT_CLERK`-scoped block
+applies to every bot; a `BOT`-scoped block applies only to the matching bot.
+`reconcile.py`'s `position_drift` verdict is the first real caller of
+`raise_uncertainty` (`ACCOUNT_CLERK`-scoped, `blocks_new_exposure=True`,
+`allows_reduction=True`).
+
+**Deferred to a follow-up slice**: the 6 named, backend-authored recovery
+actions (Reconcile now, Cancel verified working orders, Prepare safe
+flatten, Stop bot decisions, Open custody timeline, Rebuild from mirror /
+Reset authority) with their own availability/reason/scope/freshness/
+next-step metadata — this slice ships the envelope and the admission policy
+those actions will eventually consult, not the action catalog itself.
+
 ## 4. Transaction matrix — which facts commit atomically together
 
 **Corrected in the corrective foundation slice** (open-pr-review-2026-08-05.md,

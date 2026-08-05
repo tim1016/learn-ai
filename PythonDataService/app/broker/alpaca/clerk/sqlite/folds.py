@@ -28,6 +28,8 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ReconciliationAttemptedFacts,
     RunStartedFacts,
     RunStoppedFacts,
+    UncertaintyRaisedFacts,
+    UncertaintyResolvedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 
@@ -684,6 +686,55 @@ def _fold_account_hold_raised(conn: sqlite3.Connection, payload: dict[str, Any])
     )
 
 
+def _fold_uncertainty_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """#1380: raise a typed R5 uncertainty. ``uncertainties.scope`` is
+    derived from ``strategy_instance_id`` being non-null (``BOT``) or null
+    (``ACCOUNT_CLERK``) — the same truthful scope/identity coupling
+    ``holds`` already uses; callers never pass scope directly (see
+    ``uncertainty.raise_uncertainty``). Callers only append this transition
+    after confirming no ``ACTIVE`` uncertainty with the same
+    ``(scope, reason_code, strategy_instance_id)`` already exists — the same
+    bounded-growth discipline ``_fold_account_hold_raised`` established."""
+    facts = UncertaintyRaisedFacts.from_facts_json(payload["facts_json"])
+    scope = "BOT" if payload["strategy_instance_id"] is not None else "ACCOUNT_CLERK"
+    uncertainty_id = f"uncertainty:{_this_transition_sequence(conn)}"
+    conn.execute(
+        "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
+        "allows_reduction, custody_owner, strategy_instance_id, reason_code, headline, "
+        "explanation, operator_impact, next_step, observed_at_ms, resolved_at_ms, "
+        "evidence_refs_json, facts_schema_version, facts_json) "
+        "VALUES (?, ?, ?, ?, ?, 'ACCOUNT_CLERK', ?, ?, ?, ?, ?, ?, ?, NULL, ?, 1, ?)",
+        (
+            uncertainty_id,
+            scope,
+            facts.severity,
+            1 if facts.blocks_new_exposure else 0,
+            1 if facts.allows_reduction else 0,
+            payload["strategy_instance_id"],
+            facts.reason_code,
+            facts.headline,
+            facts.explanation,
+            facts.operator_impact,
+            facts.next_step,
+            payload["recorded_at_ms"],
+            canonicalize(facts.evidence_refs),
+            payload["facts_json"],
+        ),
+    )
+
+
+def _fold_uncertainty_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """#1380: close an ``ACTIVE`` uncertainty. Idempotent on
+    ``resolved_at_ms IS NULL`` — resolving an already-resolved uncertainty a
+    second time is a no-op, never a second resolution timestamp."""
+    facts = UncertaintyResolvedFacts.from_facts_json(payload["facts_json"])
+    conn.execute(
+        "UPDATE uncertainties SET resolved_at_ms = ? "
+        "WHERE uncertainty_id = ? AND resolved_at_ms IS NULL",
+        (payload["recorded_at_ms"], facts.uncertainty_id),
+    )
+
+
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
 DEFAULT_FOLD_REGISTRY.register(
     "STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered
@@ -705,3 +756,5 @@ DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_UNCERTAIN", _fold_order_submit_unce
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)
+DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RAISED", _fold_uncertainty_raised)
+DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RESOLVED", _fold_uncertainty_resolved)

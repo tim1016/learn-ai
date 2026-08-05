@@ -18,7 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
+from app.broker.alpaca.clerk.sqlite.facts import (
+    AccountHoldRaisedFacts,
+    UncertaintyRaisedFacts,
+    UncertaintyResolvedFacts,
+)
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorChainBroken, MirrorFile
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
@@ -617,4 +621,209 @@ def test_uncertain_orders_is_empty_on_a_fresh_repository(tmp_path: Path) -> None
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
     )
     assert repo.uncertain_orders() == []
+    repo.close()
+
+
+# ---------------------------------------------------------------------------
+# #1380 primitives: UNCERTAINTY_RAISED/RESOLVED folds + raise_uncertainty_if_
+# none_active/active_uncertainty*/active_holds_for_admission read helpers.
+# ---------------------------------------------------------------------------
+
+
+def _uncertainty_transition(
+    *,
+    strategy_instance_id: str | None,
+    reason_code: str = "TEST_REASON",
+    blocks_new_exposure: bool = True,
+    allows_reduction: bool = True,
+) -> TransitionInput:
+    facts = UncertaintyRaisedFacts(
+        severity="warning",
+        blocks_new_exposure=blocks_new_exposure,
+        allows_reduction=allows_reduction,
+        reason_code=reason_code,
+        headline="Test headline",
+        explanation="Test explanation",
+        operator_impact="Test operator impact",
+        next_step="Test next step",
+        evidence_refs=["ev-1"],
+    )
+    return TransitionInput(
+        strategy_instance_id=strategy_instance_id,
+        transition_kind="UNCERTAINTY_RAISED",
+        custody_owner="ACCOUNT_CLERK",
+        execution_authority="ACCOUNT_CLERK",
+        operation_state="succeeded",
+        clerk_observed_at_ms=1,
+        summary_code="UNCERTAINTY_RAISED",
+        facts_json=facts.to_facts_json(),
+    )
+
+
+def test_uncertainty_raised_fold_creates_an_active_account_clerk_uncertainty(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    repo.append_transition(_uncertainty_transition(strategy_instance_id=None))
+
+    uncertainty = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None
+    )
+    assert uncertainty is not None
+    assert uncertainty["scope"] == "ACCOUNT_CLERK"
+    assert uncertainty["strategy_instance_id"] is None
+    assert uncertainty["blocks_new_exposure"] == 1
+    assert uncertainty["resolved_at_ms"] is None
+    assert json.loads(uncertainty["evidence_refs_json"]) == ["ev-1"]
+    repo.close()
+
+
+def test_uncertainty_raised_fold_creates_an_active_bot_scoped_uncertainty(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    with repo._write_lock:
+        repo._conn.execute(
+            "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
+            "created_at_ms, retired_at_ms) VALUES ('spy-bot', 'SPY', 'h', 1, NULL)"
+        )
+        repo._conn.commit()
+
+    repo.append_transition(_uncertainty_transition(strategy_instance_id="spy-bot"))
+
+    uncertainty = repo.active_uncertainty(
+        scope="BOT", reason_code="TEST_REASON", strategy_instance_id="spy-bot"
+    )
+    assert uncertainty is not None
+    assert uncertainty["scope"] == "BOT"
+    assert uncertainty["strategy_instance_id"] == "spy-bot"
+
+    # A different bot's identical reason_code must not collide.
+    assert (
+        repo.active_uncertainty(scope="BOT", reason_code="TEST_REASON", strategy_instance_id="qqq-bot")
+        is None
+    )
+    repo.close()
+
+
+def test_active_uncertainty_returns_none_when_none_exists(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    assert (
+        repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None)
+        is None
+    )
+    repo.close()
+
+
+def test_raise_uncertainty_if_none_active_is_idempotent(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    first = repo.raise_uncertainty_if_none_active(
+        scope="ACCOUNT_CLERK",
+        reason_code="TEST_REASON",
+        strategy_instance_id=None,
+        build_transition=lambda: _uncertainty_transition(strategy_instance_id=None),
+    )
+    before = len(repo.custody_transitions())
+    second = repo.raise_uncertainty_if_none_active(
+        scope="ACCOUNT_CLERK",
+        reason_code="TEST_REASON",
+        strategy_instance_id=None,
+        build_transition=lambda: _uncertainty_transition(strategy_instance_id=None),
+    )
+    assert first is True
+    assert second is False
+    assert len(repo.custody_transitions()) == before  # no second raise
+    repo.close()
+
+
+def test_uncertainty_resolved_fold_closes_the_active_row(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    repo.append_transition(_uncertainty_transition(strategy_instance_id=None))
+    uncertainty = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None
+    )
+    assert uncertainty is not None
+
+    resolved_facts = UncertaintyResolvedFacts(
+        uncertainty_id=uncertainty["uncertainty_id"], resolution_note="fixed"
+    )
+    repo.append_transition(
+        TransitionInput(
+            transition_kind="UNCERTAINTY_RESOLVED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=2,
+            summary_code="UNCERTAINTY_RESOLVED",
+            facts_json=resolved_facts.to_facts_json(),
+        )
+    )
+
+    assert (
+        repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None)
+        is None
+    )
+    repo.close()
+
+
+def test_active_uncertainties_for_admission_includes_account_and_bot_scope(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    with repo._write_lock:
+        repo._conn.execute(
+            "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
+            "created_at_ms, retired_at_ms) VALUES ('spy-bot', 'SPY', 'h', 1, NULL)"
+        )
+        repo._conn.execute(
+            "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
+            "created_at_ms, retired_at_ms) VALUES ('qqq-bot', 'QQQ', 'h', 1, NULL)"
+        )
+        repo._conn.commit()
+
+    repo.append_transition(
+        _uncertainty_transition(strategy_instance_id=None, reason_code="ACCOUNT_WIDE")
+    )
+    repo.append_transition(
+        _uncertainty_transition(strategy_instance_id="spy-bot", reason_code="SPY_ONLY")
+    )
+    repo.append_transition(
+        _uncertainty_transition(strategy_instance_id="qqq-bot", reason_code="QQQ_ONLY")
+    )
+
+    for_spy = {u["reason_code"] for u in repo.active_uncertainties_for_admission(strategy_instance_id="spy-bot")}
+    assert for_spy == {"ACCOUNT_WIDE", "SPY_ONLY"}  # not QQQ_ONLY
+
+    for_qqq = {u["reason_code"] for u in repo.active_uncertainties_for_admission(strategy_instance_id="qqq-bot")}
+    assert for_qqq == {"ACCOUNT_WIDE", "QQQ_ONLY"}
+    repo.close()
+
+
+def test_active_holds_for_admission_includes_account_and_bot_scope(tmp_path: Path) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
+    )
+    with repo._write_lock:
+        repo._conn.execute(
+            "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
+            "created_at_ms, retired_at_ms) VALUES ('spy-bot', 'SPY', 'h', 1, NULL)"
+        )
+        repo._conn.commit()
+    repo.append_transition(_hold_transition(evidence_refs=["bo-1"]))  # ACCOUNT_CLERK-scoped
+
+    holds = repo.active_holds_for_admission(strategy_instance_id="spy-bot")
+    assert len(holds) == 1
+    assert holds[0]["scope"] == "ACCOUNT_CLERK"
     repo.close()

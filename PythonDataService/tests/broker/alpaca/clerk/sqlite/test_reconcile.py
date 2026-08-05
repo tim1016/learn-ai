@@ -455,6 +455,34 @@ async def test_reconcile_account_raises_an_account_clerk_hold_for_a_foreign_orde
     assert hold is not None and hold["state"] == "ACTIVE"
 
 
+async def test_reconcile_account_raises_an_account_clerk_uncertainty_for_position_drift(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """#1380: a position_drift verdict raises a durable, ACCOUNT_CLERK-scoped
+    uncertainty that blocks new exposure but still allows reduction."""
+    read = _FakeRead(orders=[], positions=[_position("SPY", quantity=5)])
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade())
+    assert result.verdict == "position_drift"
+
+    uncertainty = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="POSITION_DRIFT", strategy_instance_id=None
+    )
+    assert uncertainty is not None
+    assert uncertainty["blocks_new_exposure"] == 1
+    assert uncertainty["allows_reduction"] == 1
+
+
+async def test_reconcile_account_position_drift_uncertainty_is_idempotent(
+    repo: ClerkSqliteRepository,
+) -> None:
+    read = _FakeRead(orders=[], positions=[_position("SPY", quantity=5)])
+    await reconcile_account(repo, read=read, trade=_FakeTrade())
+    before = len(repo.custody_transitions())
+
+    await reconcile_account(repo, read=read, trade=_FakeTrade())
+    assert len(repo.custody_transitions()) == before  # still one ACTIVE uncertainty, no second raise
+
+
 async def test_reconcile_account_hold_raise_is_idempotent_across_repeated_passes(
     repo: ClerkSqliteRepository,
 ) -> None:

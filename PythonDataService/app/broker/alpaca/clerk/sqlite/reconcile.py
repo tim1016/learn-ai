@@ -22,13 +22,21 @@ Two independent concerns, both driven by the same broker-facing pass:
   policy the pre-SQLite Alpaca clerk's ``reconcile.py`` used), and resolve
   every currently-uncertain order.
 
-Deliberately deferred: the R5 uncertainty envelope (severity/headline/
-explanation/operator prose) that would surface a ``position_drift`` verdict
-as a durable, operator-facing ``uncertainties`` row is #1380's own scope
-("uncertainty scope, admission, and recovery actions") — this module reports
-that verdict as a return value only. Admission gating against the hold this
-module raises (i.e. actually blocking a new ENTER) is R6, also #1380 —
-raising the hold is this slice's job, enforcing it is not. HTTP wiring
+A ``position_drift`` verdict also raises a durable, ``ACCOUNT_CLERK``-scoped
+R5 uncertainty (#1380) — the same idempotent, bounded-growth discipline
+``_raise_account_hold`` already established for ``unexplained_order``: a
+persistent drift re-raises nothing after the first. It blocks new exposure
+account-wide (``blocks_new_exposure=True``) but explicitly allows reduction
+— proven cancellation and closing exposure are never gated by it. Admission
+enforcement itself (actually blocking a new ENTER) lives in
+:func:`~app.broker.alpaca.clerk.sqlite.uncertainty.require_admission`,
+called from :func:`~app.broker.alpaca.clerk.sqlite.enter.accept_enter`; this
+module's job is only to raise the uncertainty, never to enforce it.
+
+Deliberately deferred: the 6 named, backend-authored recovery actions (#1380
+Part B) an operator would consult to resolve a raised uncertainty/hold —
+this module raises the uncertainty and stops there, the same way
+``_raise_account_hold`` already does for ``unexplained_order``. HTTP wiring
 (an operator "Reconcile now" endpoint) is deferred alongside #1377's own
 undelivered ENTER endpoint, per that slice's own scope note.
 """
@@ -54,6 +62,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
+from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -62,6 +71,7 @@ from app.engine.live.order_identity import build_bot_order_namespace, order_ref_
 logger = logging.getLogger(__name__)
 
 UNEXPLAINED_ORDER_REASON_CODE = "UNEXPLAINED_ORDER"
+POSITION_DRIFT_REASON_CODE = "POSITION_DRIFT"
 
 Trigger = Literal["AUTOMATIC", "OPERATOR_RECONCILE_NOW"]
 ReconciliationOutcome = Literal["STILL_UNKNOWN", "RESOLVED_SUCCESS", "RESOLVED_FAILURE"]
@@ -263,6 +273,37 @@ def _raise_account_hold(repo: ClerkSqliteRepository, *, foreign_orders: tuple[Br
     )
 
 
+def _raise_position_drift_uncertainty(
+    repo: ClerkSqliteRepository, *, drifted_symbols: tuple[str, ...]
+) -> None:
+    """#1380: a position-drift verdict raises a durable, ``ACCOUNT_CLERK``-
+    scoped R5 uncertainty — idempotent via
+    :func:`~.uncertainty.raise_uncertainty`'s own atomic check-then-raise, so
+    a persistent drift re-raises nothing after the first (bounded growth,
+    same policy as :func:`_raise_account_hold`). Blocks new exposure
+    account-wide but explicitly allows reduction: an operator investigating
+    drift must still be able to close existing positions."""
+    symbols = ", ".join(drifted_symbols)
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=POSITION_DRIFT_REASON_CODE,
+        headline="Account position doesn't match broker records",
+        explanation=(
+            f"The broker's reported position for {symbols} differs from what the Clerk "
+            "has recorded, outside the accepted tolerance."
+        ),
+        operator_impact=(
+            "New positions are paused account-wide until this is resolved. Existing "
+            "positions can still be reduced or closed."
+        ),
+        next_step="Reconcile now, then review the drifted symbols before resuming.",
+        evidence_refs=drifted_symbols,
+        blocks_new_exposure=True,
+        allows_reduction=True,
+    )
+
+
 @dataclass(frozen=True)
 class AccountReconciliationResult:
     verdict: AccountVerdict
@@ -312,6 +353,8 @@ async def reconcile_account(
     )
     if plan.verdict == "unexplained_order":
         _raise_account_hold(repo, foreign_orders=plan.foreign_orders)
+    elif plan.verdict == "position_drift":
+        _raise_position_drift_uncertainty(repo, drifted_symbols=plan.drifted_symbols)
 
     resolved_count = 0
     for order_row in repo.uncertain_orders():

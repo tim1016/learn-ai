@@ -245,6 +245,53 @@ class AccountHoldRaisedFacts:
 
 
 @dataclass(frozen=True)
+class UncertaintyRaisedFacts:
+    """``UNCERTAINTY_RAISED`` (#1380): the R5 envelope, minus what's already
+    an outer ``custody_transitions``/``uncertainties`` column —
+    ``strategy_instance_id`` is already an outer transition column, and
+    ``uncertainties.scope`` is derived from it being non-null (``BOT``) or
+    null (``ACCOUNT_CLERK``), the same truthful scope/identity coupling
+    ``holds`` already uses. Every other envelope field (severity, the two
+    independent admission axes, and the four backend-authored operator-
+    facing strings) has nowhere else to live, so it's typed here."""
+
+    severity: str
+    blocks_new_exposure: bool
+    allows_reduction: bool
+    reason_code: str
+    headline: str
+    explanation: str
+    operator_impact: str
+    next_step: str
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> UncertaintyRaisedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class UncertaintyResolvedFacts:
+    """``UNCERTAINTY_RESOLVED`` (#1380): which uncertainty resolved, and why —
+    ``uncertainty_id`` is not an outer transition column (unlike
+    ``order_ref``/``effect_operation_id``), so it must round-trip through
+    facts for the fold to know which ``uncertainties`` row to close."""
+
+    uncertainty_id: str
+    resolution_note: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> UncertaintyResolvedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class OrderFillObservedFacts:
     """The evidence ``_fold_order_fill_observed`` needs beyond the outer
     transition row: Alpaca's REST-reported *cumulative* ``filled_quantity``

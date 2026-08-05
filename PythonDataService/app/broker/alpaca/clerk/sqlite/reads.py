@@ -195,3 +195,58 @@ def active_hold(conn: sqlite3.Connection, *, scope: str, reason_code: str) -> di
         (scope, reason_code),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+_UNCERTAINTY_COLUMNS = (
+    "uncertainty_id, scope, severity, blocks_new_exposure, allows_reduction, custody_owner, "
+    "strategy_instance_id, reason_code, headline, explanation, operator_impact, next_step, "
+    "observed_at_ms, resolved_at_ms, evidence_refs_json"
+)
+
+
+def active_uncertainty(
+    conn: sqlite3.Connection, *, scope: str, reason_code: str, strategy_instance_id: str | None
+) -> dict | None:
+    """The current ``ACTIVE`` (``resolved_at_ms IS NULL``) uncertainty for
+    this ``(scope, reason_code, strategy_instance_id)``, if any — the
+    idempotency check before raising a new one (#1380). ``strategy_instance_id``
+    is part of the key (unlike ``active_hold``, which never needs it since
+    every hold raised so far is ``ACCOUNT_CLERK``-scoped): two different bots'
+    ``BOT``-scoped uncertainties sharing the same ``reason_code`` must never
+    be confused for one another."""
+    row = conn.execute(
+        f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
+        "WHERE scope = ? AND reason_code = ? AND strategy_instance_id IS ? "
+        "AND resolved_at_ms IS NULL ORDER BY observed_at_ms DESC LIMIT 1",
+        (scope, reason_code, strategy_instance_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def active_uncertainties_for_admission(
+    conn: sqlite3.Connection, *, strategy_instance_id: str
+) -> list[dict]:
+    """Every currently-``ACTIVE`` uncertainty relevant to admission for one
+    bot (#1380): every ``ACCOUNT_CLERK``-scoped uncertainty (blocks every
+    bot) plus this specific bot's own ``BOT``-scoped ones — never another
+    bot's ``BOT``-scoped uncertainty."""
+    rows = conn.execute(
+        f"SELECT {_UNCERTAINTY_COLUMNS} FROM uncertainties "
+        "WHERE resolved_at_ms IS NULL AND (scope = 'ACCOUNT_CLERK' OR strategy_instance_id = ?)",
+        (strategy_instance_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def active_holds_for_admission(conn: sqlite3.Connection, *, strategy_instance_id: str) -> list[dict]:
+    """Every currently-``ACTIVE`` hold relevant to admission for one bot
+    (#1380) — the same account-wide-or-this-bot shape as
+    :func:`active_uncertainties_for_admission`, so :func:`admit_new_exposure`
+    can fold both mechanisms behind one admission surface."""
+    rows = conn.execute(
+        "SELECT hold_id, scope, strategy_instance_id, reason_code, state, opened_at_ms, "
+        "resolved_at_ms, evidence_refs_json FROM holds "
+        "WHERE state = 'ACTIVE' AND (scope = 'ACCOUNT_CLERK' OR strategy_instance_id = ?)",
+        (strategy_instance_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]

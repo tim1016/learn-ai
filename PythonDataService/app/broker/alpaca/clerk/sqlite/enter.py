@@ -48,13 +48,18 @@ two must share a time source or the comparison is meaningless.
 Deliberately deferred to later slices: the effect operation never reaches a
 terminal ``succeeded`` state in this module (that requires knowing an ENTER
 is "done" — fully filled vs. still working — which is EXIT/reconciliation
-territory, #1378/#1379); admission gating against open holds/uncertainties
-is R6 (#1380), not this slice.
+territory, #1378/#1379).
 
 ``fold_order_evidence``/``fold_uncertain``/``fold_failed`` moved to
 ``order_evidence.py`` for #1379: EXIT's cancel-the-entry and
 submit-the-reducing-order steps need the identical evidence-folding gate,
 not a second copy. Re-exported here (``__all__``) for existing callers.
+
+R6 admission gating against open holds/uncertainties (#1380) is implemented
+in :func:`accept_enter` via :func:`~.uncertainty.require_admission` — see
+that function's own docstring for the policy (an ``ACCOUNT_CLERK``-scoped
+block applies to every bot; a ``BOT``-scoped block applies only to the
+matching bot).
 """
 
 from __future__ import annotations
@@ -84,6 +89,7 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
     fold_uncertain,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import require_admission
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from app.broker.contract.ports import BrokerTradePort
@@ -148,11 +154,15 @@ def accept_enter(
     ``lifecycle_run_id`` must match the bot's currently ``ACTIVE`` run — the
     same active-run fence Start/Stop enforce (commands.py), so a stopped or
     stale caller can never make a bot order-capable again just by calling
-    this function. A fresh reservation commits the effect operation and
-    order row (mirror finalize included) before returning — that commit is
-    what "one accepted operation" means for recovery: nothing about a broker
-    call is durable yet, so there is nothing for recovery to duplicate, only
-    to resolve.
+    this function. R6 admission (#1380) is checked here too: a currently
+    ``ACTIVE`` uncertainty or hold that blocks new exposure — for this bot
+    specifically, or account-wide — raises
+    :class:`~.uncertainty.AdmissionBlockedError` before any transition is
+    built. A fresh reservation commits the effect operation and order row
+    (mirror finalize included) before returning — that commit is what "one
+    accepted operation" means for recovery: nothing about a broker call is
+    durable yet, so there is nothing for recovery to duplicate, only to
+    resolve.
     """
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("decision_id", decision_id)
@@ -170,6 +180,7 @@ def accept_enter(
         # under commit_first_transition's lock, rather than before it.
         require_strategy_instance(repo, strategy_instance_id)
         active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
+        require_admission(repo, strategy_instance_id=strategy_instance_id)
         effect_operation_id = f"effect:{idempotency_key}"
         namespace = build_bot_order_namespace(strategy_instance_id)
         order_ref = build_order_ref(namespace, mint_intent_id())

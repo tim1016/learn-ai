@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.idempotency import (
     UnknownStrategyInstanceError,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
+from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
 from app.broker.contract.errors import BrokerError, BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 
@@ -1003,6 +1004,62 @@ async def test_submit_enter_never_calls_broker_when_no_active_run_matches(
             trade=trade,
         )
     assert len(trade.submit_calls) == 0
+
+
+# ── R6 admission gating (#1380) ─────────────────────────────────────────────
+
+
+async def test_accept_enter_rejects_when_an_account_clerk_uncertainty_blocks_new_exposure(
+    repo: ClerkSqliteRepository,
+) -> None:
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code="ACCOUNT_WIDE_ISSUE",
+        headline="h",
+        explanation="e",
+        operator_impact="oi",
+        next_step="ns",
+    )
+    before = len(repo.custody_transitions())
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-1",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+        )
+    assert exc_info.value.decision.reason_code == "ACCOUNT_WIDE_ISSUE"
+    assert len(repo.custody_transitions()) == before  # no ENTER_ACCEPTED written
+
+
+async def test_accept_enter_unaffected_by_a_different_bots_uncertainty(
+    repo: ClerkSqliteRepository,
+) -> None:
+    other_sid = "qqq-bot"
+    repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="QQQ", config_hash="h2")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id="run-q")
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=other_sid,
+        reason_code="QQQ_SPECIFIC_ISSUE",
+        headline="h",
+        explanation="e",
+        operator_impact="oi",
+        next_step="ns",
+    )
+
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    )
+    assert accepted.created
 
 
 # ── Operation claim fences broker contact (pinned contract §2) ──────────────

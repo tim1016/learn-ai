@@ -875,6 +875,13 @@ class ClerkSqliteRepository:
             return reads.attributed_positions_by_symbol(self._conn)
 
     def active_hold(self, *, scope: str, reason_code: str) -> dict | None:
+        """No ``strategy_instance_id`` filter — safe today because every
+        current caller hardcodes ``scope='ACCOUNT_CLERK'``
+        (``reconcile._raise_account_hold``); a future ``BOT``-scoped hold
+        raiser must add that filter first (see #1380's
+        ``active_uncertainty``, which needs and has it), or two different
+        bots sharing a ``reason_code`` would silently read each other's
+        hold."""
         with self._write_lock:
             return reads.active_hold(self._conn, scope=scope, reason_code=reason_code)
 
@@ -894,6 +901,61 @@ class ClerkSqliteRepository:
         """
         with self._write_lock:
             if reads.active_hold(self._conn, scope=scope, reason_code=reason_code) is not None:
+                return False
+            self.append_transition(build_transition())
+            return True
+
+    def active_uncertainty(
+        self, *, scope: str, reason_code: str, strategy_instance_id: str | None
+    ) -> dict | None:
+        with self._write_lock:
+            return reads.active_uncertainty(
+                self._conn,
+                scope=scope,
+                reason_code=reason_code,
+                strategy_instance_id=strategy_instance_id,
+            )
+
+    def active_uncertainties_for_admission(self, *, strategy_instance_id: str) -> list[dict]:
+        with self._write_lock:
+            return reads.active_uncertainties_for_admission(
+                self._conn, strategy_instance_id=strategy_instance_id
+            )
+
+    def active_holds_for_admission(self, *, strategy_instance_id: str) -> list[dict]:
+        with self._write_lock:
+            return reads.active_holds_for_admission(
+                self._conn, strategy_instance_id=strategy_instance_id
+            )
+
+    def raise_uncertainty_if_none_active(
+        self,
+        *,
+        scope: str,
+        reason_code: str,
+        strategy_instance_id: str | None,
+        build_transition: Callable[[], TransitionInput],
+    ) -> bool:
+        """Atomic check-then-raise for an uncertainty (#1380) — the same
+        check-then-append-under-one-lock shape
+        :meth:`raise_hold_if_none_active` already uses for holds, applied
+        here so two genuinely concurrent callers can never both observe "no
+        active uncertainty" for the same ``(scope, reason_code,
+        strategy_instance_id)`` and both append one. Returns ``True`` if a
+        new uncertainty was appended, ``False`` if one was already
+        ``ACTIVE`` (idempotent no-op — bounded growth, matching
+        :meth:`raise_hold_if_none_active`'s policy).
+        """
+        with self._write_lock:
+            if (
+                reads.active_uncertainty(
+                    self._conn,
+                    scope=scope,
+                    reason_code=reason_code,
+                    strategy_instance_id=strategy_instance_id,
+                )
+                is not None
+            ):
                 return False
             self.append_transition(build_transition())
             return True
