@@ -1,5 +1,14 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component, computed, inject, output, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  inject,
+  input,
+  linkedSignal,
+  output,
+  signal,
+} from '@angular/core';
 import { form } from '@angular/forms/signals';
 import { ButtonModule } from 'primeng/button';
 import { MessageModule } from 'primeng/message';
@@ -35,21 +44,15 @@ import { AlpacaOrderResultsComponent } from './alpaca-order-results.component';
 })
 export class AlpacaOrderEntryComponent {
   private readonly brokers = inject(BrokersService);
+  readonly initialSymbol = input('');
+  readonly expectedAccountId = input.required<string>();
 
   // S1 has no operator-identity plumbing yet; the manual namespace uses a fixed
   // desk operator. Later slices thread the signed-in operator through here.
   private readonly operator = 'desk';
 
-  protected readonly legs = signal<AlpacaOrderDraftLeg[]>([
-    {
-      id: 0,
-      symbol: '',
-      side: 'buy',
-      quantity: '',
-      orderType: 'market',
-      limitPrice: '',
-      timeInForce: 'day',
-    },
+  protected readonly legs = linkedSignal<AlpacaOrderDraftLeg[]>(() => [
+    this.newLeg(0, this.initialSymbol()),
   ]);
   protected readonly legsForm = form(this.legs);
   protected readonly previewOpen = signal(false);
@@ -62,7 +65,10 @@ export class AlpacaOrderEntryComponent {
   private nextId = 1;
 
   protected readonly canSubmit = computed(
-    () => this.legs().length > 0 && this.legs().every((leg) => this.legValid(leg)),
+    () =>
+      this.expectedAccountId().trim().length > 0
+      && this.legs().length > 0
+      && this.legs().every((leg) => this.legValid(leg)),
   );
 
   protected legValid(leg: AlpacaOrderDraftLeg): boolean {
@@ -84,18 +90,7 @@ export class AlpacaOrderEntryComponent {
   }
 
   protected addEquityLeg(): void {
-    this.legs.update((legs) => [
-      ...legs,
-      {
-        id: this.nextId++,
-        symbol: '',
-        side: 'buy',
-        quantity: '',
-        orderType: 'market',
-        limitPrice: '',
-        timeInForce: 'day',
-      },
-    ]);
+    this.legs.update((legs) => [...legs, this.newLeg(this.nextId++, '')]);
     // A new draft invalidates the last submit's results view.
     this.results.set(null);
     this.submitError.set(null);
@@ -124,6 +119,7 @@ export class AlpacaOrderEntryComponent {
     this.submitError.set(null);
     const request = {
       operator: this.operator,
+      expected_account_id: this.expectedAccountId(),
       legs: this.legs().map((leg) => this.toRequestLeg(leg)),
     };
     try {
@@ -151,6 +147,18 @@ export class AlpacaOrderEntryComponent {
     return leg.orderType === 'limit'
       ? { ...base, limit_price: Number(leg.limitPrice) }
       : base;
+  }
+
+  private newLeg(id: number, symbol: string): AlpacaOrderDraftLeg {
+    return {
+      id,
+      symbol: symbol.trim().toUpperCase(),
+      side: 'buy',
+      quantity: '',
+      orderType: 'market',
+      limitPrice: '',
+      timeInForce: 'day',
+    };
   }
 
   private submissionErrorMessage(err: unknown): string {

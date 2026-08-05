@@ -321,6 +321,7 @@ async def test_clear_hold_execution_rechecks_channel_health() -> None:
         await clerk.submit(
             BrokerOrderRequest(
                 operator="inkant",
+                expected_account_id="PA-TEST",
                 legs=[BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)],
             )
         )

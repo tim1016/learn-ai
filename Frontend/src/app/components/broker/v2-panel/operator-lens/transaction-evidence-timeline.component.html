@@ -1,0 +1,54 @@
+<section class="evidence-timeline" aria-label="Transaction evidence timeline">
+  <header class="evidence-timeline__header">
+    <h4>Recorded order events</h4>
+    @if (entries().length > 0) {
+      <span aria-live="polite">{{ entries().length }} of {{ totalEntries() }}</span>
+    }
+  </header>
+
+  @if (loading() && entries().length === 0) {
+    <p class="evidence-timeline__message" role="status" aria-live="polite">Loading evidence…</p>
+  } @else if (loadError()) {
+    <div class="evidence-timeline__error" role="alert">
+      <p>{{ loadError() }}</p>
+      <button type="button" (click)="retry()">Try again</button>
+    </div>
+  } @else if (entries().length === 0) {
+    <p class="evidence-timeline__message" role="status">No evidence recorded for this transaction.</p>
+  } @else {
+    <ol class="evidence-timeline__list">
+      @for (entry of entries(); track trackEntry($index, entry)) {
+        <li class="evidence-event">
+          <span class="evidence-event__marker" aria-hidden="true"></span>
+          <div class="evidence-event__heading">
+            <strong>{{ entry.kind_label }}</strong>
+            <app-timestamp-display [value]="entry.recorded_at_ms" mode="local" />
+          </div>
+          <p>{{ entry.summary }}</p>
+          @if (entry.intent_id || entry.order_ref) {
+            <dl>
+              @if (entry.intent_id) {
+                <div><dt>Intent</dt><dd><code>{{ entry.intent_id }}</code></dd></div>
+              }
+              @if (entry.order_ref) {
+                <div><dt>Order</dt><dd><code>{{ entry.order_ref }}</code></dd></div>
+              }
+            </dl>
+          }
+          @if (entry.has_more_detail) {
+            <span class="evidence-event__note">Additional authenticated detail is available.</span>
+          }
+        </li>
+      }
+    </ol>
+
+    @if (hasNextPage()) {
+      <button
+        type="button"
+        class="evidence-timeline__more"
+        [disabled]="loading()"
+        (click)="loadMore()"
+      >{{ loading() ? 'Loading…' : 'Load more events' }}</button>
+    }
+  }
+</section>

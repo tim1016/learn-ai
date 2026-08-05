@@ -87,6 +87,7 @@ describe('BrokersService', () => {
   it('POSTs an order to the control-prefixed orders endpoint', async () => {
     const request = {
       operator: 'desk',
+      expected_account_id: 'PA1',
       legs: [{ symbol: 'SPY', side: 'buy' as const, quantity: 1, order_type: 'market' as const }],
     };
     const promise = service.submitOrder('alpaca', request);

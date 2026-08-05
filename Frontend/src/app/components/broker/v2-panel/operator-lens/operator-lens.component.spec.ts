@@ -160,6 +160,20 @@ function expandReadiness(label: string): HTMLElement {
   return header;
 }
 
+function openDisclosure(label: string): void {
+  const details = screen.getByText(label).closest('details');
+  if (details === null) throw new Error(`Expected ${label} disclosure.`);
+  details.open = true;
+  fireEvent(details, new Event('toggle'));
+}
+
+function closeDisclosure(label: string): void {
+  const details = screen.getByText(label).closest('details');
+  if (details === null) throw new Error(`Expected ${label} disclosure.`);
+  details.open = false;
+  fireEvent(details, new Event('toggle'));
+}
+
 function makeEvidencePage(): EvidencePage {
   return {
     strategy_instance_id: 'sid-1',
@@ -192,6 +206,8 @@ function makeFakePanelService(evidencePage?: EvidencePage) {
     getEvidence: vi.fn(
       () => Promise.resolve(evidencePage ?? makeEvidencePage()),
     ) as unknown as (broker: string, accountId: string, sid: string, params: Record<string, unknown>) => Promise<EvidencePage>,
+    getCurrentRun: vi.fn().mockRejectedValue(new Error('No current run fixture.')),
+    getRunHistory: vi.fn().mockResolvedValue({ runs: [], next_cursor: null }),
   };
 }
 
@@ -237,6 +253,28 @@ describe('OperatorLensComponent', () => {
     });
 
     expect(screen.getByText('Live')).toBeTruthy();
+  });
+
+  it('renders run evidence as the final operator section', async () => {
+    const fakeSvc = makeFakePanelService();
+    const { container } = await render(OperatorLensComponent, {
+      inputs: {
+        panel: makePanel(),
+        profile: makeProfile(),
+        actionPending: false,
+        broker: 'alpaca',
+        accountId: 'acc-1',
+        sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
+    });
+
+    const runHistory = container.querySelector('app-operator-run-history');
+    expect(runHistory).not.toBeNull();
+    expect(runHistory?.nextElementSibling).toBeNull();
+    expect(screen.getByText('Run evidence')).toBeTruthy();
+    expect(screen.getByText('Current and previous runs')).toBeTruthy();
+    expect(container.querySelector('app-bot-run-history')).toBeNull();
   });
 
   it('renders backend-authored Resume and account-freeze copy unchanged', async () => {
@@ -304,10 +342,10 @@ describe('OperatorLensComponent', () => {
     expect(screen.getByText('Signal')).toBeTruthy();
   });
 
-  it('calls getEvidence on mount to load the journal tail', async () => {
+  it('loads the journal only after the collapsed audit trail is opened', async () => {
     const fakeSvc = makeFakePanelService();
 
-    await render(OperatorLensComponent, {
+    const { fixture } = await render(OperatorLensComponent, {
       inputs: {
         panel: makePanel(),
         profile: makeProfile(),
@@ -318,6 +356,10 @@ describe('OperatorLensComponent', () => {
       },
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
+
+    expect(fakeSvc.getEvidence).not.toHaveBeenCalled();
+    openDisclosure('Audit trail');
+    await fixture.whenStable();
 
     expect(fakeSvc.getEvidence).toHaveBeenCalledWith(
       'alpaca',
@@ -325,12 +367,17 @@ describe('OperatorLensComponent', () => {
       'sid-1',
       expect.objectContaining({ clientHint: 'operator-lens-journal-tail' }),
     );
+
+    closeDisclosure('Audit trail');
+    openDisclosure('Audit trail');
+    await fixture.whenStable();
+    expect(fakeSvc.getEvidence).toHaveBeenCalledTimes(1);
   });
 
   it('journal tail shows loaded entries', async () => {
     const fakeSvc = makeFakePanelService();
 
-    await render(OperatorLensComponent, {
+    const { fixture } = await render(OperatorLensComponent, {
       inputs: {
         panel: makePanel(),
         profile: makeProfile(),
@@ -342,7 +389,9 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    // The journal tail renders the kind_label from the entry.
+    openDisclosure('Audit trail');
+    await fixture.whenStable();
+
     const matches = await screen.findAllByText('Order submitted');
     expect(matches.length).toBeGreaterThan(0);
     expect(screen.getByText('BUY 10 SPY @ market')).toBeTruthy();
@@ -461,7 +510,7 @@ describe('OperatorLensComponent', () => {
     expect(onActionRequested).toHaveBeenCalledWith({ action: flattenAction, reason: null });
   });
 
-  it('evidence drawer is hidden by default', async () => {
+  it('has no sidebar evidence drawer', async () => {
     const fakeSvc = makeFakePanelService();
     const { container } = await render(OperatorLensComponent, {
       inputs: {
@@ -475,9 +524,8 @@ describe('OperatorLensComponent', () => {
       providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
     });
 
-    // The evidence drawer with backdrop renders only when open.
-    const backdrop = container.querySelector('.evidence-drawer__backdrop');
-    expect(backdrop).toBeNull();
+    expect(container.querySelector('.evidence-drawer')).toBeNull();
+    expect(container.querySelector('.evidence-drawer__backdrop')).toBeNull();
   });
 
   it('shows confirmation prompt when flatten-stop has confirmation.required', async () => {
@@ -652,10 +700,7 @@ describe('OperatorLensComponent', () => {
     fireEvent.click(disclosure);
     expect(disclosure.getAttribute('aria-expanded')).toBe('true');
 
-    expect(
-      (await screen.findByRole('alert')).textContent,
-    ).toContain('The Clerk cannot prove the exposure to flatten.');
-    expect(screen.getByRole('button', { name: 'Flatten & stop' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Flatten & stop' })).toBeTruthy();
     expect(screen.queryByLabelText('Operator commands')).toBeNull();
   });
 });

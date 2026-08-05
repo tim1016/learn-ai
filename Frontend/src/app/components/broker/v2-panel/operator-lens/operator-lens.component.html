@@ -1,37 +1,12 @@
 <div class="operator-lens">
-  <app-operator-readiness
-    [panel]="panel()"
-    [actionPending]="actionPending()"
-    (actionRequested)="onActionRequested($event)"
-  />
-
-  <app-bot-run-history
-    [state]="runHistory()"
-    [botRunning]="health().running"
-    (navigationRequested)="runHistoryNavigation.emit($event)"
-  />
-
-  <div class="operator-lens__main">
-    <section class="operator-lens__trace" aria-labelledby="transaction-trace-title">
-      <div class="section-heading">
-        <span>Historical evidence</span>
-        <h2 id="transaction-trace-title">Transaction trace</h2>
-        <p>The selected order's recorded path. Selecting a journal row reloads this projection from the server.</p>
-      </div>
-      <app-transaction-rail
-        [rail]="rail()"
-        [profile]="profile()"
-        (evidenceRequested)="onEvidenceRequested($event)"
-      />
-    </section>
-
-    <aside class="operator-lens__cards">
-      <app-health-card
-        [health]="health()"
-        [retireAction]="null"
+  <div class="operator-lens__grid">
+    <div class="operator-lens__column">
+      <app-operator-readiness
+        [panel]="panel()"
         [actionPending]="actionPending()"
         (actionRequested)="onActionRequested($event)"
       />
+
       <app-clerk-card
         [clerk]="clerk()"
         [reconcileAction]="null"
@@ -39,64 +14,79 @@
         [actionPending]="actionPending()"
         (actionRequested)="onActionRequested($event)"
       />
-    </aside>
-  </div>
+    </div>
 
-  <div class="operator-lens__support-grid">
-    <section class="working-orders" aria-labelledby="working-orders-title">
-      <div class="section-heading section-heading--row">
-        <div>
-          <span>Clerk custody</span>
-          <h2 id="working-orders-title">Working orders</h2>
+    <div class="operator-lens__column">
+      <section class="operator-lens__trace" aria-labelledby="transaction-trace-title">
+        <div class="section-heading">
+          <h2 id="transaction-trace-title">Transaction Gate history</h2>
+          <p>The selected order's recorded path. Selecting a journal row reloads this projection from the server.</p>
         </div>
-        <strong class="section-count" [attr.aria-label]="panel().working_orders.length + ' working orders'">
-          {{ panel().working_orders.length }}
-        </strong>
-      </div>
-      @if (panel().working_orders.length === 0) {
-        <p class="empty-copy"><span aria-hidden="true">✓</span> No Clerk-attributed working orders.</p>
-      } @else {
-        <ul class="working-orders__grid" aria-label="Clerk-attributed working orders">
-          @for (order of panel().working_orders; track order.order_ref) {
-            <li class="working-order">
-              <div class="working-order__heading">
-                <strong>{{ order.symbol }}</strong>
-                <span>{{ order.side | receiptLabel }}</span>
-                <span class="working-order__status">{{ order.status | receiptLabel }}</span>
-              </div>
-              <dl>
-                <div><dt>Quantity</dt><dd>{{ order.quantity ?? 'Not reported' }}</dd></div>
-                <div><dt>Filled</dt><dd>{{ order.filled_quantity }}</dd></div>
-              </dl>
-              <code>{{ order.order_ref }}</code>
-            </li>
-          }
-        </ul>
-      }
-    </section>
+        <app-transaction-rail
+          [rail]="rail()"
+          [profile]="profile()"
+          [broker]="broker()"
+          [accountId]="accountId()"
+          [sid]="sid()"
+        />
+      </section>
 
-    <section class="operator-lens__journal" aria-labelledby="journal-title">
-      <div class="section-heading">
-        <span>Clerk evidence</span>
-        <h2 id="journal-title">Audit trail</h2>
-        <p>Newest custody events, with raw receipts available on demand.</p>
-      </div>
-      @if (journalPage.error()) { <p role="alert">Could not load journal evidence.</p> }
-      <app-journal-tail
-        [evidencePage]="journalPage.value() ?? null"
-        [loading]="journalPage.isLoading()"
-        (transactionSelected)="onTransactionSelected($event)"
-        (evidenceDrawerRequested)="onEvidenceRequested($event)"
+      <section class="working-orders" aria-labelledby="working-orders-title">
+        <div class="section-heading section-heading--row">
+          <h2 id="working-orders-title">Working orders</h2>
+          <strong class="section-count" [attr.aria-label]="panel().working_orders.length + ' working orders'">
+            {{ panel().working_orders.length }}
+          </strong>
+        </div>
+        @if (panel().working_orders.length === 0) {
+          <p class="empty-copy"><span aria-hidden="true">✓</span> No Clerk-attributed working orders.</p>
+        } @else {
+          <ul class="working-orders__grid" aria-label="Clerk-attributed working orders">
+            @for (order of panel().working_orders; track order.order_ref) {
+              <li class="working-order">
+                <div class="working-order__heading">
+                  <strong>{{ order.symbol }}</strong>
+                  <span>{{ order.side | receiptLabel }}</span>
+                  <span class="working-order__status">{{ order.status | receiptLabel }}</span>
+                </div>
+                <dl>
+                  <div><dt>Quantity</dt><dd>{{ order.quantity ?? 'Not reported' }}</dd></div>
+                  <div><dt>Filled</dt><dd>{{ order.filled_quantity }}</dd></div>
+                </dl>
+                <code>{{ order.order_ref }}</code>
+              </li>
+            }
+          </ul>
+        }
+      </section>
+    </div>
+
+    <div class="operator-lens__column">
+      <app-health-card
+        [health]="health()"
+        [retireAction]="null"
+        [actionPending]="actionPending()"
+        (actionRequested)="onActionRequested($event)"
       />
-    </section>
+
+      <app-operator-disclosure-card
+        title="Audit trail"
+        hint="Newest custody events"
+        (expandedChange)="onJournalExpanded($event)"
+      >
+        @if (journalPage.error()) { <p role="alert">Could not load journal evidence.</p> }
+        <app-journal-tail
+          [evidencePage]="journalPage.value() ?? null"
+          [loading]="journalPage.isLoading()"
+          (transactionSelected)="onTransactionSelected($event)"
+        />
+      </app-operator-disclosure-card>
+
+      <app-operator-run-history
+        [broker]="broker()"
+        [sid]="sid()"
+        [botRunning]="health().running"
+      />
+    </div>
   </div>
 </div>
-
-<app-evidence-drawer
-  [broker]="broker()"
-  [accountId]="accountId()"
-  [sid]="sid()"
-  [transactionRef]="evidenceDrawerRef()"
-  [open]="evidenceDrawerOpen()"
-  (closed)="onEvidenceDrawerClose()"
-/>

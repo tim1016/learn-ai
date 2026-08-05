@@ -3,7 +3,6 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
-import { PanelHeaderComponent } from './panel-header.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type {
   BotPanelView,
@@ -257,6 +256,13 @@ const mockService = {
   }),
 };
 
+function openDisclosure(label: string): void {
+  const details = screen.getByText(label).closest('details');
+  if (details === null) throw new Error(`Expected ${label} disclosure.`);
+  details.open = true;
+  fireEvent(details, new Event('toggle'));
+}
+
 describe('BotPanelShellComponent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -264,28 +270,6 @@ describe('BotPanelShellComponent', () => {
 
   afterAll(() => {
     globalThis.EventSource = originalEventSource;
-  });
-
-  it('renders the complete market explanation with PrimeNG status cards', async () => {
-    const explanation = 'Market data is degraded because the newest bar missed the expected cadence; restore the feed before trusting another decision.';
-    const panel: BotPanelView = {
-      ...PANEL,
-      market_pulse: {
-        ...PANEL.market_pulse,
-        explanation,
-        attention_required: true,
-      },
-    };
-    const { container } = await render(PanelHeaderComponent, {
-      inputs: { panel },
-      providers: [provideRouter([])],
-    });
-
-    const explanationElement = screen.getByText(explanation);
-    expect(explanationElement.classList.contains('whitespace-normal')).toBe(true);
-    expect(explanationElement.classList.contains('truncate')).toBe(false);
-    expect(container.querySelectorAll('p-card')).toHaveLength(2);
-    expect(container.querySelectorAll('p-tag')).toHaveLength(2);
   });
 
   it('shows loading state initially then renders the trader lens', async () => {
@@ -307,17 +291,44 @@ describe('BotPanelShellComponent', () => {
       'sid-001',
       '5s',
     );
-    expect(screen.getByText('run-current')).toBeTruthy();
+    expect(screen.queryByText('run-current')).toBeNull();
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
+
     expect(screen.getByText('run-current')).toBeTruthy();
   });
 
-  it('loads previous runs only on demand and preserves the selection across lenses', async () => {
+  it('keeps lens navigation above the hero and run evidence out of Trader', async () => {
+    const { fixture, container } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const navigation = container.querySelector('.lens-navigation');
+    const hero = container.querySelector('app-panel-header');
+    expect(navigation).not.toBeNull();
+    expect(hero).not.toBeNull();
+    if (navigation === null || hero === null) {
+      throw new Error('Expected lens navigation and panel hero to render.');
+    }
+    expect(
+      navigation.compareDocumentPosition(hero) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.queryByText('Run evidence')).toBeNull();
+    expect(screen.queryByText('Strategy evidence')).toBeNull();
+    expect(screen.queryByText('Clerk evidence')).toBeNull();
+  });
+
+  it('loads previous runs only while the operator lens is mounted', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -330,6 +341,12 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(mockService.getRunHistory).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
     await fixture.whenStable();
     fixture.detectChanges();
@@ -345,14 +362,28 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Trader' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.queryByText('run-previous')).toBeNull();
+
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
+    expect(screen.queryByText('run-previous')).toBeNull();
+    expect(mockService.getRunHistory).toHaveBeenCalledTimes(1);
+
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockService.getRunHistory).toHaveBeenCalledTimes(2);
     expect(screen.getByText('run-previous')).toBeTruthy();
-    expect(
-      screen.getByText('Viewing history — controls apply to the current run.'),
-    ).toBeTruthy();
   });
 
   it('requests one older run at a time with the server-issued cursor', async () => {
@@ -390,6 +421,9 @@ describe('BotPanelShellComponent', () => {
     });
     await fixture.whenStable();
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    openDisclosure('Run evidence');
     await fixture.whenStable();
     fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
@@ -435,6 +469,9 @@ describe('BotPanelShellComponent', () => {
     });
     await fixture.whenStable();
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    openDisclosure('Run evidence');
     await fixture.whenStable();
     fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Previous Runs' }));
@@ -512,6 +549,9 @@ describe('BotPanelShellComponent', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
     await fixture.whenStable();
     fixture.detectChanges();
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
     expect(screen.getByText('No terminal evidence recorded')).toBeTruthy();
     await new Promise((resolve) => setTimeout(resolve, 5_100));
     await fixture.whenStable();
@@ -545,6 +585,14 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(mockService.getCurrentRun).toHaveBeenCalledTimes(0);
+    openDisclosure('Run evidence');
+    await fixture.whenStable();
+    fixture.detectChanges();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
     await new Promise((resolve) => setTimeout(resolve, 5_100));
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
@@ -611,6 +659,9 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
+    openDisclosure('Audit trail');
+    await fixture.whenStable();
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: /Submit acknowledged at/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Select transaction tx-001 on rail' }));
     await fixture.whenStable();

@@ -68,6 +68,7 @@ from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_healt
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.errors import (
     BrokerError,
+    BrokerRequestInvalid,
     BrokerSubmissionHeld,
     BrokerUnavailable,
 )
@@ -168,7 +169,10 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
         landed); a definitive rejection does not.
         """
         return await self._submit_batch(
-            operator=request.operator, namespace=None, legs=request.legs
+            operator=request.operator,
+            expected_account_id=request.expected_account_id,
+            namespace=None,
+            legs=request.legs,
         )
 
     async def submit_for_instance(
@@ -182,19 +186,32 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
         """
         namespace = build_bot_order_namespace(strategy_instance_id)
         return await self._submit_batch(
-            operator=strategy_instance_id, namespace=namespace, legs=legs
+            operator=strategy_instance_id,
+            expected_account_id=None,
+            namespace=namespace,
+            legs=legs,
         )
 
     async def _submit_batch(
         self,
         *,
         operator: str,
+        expected_account_id: str | None,
         namespace: str | None,
         legs: list[BrokerOrderLeg],
     ) -> OrderSubmitResult:
         """Shared hold-gated serial leg submission for both namespace schemes."""
         async with self._intake_lock:
             account_id, journal = await self._ensure_journal()
+            if expected_account_id is not None and expected_account_id != account_id:
+                raise BrokerRequestInvalid(
+                    "The order ticket targets a different account.",
+                    broker=self.broker_id,
+                    detail=(
+                        f"Expected account {expected_account_id}, but the Clerk is connected "
+                        f"to {account_id}. Refresh the account desk before submitting."
+                    ),
+                )
             hold = derive.hold_state(journal.read_entries())
             if hold.active:
                 logger.warning(

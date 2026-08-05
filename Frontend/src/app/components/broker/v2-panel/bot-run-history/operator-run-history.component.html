@@ -1,0 +1,13 @@
+<app-operator-disclosure-card
+  title="Run evidence"
+  hint="Current and previous runs"
+  (expandedChange)="onExpandedChange($event)"
+>
+  @if (expanded()) {
+    <app-bot-run-history
+      [state]="state()"
+      [botRunning]="botRunning()"
+      (navigationRequested)="navigate($event)"
+    />
+  }
+</app-operator-disclosure-card>

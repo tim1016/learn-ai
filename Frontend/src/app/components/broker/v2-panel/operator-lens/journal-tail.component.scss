@@ -5,7 +5,7 @@
 
 .journal-tail__filter-btn,
 .journal-entry__select-btn,
-.journal-entry__evidence-btn {
+.journal-tail__load-more {
   padding: 0.2rem 0.5rem;
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
@@ -19,6 +19,7 @@
 
 .journal-tail__filter-btn--active { border-color: var(--accent); background: var(--accent); color: var(--text-on-accent); }
 .journal-tail__loading, .journal-tail__empty, .journal-tail__more { margin: 0; padding: var(--space-2); color: var(--text-secondary); font-size: var(--fs-xs); }
+.journal-tail__load-more { width: fit-content; margin-top: var(--space-1); }
 .journal-tail__list { display: grid; margin: 0; padding: 0; list-style: none; }
 
 .journal-entry {
