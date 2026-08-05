@@ -79,6 +79,7 @@ have their decision preserved here.
 | 0031 | Cross-stack boundary selection and generated contracts |
 | 0032 | Broker contract v2 and verbatim capture |
 | 0033 | Account custody clocks and safety composition |
+| 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only; proposed) |
 
 ---
 
@@ -151,6 +152,7 @@ PRDs were on 2026-07-04). Verify status before trusting them as current.
 | Doc | Domain |
 |---|---|
 | `docs/architecture/operator-notice-prd.md` | Operator notice contract implementation (ADR-0015) |
+| `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` | Proposed Alpaca Account Clerk SQLite authority, operation-first custody timeline, and fail-closed recovery; requires a follow-up ADR before implementation authority |
 
 ---
 
