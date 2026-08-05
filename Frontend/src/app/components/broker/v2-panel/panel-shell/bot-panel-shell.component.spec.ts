@@ -308,7 +308,11 @@ describe('BotPanelShellComponent', () => {
   it('keeps lens navigation above the hero and run evidence out of Trader', async () => {
     const { fixture, container } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService },
+      ],
     });
     await fixture.whenStable();
     fixture.detectChanges();
