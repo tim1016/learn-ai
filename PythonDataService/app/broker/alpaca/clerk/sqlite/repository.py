@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.broker.alpaca.clerk.sqlite import schema
+from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY, FoldRegistry
 from app.broker.alpaca.clerk.sqlite.hashchain import (
     GENESIS,
@@ -38,6 +38,11 @@ from app.broker.alpaca.clerk.sqlite.hashchain import (
     verify_chain,
 )
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, PendingTransition
+from app.broker.alpaca.clerk.sqlite.reads import (
+    ControlMetaSnapshot,
+    EffectOperationResource,
+    OrderResource,
+)
 from app.broker.alpaca.clerk.sqlite.registry import (
     EstablishedAccountsRegistry,
     EstablishedGeneration,
@@ -144,17 +149,6 @@ class CommittedTransition:
     row_hash: str
     prev_hash: str
     control_revision: int
-
-
-@dataclass(frozen=True)
-class ControlMetaSnapshot:
-    schema_version: int
-    account_id: str
-    db_identity_token: str
-    authority_generation: int
-    control_revision: int
-    created_at_ms: int
-    last_open_at_ms: int
 
 
 @dataclass(frozen=True)
@@ -344,6 +338,10 @@ class ClerkSqliteRepository:
     @property
     def mirror_path(self) -> Path:
         return self._account_dir / MIRROR_FILENAME
+
+    @property
+    def clock(self) -> Clock:
+        return self._clock
 
     def close(self) -> None:
         """Release the execution lease and close the connection."""
@@ -852,11 +850,7 @@ class ClerkSqliteRepository:
     # ------------------------------------------------------------------
 
     def control_meta_snapshot(self) -> ControlMetaSnapshot:
-        row = self._conn.execute(
-            "SELECT schema_version, account_id, db_identity_token, authority_generation, "
-            "control_revision, created_at_ms, last_open_at_ms FROM control_meta WHERE id = 1"
-        ).fetchone()
-        return ControlMetaSnapshot(**dict(row))
+        return reads.control_meta_snapshot(self._conn)
 
     def custody_transitions(self) -> list[dict]:
         rows = self._conn.execute(
@@ -865,11 +859,37 @@ class ClerkSqliteRepository:
         return [_row_to_payload(row) for row in rows]
 
     def strategy_instances(self) -> list[dict]:
+        return reads.strategy_instances(self._conn)
+
+    def effect_operation(self, effect_operation_id: str) -> EffectOperationResource | None:
+        return reads.effect_operation(self._conn, effect_operation_id)
+
+    def order(self, order_ref: str) -> OrderResource | None:
+        return reads.order(self._conn, order_ref)
+
+    def order_for_effect_operation(self, effect_operation_id: str) -> OrderResource | None:
+        """The order for a single-order effect operation (ENTER, #1377).
+
+        An EXIT effect operation (#1379) owns more than one ``orders`` row
+        (the cancelled entry and the reducing close) — that slice needs a
+        different, order-role-aware query; this one is scoped to "exactly
+        one order" callers.
+        """
+        return reads.order_for_effect_operation(self._conn, effect_operation_id)
+
+    def position(self, strategy_instance_id: str, symbol: str) -> float:
+        return reads.position(self._conn, strategy_instance_id, symbol)
+
+    def fills_for_order(self, order_ref: str) -> list[dict]:
+        return reads.fills_for_order(self._conn, order_ref)
+
+    def transitions_for_order(self, order_ref: str) -> list[dict]:
         rows = self._conn.execute(
-            "SELECT strategy_instance_id, symbol, config_hash, created_at_ms, retired_at_ms "
-            "FROM strategy_instances ORDER BY created_at_ms ASC"
+            f"SELECT {', '.join(_TRANSITION_COLUMNS)} FROM custody_transitions "
+            f"WHERE order_ref = ? ORDER BY sequence ASC",
+            (order_ref,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_payload(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Disaster recovery

@@ -16,6 +16,11 @@ import hashlib
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.idempotency import (
+    DurableConflictError,
+    InvalidIdentityError,
+    reject_colon,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     CommandResource,
@@ -34,13 +39,14 @@ INTENDED_END_STATE_STOPPED = "STOPPED"
 _ALREADY_ACTIVE_REASON = "This bot already has an active run; stop it before starting a new one."
 _NO_ACTIVE_RUN_REASON = "This bot has no active run to stop."
 
-
-class DurableConflictError(Exception):
-    """Same command identity, different payload — R2's durable conflict."""
-
-    def __init__(self, command: CommandResource) -> None:
-        self.command = command
-        super().__init__(f"command {command.command_id} already exists with a different payload")
+__all__ = [
+    "CommandSubmission",
+    "DurableConflictError",
+    "InvalidIdentityError",
+    "NoActiveRunError",
+    "submit_start_run",
+    "submit_stop_run",
+]
 
 
 class NoActiveRunError(Exception):
@@ -50,19 +56,6 @@ class NoActiveRunError(Exception):
     def __init__(self, strategy_instance_id: str) -> None:
         self.strategy_instance_id = strategy_instance_id
         super().__init__(_NO_ACTIVE_RUN_REASON)
-
-
-class InvalidIdentityError(ValueError):
-    """A caller-supplied identity component cannot safely form the
-    colon-delimited idempotency key (#1376 review)."""
-
-
-def _reject_colon(field_name: str, value: str) -> None:
-    if ":" in value:
-        raise InvalidIdentityError(
-            f"{field_name} must not contain ':' — it is embedded in a colon-delimited "
-            f"idempotency key, got {value!r}"
-        )
 
 
 @dataclass(frozen=True)
@@ -123,8 +116,8 @@ def submit_start_run(
     frontend mints it once per user action and resends the same value on a
     transport retry, which is what makes the retry idempotent.
     """
-    _reject_colon("strategy_instance_id", strategy_instance_id)
-    _reject_colon("lifecycle_run_id", lifecycle_run_id)
+    reject_colon("strategy_instance_id", strategy_instance_id)
+    reject_colon("lifecycle_run_id", lifecycle_run_id)
 
     idempotency_key = _operator_lifecycle_key(
         account_id=account_id,
@@ -219,7 +212,7 @@ def submit_stop_run(
     client-generated token — idempotent by construction (ADR 0035 #3: "Stop
     binds the active run").
     """
-    _reject_colon("strategy_instance_id", strategy_instance_id)
+    reject_colon("strategy_instance_id", strategy_instance_id)
 
     # The active-run read that resolves lifecycle_run_id, the reservation,
     # and the append must be one atomic sequence for the same reason as
