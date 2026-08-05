@@ -26,6 +26,40 @@
 elsewhere in `PythonDataService/app/broker/alpaca/` (Slice 2 reuses it; it is
 not redefined here).
 
+### 1a. Established-accounts registry
+
+Closes PRD §15.4: "remove `clerk.db` after authority was established and
+prove it is not recreated."
+
+Every fail-closed check in §9 reads state *from* `clerk.db` or its mirror.
+None of them can distinguish "this account's database was deleted" from
+"this account has never been initialized" — both look identical from inside
+the per-account directory once `clerk.db` is gone. Proving the former
+requires evidence that survives deletion of that directory, so it cannot
+live inside it.
+
+```text
+<artifacts_root>/accounts/alpaca/_established_generations.jsonl
+```
+
+One append-only, fsync'd, newline-delimited JSON line per successful
+`clerk.db` initialization — the very first one for an account, and every
+reset-created generation after it:
+
+```json
+{"account_id": "...", "authority_generation": 3, "db_identity_token": "...", "established_at_ms": 1785900000000}
+```
+
+This file lives at the `accounts/alpaca/` level, one directory above any
+single account — deleting or corrupting one account's directory cannot erase
+its own establishment evidence. (It does not defend against wiping the
+entire `accounts/alpaca/` tree; that is outside the trust boundary the PRD
+draws around `artifacts_root`, consistent with every other recovery
+mechanism in this document.) Slice 2 owns writing to it as part of the
+"initialize a new database and authority generation" workflow; this document
+pins only that the file exists, its format, and that startup consults it —
+see §9 check 2.
+
 ## 2. PRAGMA / runtime configuration (PRD §9.2)
 
 Enabled and verified on every connection open, in this order:
@@ -290,20 +324,54 @@ CREATE TABLE custody_transitions (
     facts_json                TEXT NOT NULL
 );
 -- immutable sequence/payload/hash-chain-link after commit (§9.4): enforced by
--- application code (SQLite has no UPDATE-forbidding constraint); Slice 2's
--- repository boundary is the only writer and never issues UPDATE/DELETE
--- against this table. A dedicated test asserts that.
+-- the triggers below, not just by Slice 2's repository boundary declining to
+-- issue UPDATE/DELETE. A dedicated test asserts both hold.
 
 -- ============================================================
--- mirror_fence — mirror prepare/finalize identities; derived, never authority
+-- mirror_fence — records that the SQLite transaction verified and consumed a
+-- matching PREPARE line from the external mirror file (§8). It never gets a
+-- FINALIZE-phase row: the external mirror's finalize fsync (R9 step 3) happens
+-- *after* this transaction commits, so re-recording it in SQLite would need a
+-- second, separately-fenced write — the same unbounded-regress problem the
+-- two-phase fence exists to avoid. "Is sequence N finalized?" is answered by
+-- reading the external mirror file's tail at startup (§9 check 9), never by a
+-- SQLite column. `phase` is retained rather than dropped only so a future
+-- schema version could add a durable FINALIZE marker without a migration;
+-- today it is always 'PREPARE'.
 -- ============================================================
 CREATE TABLE mirror_fence (
-    sequence                  INTEGER PRIMARY KEY,     -- matches custody_transitions.sequence 1:1
-    phase                     TEXT NOT NULL CHECK (phase IN ('PREPARE','FINALIZE')),
+    sequence                  INTEGER PRIMARY KEY REFERENCES custody_transitions(sequence),
+    phase                     TEXT NOT NULL CHECK (phase = 'PREPARE'),
     row_hash                  TEXT NOT NULL,
     authority_generation      INTEGER NOT NULL,
     recorded_at_ms            INTEGER NOT NULL
 );
+
+-- ============================================================
+-- Immutability backstops (§9.4): the repository boundary is the only writer
+-- and never issues UPDATE/DELETE against these two invariants, but per the
+-- ADR's "robustness is bought explicitly" posture, convention alone is not
+-- the standard this program holds itself to elsewhere — these two get a
+-- database-enforced backstop rather than resting on that convention alone.
+-- ============================================================
+CREATE TRIGGER trg_custody_transitions_immutable_update
+BEFORE UPDATE ON custody_transitions
+BEGIN
+    SELECT RAISE(ABORT, 'custody_transitions is append-only: UPDATE forbidden');
+END;
+
+CREATE TRIGGER trg_custody_transitions_immutable_delete
+BEFORE DELETE ON custody_transitions
+BEGIN
+    SELECT RAISE(ABORT, 'custody_transitions is append-only: DELETE forbidden');
+END;
+
+CREATE TRIGGER trg_commands_payload_hash_immutable
+BEFORE UPDATE OF payload_hash ON commands
+WHEN OLD.payload_hash IS NOT NULL AND NEW.payload_hash != OLD.payload_hash
+BEGIN
+    SELECT RAISE(ABORT, 'commands.payload_hash is immutable once committed');
+END;
 ```
 
 ### 3a. Content-addressed idempotency keys (R2, ADR 0035 #3)
@@ -326,35 +394,65 @@ CREATE TABLE mirror_fence (
 | Requirement | Enforced by |
 | --- | --- |
 | Unique content-addressed command identity within the authority generation | `ux_commands_idempotency` |
-| Immutable request hash for an existing command | Repository boundary rejects any UPDATE of `commands.payload_hash`; parity test |
+| Immutable request hash for an existing command | `trg_commands_payload_hash_immutable` (DB-enforced) |
 | Unique Clerk effect idempotency identity | `ux_effect_operations_idempotency` |
 | Unique broker `client_order_id`/order reference | `ux_orders_client_order_id`, `orders.order_ref` PK |
-| Idempotent broker-event and fill identities | `fills.fill_id` PK (Alpaca execution id) |
+| Idempotent fill identities | `fills.fill_id` PK (Alpaca execution id) |
+| Idempotent broker order-state-transition events | No separate identity table — the fold is idempotent by construction (§3c) |
 | One active run fence per strategy instance | `ux_runs_one_active_per_instance` (partial unique index) |
 | One monotonically increasing account control revision | `control_meta.control_revision`, advanced by every fold, asserted non-decreasing by a repository invariant test |
 | Immutable terminal receipt identity | `receipts.receipt_id` PK, insert-only repository method (no update method exists) |
-| Immutable custody-transition sequence, payload, and hash-chain link after commit | `AUTOINCREMENT` PK + repository boundary issues no UPDATE/DELETE on `custody_transitions`; parity test |
+| Immutable custody-transition sequence, payload, and hash-chain link after commit | `AUTOINCREMENT` PK + `trg_custody_transitions_immutable_update`/`_delete` (DB-enforced) |
+
+### 3c. Idempotent broker order-state-transition folding (§9.4, distinct from fill identity)
+
+Fills need identity-based dedup (`fills.fill_id`) because double-counting an
+execution corrupts P&L. A pure order-*status* transition (e.g. `new` →
+`accepted` → `partially_filled`) does not carry that risk and does not get a
+separate idempotency table. Instead the fold is idempotent by construction:
+
+- Applying an identical `(order_ref, broker_state, source_event_at_ms)` a
+  second time is a no-op — `orders.broker_state` is already that value.
+- An event whose `source_event_at_ms` is older than the value already
+  recorded for that order is still appended to `custody_transitions` (for
+  audit — nothing is silently dropped) but does **not** regress
+  `orders.broker_state`, satisfying adversarial test 15.2's "duplicate and
+  out-of-order broker events fold idempotently."
+- This relies on Alpaca order states being monotonic for a given order
+  lifecycle (Slice 5/#1378's reconciliation logic owns the exact ordering
+  table); this document pins only that no separate broker-event-identity
+  table is introduced for this purpose.
 
 ## 4. Transaction matrix — which facts commit atomically together
 
 | Operation | Atomic SQLite transaction contents | External fence before "accepted"/broker-eligible |
 | --- | --- | --- |
-| Command reservation | insert `commands` (state=`reserved`) | none — reservation alone is not externally visible acceptance |
-| Command acceptance (admission passes, no broker contact needed, e.g. reject/local-terminal) | update `commands.state`, insert `custody_transitions` row, apply fold(s), advance `control_meta.control_revision`, insert `mirror_fence` PREPARE row | mirror **finalize** fsync (R9 step 3) — required even when no broker contact occurs, because the transition is still the accepted record of the decision |
+| Command reservation, strategy decision | insert `commands` (state=`reserved`) | none — reservation alone is not externally visible acceptance |
+| Command reservation, operator Start/Resume | insert `runs` (state=`ACTIVE`, reserving `lifecycle_run_id`) **and** insert `commands` (state=`reserved`, idempotency key embeds that `lifecycle_run_id`) **in the same transaction** — see §3a. This is the one case where a `runs` write and a `commands` write are not independently committable: a crash between them must never happen, so they are never two transactions. | none — reservation alone is not externally visible acceptance |
+| Command reservation, operator Stop | read the `runs` row with `state='ACTIVE'` for the target instance to resolve the active `lifecycle_run_id`, insert `commands` (state=`reserved`) bound to it | none |
+| Command rejection (admission fails before effect, §10.1 `RESERVED → REJECTED`) | update `commands.state = 'rejected'`, insert `custody_transitions` row, advance `control_meta.control_revision`, insert `mirror_fence` PREPARE row | mirror **finalize** fsync (R9 step 3) — required even though no broker contact occurs, because the rejection is still the accepted record of the decision |
+| Command/effect acceptance, local-terminal (admission passes, no broker contact needed) | update `commands.state`, insert `custody_transitions` row, apply fold(s), advance `control_meta.control_revision`, insert `mirror_fence` PREPARE row | mirror **finalize** fsync |
 | Effect operation acceptance + broker-eligible capture (R1) | insert/update `effect_operations`, insert `orders` (order_ref minted), insert `custody_transitions` (with hash link), apply every affected fold (`positions`/`holds`/`uncertainties` as relevant), advance `control_meta.control_revision`, insert `mirror_fence` PREPARE row | mirror **finalize** fsync — this is the acceptance fence; no broker call may occur before it completes (R1) |
-| Broker evidence fold (fill, order-state transition, reconciliation outcome) | insert `fills`/update `orders.broker_state`, insert `custody_transitions`, apply fold, advance revision, insert `mirror_fence` PREPARE row | mirror finalize fsync before the fold is externally visible as current state |
+| Broker evidence fold — fill | insert `fills`, update `orders.broker_state`, insert `custody_transitions`, apply position/hold/uncertainty folds, advance revision, insert `mirror_fence` PREPARE row | mirror finalize fsync before the fold is externally visible as current state |
+| Broker evidence fold — order-state transition (no fill) | update `orders.broker_state` (idempotently, §3c), insert `custody_transitions`, advance revision, insert `mirror_fence` PREPARE row | mirror finalize fsync |
+| Broker evidence fold — reconciliation outcome | insert `reconciliations`, update the resolved `effect_operations`/`orders`/`uncertainties` rows as the outcome dictates, insert `custody_transitions`, advance revision, insert `mirror_fence` PREPARE row | mirror finalize fsync |
 | Reset / new generation (§13) | update `control_meta.authority_generation`, insert `custody_transitions` (generation-reset transition kind), fresh `mirror_fence` sequence restarts at 1 for the new generation | requires the full reset workflow (fresh broker proof, flat/order-free account) — Slice 9 scope, not Slice 1 |
 
-Every row above obeys R9's ordered fsync fence exactly:
+Every row that carries a `custody_transitions` insert obeys R9's ordered
+fsync fence exactly (reservation-only rows do not — no transition is being
+recorded, so there is nothing to mirror yet):
 
 1. **Prepare** — fsync a mirror line (authority generation, sequence,
    canonical transition bytes, predecessor hash, row hash) *before* the
    SQLite transaction opens.
 2. **Commit** — one `synchronous=FULL` SQLite transaction: verify the
    prepared identity, append the `custody_transitions` row, apply every
-   fold, insert the matching `mirror_fence` row, commit.
-3. **Finalize** — fsync the matching finalize record. Only after this may the
-   backend return accepted or claim the operation for broker contact.
+   fold, insert the matching `mirror_fence` PREPARE row, commit.
+3. **Finalize** — fsync the matching finalize line to the *external* mirror
+   file. This step writes nothing back into SQLite (§3, `mirror_fence`
+   comment) — the external fsync succeeding is itself the finalization fact.
+   Only after it completes may the backend return accepted or claim the
+   operation for broker contact.
 
 ## 5. Command lifecycle state machine (PRD §10.1, pinned)
 
@@ -408,17 +506,40 @@ reads `custody_transitions` filtered by `effect_operation_id`, ordered by
 row_hash = H(prev_hash || canonical(payload))
 ```
 
-- `H` = SHA-256, hex-encoded.
-- `canonical(payload)` = the row's non-hash columns (`authority_generation`
-  through `facts_json`, i.e. everything except `sequence`, `prev_hash`,
-  `row_hash` themselves), serialized as JSON with sorted keys, UTF-8 encoded,
-  no whitespace between tokens (`json.dumps(..., sort_keys=True,
-  separators=(",", ":"))` in Slice 2's Python implementation).
+Pinned to the byte level, so two independent implementations produce
+identical hashes:
+
+- `H` = SHA-256. `row_hash` is stored as its lowercase hex digest (64
+  characters).
+- `||` is **string concatenation of UTF-8 text**, not concatenation of
+  decoded hash bytes. Concretely:
+  `hashlib.sha256((prev_hash + canonical_payload).encode("utf-8")).hexdigest()`,
+  where `prev_hash` is the previous row's stored hex-string `row_hash` (or
+  the sentinel below for the first row) and `canonical_payload` is the JSON
+  string defined next.
 - `prev_hash` for `sequence = 1` is the fixed genesis value `"GENESIS"` (not
-  null, not empty string — an explicit sentinel so a truncated chain cannot
-  be mistaken for a fresh one during rebuild verification).
-- The chain is verified at startup (§13) and on every mirror rebuild by
-  recomputing `row_hash` for each row in sequence order and comparing.
+  null, not empty string, and not valid hex — an explicit sentinel so a
+  truncated chain cannot be mistaken for a fresh one during rebuild
+  verification, and so string-concatenation semantics are unambiguous even
+  before any real hash exists).
+- `canonical(payload)` = a JSON object built from the row's non-hash columns
+  (`authority_generation` through `facts_json`, i.e. everything except
+  `sequence`, `prev_hash`, `row_hash` themselves), with **every** column
+  present as a key — a SQL `NULL` serializes as JSON `null`, columns are
+  never omitted — serialized via `json.dumps(obj, sort_keys=True,
+  separators=(",", ":"), ensure_ascii=True)` (sorted keys, no whitespace,
+  ASCII-escaped so encoding is not locale/platform dependent).
+- `facts_json` is itself a JSON *string* value inside that object (per the
+  schema, `facts_json TEXT`). It must already have been produced by the
+  identical canonicalization call (`sort_keys=True, separators=(",", ":")`)
+  before being assigned to the column — the outer `canonical(payload)` call
+  treats it as an ordinary string, it does not re-serialize nested JSON. Two
+  logically-identical `facts_json` payloads that were canonicalized
+  differently before storage would otherwise produce different `row_hash`
+  values despite being semantically equal; pinning the inner
+  canonicalization closes that gap.
+- The chain is verified at startup (§9 check 8) and on every mirror rebuild
+  by recomputing `row_hash` for each row in sequence order and comparing.
 
 ## 8. Write-only mirror line format (R9, pinned)
 
@@ -456,24 +577,32 @@ On every process start, before the Clerk accepts any command:
 1. **Path confinement** — `clerk.db` and the mirror file resolve inside the
    expected `accounts/alpaca/<safe_account_id>/` directory; reject symlink
    escapes or a path outside `artifacts_root`.
-2. **Database identity** — `control_meta.db_identity_token` exists and was
+2. **Missing-database check against the established-accounts registry
+   (§1a)** — if `clerk.db` does not exist for the requested account, consult
+   `_established_generations.jsonl`. No matching `account_id` entry → this is
+   a genuinely new account, initialization may proceed (Slice 2 scope). A
+   matching entry exists → an authority was previously established and is
+   now missing; this is `ACCOUNT_CLERK` uncertainty, fails closed, blocks new
+   exposure, and requires the explicit recovery/reset workflow — the service
+   never silently creates an empty database here (PRD §13, §15.4).
+3. **Database identity** — `control_meta.db_identity_token` exists and was
    minted by this account's initialization, not copied from another account's
    database.
-3. **Account identity** — `control_meta.account_id` matches the requested
+4. **Account identity** — `control_meta.account_id` matches the requested
    account; mismatch fails closed (§9.1).
-4. **Schema** — `control_meta.schema_version` matches the version this Slice
+5. **Schema** — `control_meta.schema_version` matches the version this Slice
    2+ binary expects; an older/newer schema fails closed rather than
    attempting an implicit migration.
-5. **Authority generation** — `control_meta.authority_generation` is read and
+6. **Authority generation** — `control_meta.authority_generation` is read and
    becomes part of every subsequent idempotency key and hash-chain check for
    this session (generation is not itself re-validated against an external
    source at this step — that happens only during reset, Slice 9).
-6. **`PRAGMA integrity_check`** — must return `ok`; any other result fails
+7. **`PRAGMA integrity_check`** — must return `ok`; any other result fails
    closed and preserves the file for diagnosis (never overwrites it).
-7. **Hash-chain verification** — recompute `row_hash` for every
+8. **Hash-chain verification** — recompute `row_hash` for every
    `custody_transitions` row in sequence order (§7); the first mismatch fails
    closed.
-8. **Mirror reconciliation** — for the highest committed `custody_transitions`
+9. **Mirror reconciliation** — for the highest committed `custody_transitions`
    sequence, confirm a matching FINALIZE mirror line exists. If the DB shows a
    commit with no FINALIZE line, finalize it now (crash between steps 2 and 3
    of §4's fence, DB is intact — this is the one case startup is allowed to
@@ -483,8 +612,9 @@ On every process start, before the Clerk accepts any command:
    fall back to the full mirror-rebuild recovery workflow (Slice 2 scope)
    instead of guessing.
 
-Only after all eight checks pass does the process register its execution
-lease (§2) and accept commands.
+Only after all nine checks pass (or check 2 explicitly clears a genuinely new
+account for initialization) does the process register its execution lease
+(§2) and accept commands.
 
 ## 10. What Slice 2 owes back to this document
 
