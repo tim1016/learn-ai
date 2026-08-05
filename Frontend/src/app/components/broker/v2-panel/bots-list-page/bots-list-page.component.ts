@@ -12,6 +12,7 @@ import {
 } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { RouterLink } from '@angular/router';
+import { MessageService } from 'primeng/api';
 
 import type { BrokerAccountSnapshot, ClerkStatus } from '../../../../api/alpaca.types';
 import { BrokersService } from '../../../../services/brokers.service';
@@ -21,6 +22,7 @@ import { AccountStripComponent } from '../account-strip/account-strip.component'
 import { BotsRosterComponent, type RowActionEvent } from '../bots-roster/bots-roster.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotCatalogView } from '../lib/broker-v2-panel.types';
+import { actionOutcomeToast, deriveActionRejection } from '../lib/panel-action-outcome';
 
 const CATALOG_POLL_MS = 5_000;
 const ACCOUNT_POLL_MS = 15_000;
@@ -54,6 +56,7 @@ export class BotsListPageComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
   private readonly document = inject(DOCUMENT);
+  private readonly messageService = inject(MessageService);
   private readonly fleetScope = computed(() => `${this.broker()}:${this.accountId()}`);
   private readonly catalogSnapshot = signal<ScopedSnapshot<BotCatalogView[]> | null>(null);
   private readonly accountSnapshot = signal<ScopedSnapshot<BrokerAccountSnapshot> | null>(null);
@@ -199,10 +202,9 @@ export class BotsListPageComponent {
     try {
       const action = event.bot.row_action;
       if (action?.action_id !== event.action || !action.enabled) {
-        this.actionNotice.set({
-          tone: 'danger',
-          message: `${event.action === 'resume' ? 'Resume' : 'Stop'} is no longer available for ${sid}. Refreshing its current state.`,
-        });
+        const message = `${event.action === 'resume' ? 'Resume' : 'Stop'} is no longer available for ${sid}. Refreshing its current state.`;
+        this.actionNotice.set({ tone: 'danger', message });
+        this.messageService.add(actionOutcomeToast('conflict', message));
         this.catalog.reload();
         return;
       }
@@ -214,12 +216,13 @@ export class BotsListPageComponent {
         action,
       );
       this.actionNotice.set({ tone: 'success', message: result.message });
+      this.messageService.add(actionOutcomeToast('success', result.message));
       this.catalog.reload();
     } catch (error) {
-      this.actionNotice.set({
-        tone: 'danger',
-        message: error instanceof Error ? error.message : `Could not ${event.action} ${sid}.`,
-      });
+      const rejection = deriveActionRejection(error, `Could not ${event.action} ${sid}.`);
+      this.actionNotice.set({ tone: 'danger', message: rejection.message });
+      this.messageService.add(actionOutcomeToast(rejection.outcome, rejection.message, rejection.why));
+      this.catalog.reload();
     } finally {
       this.pendingBotIds.update((current) => {
         const next = new Set(current);

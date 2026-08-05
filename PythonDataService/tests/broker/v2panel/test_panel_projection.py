@@ -565,6 +565,62 @@ def test_resume_token_ignores_market_data_observation_timestamp() -> None:
     assert _action(first, "resume").concurrency_token == _action(second, "resume").concurrency_token
 
 
+def test_resume_token_ignores_reconciliation_observation_timestamp() -> None:
+    # A fresh Clerk reconciliation stamps a new observation instant every pass
+    # (custody.py emits ``alpaca-reconciliation:<observed_at_ms>``). For an
+    # unchanged off-duty bot that instant is pure churn — it must not make an
+    # already presented Resume stale (the 2026-08-04 val-nvda-0804-05 409).
+    common = (
+        "bot-process-registry:registry-1",
+        "market-data-feed:alpaca:1700000000000",
+        "alpaca-clerk-journal:PA3KWXU1C4C3:418",
+    )
+    first = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(*common, "alpaca-reconciliation:1722800212000"),
+    )
+    second = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(*common, "alpaca-reconciliation:1722800217000"),
+    )
+
+    assert _action(first, "resume").concurrency_token == _action(second, "resume").concurrency_token
+
+
+def test_resume_token_changes_when_clerk_journal_advances() -> None:
+    # Stripping observation timestamps must NOT blind the token to a real
+    # custody change. The Clerk appends a journal line only when something
+    # happens on the account, so an advancing journal sequence is a genuine
+    # change that must invalidate a presented Resume.
+    common = (
+        "bot-process-registry:registry-1",
+        "market-data-feed:alpaca:1700000000000",
+        "alpaca-reconciliation:1722800212000",
+    )
+    before = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(*common, "alpaca-clerk-journal:PA3KWXU1C4C3:418"),
+    )
+    after = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+        admission_evidence_refs=(*common, "alpaca-clerk-journal:PA3KWXU1C4C3:419"),
+    )
+
+    assert _action(before, "resume").concurrency_token != _action(after, "resume").concurrency_token
+
+
 def test_clear_hold_gated_on_healthy_and_fresh() -> None:
     # Hold active + channels healthy & fresh → clear_hold enabled.
     healthy = _panel(_status(), _clerk_status(hold=True, hold_code="STREAM_HEALTH_HOLD"), [])

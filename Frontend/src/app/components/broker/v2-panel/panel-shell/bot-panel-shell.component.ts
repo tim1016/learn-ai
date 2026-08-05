@@ -10,9 +10,9 @@ import {
   resource,
   signal,
 } from '@angular/core';
-import { HttpErrorResponse } from '@angular/common/http';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
+import { MessageService } from 'primeng/api';
 
 import type {
   ChartHistoryPreset,
@@ -23,6 +23,11 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
+import {
+  actionOutcomeToast,
+  deriveActionRejection,
+  extractActionErrorDetail,
+} from '../lib/panel-action-outcome';
 import { TraderLensComponent } from '../trader-lens/trader-lens.component';
 import { OperatorLensComponent } from '../operator-lens/operator-lens.component';
 import { PanelHeaderComponent } from './panel-header.component';
@@ -77,6 +82,7 @@ export class BotPanelShellComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly messageService = inject(MessageService);
 
   // ── Active lens ──────────────────────────────────────────────────────────
   // Reads the `?lens=` query param if provided; defaults to 'trader'.
@@ -227,11 +233,19 @@ export class BotPanelShellComponent {
         action,
         reason,
       );
-      this.actionReceipt.set(this.successReceipt(result));
+      const receipt = this.successReceipt(result);
+      this.actionReceipt.set(receipt);
+      this.messageService.add(actionOutcomeToast('success', receipt.message));
       await this.liveStore.refresh();
     } catch (error) {
       const receipt = this.errorReceipt(error, action);
       this.actionReceipt.set(receipt);
+      this.messageService.add(actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation));
+      // The rejection is always pre-execution (see runBotAction's doc), so the
+      // operator's last-seen panel state is now stale relative to whatever
+      // changed underneath it — refresh so "Ready to resume" doesn't linger
+      // after a resume was just refused for no longer being ready.
+      await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);
     }
@@ -249,39 +263,22 @@ export class BotPanelShellComponent {
   }
 
   private errorReceipt(error: unknown, action: PanelAction): ActionReceiptView {
-    const detail =
-      error instanceof HttpErrorResponse &&
-      typeof error.error === 'object' &&
-      error.error !== null &&
-      'detail' in error.error &&
-      typeof error.error.detail === 'object' &&
-      error.error.detail !== null
-        ? (error.error.detail as Record<string, unknown>)
-        : null;
-    const outcome = detail?.['outcome'];
+    const detail = extractActionErrorDetail(error);
+    const rejection = deriveActionRejection(error, `Action "${action.label}" failed.`);
     return {
       actionId:
         typeof detail?.['action_id'] === 'string'
           ? detail['action_id']
           : action.action_id,
-      outcome:
-        outcome === 'conflict' || outcome === 'failure' || outcome === 'unknown'
-          ? outcome
-          : 'unknown',
+      outcome: rejection.outcome,
       receiptId:
         typeof detail?.['receipt_id'] === 'string' ? detail['receipt_id'] : null,
       recordedAtMs:
         typeof detail?.['recorded_at_ms'] === 'number'
           ? detail['recorded_at_ms']
           : Date.now(),
-      message:
-        typeof detail?.['message'] === 'string'
-          ? detail['message']
-          : error instanceof Error
-            ? error.message
-            : `Action "${action.label}" failed.`,
-      remediation:
-        typeof detail?.['why'] === 'string' ? detail['why'] : null,
+      message: rejection.message,
+      remediation: rejection.why,
     };
   }
 }

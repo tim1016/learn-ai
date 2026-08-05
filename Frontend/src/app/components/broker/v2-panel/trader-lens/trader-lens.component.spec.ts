@@ -6,7 +6,7 @@ import type { BotPanelView, PanelProfile, ChartLiveResponse } from '../lib/broke
 // DualPaneChartComponent uses lightweight-charts — mock for unit tests.
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
-  const createMockSeries = () => ({ setData: vi.fn(), applyOptions: vi.fn() });
+  const createMockSeries = () => ({ setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() });
   const createSeriesMarkers = vi.fn().mockReturnValue({ setMarkers: vi.fn() });
   const createMockChart = () => ({
     addSeries: vi.fn().mockReturnValue(createMockSeries()),
