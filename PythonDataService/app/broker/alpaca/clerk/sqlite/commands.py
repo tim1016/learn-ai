@@ -35,7 +35,9 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
     InvalidIdentityError,
+    UnknownStrategyInstanceError,
     reject_colon,
+    require_strategy_instance,
 )
 from app.broker.alpaca.clerk.sqlite.models import (
     CommandCreated,
@@ -78,16 +80,6 @@ class NoActiveRunError(Exception):
         super().__init__(_NO_ACTIVE_RUN_REASON)
 
 
-class UnknownStrategyInstanceError(Exception):
-    """The target bot has no ``strategy_instances`` row — a typed domain
-    not-found, never a raw SQLite foreign-key failure (open-pr-review-2026-08-05.md
-    P2 "Unknown bot ID becomes raw SQLite 500")."""
-
-    def __init__(self, strategy_instance_id: str) -> None:
-        self.strategy_instance_id = strategy_instance_id
-        super().__init__(f"unknown strategy instance {strategy_instance_id!r}")
-
-
 @dataclass(frozen=True)
 class CommandSubmission:
     command: CommandResource
@@ -128,11 +120,6 @@ def _operator_lifecycle_hash(
         }
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _require_strategy_instance(repo: ClerkSqliteRepository, strategy_instance_id: str) -> None:
-    if repo.strategy_instance(strategy_instance_id) is None:
-        raise UnknownStrategyInstanceError(strategy_instance_id)
 
 
 def _lifecycle_identity(
@@ -222,7 +209,7 @@ def submit_start_run(
         # existence before acquiring that lock (like reject_colon() above)
         # would race unprotected reads against concurrent callers on the
         # same shared connection.
-        _require_strategy_instance(repo, strategy_instance_id)
+        require_strategy_instance(repo, strategy_instance_id)
         observed_at_ms = clock()
         if repo.active_run(strategy_instance_id) is not None:
             facts = CommandRejectedFacts(
@@ -317,7 +304,7 @@ def submit_stop_run(
     def build_transition() -> TransitionInput:
         # See submit_start_run's build_transition for why this existence
         # check runs here, under the lock, rather than before it.
-        _require_strategy_instance(repo, strategy_instance_id)
+        require_strategy_instance(repo, strategy_instance_id)
         active = repo.active_run(strategy_instance_id)
         if active is None or active.lifecycle_run_id != lifecycle_run_id:
             raise NoActiveRunError(strategy_instance_id)

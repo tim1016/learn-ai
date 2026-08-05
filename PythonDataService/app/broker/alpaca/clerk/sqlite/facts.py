@@ -11,9 +11,18 @@ this facts string — is therefore sufficient to reconstruct the command
 resource on rebuild without a live database or a caller closure.
 
 ``ENTER_ACCEPTED`` facts are pinned in
-``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`` §3.d but are not
-defined here: no command flow appends that transition kind in this slice —
-issue #1377's rebuild adds the dataclass alongside the fold that consumes it.
+``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`` §3.d; #1377 adds
+the dataclass here alongside the fold that consumes it
+(``folds._fold_enter_accepted``). The evidence-fold kinds that follow it
+(``ORDER_SUBMIT_UNCERTAIN``, ``ORDER_SUBMIT_FAILED``, ``ORDER_FILL_OBSERVED``)
+only ever *update* an already-existing ``effect_operations``/``orders`` row —
+none of their fields are needed to rebuild that row's identity — but §3d's
+"no untyped snapshot bag" rule still applies to whatever they *do* carry
+beyond outer transition columns, so those get typed dataclasses too.
+``ORDER_SUBMIT_ACKED`` is the one exception: every field its fold reads
+(``broker_order_id``, ``broker_state``, ``source_event_at_ms``) is already an
+outer ``custody_transitions`` column, so its ``facts_json`` is legitimately
+``{}`` — there is nothing left to type.
 """
 
 from __future__ import annotations
@@ -77,4 +86,87 @@ class CommandRejectedFacts:
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> CommandRejectedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class EnterAcceptedFacts:
+    """§3d's ``ENTER_ACCEPTED`` row: command idempotency key/hash/kind/action,
+    the decision id, the effect idempotency key/kind, and the complete
+    immutable broker leg — everything ``_fold_enter_accepted`` needs to
+    rebuild the ``commands``, ``effect_operations``, and ``orders`` rows from
+    a finalized mirror line alone."""
+
+    idempotency_key: str
+    payload_hash: str
+    kind: str
+    action: str
+    intended_end_state: str | None
+    effect_idempotency_key: str
+    effect_kind: str
+    decision_id: str
+    # Already-validated ``BrokerOrderLeg.model_dump(mode="json")`` — kept as a
+    # plain dict, not re-typed as a nested ``BrokerOrderLeg`` field, because
+    # ``asdict()`` (this module's uniform (de)serialization path) only
+    # recurses into stdlib dataclasses, not Pydantic models; storing the
+    # already-dumped, already-validated leg is the one shape that keeps every
+    # facts dataclass here going through the same to/from_facts_json pair.
+    leg: dict
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> EnterAcceptedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class OrderSubmitUncertainFacts:
+    """A lost/timed-out broker response — R4's ``why`` explanation."""
+
+    why: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> OrderSubmitUncertainFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class OrderSubmitFailedFacts:
+    """A definitive broker rejection, or an absence proven past the R4
+    uncertainty grace window."""
+
+    reason: str
+    why: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> OrderSubmitFailedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class OrderFillObservedFacts:
+    """The evidence ``_fold_order_fill_observed`` needs beyond the outer
+    transition row: Alpaca's REST-reported *cumulative* ``filled_quantity``
+    for the order, from which the fold derives both the fill delta and its
+    idempotent identity (see the fold's own docstring for why)."""
+
+    symbol: str
+    side: str
+    cumulative_filled_quantity: float
+    avg_price: float
+    is_correction: bool
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> OrderFillObservedFacts:
         return cls(**json.loads(facts_json))

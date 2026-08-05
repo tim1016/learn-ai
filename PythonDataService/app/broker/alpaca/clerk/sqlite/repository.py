@@ -789,6 +789,18 @@ class ClerkSqliteRepository:
             ).fetchall()
             return [writes.row_to_payload(row) for row in rows]
 
+    def transitions_for_order(self, order_ref: str) -> list[dict]:
+        """Every transition recorded against one order, sequence-ordered —
+        e.g. #1377's ``enter.py`` uses this to find when an order first
+        became uncertain, for the R4 grace-window comparison."""
+        with self._write_lock:
+            rows = self._conn.execute(
+                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions "
+                "WHERE order_ref = ? ORDER BY sequence ASC",
+                (order_ref,),
+            ).fetchall()
+            return [writes.row_to_payload(row) for row in rows]
+
     def strategy_instances(self) -> list[dict]:
         with self._write_lock:
             return reads.strategy_instances(self._conn)
