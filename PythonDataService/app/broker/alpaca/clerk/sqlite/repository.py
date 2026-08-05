@@ -168,6 +168,14 @@ class ClerkSqliteRepository:
         return self._account_id
 
     @property
+    def lease_owner(self) -> str:
+        """This process's execution-lease identity — the same owner an
+        operation claim should be acquired under, since a claim is only
+        meaningful as proof that *this* live process is the one about to
+        contact the broker (§2's lease + claim close the same gap)."""
+        return self._lease_owner
+
+    @property
     def db_path(self) -> Path:
         return self._db_path
 
@@ -786,6 +794,18 @@ class ClerkSqliteRepository:
         with self._write_lock:
             rows = self._conn.execute(
                 f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions ORDER BY sequence ASC"
+            ).fetchall()
+            return [writes.row_to_payload(row) for row in rows]
+
+    def transitions_for_order(self, order_ref: str) -> list[dict]:
+        """Every transition recorded against one order, sequence-ordered —
+        e.g. #1377's ``enter.py`` uses this to find when an order first
+        became uncertain, for the R4 grace-window comparison."""
+        with self._write_lock:
+            rows = self._conn.execute(
+                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions "
+                "WHERE order_ref = ? ORDER BY sequence ASC",
+                (order_ref,),
             ).fetchall()
             return [writes.row_to_payload(row) for row in rows]
 

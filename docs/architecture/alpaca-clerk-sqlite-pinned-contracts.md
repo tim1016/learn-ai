@@ -11,6 +11,11 @@
   and §9.3; §9 gained per-sequence mirror reconciliation, generation
   validation, lease renewal, and full path confinement. `SCHEMA_VERSION`
   bumped 1 → 2 for the DDL changes this correction required.
+- Issue #1377 (ENTER) added an index on `custody_transitions(order_ref)` (§3)
+  — no new columns, but a DDL change all the same, so `SCHEMA_VERSION` bumped
+  2 → 3. There is no live database to migrate yet (pre-cutover, #1382); the
+  bump exists so `open()`'s version check rejects a stale on-disk DDL
+  shape with a clear error instead of silently running without the index.
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -365,6 +370,9 @@ CREATE TABLE custody_transitions (
     facts_schema_version      INTEGER NOT NULL,
     facts_json                TEXT NOT NULL
 );
+-- order_ref is scanned by both the §3c ack idempotency guard and recovery's
+-- transitions_for_order (#1377) — an index keeps both O(log n), not O(n):
+CREATE INDEX ix_custody_transitions_order_ref ON custody_transitions(order_ref);
 -- immutable sequence/payload/hash-chain-link after commit (§9.4): enforced by
 -- the triggers below, not just by Slice 2's repository boundary declining to
 -- issue UPDATE/DELETE. A dedicated test asserts both hold.
