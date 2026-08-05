@@ -130,6 +130,16 @@ CREATE TABLE effect_operations (
     claim_token              TEXT,
     claimed_at_ms            INTEGER,
     claim_expires_at_ms      INTEGER,
+    -- a claim is all-null (unclaimed) or fully populated with a real
+    -- expiry window — never partially populated (open-pr-review-2026-08-05.md
+    -- "Require operation claims to be all-null or complete"):
+    CHECK (
+        (claim_owner IS NULL AND claim_token IS NULL
+            AND claimed_at_ms IS NULL AND claim_expires_at_ms IS NULL)
+        OR
+        (claim_owner IS NOT NULL AND claim_token IS NOT NULL
+            AND claimed_at_ms IS NOT NULL AND claim_expires_at_ms > claimed_at_ms)
+    ),
     FOREIGN KEY (strategy_instance_id, run_id) REFERENCES runs(strategy_instance_id, run_id)
 );
 -- unique Clerk effect idempotency identity (§9.4):

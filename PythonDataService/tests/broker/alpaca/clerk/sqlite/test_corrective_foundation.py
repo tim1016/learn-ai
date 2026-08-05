@@ -542,9 +542,12 @@ def test_operation_claim_cas_fences_a_second_owner_until_expiry(repo: ClerkSqlit
     with pytest.raises(OperationClaimError):
         repo.claim_effect_operation(effect_operation_id="eff:1", owner="worker-2", ttl_ms=10_000)
 
-    # Force the claim to expire, then a different worker may take it over.
+    # Force the claim to expire (but still claim_expires_at_ms > claimed_at_ms,
+    # satisfying the schema's all-null-or-complete CHECK), then a different
+    # worker may take it over.
     repo._conn.execute(
-        "UPDATE effect_operations SET claim_expires_at_ms = 0 WHERE effect_operation_id = 'eff:1'"
+        "UPDATE effect_operations SET claim_expires_at_ms = claimed_at_ms + 1 "
+        "WHERE effect_operation_id = 'eff:1'"
     )
     repo._conn.commit()
     takeover = repo.claim_effect_operation(effect_operation_id="eff:1", owner="worker-2", ttl_ms=10_000)
@@ -583,6 +586,67 @@ def test_operation_claim_lets_the_live_owner_renew_before_expiry(
     # A different owner is still fenced out while the renewal is live.
     with pytest.raises(OperationClaimError):
         repo.claim_effect_operation(effect_operation_id="eff:3", owner="worker-2", ttl_ms=10_000)
+
+
+def test_operation_claim_fields_must_be_all_null_or_all_complete(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """open-pr-review-2026-08-05.md "Require operation claims to be all-null
+    or complete": a partial claim (e.g. an owner with no token) or an
+    expiry not strictly after its claimed_at_ms would break fencing and
+    recovery — the schema should reject both, not just the application
+    code's own CAS discipline."""
+    submission = submit_start_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
+    )
+
+    def insert_effect(effect_operation_id: str, **claim_fields) -> None:
+        fields = {
+            "claim_owner": None,
+            "claim_token": None,
+            "claimed_at_ms": None,
+            "claim_expires_at_ms": None,
+            **claim_fields,
+        }
+        repo._conn.execute(
+            "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+            "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
+            "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id, "
+            "claim_owner, claim_token, claimed_at_ms, claim_expires_at_ms) "
+            "VALUES (?, 1, ?, ?, ?, ?, 'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1, NULL, "
+            "?, ?, ?, ?)",
+            (
+                effect_operation_id,
+                f"eff-key-{effect_operation_id}",
+                submission.command.command_id,
+                SID_A,
+                submission.command.run_id,
+                fields["claim_owner"],
+                fields["claim_token"],
+                fields["claimed_at_ms"],
+                fields["claim_expires_at_ms"],
+            ),
+        )
+        repo._conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        insert_effect("eff:partial-owner-only", claim_owner="worker-1")
+    with pytest.raises(sqlite3.IntegrityError):
+        insert_effect(
+            "eff:expiry-before-claim",
+            claim_owner="worker-1",
+            claim_token="tok",
+            claimed_at_ms=100,
+            claim_expires_at_ms=50,
+        )
+    # A fully-populated, correctly-ordered claim is valid.
+    insert_effect(
+        "eff:valid-claim",
+        claim_owner="worker-1",
+        claim_token="tok",
+        claimed_at_ms=100,
+        claim_expires_at_ms=200,
+    )
 
 
 def test_claiming_an_unknown_effect_operation_reports_not_found_not_taken(
