@@ -79,6 +79,7 @@ have their decision preserved here.
 | 0031 | Cross-stack boundary selection and generated contracts |
 | 0032 | Broker contract v2 and verbatim capture |
 | 0033 | Account custody clocks and safety composition |
+| 0035 | Alpaca Account Clerk event-sourced SQLite authority (supersedes JSONL-authority parts of 0001/0008/0030/0033 for Alpaca only; proposed) |
 
 ---
 
