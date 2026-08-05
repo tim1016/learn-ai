@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
 import { HttpErrorResponse } from '@angular/common/http';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MessageService } from 'primeng/api';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { PanelHeaderComponent } from './panel-header.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
@@ -11,6 +12,8 @@ import type {
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
+
+const messageService = { add: vi.fn() };
 
 // DualPaneChartComponent -> lightweight-charts: mock for unit tests.
 vi.mock('lightweight-charts', () => {
@@ -288,7 +291,8 @@ describe('BotPanelShellComponent', () => {
   it('shows loading state initially then renders the trader lens', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService }],
     });
 
     // Wait for async initial load
@@ -319,6 +323,7 @@ describe('BotPanelShellComponent', () => {
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService },
       ],
     });
     await fixture.whenStable();
@@ -380,6 +385,7 @@ describe('BotPanelShellComponent', () => {
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService },
       ],
     });
     await fixture.whenStable();
@@ -424,6 +430,7 @@ describe('BotPanelShellComponent', () => {
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService },
       ],
     });
     await fixture.whenStable();
@@ -463,6 +470,7 @@ describe('BotPanelShellComponent', () => {
         providers: [
           provideRouter([]),
           { provide: BrokerV2PanelService, useValue: slowService },
+          { provide: MessageService, useValue: messageService },
         ],
       });
       fixture.detectChanges();
@@ -495,6 +503,7 @@ describe('BotPanelShellComponent', () => {
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService },
       ],
     });
     await fixture.whenStable();
@@ -530,6 +539,7 @@ describe('BotPanelShellComponent', () => {
       providers: [
         provideRouter([]),
         { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService },
       ],
     });
     await fixture.whenStable();
@@ -544,7 +554,8 @@ describe('BotPanelShellComponent', () => {
   it('shows log-only degradation panel after data loads', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService }],
     });
 
     await fixture.whenStable();
@@ -560,7 +571,8 @@ describe('BotPanelShellComponent', () => {
 
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService }],
     });
 
     await fixture.whenStable();
@@ -572,7 +584,8 @@ describe('BotPanelShellComponent', () => {
   it('persists keyboard lens changes in the query string', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService }],
     });
     await fixture.whenStable();
     fixture.detectChanges();
@@ -590,7 +603,8 @@ describe('BotPanelShellComponent', () => {
   it('fetches a new server projection for a selected transaction', async () => {
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService }],
     });
     await fixture.whenStable();
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
@@ -628,7 +642,8 @@ describe('BotPanelShellComponent', () => {
     }));
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService }],
     });
     await fixture.whenStable();
     fixture.detectChanges();
@@ -639,6 +654,9 @@ describe('BotPanelShellComponent', () => {
 
     expect(screen.getByText('Bot start requested.')).toBeTruthy();
     expect(screen.getByText('receipt-001')).toBeTruthy();
+    expect(messageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({ severity: 'success', detail: 'Bot start requested.' }),
+    );
   });
 
   it('renders backend-authored remediation for an unknown action outcome', async () => {
@@ -675,7 +693,8 @@ describe('BotPanelShellComponent', () => {
     );
     const { fixture } = await render(BotPanelShellComponent, {
       inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }],
+      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService }],
     });
     await fixture.whenStable();
     fixture.detectChanges();
@@ -692,5 +711,15 @@ describe('BotPanelShellComponent', () => {
         'Inspect Clerk evidence before issuing another lifecycle command.',
       ),
     ).toBeTruthy();
+    expect(messageService.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: 'error',
+        detail:
+          'The command did not return a terminal receipt. Inspect Clerk evidence before issuing another lifecycle command.',
+      }),
+    );
+    // A rejected action refreshes the panel so a superseded "Ready to resume"
+    // state doesn't linger (the 2026-08-04 val-nvda-0804-05 409).
+    expect(mockService.getLiveSnapshot).toHaveBeenCalledTimes(2);
   });
 });
