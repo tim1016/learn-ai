@@ -151,7 +151,11 @@ def _clerk_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _request(operator: str = "inkant", **leg: Any) -> BrokerOrderRequest:
     base: dict[str, Any] = {"symbol": "SPY", "side": "buy", "quantity": 1}
     base.update(leg)
-    return BrokerOrderRequest(operator=operator, legs=[BrokerOrderLeg(**base)])
+    return BrokerOrderRequest(
+        operator=operator,
+        expected_account_id="PA-TEST",
+        legs=[BrokerOrderLeg(**base)],
+    )
 
 
 def _clerk(broker: _FakeBroker) -> AlpacaClerk:
@@ -299,6 +303,7 @@ async def test_uncertain_leg_stops_later_legs_before_any_broker_submit() -> None
     clerk = _clerk(broker)
     request = BrokerOrderRequest(
         operator="inkant",
+        expected_account_id="PA-TEST",
         legs=[
             BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
             BrokerOrderLeg(symbol="QQQ", side="buy", quantity=1),

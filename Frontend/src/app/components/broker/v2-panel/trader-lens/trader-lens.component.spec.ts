@@ -123,41 +123,6 @@ const BASE_PANEL: BotPanelView = {
   recent_fills: [],
 };
 
-describe('TraderLensComponent — headline', () => {
-  it('shows the duty_outcome explanation as headline when present', async () => {
-    const panel = {
-      ...BASE_PANEL,
-      health: {
-        ...BASE_PANEL.health,
-        duty_outcome: {
-          kind: 'STOPPED' as const,
-          reason_code: 'STOPPED_OUTCOME',
-          label: 'Stopped cleanly',
-          explanation: 'Watching 1-minute bars. Last decision 10:42 — no entry.',
-          recorded_at_ms: 1_753_800_000_000,
-          run_id: null,
-        },
-      },
-    };
-
-    await render(TraderLensComponent, {
-      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
-    });
-
-    expect(
-      screen.getByText('Watching 1-minute bars. Last decision 10:42 — no entry.'),
-    ).toBeTruthy();
-  });
-
-  it('falls back to desired_state_label when no duty_outcome', async () => {
-    await render(TraderLensComponent, {
-      inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
-    });
-
-    expect(screen.getByText('Running')).toBeTruthy();
-  });
-});
-
 describe('TraderLensComponent — log-only degradation', () => {
   it('renders the log-only observation panel instead of trades table', async () => {
     await render(TraderLensComponent, {
@@ -172,7 +137,7 @@ describe('TraderLensComponent — log-only degradation', () => {
 });
 
 describe('TraderLensComponent — trader evidence', () => {
-  it('keeps current run and non-trade decision evidence in the trader lens', async () => {
+  it('keeps strategy, Clerk, and run evidence out of the trader lens', async () => {
     const panel: BotPanelView = {
       ...BASE_PANEL,
       recent_decisions: [
@@ -191,11 +156,11 @@ describe('TraderLensComponent — trader evidence', () => {
       inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
     });
 
-    expect(screen.getByText('Run evidence')).toBeTruthy();
-    expect(screen.getByText('Strategy evidence')).toBeTruthy();
-    expect(screen.getByText('Recent decisions')).toBeTruthy();
-    expect(screen.getByText(/No signal/i)).toBeTruthy();
-    expect(screen.getByText('Clerk evidence')).toBeTruthy();
+    expect(screen.queryByText('Run evidence')).toBeNull();
+    expect(screen.queryByText('Strategy evidence')).toBeNull();
+    expect(screen.queryByText('Recent decisions')).toBeNull();
+    expect(screen.queryByText(/No signal/i)).toBeNull();
+    expect(screen.queryByText('Clerk evidence')).toBeNull();
   });
 
   it('shows P&L before the compact bot snapshot', async () => {
@@ -258,29 +223,6 @@ describe('TraderLensComponent — trader evidence', () => {
     expect(screen.queryByText('None yet')).toBeNull();
   });
 
-  it('shows simulated fill evidence in dry-run mode', async () => {
-    const panel: BotPanelView = {
-      ...BASE_PANEL,
-      mode: 'dry_run',
-      recent_fills: [
-        {
-          order_ref: 'sim-1',
-          symbol: 'SPY',
-          side: 'buy',
-          quantity: 2,
-          price: 500,
-          filled_at_ms: 1_753_800_000_000,
-          simulated: true,
-        },
-      ],
-    };
-    await render(TraderLensComponent, {
-      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
-    });
-
-    expect(screen.getByText(/Simulated fill/)).toBeTruthy();
-  });
-
   it('places fills today in the right-hand trader rail', async () => {
     const panel: BotPanelView = { ...BASE_PANEL, mode: 'trade' };
     const { container } = await render(TraderLensComponent, {
@@ -321,73 +263,5 @@ describe('TraderLensComponent — live fallback chip', () => {
     expect(
       screen.getByText('Live feed unavailable — showing Polygon (delayed).'),
     ).toBeTruthy();
-  });
-});
-
-describe('TraderLensComponent — primary verb button', () => {
-  it('links to the account-scoped click-to-trade ticket', async () => {
-    await render(TraderLensComponent, {
-      inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
-    });
-
-    const link = screen.getByRole('link', { name: 'Manual order' });
-    expect(link.getAttribute('href')).toBe('/brokers/alpaca');
-  });
-
-  it('renders Stop when stop action is presented', async () => {
-    await render(TraderLensComponent, {
-      inputs: { panel: BASE_PANEL, profile: PROFILE, liveChart: null, histChart: null },
-    });
-
-    const btn = screen.getByRole('button', { name: 'Stop' });
-    expect(btn).toBeTruthy();
-  });
-
-  it('renders Resume when resume action is presented', async () => {
-    const panel: BotPanelView = {
-      ...BASE_PANEL,
-      health: {
-        ...BASE_PANEL.health,
-        phase: 'OFF_DUTY',
-        phase_label: 'Off duty',
-        desired_state: 'STOPPED',
-        desired_state_label: 'Stopped',
-        running: false,
-      },
-      actions: [
-        {
-          action_id: 'resume',
-          label: 'Resume',
-          explanation: 'Begin evaluating bars.',
-          enabled: true,
-          blockers: [],
-          confirmation: null,
-          revision: 1,
-          concurrency_token: 'test-token',
-        },
-      ],
-    };
-
-    await render(TraderLensComponent, {
-      inputs: { panel, profile: PROFILE, liveChart: null, histChart: null },
-    });
-
-    const btn = screen.getByRole('button', { name: 'Resume' });
-    expect(btn).toBeTruthy();
-  });
-
-  it('disables the button when actionPending is true', async () => {
-    await render(TraderLensComponent, {
-      inputs: {
-        panel: BASE_PANEL,
-        profile: PROFILE,
-        liveChart: null,
-        histChart: null,
-        actionPending: true,
-      },
-    });
-
-    const btn = screen.getByRole('button', { name: 'Stop' });
-    expect((btn as HTMLButtonElement).disabled).toBe(true);
   });
 });

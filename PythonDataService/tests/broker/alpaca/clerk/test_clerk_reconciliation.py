@@ -213,6 +213,7 @@ def _fixed_clock() -> int:
 def _request(operator: str = "inkant") -> BrokerOrderRequest:
     return BrokerOrderRequest(
         operator=operator,
+        expected_account_id="PA-TEST",
         legs=[BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)],
     )
 

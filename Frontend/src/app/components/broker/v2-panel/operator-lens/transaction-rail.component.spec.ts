@@ -1,7 +1,8 @@
 import { render, screen, fireEvent } from '@testing-library/angular';
 import { describe, it, expect, vi } from 'vitest';
 import { TransactionRailComponent } from './transaction-rail.component';
-import type { StationView, TransactionRail } from '../lib/broker-v2-panel.types';
+import type { EvidencePage, StationView, TransactionRail } from '../lib/broker-v2-panel.types';
+import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 
 function makeStation(
   overrides: Partial<StationView> & Pick<StationView, 'station_id' | 'state'>,
@@ -90,9 +91,7 @@ describe('TransactionRailComponent', () => {
     expect(container.querySelector('.station--satisfied details')?.hasAttribute('open')).toBe(false);
   });
 
-  it('evidence link click emits rail transaction_ref', async () => {
-    const onEvidence = vi.fn<(val: string) => void>();
-
+  it('loads and renders transaction evidence inside the station accordion', async () => {
     const station: StationView = makeStation({
       station_id: 'SUBMIT_GATE',
       state: 'satisfied',
@@ -101,16 +100,64 @@ describe('TransactionRailComponent', () => {
       evidence_at_ms: 1_700_000_000_000,
     });
 
-    const { fixture } = await render(TransactionRailComponent, {
-      inputs: { rail: makeRail([station], 'my-tx-ref') },
-      on: { evidenceRequested: onEvidence },
+    const evidence: EvidencePage = {
+      strategy_instance_id: 'sid-1',
+      account_id: 'acc-1',
+      transaction_ref: 'my-tx-ref',
+      entries: [
+        {
+          seq: 7,
+          kind: 'ORDER_FILLED',
+          kind_label: 'Order filled',
+          recorded_at_ms: 1_700_000_000_000,
+          order_ref: 'my-tx-ref',
+          intent_id: 'intent-7',
+          summary: 'Filled 10 shares at the broker.',
+          has_more_detail: false,
+        },
+        {
+          seq: 6,
+          kind: 'ORDER_EVENT',
+          kind_label: 'Order event',
+          recorded_at_ms: 1_699_999_999_000,
+          order_ref: 'my-tx-ref',
+          intent_id: 'intent-7',
+          summary: 'kind=order_event | intent=intent-7 | event=fill | filled=10@100',
+          has_more_detail: false,
+        },
+      ],
+      next_cursor: null,
+      total_entries: 2,
+      truncated: false,
+      read_by: 'operator:test',
+      read_at_ms: 1_700_000_000_001,
+    };
+    const getEvidence = vi.fn().mockResolvedValue(evidence);
+
+    const { fixture, container } = await render(TransactionRailComponent, {
+      inputs: {
+        rail: makeRail([station], 'my-tx-ref'),
+        broker: 'alpaca',
+        accountId: 'acc-1',
+        sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: { getEvidence } }],
     });
 
     const btn = screen.getByRole('button', { name: /view raw evidence/i });
     fireEvent.click(btn);
 
     await fixture.whenStable();
-    expect(onEvidence).toHaveBeenCalledWith('my-tx-ref');
+    expect(await screen.findByText('Order filled')).toBeTruthy();
+    expect(screen.getByText('Filled 10 shares at the broker.')).toBeTruthy();
+    expect(screen.getByText(/kind=order_event/)).toBeTruthy();
+    expect(container.querySelector('.evidence-drawer')).toBeNull();
+    expect(getEvidence).toHaveBeenCalledWith(
+      'alpaca',
+      'acc-1',
+      'sid-1',
+      expect.objectContaining({ transactionRef: 'my-tx-ref' }),
+    );
   });
 
   it('blocked station with OperatorBlocker shows headline text', async () => {

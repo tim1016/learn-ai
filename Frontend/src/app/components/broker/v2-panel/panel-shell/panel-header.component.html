@@ -12,11 +12,17 @@
     </div>
   </div>
 
-  <div class="control-header__identity">
+  <div class="control-header__hero">
     <div class="identity-lockup">
       <span class="eyebrow">{{ panel().strategy_label }}</span>
       <div class="identity-lockup__line">
-        <h1><app-asset-identity [symbol]="panel().symbol" size="md" /></h1>
+        <h1>
+          @if (tickerQuote(); as quote) {
+            <app-ticker-quote [quote]="quote" size="lg" />
+          } @else {
+            {{ panel().symbol }}
+          }
+        </h1>
         <code>{{ panel().strategy_instance_id }}</code>
       </div>
     </div>
@@ -28,55 +34,72 @@
     </div>
   </div>
 
-  <div class="grid min-w-0 gap-3 lg:grid-cols-[minmax(14rem,0.75fr)_minmax(0,1.25fr)]">
-    <div
-      class="min-w-0 border-l-4 border-l-[var(--bull)]"
-      [class.border-l-[var(--bear)]]="panel().mission_verdict.state === 'blocked' || panel().mission_verdict.state === 'retired'"
-      [class.border-l-[var(--warn)]]="panel().mission_verdict.state === 'off_duty'"
-      [attr.data-state]="panel().mission_verdict.state"
-      role="status"
-      aria-live="polite"
-    >
-      <p-card styleClass="h-full">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="status-kicker">Mission</span>
-          <p-tag [severity]="missionSeverity()" [value]="panel().mission_verdict.label" />
+  <section class="status-rail" aria-label="Bot and market status">
+    <div class="status-rail__mission" [attr.data-state]="panel().mission_verdict.state">
+      <span class="status-rail__indicator" aria-hidden="true"></span>
+      <div class="status-rail__copy">
+        <div class="status-rail__label-line">
+          <span class="status-kicker">Bot status</span>
+          <span class="status-badge">{{ panel().mission_verdict.label }}</span>
         </div>
-        <p class="mt-2 mb-0 text-sm text-[var(--text-secondary)]">{{ panel().mission_verdict.explanation }}</p>
-        @if (panel().mission_verdict.next_action) {
-          <small class="mt-2 block text-[var(--text-subtle)]">Next: {{ panel().mission_verdict.next_action }}</small>
-        }
-      </p-card>
+        <strong
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          [attr.aria-label]="botHeadline()"
+        >{{ botHeadline() }}</strong>
+        <details>
+          <summary>Status details</summary>
+          <p>{{ panel().mission_verdict.explanation }} {{ panel().mission_verdict.next_action }} · {{ panel().execution_policy }}</p>
+        </details>
+      </div>
+      @if (primaryAction(); as action) {
+        <app-panel-action-button
+          [action]="action"
+          [pending]="actionPending()"
+          [tone]="action.action_id === 'stop' ? 'danger' : 'primary'"
+          (triggered)="actionRequested.emit($event)"
+        />
+      }
     </div>
 
     <div
-      class="min-w-0"
-      role="status"
-      aria-live="polite"
+      class="status-rail__market"
+      [class.status-rail__market--attention]="panel().market_pulse.attention_required"
     >
-      <p-card styleClass="h-full">
-        <div class="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="status-kicker">Market</span>
-              <p-tag [severity]="marketSeverity()" [value]="panel().market_pulse.feed_state | receiptLabel" />
-            </div>
-            <strong class="mt-2 block text-sm text-[var(--text-primary)]">{{ panel().market_pulse.headline }}</strong>
-            <p class="mt-1 mb-0 whitespace-normal text-xs leading-relaxed text-[var(--text-secondary)]">{{ panel().market_pulse.explanation }}</p>
-          </div>
-          <dl class="market-pulse__facts">
-            <div>
-              <dt>Latest</dt>
-              <dd><app-timestamp-display [value]="panel().market_pulse.latest_bar_at_ms" mode="et" granularity="time" /></dd>
-            </div>
-            <div><dt>Age</dt><dd>{{ formatAge(panel().market_pulse.age_ms) }}</dd></div>
-            <div><dt>Source</dt><dd>{{ panel().market_pulse.source ? (panel().market_pulse.source | receiptLabel) : 'Unavailable' }}</dd></div>
-          </dl>
+      <div class="status-rail__copy">
+        <div class="status-rail__label-line">
+          <span class="status-kicker">Market</span>
+          <span class="status-badge">{{ panel().market_pulse.feed_state | receiptLabel }}</span>
         </div>
-        @if (panel().market_pulse.next_step) {
-          <small class="mt-2 block text-[var(--text-subtle)]">Next: {{ panel().market_pulse.next_step }}</small>
-        }
-      </p-card>
+        <strong
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          [attr.aria-label]="panel().market_pulse.headline"
+        >{{ panel().market_pulse.headline }}</strong>
+        <details>
+          <summary>Feed details</summary>
+          <p>{{ panel().market_pulse.explanation }} {{ panel().market_pulse.next_step }}</p>
+        </details>
+      </div>
+      <dl class="market-pulse__facts">
+        <div>
+          <dt>Latest</dt>
+          <dd><app-timestamp-display [value]="panel().market_pulse.latest_bar_at_ms" mode="et" granularity="time" /></dd>
+        </div>
+        <div><dt>Age</dt><dd>{{ formatAge(panel().market_pulse.age_ms) }}</dd></div>
+        <div><dt>Source</dt><dd>{{ panel().market_pulse.source ? (panel().market_pulse.source | receiptLabel) : 'Unavailable' }}</dd></div>
+      </dl>
     </div>
-  </div>
+
+    <div class="status-rail__manual-order">
+      <a
+        [routerLink]="manualOrderNavigation().commands"
+        [queryParams]="manualOrderNavigation().queryParams"
+        title="Open the account-scoped order ticket; every order intent is recorded before the broker is called."
+      >Manual order</a>
+      <span>Account ticket</span>
+    </div>
+  </section>
 </header>

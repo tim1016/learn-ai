@@ -1,28 +1,99 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  computed,
+  inject,
+  input,
+  output,
+  resource,
+} from '@angular/core';
 import { RouterLink } from '@angular/router';
-import type { BotPanelView } from '../lib/broker-v2-panel.types';
-import { AssetIdentityComponent } from '../../../../shared/asset-identity';
+import { firstValueFrom } from 'rxjs';
+import type {
+  BotPanelView,
+  PanelAction,
+  PanelActionTrigger,
+} from '../lib/broker-v2-panel.types';
+import {
+  TickerQuoteComponent,
+  type TickerQuoteView,
+} from '../../../../shared/ticker-quote/ticker-quote.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import { CardModule } from 'primeng/card';
-import { TagModule, type TagSeverity } from 'primeng/tag';
+import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+import { MarketDataService } from '../../../../services/market-data.service';
+import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 
 @Component({
   selector: 'app-panel-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    AssetIdentityComponent,
-    CardModule,
+    PanelActionButtonComponent,
     ReceiptLabelPipe,
     RouterLink,
-    TagModule,
     TimestampDisplayComponent,
+    TickerQuoteComponent,
   ],
   templateUrl: './panel-header.component.html',
   styleUrl: './panel-header.component.scss',
 })
 export class PanelHeaderComponent {
+  private readonly marketData = inject(MarketDataService);
+
   readonly panel = input.required<BotPanelView>();
+  readonly actionPending = input(false);
+  readonly actionRequested = output<PanelActionTrigger>();
+
+  private readonly marketSnapshot = resource({
+    params: () => this.panel().symbol,
+    loader: ({ params: symbol }) =>
+      firstValueFrom(this.marketData.getStockSnapshot(symbol)),
+  });
+
+  protected readonly tickerQuote = computed<TickerQuoteView | null>(() => {
+    const snapshot = this.marketSnapshot.hasValue()
+      ? this.marketSnapshot.value().snapshot
+      : null;
+    const price = snapshot?.day?.close ?? snapshot?.min?.close;
+    const changePercent = snapshot?.todaysChangePercent;
+    if (
+      price === null
+      || price === undefined
+      || changePercent === null
+      || changePercent === undefined
+    ) {
+      return null;
+    }
+    return {
+      ticker: snapshot?.ticker ?? this.panel().symbol,
+      price,
+      change: snapshot?.todaysChange,
+      changePercent,
+    };
+  });
+
+  protected readonly manualOrderNavigation = computed(() =>
+    buildManualOrderTicketNavigation(
+      this.panel().broker,
+      this.panel().account_id,
+      this.panel().symbol,
+    ),
+  );
+
+  protected readonly botHeadline = computed(() => {
+    const health = this.panel().health;
+    return health.duty_outcome?.explanation ?? health.desired_state_label;
+  });
+
+  protected readonly primaryAction = computed<PanelAction | null>(() => {
+    const health = this.panel().health;
+    const actionId = !health.running
+      ? 'resume'
+      : health.desired_state === 'PAUSED'
+        ? 'continue'
+        : 'stop';
+    return this.panel().actions.find((action) => action.action_id === actionId) ?? null;
+  });
 
   protected formatAge(ageMs: number | null): string {
     if (ageMs === null) return 'No bar received';
@@ -30,17 +101,4 @@ export class PanelHeaderComponent {
     return `${Math.floor(ageMs / 60_000)}m old`;
   }
 
-  protected missionSeverity(): TagSeverity {
-    switch (this.panel().mission_verdict.state) {
-      case 'working': return 'success';
-      case 'off_duty': return 'warn';
-      case 'blocked':
-      case 'retired': return 'danger';
-      default: return 'info';
-    }
-  }
-
-  protected marketSeverity(): TagSeverity {
-    return this.panel().market_pulse.attention_required ? 'danger' : 'success';
-  }
 }

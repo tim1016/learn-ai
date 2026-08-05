@@ -46,11 +46,21 @@
                 <button
                   type="button"
                   class="station__evidence-link"
-                  [attr.aria-label]="'View raw evidence for ' + station.label"
+                  [attr.aria-label]="(evidenceStationId() === station.station_id ? 'Hide' : 'View') + ' raw evidence for ' + station.label"
+                  [attr.aria-expanded]="evidenceStationId() === station.station_id"
                   (click)="onEvidenceClick(station)"
                 >
-                  View evidence
+                  {{ evidenceStationId() === station.station_id ? 'Hide evidence' : 'View evidence' }}
                 </button>
+
+                @if (evidenceStationId() === station.station_id && transactionRef(); as ref) {
+                  <app-transaction-evidence-timeline
+                    [broker]="broker()"
+                    [accountId]="accountId()"
+                    [sid]="sid()"
+                    [transactionRef]="ref"
+                  />
+                }
               }
             </div>
           }

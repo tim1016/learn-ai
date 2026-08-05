@@ -10535,6 +10535,8 @@ export interface components {
          *     identity per submitted leg.
          */
         BrokerOrderRequest: {
+            /** Expected Account Id */
+            expected_account_id: string;
             /** Legs */
             legs: components["schemas"]["BrokerOrderLeg"][];
             /** Operator */
