@@ -23,6 +23,8 @@ import os
 import secrets
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -322,7 +324,14 @@ class ClerkSqliteRepository:
         # before that point, so this lock is what actually closes the window
         # between that read and the transaction that depends on it — not the
         # database lock, which starts later.
-        self._write_lock = threading.Lock()
+        #
+        # Reentrant (not plain Lock): reserve_command()/append_transition()
+        # each take this lock for their own atomicity, and a domain caller
+        # composing several of these calls into one check -> decide -> append
+        # sequence holds it for the whole sequence via serialized() (#1376
+        # review — see that method's docstring) — a nested acquisition from
+        # the same thread must not deadlock.
+        self._write_lock = threading.RLock()
 
     @property
     def account_id(self) -> str:
@@ -707,6 +716,29 @@ class ClerkSqliteRepository:
     # command (what to hash, what happens on acceptance) lives in its own
     # domain module built on top of this and append_transition().
     # ------------------------------------------------------------------
+
+    @contextmanager
+    def serialized(self) -> Iterator[None]:
+        """Hold the write coordinator across a caller-composed sequence of
+        repository calls — a generic spine primitive, not business logic.
+
+        ``reserve_command()`` and ``append_transition()`` each take the
+        write lock for their own atomicity, but a domain caller that reads
+        additional state *between* reserving a command and deciding what to
+        append (e.g. "is there already an active run for this instance?")
+        needs that whole read-decide-append sequence to be atomic, not just
+        each individual call: otherwise two reservations with different
+        idempotency keys can each observe stale state and both decide to
+        append, racing on whatever uniqueness constraint the fold enforces
+        (#1376 review: two concurrent Starts with different
+        ``lifecycle_run_id``s both observing "no active run" and both
+        appending ``RUN_STARTED``, colliding on
+        ``ux_runs_one_active_per_instance``). Wrap the whole sequence in
+        this instead. Reentrant, so calling ``reserve_command()`` /
+        ``append_transition()`` from inside this block does not deadlock.
+        """
+        with self._write_lock:
+            yield
 
     def reserve_command(
         self,

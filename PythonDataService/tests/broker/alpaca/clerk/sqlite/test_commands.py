@@ -13,6 +13,7 @@ import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import (
     DurableConflictError,
+    InvalidIdentityError,
     NoActiveRunError,
     submit_start_run,
     submit_stop_run,
@@ -206,3 +207,70 @@ def test_concurrent_duplicate_starts_produce_exactly_one_effect(repo: ClerkSqlit
     assert len(repo.custody_transitions()) == transitions_before + 1  # exactly one new effect
     active = repo.active_run(SID)
     assert active is not None and active.lifecycle_run_id == "run-1"
+
+
+def test_concurrent_starts_with_different_run_ids_serialize_to_one_active_run(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Different lifecycle_run_ids don't collide at reserve_command's
+    idempotency key (unlike the identical-key case above), so this
+    exercises a different atomicity guarantee: repo.serialized() spanning
+    the whole reserve -> active_run() check -> append sequence, not the
+    reservation lock alone. Before that fix (#1376 review), both threads
+    could observe "no active run" before either committed and both append
+    RUN_STARTED, racing on ux_runs_one_active_per_instance with a raw,
+    unhandled sqlite3.IntegrityError and a permanently stuck 'reserved'
+    command for the loser."""
+    results: list[object] = []
+    errors: list[Exception] = []
+    barrier = threading.Barrier(2)
+
+    def worker(lifecycle_run_id: str) -> None:
+        barrier.wait()
+        try:
+            results.append(
+                submit_start_run(
+                    repo,
+                    account_id=ACCOUNT_ID,
+                    strategy_instance_id=SID,
+                    lifecycle_run_id=lifecycle_run_id,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - would fail the test below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=worker, args=("run-A",)),
+        threading.Thread(target=worker, args=("run-B",)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    assert len(results) == 2
+    assert sorted(r.command.state for r in results) == ["rejected", "succeeded"]
+    active = repo.active_run(SID)
+    assert active is not None
+    winner = next(r for r in results if r.command.state == "succeeded")
+    assert winner.command.command_id.split(":")[3] == active.lifecycle_run_id
+
+
+def test_start_rejects_a_colon_in_strategy_instance_id(repo: ClerkSqliteRepository) -> None:
+    with pytest.raises(InvalidIdentityError):
+        submit_start_run(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id="a:b", lifecycle_run_id="run-1"
+        )
+
+
+def test_start_rejects_a_colon_in_lifecycle_run_id(repo: ClerkSqliteRepository) -> None:
+    with pytest.raises(InvalidIdentityError):
+        submit_start_run(
+            repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="a:b"
+        )
+
+
+def test_stop_rejects_a_colon_in_strategy_instance_id(repo: ClerkSqliteRepository) -> None:
+    with pytest.raises(InvalidIdentityError):
+        submit_stop_run(repo, account_id=ACCOUNT_ID, strategy_instance_id="a:b")

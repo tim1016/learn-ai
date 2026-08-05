@@ -413,3 +413,105 @@ def test_mirror_prepare_without_finalize_is_excluded_not_imported(tmp_path: Path
     )
     # No finalize call — simulates a crash right after step 1.
     assert mirror.rebuild() == []
+
+
+def _mirror_row(summary_code: str) -> dict:
+    return {
+        "authority_generation": 1,
+        "strategy_instance_id": None,
+        "run_id": None,
+        "command_id": None,
+        "effect_operation_id": None,
+        "order_ref": None,
+        "broker_order_id": None,
+        "transition_kind": "K",
+        "custody_owner": "ACCOUNT_CLERK",
+        "execution_authority": "ACCOUNT_CLERK",
+        "operation_state": "reserved",
+        "broker_state": None,
+        "proof_reference": None,
+        "source_event_at_ms": None,
+        "clerk_observed_at_ms": 1,
+        "recorded_at_ms": 1,
+        "summary_code": summary_code,
+        "facts_schema_version": 1,
+        "facts_json": "{}",
+    }
+
+
+def test_mirror_rebuild_tolerates_an_abandoned_prepare_reusing_a_sequence(tmp_path: Path) -> None:
+    """A failed fold (e.g. the concurrent-decision race a unique constraint
+    catches, #1376's review) can leave an unfinalized PREPARE at a sequence
+    that the next successful append then reuses with a different payload —
+    next_sequence is computed from the *committed* row count, which the
+    failed attempt never joined. That abandoned attempt must not be
+    mistaken for tampering: only the PREPARE matching the sequence's
+    FINALIZE is authoritative."""
+    from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, canonical_payload, compute_row_hash
+    from app.broker.alpaca.clerk.sqlite.mirror import PendingTransition
+
+    mirror = MirrorFile(tmp_path / "reused.mirror")
+
+    abandoned_payload = canonical_payload(_mirror_row("ABANDONED"))
+    abandoned_hash = compute_row_hash(GENESIS, abandoned_payload)
+    mirror.prepare(
+        PendingTransition(
+            sequence=1,
+            authority_generation=1,
+            row_hash=abandoned_hash,
+            prev_hash=GENESIS,
+            payload_canonical=abandoned_payload,
+            recorded_at_ms=1,
+        )
+    )
+    # No finalize for the abandoned attempt — its owning SQLite commit failed.
+
+    real_payload = canonical_payload(_mirror_row("REAL"))
+    real_hash = compute_row_hash(GENESIS, real_payload)
+    mirror.prepare(
+        PendingTransition(
+            sequence=1,
+            authority_generation=1,
+            row_hash=real_hash,
+            prev_hash=GENESIS,
+            payload_canonical=real_payload,
+            recorded_at_ms=2,
+        )
+    )
+    mirror.finalize(sequence=1, authority_generation=1, row_hash=real_hash, recorded_at_ms=2)
+
+    rebuilt = mirror.rebuild()
+    assert len(rebuilt) == 1
+    assert rebuilt[0].row_hash == real_hash
+    assert rebuilt[0].payload["summary_code"] == "REAL"
+
+
+def test_mirror_rebuild_still_fails_closed_on_conflicting_finalize(tmp_path: Path) -> None:
+    """Two FINALIZE records at the same sequence with different hashes is
+    genuine corruption (SQLite's own PRIMARY KEY on ``sequence`` would
+    prevent this from ever arising on a real commit path) and must still
+    fail closed — unlike the benign abandoned-PREPARE case above."""
+    from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, canonical_payload, compute_row_hash
+    from app.broker.alpaca.clerk.sqlite.mirror import PendingTransition
+
+    mirror = MirrorFile(tmp_path / "conflict.mirror")
+
+    for summary_code, recorded_at in (("A", 1), ("B", 2)):
+        payload = canonical_payload(_mirror_row(summary_code))
+        row_hash = compute_row_hash(GENESIS, payload)
+        mirror.prepare(
+            PendingTransition(
+                sequence=1,
+                authority_generation=1,
+                row_hash=row_hash,
+                prev_hash=GENESIS,
+                payload_canonical=payload,
+                recorded_at_ms=recorded_at,
+            )
+        )
+        mirror.finalize(
+            sequence=1, authority_generation=1, row_hash=row_hash, recorded_at_ms=recorded_at
+        )
+
+    with pytest.raises(MirrorChainBroken):
+        mirror.rebuild()

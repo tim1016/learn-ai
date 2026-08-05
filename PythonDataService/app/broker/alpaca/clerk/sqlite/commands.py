@@ -52,6 +52,19 @@ class NoActiveRunError(Exception):
         super().__init__(_NO_ACTIVE_RUN_REASON)
 
 
+class InvalidIdentityError(ValueError):
+    """A caller-supplied identity component cannot safely form the
+    colon-delimited idempotency key (#1376 review)."""
+
+
+def _reject_colon(field_name: str, value: str) -> None:
+    if ":" in value:
+        raise InvalidIdentityError(
+            f"{field_name} must not contain ':' — it is embedded in a colon-delimited "
+            f"idempotency key, got {value!r}"
+        )
+
+
 @dataclass(frozen=True)
 class CommandSubmission:
     command: CommandResource
@@ -110,6 +123,9 @@ def submit_start_run(
     frontend mints it once per user action and resends the same value on a
     transport retry, which is what makes the retry idempotent.
     """
+    _reject_colon("strategy_instance_id", strategy_instance_id)
+    _reject_colon("lifecycle_run_id", lifecycle_run_id)
+
     idempotency_key = _operator_lifecycle_key(
         account_id=account_id,
         strategy_instance_id=strategy_instance_id,
@@ -127,56 +143,62 @@ def submit_start_run(
     )
     command_id = f"cmd:{idempotency_key}"
 
-    outcome = repo.reserve_command(
-        command_id=command_id,
-        idempotency_key=idempotency_key,
-        payload_hash=payload_hash,
-        kind="operator_lifecycle",
-        strategy_instance_id=strategy_instance_id,
-        run_id=None,  # pre-run command: the fold creates the run, not the reservation
-        action=ACTION_START,
-        intended_end_state=INTENDED_END_STATE_ACTIVE,
-    )
-    if isinstance(outcome, ReservationConflict):
-        raise DurableConflictError(outcome.command)
-    if isinstance(outcome, ReservedExisting):
-        return CommandSubmission(command=outcome.command, created=False)
-    assert isinstance(outcome, ReservedNew)
+    # reserve -> read active_run() -> decide -> append must be one atomic
+    # sequence: two Starts with different lifecycle_run_ids (so no collision
+    # at reserve_command) could otherwise both observe "no active run" before
+    # either commits and both append RUN_STARTED, racing on
+    # ux_runs_one_active_per_instance (#1376 review).
+    with repo.serialized():
+        outcome = repo.reserve_command(
+            command_id=command_id,
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+            kind="operator_lifecycle",
+            strategy_instance_id=strategy_instance_id,
+            run_id=None,  # pre-run command: the fold creates the run, not the reservation
+            action=ACTION_START,
+            intended_end_state=INTENDED_END_STATE_ACTIVE,
+        )
+        if isinstance(outcome, ReservationConflict):
+            raise DurableConflictError(outcome.command)
+        if isinstance(outcome, ReservedExisting):
+            return CommandSubmission(command=outcome.command, created=False)
+        assert isinstance(outcome, ReservedNew)
 
-    run_id = f"{strategy_instance_id}:{lifecycle_run_id}"
-    observed_at_ms = clock()
-    if repo.active_run(strategy_instance_id) is not None:
-        repo.append_transition(
-            TransitionInput(
-                strategy_instance_id=strategy_instance_id,
-                command_id=command_id,
-                transition_kind="COMMAND_REJECTED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="rejected",
-                clerk_observed_at_ms=observed_at_ms,
-                summary_code="START_REJECTED_ALREADY_ACTIVE",
-                facts_json=canonicalize({"reason": _ALREADY_ACTIVE_REASON}),
+        run_id = f"{strategy_instance_id}:{lifecycle_run_id}"
+        observed_at_ms = clock()
+        if repo.active_run(strategy_instance_id) is not None:
+            repo.append_transition(
+                TransitionInput(
+                    strategy_instance_id=strategy_instance_id,
+                    command_id=command_id,
+                    transition_kind="COMMAND_REJECTED",
+                    custody_owner="ACCOUNT_CLERK",
+                    execution_authority="ACCOUNT_CLERK",
+                    operation_state="rejected",
+                    clerk_observed_at_ms=observed_at_ms,
+                    summary_code="START_REJECTED_ALREADY_ACTIVE",
+                    facts_json=canonicalize({"reason": _ALREADY_ACTIVE_REASON}),
+                )
             )
-        )
-    else:
-        repo.append_transition(
-            TransitionInput(
-                strategy_instance_id=strategy_instance_id,
-                run_id=run_id,
-                command_id=command_id,
-                transition_kind="RUN_STARTED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="succeeded",
-                clerk_observed_at_ms=observed_at_ms,
-                summary_code="RUN_STARTED",
-                facts_json=canonicalize({"lifecycle_run_id": lifecycle_run_id}),
+        else:
+            repo.append_transition(
+                TransitionInput(
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                    command_id=command_id,
+                    transition_kind="RUN_STARTED",
+                    custody_owner="ACCOUNT_CLERK",
+                    execution_authority="ACCOUNT_CLERK",
+                    operation_state="succeeded",
+                    clerk_observed_at_ms=observed_at_ms,
+                    summary_code="RUN_STARTED",
+                    facts_json=canonicalize({"lifecycle_run_id": lifecycle_run_id}),
+                )
             )
-        )
-    command = repo.get_command(command_id)
-    assert command is not None
-    return CommandSubmission(command=command, created=True)
+        command = repo.get_command(command_id)
+        assert command is not None
+        return CommandSubmission(command=command, created=True)
 
 
 def submit_stop_run(
@@ -197,57 +219,64 @@ def submit_stop_run(
     client-generated token — idempotent by construction (ADR 0035 #3: "Stop
     binds the active run").
     """
-    active = repo.active_run(strategy_instance_id)
-    if active is None:
-        raise NoActiveRunError(strategy_instance_id)
+    _reject_colon("strategy_instance_id", strategy_instance_id)
 
-    idempotency_key = _operator_lifecycle_key(
-        account_id=account_id,
-        strategy_instance_id=strategy_instance_id,
-        lifecycle_run_id=active.lifecycle_run_id,
-        action=ACTION_STOP,
-        intended_end_state=INTENDED_END_STATE_STOPPED,
-    )
-    payload_hash = _operator_lifecycle_hash(
-        account_id=account_id,
-        strategy_instance_id=strategy_instance_id,
-        lifecycle_run_id=active.lifecycle_run_id,
-        action=ACTION_STOP,
-        intended_end_state=INTENDED_END_STATE_STOPPED,
-        operator_reason=operator_reason,
-    )
-    command_id = f"cmd:{idempotency_key}"
+    # The active-run read that resolves lifecycle_run_id, the reservation,
+    # and the append must be one atomic sequence for the same reason as
+    # submit_start_run: state read outside the lock can go stale before the
+    # decision it drives gets appended (#1376 review).
+    with repo.serialized():
+        active = repo.active_run(strategy_instance_id)
+        if active is None:
+            raise NoActiveRunError(strategy_instance_id)
 
-    outcome = repo.reserve_command(
-        command_id=command_id,
-        idempotency_key=idempotency_key,
-        payload_hash=payload_hash,
-        kind="operator_lifecycle",
-        strategy_instance_id=strategy_instance_id,
-        run_id=active.run_id,  # the run already exists, so this FK is satisfiable now
-        action=ACTION_STOP,
-        intended_end_state=INTENDED_END_STATE_STOPPED,
-    )
-    if isinstance(outcome, ReservationConflict):
-        raise DurableConflictError(outcome.command)
-    if isinstance(outcome, ReservedExisting):
-        return CommandSubmission(command=outcome.command, created=False)
-    assert isinstance(outcome, ReservedNew)
-
-    repo.append_transition(
-        TransitionInput(
+        idempotency_key = _operator_lifecycle_key(
+            account_id=account_id,
             strategy_instance_id=strategy_instance_id,
-            run_id=active.run_id,
-            command_id=command_id,
-            transition_kind="RUN_STOPPED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="succeeded",
-            clerk_observed_at_ms=clock(),
-            summary_code="RUN_STOPPED",
-            facts_json=canonicalize({"operator_reason": operator_reason}),
+            lifecycle_run_id=active.lifecycle_run_id,
+            action=ACTION_STOP,
+            intended_end_state=INTENDED_END_STATE_STOPPED,
         )
-    )
-    command = repo.get_command(command_id)
-    assert command is not None
-    return CommandSubmission(command=command, created=True)
+        payload_hash = _operator_lifecycle_hash(
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+            lifecycle_run_id=active.lifecycle_run_id,
+            action=ACTION_STOP,
+            intended_end_state=INTENDED_END_STATE_STOPPED,
+            operator_reason=operator_reason,
+        )
+        command_id = f"cmd:{idempotency_key}"
+
+        outcome = repo.reserve_command(
+            command_id=command_id,
+            idempotency_key=idempotency_key,
+            payload_hash=payload_hash,
+            kind="operator_lifecycle",
+            strategy_instance_id=strategy_instance_id,
+            run_id=active.run_id,  # the run already exists, so this FK is satisfiable now
+            action=ACTION_STOP,
+            intended_end_state=INTENDED_END_STATE_STOPPED,
+        )
+        if isinstance(outcome, ReservationConflict):
+            raise DurableConflictError(outcome.command)
+        if isinstance(outcome, ReservedExisting):
+            return CommandSubmission(command=outcome.command, created=False)
+        assert isinstance(outcome, ReservedNew)
+
+        repo.append_transition(
+            TransitionInput(
+                strategy_instance_id=strategy_instance_id,
+                run_id=active.run_id,
+                command_id=command_id,
+                transition_kind="RUN_STOPPED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded",
+                clerk_observed_at_ms=clock(),
+                summary_code="RUN_STOPPED",
+                facts_json=canonicalize({"operator_reason": operator_reason}),
+            )
+        )
+        command = repo.get_command(command_id)
+        assert command is not None
+        return CommandSubmission(command=command, created=True)

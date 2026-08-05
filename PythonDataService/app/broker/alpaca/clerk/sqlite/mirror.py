@@ -115,33 +115,42 @@ class MirrorFile:
     def rebuild(self) -> list[RebuiltRow]:
         """Replay finalized PREPARE/FINALIZE pairs into rows, verifying the chain.
 
-        Fails closed (raises ``MirrorChainBroken``) on: a PREPARE with no
-        matching FINALIZE (excluded, not an error by itself — it's just
-        dropped, since the fence guarantees it had no broker effect), a
-        sequence gap, a duplicate sequence with a different hash, or a
-        hash-chain break.
+        A sequence number can legitimately have more than one PREPARE line:
+        whenever a prepared transition's owning SQLite commit fails (a
+        fold-level constraint violation on a concurrent decision, for
+        instance — see #1376's review), the mirror already has an fsynced
+        PREPARE for that sequence, but ``append_transition`` computes its
+        next sequence from the *committed* row count, so the very next
+        successful append reuses the same number with a different payload.
+        That abandoned PREPARE never gets a FINALIZE — the fence's own
+        guarantee that it had no broker effect (R1) — and must not be
+        mistaken for corruption; only the PREPARE whose hash matches the
+        sequence's FINALIZE is real, so a FINALIZE (not a raw duplicate
+        PREPARE) is what makes a sequence "used" here.
+
+        Fails closed (raises ``MirrorChainBroken``) on: two FINALIZE
+        records at the same sequence with different hashes, a FINALIZE
+        with no matching-hash PREPARE, a sequence gap in the finalized
+        chain, or a hash-chain break.
         """
         records = self._read_records()
-        prepares: dict[int, dict[str, Any]] = {}
-        finalized: set[int] = set()
+        prepares_by_sequence: dict[int, list[dict[str, Any]]] = {}
+        finalize_by_sequence: dict[int, dict[str, Any]] = {}
         for record in records:
             sequence = record["sequence"]
             if record["phase"] == "PREPARE":
-                if sequence in prepares and prepares[sequence]["row_hash"] != record["row_hash"]:
-                    raise MirrorChainBroken(
-                        f"duplicate sequence {sequence} with a different hash"
-                    )
-                prepares[sequence] = record
+                prepares_by_sequence.setdefault(sequence, []).append(record)
             elif record["phase"] == "FINALIZE":
-                if sequence in prepares and prepares[sequence]["row_hash"] != record["row_hash"]:
+                existing = finalize_by_sequence.get(sequence)
+                if existing is not None and existing["row_hash"] != record["row_hash"]:
                     raise MirrorChainBroken(
-                        f"sequence {sequence} FINALIZE hash disagrees with its PREPARE"
+                        f"sequence {sequence} has conflicting FINALIZE records"
                     )
-                finalized.add(sequence)
+                finalize_by_sequence[sequence] = record
             else:  # pragma: no cover - defensive, format is pinned
                 raise MirrorChainBroken(f"unknown mirror record phase: {record['phase']!r}")
 
-        usable_sequences = sorted(s for s in finalized if s in prepares)
+        usable_sequences = sorted(finalize_by_sequence)
         expected_prev = GENESIS
         rows: list[RebuiltRow] = []
         for expected_seq, sequence in enumerate(usable_sequences, start=1):
@@ -149,7 +158,15 @@ class MirrorFile:
                 raise MirrorChainBroken(
                     f"sequence gap: expected {expected_seq}, found {sequence}"
                 )
-            record = prepares[sequence]
+            finalize_record = finalize_by_sequence[sequence]
+            matching_prepares = [
+                record
+                for record in prepares_by_sequence.get(sequence, [])
+                if record["row_hash"] == finalize_record["row_hash"]
+            ]
+            if not matching_prepares:
+                raise MirrorChainBroken(f"sequence {sequence} FINALIZE has no matching PREPARE")
+            record = matching_prepares[0]
             recomputed = compute_row_hash(expected_prev, record["payload_canonical"])
             if record["prev_hash"] != expected_prev or record["row_hash"] != recomputed:
                 raise MirrorChainBroken(f"hash-chain break at sequence {sequence}")

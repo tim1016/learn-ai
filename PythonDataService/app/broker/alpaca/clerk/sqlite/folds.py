@@ -69,9 +69,10 @@ def _fold_strategy_instance_registered(conn: sqlite3.Connection, payload: dict[s
     )
 
 
-def _set_command_terminal(
-    conn: sqlite3.Connection, payload: dict[str, Any], *, state: str, with_receipt: bool
-) -> None:
+_RECEIPT_TERMINAL_STATES = frozenset({"succeeded", "failed"})
+
+
+def _set_command_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, state: str) -> None:
     """Shared tail for every command-terminal fold (#1376): link a receipt
     (succeeded/failed only — R3's receipts.terminal_state vocabulary has no
     'rejected'; an admission-time rejection isn't a proof of outcome) and
@@ -79,7 +80,7 @@ def _set_command_terminal(
     """
     command_id = payload["command_id"]
     receipt_id = None
-    if with_receipt:
+    if state in _RECEIPT_TERMINAL_STATES:
         receipt_id = f"receipt:{command_id}"
         conn.execute(
             "INSERT INTO receipts (receipt_id, command_id, effect_operation_id, terminal_state, "
@@ -114,7 +115,7 @@ def _fold_run_started(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
             payload["recorded_at_ms"],
         ),
     )
-    _set_command_terminal(conn, payload, state="succeeded", with_receipt=True)
+    _set_command_terminal(conn, payload, state="succeeded")
 
 
 def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -122,11 +123,11 @@ def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         "UPDATE runs SET state = 'STOPPED', stopped_at_ms = ? WHERE run_id = ?",
         (payload["recorded_at_ms"], payload["run_id"]),
     )
-    _set_command_terminal(conn, payload, state="succeeded", with_receipt=True)
+    _set_command_terminal(conn, payload, state="succeeded")
 
 
 def _fold_command_rejected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    _set_command_terminal(conn, payload, state="rejected", with_receipt=False)
+    _set_command_terminal(conn, payload, state="rejected")
 
 
 DEFAULT_FOLD_REGISTRY = FoldRegistry()

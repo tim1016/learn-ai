@@ -97,6 +97,17 @@ async def test_start_conflict_returns_typed_409(api: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_with_colon_in_lifecycle_run_id_returns_typed_400(api: FastAPI) -> None:
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": "a:b"},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"]["reason"] == "invalid_identity"
+
+
+@pytest.mark.asyncio
 async def test_stop_without_active_run_returns_typed_404(api: FastAPI) -> None:
     async with _client(api) as client:
         response = await client.post(

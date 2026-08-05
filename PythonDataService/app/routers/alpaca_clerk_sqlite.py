@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from app.broker.alpaca.clerk.journal import get_clerk_settings
 from app.broker.alpaca.clerk.sqlite.commands import (
     DurableConflictError,
+    InvalidIdentityError,
     NoActiveRunError,
     submit_start_run,
     submit_stop_run,
@@ -91,6 +92,10 @@ async def start_run(
         )
     except DurableConflictError as exc:
         raise _conflict_response(exc) from exc
+    except InvalidIdentityError as exc:
+        raise HTTPException(
+            status_code=400, detail={"reason": "invalid_identity", "message": str(exc)}
+        ) from exc
     return CommandResponse.from_resource(submission.command)
 
 
@@ -118,6 +123,10 @@ async def stop_run(
         ) from exc
     except DurableConflictError as exc:
         raise _conflict_response(exc) from exc
+    except InvalidIdentityError as exc:
+        raise HTTPException(
+            status_code=400, detail={"reason": "invalid_identity", "message": str(exc)}
+        ) from exc
     return CommandResponse.from_resource(submission.command)
 
 
