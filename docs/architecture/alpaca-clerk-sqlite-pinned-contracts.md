@@ -304,11 +304,11 @@ CREATE TABLE custody_transitions (
     prev_hash                 TEXT,                     -- null only for sequence 1
     row_hash                  TEXT NOT NULL,
     authority_generation      INTEGER NOT NULL,
-    strategy_instance_id      TEXT REFERENCES strategy_instances(strategy_instance_id),
-    run_id                    TEXT REFERENCES runs(run_id),
-    command_id                TEXT REFERENCES commands(command_id),
-    effect_operation_id       TEXT REFERENCES effect_operations(effect_operation_id),
-    order_ref                 TEXT REFERENCES orders(order_ref),
+    strategy_instance_id      TEXT REFERENCES strategy_instances(strategy_instance_id) DEFERRABLE INITIALLY DEFERRED,
+    run_id                    TEXT REFERENCES runs(run_id) DEFERRABLE INITIALLY DEFERRED,
+    command_id                TEXT REFERENCES commands(command_id) DEFERRABLE INITIALLY DEFERRED,
+    effect_operation_id       TEXT REFERENCES effect_operations(effect_operation_id) DEFERRABLE INITIALLY DEFERRED,
+    order_ref                 TEXT REFERENCES orders(order_ref) DEFERRABLE INITIALLY DEFERRED,
     broker_order_id           TEXT,
     transition_kind           TEXT NOT NULL,
     custody_owner             TEXT NOT NULL,
@@ -373,6 +373,19 @@ BEGIN
     SELECT RAISE(ABORT, 'commands.payload_hash is immutable once committed');
 END;
 ```
+
+Five `custody_transitions` foreign keys (`strategy_instance_id`, `run_id`,
+`command_id`, `effect_operation_id`, `order_ref`) are `DEFERRABLE INITIALLY
+DEFERRED` — discovered as a genuine implementation-level necessity while
+building Slice 2, per §10. A transition legitimately creates the very
+entity it references in the same atomic commit (e.g. a
+`STRATEGY_INSTANCE_REGISTERED` transition's fold inserts the
+`strategy_instances` row it points at). SQLite checks a plain `REFERENCES`
+immediately, per statement; deferring the check to `COMMIT` lets the
+transition row and the entity row commit together in either statement
+order without breaking the FK guarantee itself — it is still enforced,
+just at the transaction boundary instead of the statement boundary, which
+is exactly where this document already draws the atomicity line (§4).
 
 ### 3a. Content-addressed idempotency keys (R2, ADR 0035 #3)
 
