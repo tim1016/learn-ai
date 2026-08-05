@@ -1,7 +1,7 @@
 <!-- Journal tail (spec §7.4). Newest-first, filterable by kind. -->
 <section class="journal-tail" aria-label="Order journal tail">
   <header class="journal-tail__header">
-    <span class="journal-tail__count">{{ entries().length }} events</span>
+    <span class="journal-tail__count">{{ entries().length }} of {{ filteredEntries().length }} events</span>
 
     @if (availableKinds().length > 0) {
       <div class="journal-tail__filters" role="group" aria-label="Filter by kind">
@@ -9,7 +9,7 @@
           type="button"
           class="journal-tail__filter-btn"
           [class.journal-tail__filter-btn--active]="kindFilter() === ''"
-          aria-pressed="true"
+          [attr.aria-pressed]="kindFilter() === ''"
           (click)="onKindFilter('')"
         >
           All
@@ -68,16 +68,6 @@
                 </button>
               }
 
-              @if (entry.order_ref) {
-                <button
-                  type="button"
-                  class="journal-entry__evidence-btn"
-                  [attr.aria-label]="'View raw evidence for ' + entry.kind_label"
-                  (click)="onEvidenceDrawer(entry)"
-                >
-                  View evidence
-                </button>
-              }
             </div>
           </div>
         </details>
@@ -85,9 +75,13 @@
     }
   </ul>
 
-  @if (hasMore()) {
+  @if (hasMoreVisible()) {
+    <button type="button" class="journal-tail__load-more" (click)="loadMore()">
+      Load more events
+    </button>
+  } @else if (hasMoreRecorded()) {
     <p class="journal-tail__more" role="note">
-      Showing first {{ entries().length }} entries. Older entries available via the evidence drawer.
+      Showing {{ entries().length }} recent events. Older events remain in the bounded audit record.
     </p>
   }
 </section>

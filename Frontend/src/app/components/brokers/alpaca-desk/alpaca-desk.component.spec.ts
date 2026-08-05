@@ -1,7 +1,14 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
+import { convertToParamMap, ActivatedRoute } from '@angular/router';
+import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { BrokerOrder, CustodyDiagnosis, OrderSubmitResult } from '../../../api/alpaca.types';
+import type {
+  BrokerAccountSnapshot,
+  BrokerOrder,
+  CustodyDiagnosis,
+  OrderSubmitResult,
+} from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
 import { AlpacaDeskComponent } from './alpaca-desk.component';
 
@@ -64,9 +71,30 @@ function inSyncDiagnosis(): CustodyDiagnosis {
   };
 }
 
+function accountSnapshot(accountId = 'PA1'): BrokerAccountSnapshot {
+  return {
+    broker: 'alpaca',
+    account_id: accountId,
+    account_mode: 'paper',
+    account_status: 'ACTIVE',
+    currency: 'USD',
+    cash: 1_000,
+    equity: 1_000,
+    buying_power: 2_000,
+    portfolio_value: 1_000,
+    long_market_value: 0,
+    short_market_value: 0,
+    pattern_day_trader: false,
+    trading_blocked: false,
+    account_blocked: false,
+    created_at_ms: null,
+    observed_at_ms: 1,
+  };
+}
+
 function brokerService(overrides: Partial<BrokersService> = {}) {
   return {
-    getAccount: vi.fn().mockResolvedValue(undefined),
+    getAccount: vi.fn().mockResolvedValue(accountSnapshot()),
     listPositions: vi.fn().mockResolvedValue([]),
     listOrders: vi.fn().mockResolvedValue([]),
     submitOrder: vi.fn(),
@@ -92,6 +120,65 @@ describe('AlpacaDeskComponent', () => {
     expect(screen.getByRole('heading', { name: /Alpaca/i })).toBeTruthy();
     expect(screen.getByText('Broker desk')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Create a new Alpaca order' })).toBeTruthy();
+  });
+
+  it('opens an account-scoped order ticket with the routed symbol prefilled', async () => {
+    const queryParamMap = convertToParamMap({
+      order: 'new',
+      accountId: 'PA3KWXU1C4C3',
+      symbol: 'nvda',
+    });
+
+    await render(AlpacaDeskComponent, {
+      providers: [
+        {
+          provide: BrokersService,
+          useValue: brokerService({
+            getAccount: vi.fn().mockResolvedValue(accountSnapshot('PA3KWXU1C4C3')),
+          }),
+        },
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            snapshot: { queryParamMap },
+            queryParamMap: of(queryParamMap),
+          },
+        },
+      ],
+    });
+
+    expect(await screen.findByText('PA3KWXU1C4C3 · Equities')).toBeTruthy();
+    const symbolInput = await screen.findByLabelText('Leg 1 symbol');
+    if (!(symbolInput instanceof HTMLInputElement)) {
+      throw new Error('Expected the routed symbol field to be an input.');
+    }
+    expect(symbolInput.value).toBe('NVDA');
+  });
+
+  it('refuses a routed ticket when the connected account differs', async () => {
+    const queryParamMap = convertToParamMap({
+      order: 'new',
+      accountId: 'PA-STALE',
+      symbol: 'NVDA',
+    });
+
+    await render(AlpacaDeskComponent, {
+      providers: [
+        { provide: BrokersService, useValue: brokerService() },
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            snapshot: { queryParamMap },
+            queryParamMap: of(queryParamMap),
+          },
+        },
+      ],
+    });
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      'The order link targets account PA-STALE, but Alpaca is connected to PA1. No ticket was opened.',
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('refreshes transaction history after a successful submission', async () => {

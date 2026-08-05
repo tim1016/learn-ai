@@ -1,0 +1,10 @@
+<details class="disclosure-card" (toggle)="onToggle($event)">
+  <summary>
+    <h2>{{ title() }}</h2>
+    <span class="disclosure-card__hint">{{ hint() }}</span>
+    <span class="disclosure-card__chevron" aria-hidden="true">⌄</span>
+  </summary>
+  <div class="disclosure-card__body">
+    <ng-content />
+  </div>
+</details>

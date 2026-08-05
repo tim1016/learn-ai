@@ -5,27 +5,17 @@ import {
   input,
   output,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
-import { EMPTY_RUN_HISTORY_STATE } from '../lib/broker-v2-panel.types';
 import type {
   BotPanelView,
   ChartHistoryPreset,
   ChartLiveResolution,
   ChartLiveResponse,
   ChartHistoryResponse,
-  PanelAction,
-  PanelActionTrigger,
   PanelProfile,
-  RunHistoryNavigation,
-  RunHistoryState,
 } from '../lib/broker-v2-panel.types';
 import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.component';
 import { TradesTodayListComponent } from './trades-today-list.component';
-import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { TraderMetricsComponent } from './trader-metrics.component';
-import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
-import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
-import { BotRunHistoryComponent } from '../bot-run-history/bot-run-history.component';
 
 /**
  * Trader lens (spec §6).
@@ -45,12 +35,7 @@ import { BotRunHistoryComponent } from '../bot-run-history/bot-run-history.compo
   imports: [
     DualPaneChartComponent,
     TradesTodayListComponent,
-    PanelActionButtonComponent,
     TraderMetricsComponent,
-    TimestampDisplayComponent,
-    ReceiptLabelPipe,
-    BotRunHistoryComponent,
-    RouterLink,
   ],
   templateUrl: './trader-lens.component.html',
   styleUrl: './trader-lens.component.scss',
@@ -66,47 +51,19 @@ export class TraderLensComponent {
   readonly histChartLoading = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly selectedPreset = input<ChartHistoryPreset>('1D');
-  readonly actionPending = input(false);
-  readonly runHistory = input<RunHistoryState>(EMPTY_RUN_HISTORY_STATE);
 
   // ── Outputs ───────────────────────────────────────────────────────────────
 
   /** User selected a history preset. */
   readonly presetChange = output<ChartHistoryPreset>();
   readonly liveResolutionChange = output<ChartLiveResolution>();
-  /** User clicked the primary verb button (Resume/Stop). */
-  readonly actionRequested = output<PanelActionTrigger>();
-  readonly runHistoryNavigation = output<RunHistoryNavigation>();
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
   protected readonly isLogOnly = computed(() => this.panel().mode === 'log_only');
-  protected readonly isDryRun = computed(() => this.panel().mode === 'dry_run');
   protected readonly isPaperExecution = computed(() => this.panel().mode === 'trade');
 
   protected readonly symbol = computed(() => this.panel().symbol);
-
-  /**
-   * Headline sourced from the latest decision receipt on the health card.
-   * The backend provides the full sentence; Angular renders it verbatim.
-   * Falls back to the desired-state label when no decision is recorded yet.
-   */
-  protected readonly headline = computed(() => {
-    const health = this.panel().health;
-    if (health.duty_outcome?.explanation) return health.duty_outcome.explanation;
-    return health.desired_state_label;
-  });
-
-  /** The one primary verb action (Resume or Stop) — exactly one at a time. */
-  protected readonly primaryAction = computed<PanelAction | null>(() => {
-    const health = this.panel().health;
-    const actionId = !health.running
-      ? 'resume'
-      : health.desired_state === 'PAUSED'
-        ? 'continue'
-        : 'stop';
-    return this.panel().actions.find((action) => action.action_id === actionId) ?? null;
-  });
 
   protected readonly liveBars = computed(() => this.liveChart()?.bars ?? []);
   protected readonly liveFillMarkers = computed(

@@ -12,9 +12,8 @@
   @let panelData = panel()!;
   @let profileData = profile.value()!;
 
-  <app-panel-header [panel]="panelData" />
-
-  <div class="lens-toggle" role="tablist" aria-label="Bot control perspective">
+  <nav class="lens-navigation" aria-label="Bot detail views">
+    <div class="lens-toggle" role="tablist" aria-label="Bot control perspective">
     <button
       id="trader-tab"
       data-lens="trader"
@@ -39,7 +38,8 @@
       (click)="selectLens('operator')"
       (keydown)="onLensKeydown($event)"
     >Operator</button>
-  </div>
+    </div>
+  </nav>
 
   @if (actionReceipt(); as receipt) {
     <app-panel-action-receipt
@@ -47,6 +47,12 @@
       (dismissed)="dismissActionReceipt()"
     />
   }
+
+  <app-panel-header
+    [panel]="panelData"
+    [actionPending]="actionPending()"
+    (actionRequested)="onActionRequested($event)"
+  />
 
   @switch (activeLens()) {
     @case ('trader') {
@@ -60,12 +66,8 @@
           [histChartLoading]="histChart.isLoading()"
           [liveResolution]="liveResolution()"
           [selectedPreset]="selectedPreset()"
-          [actionPending]="actionPending()"
-          [runHistory]="runHistoryState()"
           (presetChange)="onPresetChange($event)"
           (liveResolutionChange)="onLiveResolutionChange($event)"
-          (actionRequested)="onActionRequested($event)"
-          (runHistoryNavigation)="onRunHistoryNavigation($event)"
         />
       </div>
     }
@@ -78,10 +80,8 @@
           [broker]="broker()"
           [accountId]="accountId()"
           [sid]="sid()"
-          [runHistory]="runHistoryState()"
           (transactionSelected)="onTransactionSelected($event)"
           (actionRequested)="onActionRequested($event)"
-          (runHistoryNavigation)="onRunHistoryNavigation($event)"
         />
       </div>
     }

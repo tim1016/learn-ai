@@ -239,6 +239,7 @@ async def _warm(clerk: AlpacaClerk, operator: str = "inkant") -> None:
     await clerk.submit(
         BrokerOrderRequest(
             operator=operator,
+            expected_account_id="PA-TEST",
             legs=[BrokerOrderLeg(symbol="AAPL", side="buy", quantity=10)],
         )
     )
@@ -550,7 +551,11 @@ async def test_owned_client_order_id_journals_order_event(tmp_path: Path) -> Non
     broker = _FakeBroker()
     clerk = AlpacaClerk(read=broker, trade=broker)
     submit = await clerk.submit(
-        BrokerOrderRequest(operator="inkant", legs=[BrokerOrderLeg(symbol="AAPL", side="buy", quantity=10)])
+        BrokerOrderRequest(
+            operator="inkant",
+            expected_account_id="PA-TEST",
+            legs=[BrokerOrderLeg(symbol="AAPL", side="buy", quantity=10)],
+        )
     )
     owned_ref = submit.results[0].order_ref
     frame = _load_frames()[0]
@@ -591,6 +596,7 @@ async def test_foreign_client_order_id_journals_unexplained_and_counts(tmp_path:
         await clerk.submit(
             BrokerOrderRequest(
                 operator="inkant",
+                expected_account_id="PA-TEST",
                 legs=[BrokerOrderLeg(symbol="AAPL", side="buy", quantity=1)],
             )
         )
