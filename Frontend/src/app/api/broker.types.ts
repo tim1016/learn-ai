@@ -715,6 +715,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Run
+         * @description Reserve and admit a Start command. Idempotent on
+         *     ``(account_id, strategy_instance_id, lifecycle_run_id)`` — the frontend
+         *     mints ``lifecycle_run_id`` once and resends the same value on retry.
+         */
+        post: operations["start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop Run
+         * @description Reserve and admit a Stop command for ``body.lifecycle_run_id`` —
+         *     caller-supplied, exactly like Start (corrective foundation slice).
+         */
+        post: operations["stop_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/commands/{command_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Command */
+        get: operations["get_command_api_alpaca_clerk_sqlite_accounts__account_id__commands__command_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/broker/account": {
         parameters: {
             query?: never;
@@ -11850,6 +11910,41 @@ export interface components {
              * @constant
              */
             kind: "close_leg";
+        };
+        /**
+         * CommandResponse
+         * @description The durable command resource (R2). Mirrors ``CommandResource`` 1:1,
+         *     plus a backend-authored ``disabled_tooltip`` for a non-terminal command
+         *     so a future UI slice needs no extra round trip to render "already
+         *     requested".
+         */
+        CommandResponse: {
+            /** Action */
+            action: string;
+            /** Command Id */
+            command_id: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Disabled Tooltip */
+            disabled_tooltip: string | null;
+            /** Effect Operation Id */
+            effect_operation_id: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Intended End State */
+            intended_end_state: string | null;
+            /** Kind */
+            kind: string;
+            /** Receipt Id */
+            receipt_id: string | null;
+            /** Run Id */
+            run_id: string | null;
+            /** State */
+            state: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
         };
         /**
          * CommandSummary
@@ -24030,6 +24125,13 @@ export interface components {
             /** Strategy Instance Id */
             strategy_instance_id: string;
         };
+        /** StartRunRequest */
+        StartRunRequest: {
+            /** Lifecycle Run Id */
+            lifecycle_run_id: string;
+            /** Operator Reason */
+            operator_reason?: string | null;
+        };
         /**
          * StaticAction
          * @description A deliberately inert action example for the static gallery.
@@ -24231,6 +24333,18 @@ export interface components {
         StopBotRequest: {
             /** Reason */
             reason?: string | null;
+        };
+        /**
+         * StopRunRequest
+         * @description ``lifecycle_run_id`` is required (corrective foundation slice): Stop
+         *     is no longer resolved from the currently active run, since that made a
+         *     lost response unrecoverable — see the pinned contract's §3a.
+         */
+        StopRunRequest: {
+            /** Lifecycle Run Id */
+            lifecycle_run_id: string;
+            /** Operator Reason */
+            operator_reason?: string | null;
         };
         /**
          * StrategyAnalyzeRequest
@@ -27751,6 +27865,116 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SanitizedDataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommandResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_stop_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StopRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommandResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_command_api_alpaca_clerk_sqlite_accounts__account_id__commands__command_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                command_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommandResponse"];
                 };
             };
             /** @description Validation Error */

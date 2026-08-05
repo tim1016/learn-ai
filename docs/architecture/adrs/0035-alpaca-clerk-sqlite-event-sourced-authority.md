@@ -194,6 +194,15 @@ prove-terminal EXIT; live-idempotent websocket dedup.
   buying-power behavior, is **net-new** work — it does not exist today and is not
   a rewrite of existing behavior.
 
+## Pinned implementation contracts
+
+The concrete schema DDL, PRAGMA set, transaction matrix, hash-chain row
+format, write-only mirror line format, and fail-closed startup checks this
+ADR requires are pinned in
+[`docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`](../alpaca-clerk-sqlite-pinned-contracts.md)
+(PRD Phase 0 / issue #1374). That document is binding on Slice 2 onward; this
+ADR's Status is unchanged by its existence.
+
 ## Qualification gate
 
 Both gate before this ADR moves to Accepted-for-implementation: (a) the

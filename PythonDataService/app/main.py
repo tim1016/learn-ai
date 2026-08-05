@@ -28,6 +28,7 @@ from app.routers import (
     account_reconciliation,
     aggregates,
     alpaca_bot_control_examples,
+    alpaca_clerk_sqlite,
     baselines,
     bot_events,
     broker,
@@ -733,6 +734,9 @@ app.include_router(
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
+# SQLite Alpaca Clerk command lifecycle (#1376) — additive, pre-cutover.
+# Purely-local operator-lifecycle commands only; no broker contact yet.
+app.include_router(alpaca_clerk_sqlite.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # ADR 0014 — broker-activity reconciliation surface (SSE + REST backfill).
 # The router carries its own ``/api/live-instances`` prefix internally
 # (so the path is sibling to the live-instances router), keeping the
