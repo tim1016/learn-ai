@@ -134,9 +134,12 @@ def test_stop_lifecycle_run_id_not_matching_the_active_run_raises(
     assert repo.active_run(SID) is not None  # run-1 is untouched
 
 
-def test_repeated_stop_of_the_same_run_is_idempotent_by_construction(repo: ClerkSqliteRepository) -> None:
-    """Repeated Stop calls for the *same* lifecycle_run_id collide on the
-    same content-addressed key without any special-casing."""
+def test_stop_command_id_is_scoped_to_the_lifecycle_run_id(repo: ClerkSqliteRepository) -> None:
+    """Stop commands for different lifecycle_run_ids never collide — each
+    embeds its own run identity in the content-addressed key. (Repeated
+    Stop of the *same* run is covered separately by
+    test_stop_retry_after_run_already_stopped_replays_the_completed_result
+    in test_corrective_foundation.py.)"""
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1")
     first_stop = submit_stop_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1"

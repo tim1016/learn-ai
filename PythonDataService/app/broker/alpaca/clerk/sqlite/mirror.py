@@ -122,6 +122,35 @@ class MirrorFile:
             for r in self._read_records()
         )
 
+    def _parsed_records(
+        self,
+    ) -> tuple[dict[int, list[dict[str, Any]]], dict[int, dict[str, Any]]]:
+        """Parse every mirror line into ``(prepares_by_sequence,
+        finalize_by_sequence)`` — the one shared parse both ``reconcile()``
+        (startup) and ``rebuild()`` (disaster recovery) verify against, so
+        the two integrity policies cannot silently diverge (open-pr-review-2026-08-05.md
+        P2 "use the same verifier for startup and rebuild"). Two FINALIZE
+        records at the same sequence with different hashes is genuine
+        corruption and fails closed here, before either caller decides what
+        to do with the parsed result.
+        """
+        prepares_by_sequence: dict[int, list[dict[str, Any]]] = {}
+        finalize_by_sequence: dict[int, dict[str, Any]] = {}
+        for record in self._read_records():
+            sequence = record["sequence"]
+            if record["phase"] == "PREPARE":
+                prepares_by_sequence.setdefault(sequence, []).append(record)
+            elif record["phase"] == "FINALIZE":
+                existing = finalize_by_sequence.get(sequence)
+                if existing is not None and existing["row_hash"] != record["row_hash"]:
+                    raise MirrorChainBroken(
+                        f"sequence {sequence} has conflicting FINALIZE records"
+                    )
+                finalize_by_sequence[sequence] = record
+            else:  # pragma: no cover - defensive, format is pinned
+                raise MirrorChainBroken(f"unknown mirror record phase: {record['phase']!r}")
+        return prepares_by_sequence, finalize_by_sequence
+
     def reconcile(self, committed_rows: list[dict[str, Any]], *, clock: Clock) -> None:
         """Startup check 9, corrected: every committed row, not only the
         tail (open-pr-review-2026-08-05.md P2 "Only the mirror tail is
@@ -132,17 +161,31 @@ class MirrorFile:
         committed data — a crash between §4 steps 2 and 3 leaves the DB
         transaction as the durable fact and the mirror only catching up, so
         completing the fence here (rather than failing closed) is correct
-        for every such row, not only the most recent one. A row whose
-        FINALIZE disagrees with the committed row (different hash or
-        generation) is genuine corruption and fails closed.
+        for every such row, not only the most recent one — **but only when
+        the mirror still has the matching PREPARE** (with this row's exact
+        hash): completing a FINALIZE from the DB row alone, with no PREPARE
+        to back it, would pass startup while leaving the mirror unable to
+        ever reconstruct that row's ``payload_canonical`` again, silently
+        destroying the disaster-recovery property R9 exists to guarantee
+        (open-pr-review-2026-08-05.md P2 "require PREPARE before catching up
+        FINALIZE"). A row whose existing FINALIZE disagrees with the
+        committed row (different hash or generation) is genuine corruption
+        and fails closed.
         """
-        finalize_by_sequence: dict[int, dict[str, Any]] = {}
-        for record in self._read_records():
-            if record["phase"] == "FINALIZE":
-                finalize_by_sequence[record["sequence"]] = record
+        prepares_by_sequence, finalize_by_sequence = self._parsed_records()
         for row in committed_rows:
             existing = finalize_by_sequence.get(row["sequence"])
             if existing is None:
+                matching_prepares = [
+                    record
+                    for record in prepares_by_sequence.get(row["sequence"], [])
+                    if record["row_hash"] == row["row_hash"]
+                ]
+                if not matching_prepares:
+                    raise MirrorChainBroken(
+                        f"sequence {row['sequence']} is committed but has no matching "
+                        "PREPARE to finalize from — mirror cannot recover this row"
+                    )
                 self.finalize(
                     sequence=row["sequence"],
                     authority_generation=row["authority_generation"],
@@ -179,23 +222,7 @@ class MirrorFile:
         with no matching-hash PREPARE, a sequence gap in the finalized
         chain, or a hash-chain break.
         """
-        records = self._read_records()
-        prepares_by_sequence: dict[int, list[dict[str, Any]]] = {}
-        finalize_by_sequence: dict[int, dict[str, Any]] = {}
-        for record in records:
-            sequence = record["sequence"]
-            if record["phase"] == "PREPARE":
-                prepares_by_sequence.setdefault(sequence, []).append(record)
-            elif record["phase"] == "FINALIZE":
-                existing = finalize_by_sequence.get(sequence)
-                if existing is not None and existing["row_hash"] != record["row_hash"]:
-                    raise MirrorChainBroken(
-                        f"sequence {sequence} has conflicting FINALIZE records"
-                    )
-                finalize_by_sequence[sequence] = record
-            else:  # pragma: no cover - defensive, format is pinned
-                raise MirrorChainBroken(f"unknown mirror record phase: {record['phase']!r}")
-
+        prepares_by_sequence, finalize_by_sequence = self._parsed_records()
         usable_sequences = sorted(finalize_by_sequence)
         expected_prev = GENESIS
         rows: list[RebuiltRow] = []

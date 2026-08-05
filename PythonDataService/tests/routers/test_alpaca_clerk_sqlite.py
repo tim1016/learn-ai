@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 
@@ -111,6 +112,19 @@ async def test_start_with_colon_in_lifecycle_run_id_returns_typed_400(api: FastA
 
 
 @pytest.mark.asyncio
+async def test_start_with_empty_lifecycle_run_id_returns_422(api: FastAPI) -> None:
+    """reject_colon() only blocks ':' — an empty string would otherwise mint
+    a durable command identity no client could reproduce intentionally.
+    Enforced at the Pydantic boundary, not the domain layer."""
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": ""},
+        )
+        assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_stop_without_active_run_returns_typed_404(api: FastAPI) -> None:
     async with _client(api) as client:
         response = await client.post(
@@ -212,8 +226,10 @@ async def test_blocked_repository_call_does_not_stall_an_unrelated_request(
     event loop (open-pr-review-2026-08-05.md P2 "Synchronous SQLite/fsync
     blocks the FastAPI event loop")."""
     real_submit_start_run = alpaca_clerk_sqlite.submit_start_run
+    entered = threading.Event()
 
     def slow_submit_start_run(*args, **kwargs):
+        entered.set()
         time.sleep(0.2)
         return real_submit_start_run(*args, **kwargs)
 
@@ -226,7 +242,10 @@ async def test_blocked_repository_call_does_not_stall_an_unrelated_request(
                 json={"lifecycle_run_id": "run-1"},
             )
         )
-        await asyncio.sleep(0.05)  # let the slow request begin its blocking sleep
+        # Wait until the worker thread is actually inside the blocking sleep,
+        # rather than guessing a fixed handoff delay (flakes under load).
+        while not entered.is_set():
+            await asyncio.sleep(0.005)
         began = time.monotonic()
         unrelated = await client.get(
             f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/commands/cmd:does-not-exist"
@@ -234,7 +253,7 @@ async def test_blocked_repository_call_does_not_stall_an_unrelated_request(
         unrelated_elapsed = time.monotonic() - began
 
         assert unrelated.status_code == 404
-        assert unrelated_elapsed < 0.15  # completed well before the slow call's 0.2s sleep
+        assert unrelated_elapsed < 0.18  # completed before the slow call's 0.2s sleep ended
         assert (await start).status_code == 202
 
 

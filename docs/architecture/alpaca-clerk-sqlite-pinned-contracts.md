@@ -419,7 +419,7 @@ END;
 
 CREATE TRIGGER trg_effect_operations_terminal_state_immutable
 BEFORE UPDATE OF state ON effect_operations
-WHEN OLD.state IN ('succeeded','failed') AND NEW.state != OLD.state
+WHEN OLD.state IN ('succeeded','failed','rejected') AND NEW.state != OLD.state
 BEGIN
     SELECT RAISE(ABORT, 'effect_operations.state cannot change once terminal');
 END;

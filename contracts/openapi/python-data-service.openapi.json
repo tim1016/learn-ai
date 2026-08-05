@@ -40664,6 +40664,7 @@
       "StartRunRequest": {
         "properties": {
           "lifecycle_run_id": {
+            "minLength": 1,
             "title": "Lifecycle Run Id",
             "type": "string"
           },
@@ -41154,6 +41155,7 @@
         "description": "``lifecycle_run_id`` is required (corrective foundation slice): Stop\nis no longer resolved from the currently active run, since that made a\nlost response unrecoverable \u2014 see the pinned contract's \u00a73a.",
         "properties": {
           "lifecycle_run_id": {
+            "minLength": 1,
             "title": "Lifecycle Run Id",
             "type": "string"
           },

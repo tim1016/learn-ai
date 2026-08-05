@@ -11,6 +11,7 @@ pre-correction commits and pass only after the source-model change.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -183,6 +184,27 @@ def test_effect_operations_terminal_state_cannot_regress(repo: ClerkSqliteReposi
         repo._conn.execute("UPDATE effect_operations SET state = 'failed' WHERE effect_operation_id = 'eff:1'")
 
 
+def test_rejected_effect_operation_cannot_regress_either(repo: ClerkSqliteRepository) -> None:
+    """open-pr-review-2026-08-05.md P2 "Treat rejected effects as terminal":
+    'rejected' is part of effect_operations.state's own CHECK vocabulary, so
+    the terminal-state backstop must cover it too, not only succeeded/failed —
+    otherwise a rejected effect could be moved back to accepted/in_progress
+    and become eligible for broker work after rejection."""
+    submission = submit_start_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
+    )
+    repo._conn.execute(
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+        "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
+        "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
+        "VALUES ('eff:2', 1, 'eff-key-2', ?, ?, ?, 'ENTER', 'rejected', 'ACCOUNT_CLERK', 1, 1, NULL)",
+        (submission.command.command_id, SID_A, submission.command.run_id),
+    )
+    repo._conn.commit()
+    with pytest.raises(sqlite3.IntegrityError):
+        repo._conn.execute("UPDATE effect_operations SET state = 'accepted' WHERE effect_operation_id = 'eff:2'")
+
+
 def test_rejected_command_has_a_durable_rejection_receipt(repo: ClerkSqliteRepository) -> None:
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1")
     rejected = submit_start_run(
@@ -235,6 +257,64 @@ def test_mirror_reconciles_every_committed_sequence_not_only_the_tail(tmp_path: 
     assert reopened._mirror.has_finalize(1) is True
     assert reopened._mirror.has_finalize(2) is True
     reopened.close()
+
+
+def test_reconcile_fails_closed_when_missing_finalize_has_no_matching_prepare(
+    tmp_path: Path,
+) -> None:
+    """open-pr-review-2026-08-05.md P2 "require PREPARE before catching up
+    FINALIZE": completing a FINALIZE from the committed DB row alone, with
+    no matching PREPARE left in the mirror, would pass startup while leaving
+    the mirror unable to ever reconstruct that row's payload again — a
+    silent loss of the disaster-recovery property R9 exists to guarantee."""
+    clock = _clock_seq()
+    r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    r.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")
+    r.register_strategy_instance(strategy_instance_id=SID_B, symbol="QQQ", config_hash="h2")
+    mirror_path = r.mirror_path
+    r.close()
+
+    lines = mirror_path.read_text().splitlines()
+    # Drop BOTH sequence 1's PREPARE and FINALIZE, keeping sequence 2 intact —
+    # clerk.db still has the committed row, the mirror has lost all evidence of it.
+    kept = [line for line in lines if '"sequence":1}' not in line]
+    assert len(kept) == len(lines) - 2
+    mirror_path.write_text("\n".join(kept) + "\n")
+
+    with pytest.raises(MirrorChainBroken):
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+
+def test_reconcile_fails_closed_on_conflicting_duplicate_finalize_lines(tmp_path: Path) -> None:
+    """Two FINALIZE lines for the same sequence with different hashes is
+    genuine corruption regardless of line order (open-pr-review-2026-08-05.md
+    P2 "Reject conflicting duplicate finalizes"). The bogus record is placed
+    *before* the real one so a naive last-wins dict would pick the real
+    (matching) one and see nothing wrong — proving detection does not
+    depend on which record happens to survive a dict overwrite."""
+    clock = _clock_seq()
+    r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    r.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")
+    mirror_path = r.mirror_path
+    r.close()
+
+    lines = mirror_path.read_text().splitlines()
+    finalize_index = next(i for i, line in enumerate(lines) if '"phase":"FINALIZE"' in line)
+    finalize_line = lines[finalize_index]
+    import re
+
+    bogus = re.sub(
+        r'"row_hash":"([0-9a-f])',
+        lambda m: f'"row_hash":"{"0" if m.group(1) != "0" else "1"}',
+        finalize_line,
+        count=1,
+    )
+    assert bogus != finalize_line
+    lines.insert(finalize_index, bogus)  # bogus now comes before the real, matching FINALIZE
+    mirror_path.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(MirrorChainBroken):
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
 
 def test_conflicting_finalize_record_fails_closed_on_open(tmp_path: Path) -> None:
@@ -470,3 +550,104 @@ def test_operation_claim_cas_fences_a_second_owner_until_expiry(repo: ClerkSqlit
     takeover = repo.claim_effect_operation(effect_operation_id="eff:1", owner="worker-2", ttl_ms=10_000)
     assert takeover.owner == "worker-2"
     assert not repo.verify_operation_claim(effect_operation_id="eff:1", token=claim.token)
+
+
+# ---------------------------------------------------------------------------
+# Reviewer follow-up fixes (Codex + CodeRabbit on PR #1388)
+# ---------------------------------------------------------------------------
+
+
+def test_operation_claim_lets_the_live_owner_renew_before_expiry(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """The docstring promises renewal ("Claim (or renew this owner's own
+    claim on)"), but the original CAS predicate only admitted unclaimed or
+    expired rows — a live owner renewing its own long-running claim got
+    OperationClaimError instead of an extended lease."""
+    submission = submit_start_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
+    )
+    repo._conn.execute(
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+        "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
+        "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
+        "VALUES ('eff:3', 1, 'eff-key-3', ?, ?, ?, 'ENTER', 'accepted', 'ACCOUNT_CLERK', 1, 1, NULL)",
+        (submission.command.command_id, SID_A, submission.command.run_id),
+    )
+    repo._conn.commit()
+
+    first = repo.claim_effect_operation(effect_operation_id="eff:3", owner="worker-1", ttl_ms=10_000)
+    renewed = repo.claim_effect_operation(effect_operation_id="eff:3", owner="worker-1", ttl_ms=10_000)
+    assert renewed.owner == "worker-1"
+    assert renewed.expires_at_ms >= first.expires_at_ms
+    # A different owner is still fenced out while the renewal is live.
+    with pytest.raises(OperationClaimError):
+        repo.claim_effect_operation(effect_operation_id="eff:3", owner="worker-2", ttl_ms=10_000)
+
+
+def test_claiming_an_unknown_effect_operation_reports_not_found_not_taken(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """rowcount == 0 previously conflated two distinct causes: no such row,
+    and a row claimed by a live other owner. Distinguish them."""
+    with pytest.raises(OperationClaimError, match="does not exist"):
+        repo.claim_effect_operation(effect_operation_id="eff:does-not-exist", owner="worker-1")
+
+
+def test_get_command_is_synchronized_against_an_in_flight_write(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """open-pr-review-2026-08-05.md P1 "Use a committed-read path for
+    command GETs": get_command() must not run concurrently with an
+    in-flight write on the shared connection — proven here by holding the
+    repository's write coordinator on the main thread and confirming a
+    background get_command() call cannot complete until it is released."""
+    submission = submit_start_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
+    )
+    entered = threading.Event()
+    result: dict = {}
+
+    def reader() -> None:
+        entered.set()
+        result["command"] = repo.get_command(submission.command.command_id)
+
+    with repo._write_lock:
+        thread = threading.Thread(target=reader)
+        thread.start()
+        assert entered.wait(timeout=1)
+        thread.join(timeout=0.1)  # reader must still be blocked on the lock
+        assert "command" not in result
+        assert thread.is_alive()
+
+    thread.join(timeout=1)
+    assert result["command"] is not None
+    assert result["command"].command_id == submission.command.command_id
+
+
+def test_commit_first_transition_blocks_an_existing_command_retry_when_poisoned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """open-pr-review-2026-08-05.md P2 "Block retries on poisoned handles":
+    the existing-command short-circuit in commit_first_transition() must
+    also refuse to serve a retry while the handle is poisoned — otherwise a
+    caller gets back an accepted command whose mirror fence is unconfirmed."""
+    clock = _clock_seq()
+    r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    r.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")
+    submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1")
+
+    def boom(*_args, **_kwargs):
+        raise OSError("simulated crash between SQLite commit and mirror finalize")
+
+    monkeypatch.setattr(r._mirror, "finalize", boom)
+    with pytest.raises(OSError):
+        submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-2")
+    monkeypatch.undo()
+
+    # run-2's Start command already exists (rejected, since run-1 is still
+    # active) — retrying it is the existing-command path, which must still
+    # see the poison.
+    with pytest.raises(RepositoryPoisoned):
+        submit_start_run(r, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-2")
+    r._conn.close()

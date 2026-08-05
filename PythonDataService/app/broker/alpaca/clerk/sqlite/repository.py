@@ -40,7 +40,7 @@ from app.broker.alpaca.clerk.sqlite.hashchain import (
     compute_row_hash,
     verify_chain,
 )
-from app.broker.alpaca.clerk.sqlite.mirror import MirrorChainBroken, MirrorFile, PendingTransition
+from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, PendingTransition
 from app.broker.alpaca.clerk.sqlite.models import (
     CommandCreated,
     CommandExistingConflict,
@@ -233,6 +233,7 @@ class ClerkSqliteRepository:
         # legitimately arrive on different worker threads. _write_lock (not
         # SQLite's thread affinity) is what serializes them safely.
         conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
         schema.configure_connection(conn)
         schema.apply_schema(conn)
 
@@ -408,7 +409,12 @@ class ClerkSqliteRepository:
         mirror = MirrorFile(mirror_path)
         try:
             mirror.reconcile(chain_payloads, clock=clock)
-        except MirrorChainBroken:
+        except Exception:
+            # Not narrowed to MirrorChainBroken: reconcile() also does file
+            # I/O and JSON parsing, so an OSError or JSONDecodeError must
+            # close the connection too, not just the expected fail-closed
+            # exception (open-pr-review-2026-08-05.md, connection-leak
+            # finding on this block).
             conn.close()
             raise
 
@@ -635,6 +641,13 @@ class ClerkSqliteRepository:
         and captured order) row.
         """
         with self._write_lock:
+            # Checked here too, not only inside append_transition: an
+            # existing-command retry short-circuits *before* ever calling
+            # append_transition, so without this it could return a command
+            # whose mirror fence is unconfirmed while the handle is poisoned
+            # (open-pr-review-2026-08-05.md P2 "Block retries on poisoned
+            # handles").
+            self._assert_not_poisoned()
             authority_generation = self._conn.execute(
                 "SELECT authority_generation FROM control_meta WHERE id = 1"
             ).fetchone()["authority_generation"]
@@ -658,15 +671,23 @@ class ClerkSqliteRepository:
             return CommandCreated(command=command, committed=committed)
 
     def get_command(self, command_id: str) -> CommandResource | None:
-        return reads.command(self._conn, command_id)
+        # Locked, not a bare read: the router dispatches Start/Stop/GET via
+        # asyncio.to_thread, so this can genuinely run on a different OS
+        # thread than an in-flight writer using the same cached connection.
+        # Without the lock this can observe another transaction's
+        # uncommitted rows (open-pr-review-2026-08-05.md P1 "Use a
+        # committed-read path for command GETs").
+        with self._write_lock:
+            return reads.command(self._conn, command_id)
 
     def active_run(self, strategy_instance_id: str) -> RunResource | None:
-        row = self._conn.execute(
-            "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, "
-            "stopped_at_ms FROM runs WHERE strategy_instance_id = ? AND state = 'ACTIVE'",
-            (strategy_instance_id,),
-        ).fetchone()
-        return RunResource(**dict(row)) if row is not None else None
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, "
+                "stopped_at_ms FROM runs WHERE strategy_instance_id = ? AND state = 'ACTIVE'",
+                (strategy_instance_id,),
+            ).fetchone()
+            return RunResource(**dict(row)) if row is not None else None
 
     # ------------------------------------------------------------------
     # Operation claims — CAS fencing before broker contact (Scope D). The
@@ -679,7 +700,11 @@ class ClerkSqliteRepository:
     ) -> OperationClaim:
         """Claim (or renew this owner's own claim on) an ``effect_operations``
         row with a unique fencing token, guarded by a compare-and-swap
-        UPDATE: succeeds only when unclaimed or the existing claim expired.
+        UPDATE: succeeds when unclaimed, expired, or already held by this
+        same ``owner`` (a renewal). A same-owner renewal mints a fresh
+        token — callers that must keep working under the old token across a
+        renewal should call :meth:`verify_operation_claim` with the new one
+        instead of assuming the old token still verifies.
         """
         with self._write_lock:
             self._assert_not_poisoned()
@@ -690,11 +715,15 @@ class ClerkSqliteRepository:
             cursor = self._conn.execute(
                 "UPDATE effect_operations SET claim_owner = ?, claim_token = ?, "
                 "claimed_at_ms = ?, claim_expires_at_ms = ? WHERE effect_operation_id = ? "
-                "AND (claim_owner IS NULL OR claim_expires_at_ms < ?)",
-                (owner, token, now, expires_at_ms, effect_operation_id, now),
+                "AND (claim_owner IS NULL OR claim_owner = ? OR claim_expires_at_ms < ?)",
+                (owner, token, now, expires_at_ms, effect_operation_id, owner, now),
             )
             self._conn.commit()
             if cursor.rowcount == 0:
+                if reads.effect_operation(self._conn, effect_operation_id) is None:
+                    raise OperationClaimError(
+                        f"effect_operation {effect_operation_id!r} does not exist"
+                    )
                 raise OperationClaimError(
                     f"effect_operation {effect_operation_id!r} is already claimed by a live owner"
                 )
@@ -709,14 +738,15 @@ class ClerkSqliteRepository:
     def verify_operation_claim(self, *, effect_operation_id: str, token: str) -> bool:
         """True iff ``token`` is the live (unexpired) claim on this operation —
         later operation updates must present it (Scope D)."""
-        row = self._conn.execute(
-            "SELECT claim_token, claim_expires_at_ms FROM effect_operations "
-            "WHERE effect_operation_id = ?",
-            (effect_operation_id,),
-        ).fetchone()
-        if row is None:
-            return False
-        return row["claim_token"] == token and row["claim_expires_at_ms"] >= self._clock()
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT claim_token, claim_expires_at_ms FROM effect_operations "
+                "WHERE effect_operation_id = ?",
+                (effect_operation_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            return row["claim_token"] == token and row["claim_expires_at_ms"] >= self._clock()
 
     # ------------------------------------------------------------------
     # Concrete business use of the spine this slice owns
@@ -742,35 +772,50 @@ class ClerkSqliteRepository:
     # Typed read snapshots — SQL stays private to this module and reads.py
     # ------------------------------------------------------------------
 
+    # Every method below acquires the write coordinator too, not just
+    # writes: it is the single point of synchronized access to a
+    # connection shared across threads (open-pr-review-2026-08-05.md P1
+    # "Use a committed-read path for command GETs"; the reasoning
+    # generalizes to every public read here, not only get_command).
+
     def control_meta_snapshot(self) -> ControlMetaSnapshot:
-        return reads.control_meta_snapshot(self._conn)
+        with self._write_lock:
+            return reads.control_meta_snapshot(self._conn)
 
     def custody_transitions(self) -> list[dict]:
-        rows = self._conn.execute(
-            f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions ORDER BY sequence ASC"
-        ).fetchall()
-        return [writes.row_to_payload(row) for row in rows]
+        with self._write_lock:
+            rows = self._conn.execute(
+                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions ORDER BY sequence ASC"
+            ).fetchall()
+            return [writes.row_to_payload(row) for row in rows]
 
     def strategy_instances(self) -> list[dict]:
-        return reads.strategy_instances(self._conn)
+        with self._write_lock:
+            return reads.strategy_instances(self._conn)
 
     def strategy_instance(self, strategy_instance_id: str) -> dict | None:
-        return reads.strategy_instance(self._conn, strategy_instance_id)
+        with self._write_lock:
+            return reads.strategy_instance(self._conn, strategy_instance_id)
 
     def effect_operation(self, effect_operation_id: str) -> EffectOperationResource | None:
-        return reads.effect_operation(self._conn, effect_operation_id)
+        with self._write_lock:
+            return reads.effect_operation(self._conn, effect_operation_id)
 
     def order(self, order_ref: str) -> OrderResource | None:
-        return reads.order(self._conn, order_ref)
+        with self._write_lock:
+            return reads.order(self._conn, order_ref)
 
     def order_for_effect_operation(self, effect_operation_id: str) -> OrderResource | None:
-        return reads.order_for_effect_operation(self._conn, effect_operation_id)
+        with self._write_lock:
+            return reads.order_for_effect_operation(self._conn, effect_operation_id)
 
     def position(self, strategy_instance_id: str, symbol: str) -> float:
-        return reads.position(self._conn, strategy_instance_id, symbol)
+        with self._write_lock:
+            return reads.position(self._conn, strategy_instance_id, symbol)
 
     def fills_for_order(self, order_ref: str) -> list[dict]:
-        return reads.fills_for_order(self._conn, order_ref)
+        with self._write_lock:
+            return reads.fills_for_order(self._conn, order_ref)
 
     # ------------------------------------------------------------------
     # Disaster recovery
