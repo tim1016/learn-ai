@@ -28,7 +28,7 @@ applies to the two input clocks rather than the derived display scalar.
 representable UTC millisecond before subtraction. The calculation therefore
 preserves the repository's boundary precision and returns a multiple of
 0.001 seconds. `test_filled_order_maps_every_field_and_synthesizes_fill_event`
-pins the fixture result to `atol=1e-12, rtol=0`; that tolerance admits only the
+pins the fixture result to `abs=1e-12, rel=0`; that tolerance admits only the
 binary floating-point representation of the exact millisecond-derived value,
 not a different clock interval.
 
