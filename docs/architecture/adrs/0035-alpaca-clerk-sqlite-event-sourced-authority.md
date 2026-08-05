@@ -64,21 +64,27 @@ following load-bearing decisions.
 3. **Idempotency is content-addressed and enforced by `UNIQUE` constraints.**
    Strategy decisions keep the proven natural key `(strategy_instance_id,
    decision_id)`. Operator lifecycle commands get a natural key
-   `(account, strategy_instance_id, action, intended_end_state)`. A transport
-   retry of the same command returns the existing result with no new effect and
-   no error; a genuine re-request returns a typed reason (e.g. "a stop has
-   already been requested"); the UI renders the control disabled with a
-   backend-authored tooltip. A random nonce is used only where re-issue is
-   genuinely meaningful.
+   `(account, strategy_instance_id, lifecycle_run_id, action,
+   intended_end_state)`. Start/Resume reserves its proposed run identity before
+   committing the key; Stop binds the active run. A transport retry of the same
+   command returns the existing result with no new effect and no error; a genuine
+   re-request returns a typed reason (e.g. "a stop has already been requested");
+   the UI renders the control disabled with a backend-authored tooltip. A random
+   nonce is used only where re-issue is genuinely meaningful. A run-2 lifecycle
+   command therefore cannot collide with the equivalent run-1 command.
 
 4. **Capture-before-contact is absolute.** `PRAGMA synchronous = FULL`; the
    intent-transition commit fsyncs **before** any broker call. Write latency is
    tracked as an observable, not traded away.
 
-5. **The database enforces the single writer.** `BEGIN IMMEDIATE` + a bounded
-   `busy_timeout` make a second writer serialize or error rather than corrupt —
-   retiring the honor-system single-uvicorn-worker footgun (a robustness gain
-   over today, where two workers corrupt silently).
+5. **The database serializes mutations; a durable lease owns execution.**
+   `BEGIN IMMEDIATE` + a bounded `busy_timeout` make a second database writer
+   serialize or error rather than corrupt. They do not prove one FastAPI process,
+   stream consumer, or reconciler. The supported one-worker topology is validated
+   at startup, and every broker contact additionally requires a database-durable
+   per-account execution lease plus a transactionally claimed operation work item.
+   An accidental second process therefore cannot race broker recovery or stream
+   handling merely because its database writes serialize.
 
 6. **No PostgreSQL in scope.** The best-effort projection and its outbox,
    projector, cursor-tail reader, advisory lock, and rebuild runbook are
@@ -87,12 +93,15 @@ following load-bearing decisions.
    trigger fires (concurrent multi-consumer load, hot cross-run analytics,
    authenticated multi-operator audit).
 
-7. **Disaster recovery via a write-only append mirror.** Every committed
-   transition is *also* appended to a plain fsync'd file that is **never read
-   except to rebuild a corrupt database**. This restores graceful degradation
-   and a rebuild source (the property "append-only log canonical" would have
-   given) **without** introducing a second *authority* and without any hot-path
-   read cost.
+7. **Disaster recovery via a write-only append mirror.** A SQLite transaction
+   and a plain file cannot commit atomically, so each transition uses a two-phase
+   fsync fence: write a mirror prepare record, commit the matching SQLite log and
+   folds, then write a mirror finalize record. The command is neither returned as
+   accepted nor broker-eligible until finalization. On recovery, only a contiguous
+   hash-verified sequence of finalized records can rebuild a corrupt database;
+   prepare-only records are excluded because the fence guarantees they had no
+   broker effect. This restores graceful degradation and a rebuild source without
+   introducing a second *authority* or any hot-path read cost.
 
 8. **The log is hash-chained for tamper-evidence.** Each `custody_transitions`
    row carries the prior row's hash. Corruption and tampering are detectable,
@@ -165,9 +174,11 @@ prove-terminal EXIT; live-idempotent websocket dedup.
 - Idempotency is a constraint, not derived-state comparison — the Resume/Stop
   409-churn class is retired at the source.
 - The entire Postgres projection subsystem is deleted.
-- Corruption is survivable (append mirror rebuild) and detectable (hash chain +
-  `integrity_check`); the account is reproducible from a single-file backup.
-- The multi-worker footgun becomes a structural impossibility.
+- Corruption is survivable from a contiguous finalized mirror sequence and
+  detectable (hash chain + `integrity_check`); the account is reproducible from a
+  WAL-safe SQLite online-backup snapshot, not a raw database-file copy.
+- The one-worker deployment is defended by startup validation, execution leases,
+  and transactional work claims rather than an honor-system configuration.
 
 **Negative / costs**
 - Capture-before-contact and never-fabricate-terminal must be **re-proven** under
@@ -175,6 +186,8 @@ prove-terminal EXIT; live-idempotent websocket dedup.
   hand-rolled JSONL discipline.
 - Whole-file corruption is a new failure mode (mitigated by mirror + backups +
   startup `integrity_check`, and fail-closed on detection).
+- The external mirror adds a prepare/finalize recovery fence; it cannot be
+  described as one atomic SQLite-and-file transaction and must be fault-tested.
 - A follow-up requires this ADR to supersede parts of four accepted ADRs for the
   Alpaca clerk; the boundary must be stated precisely (Alpaca only).
 - Order replacement (PATCH), including Alpaca's larger-of-old-and-new

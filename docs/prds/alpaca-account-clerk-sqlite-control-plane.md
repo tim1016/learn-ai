@@ -51,9 +51,10 @@ platform:
 - **PostgreSQL is removed from this scope.** SQLite serves current-state and
   operator history. Postgres returns only if a named ADR-0001 trigger fires.
 - **Robustness is bought explicitly:** `synchronous=FULL` (capture-before-contact
-  survives power loss), DB-enforced single writer (`BEGIN IMMEDIATE`), a
-  write-only append mirror for disaster rebuild, a hash chain for tamper- and
-  corruption-evidence, and single-file backup for reproducibility.
+  survives power loss), SQLite transaction serialization plus execution leases,
+  a write-only append mirror with a prepare/finalize fence for disaster rebuild,
+  a hash chain for tamper- and corruption-evidence, and WAL-safe online backup
+  snapshots for reproducibility.
 
 The UI receives authoritative snapshots over REST and the existing versioned
 SSE; SSE transports state but never authors it. The frontend derives no safety.
@@ -70,7 +71,10 @@ answer:
 ## 2. Decisions (locked in the 2026-08-04 grilling; see ADR 0035)
 
 1. **Trusted-local, single-operator topology,** one FastAPI worker, Alpaca paper
-   only.
+   only. Production startup validates that topology and rejects duplicate local
+   scheduler, stream-consumer, or reconciler registration. A database-durable
+   per-account execution lease and operation work claim fence broker contact, so
+   an accidental second process cannot send a competing operation.
 2. **Event-sourced SQLite is the canonical Account Clerk control-plane store**
    after cutover: an append-only log is the authority, current-state is a fold.
 3. The database is **account-scoped** under the Alpaca account artifact
@@ -87,17 +91,21 @@ answer:
 8. `UNKNOWN` is **nonterminal** in durable state; the Clerk retains custody and
    reconciles automatically.
 9. **Idempotency is content-addressed:** strategy `(sid, decision_id)`; operator
-   lifecycle `(account, sid, action, intended_end_state)`; enforced by `UNIQUE`.
-   Transport retry returns the existing result with no new effect and no error; a
+   lifecycle `(account, sid, lifecycle_run_id, action, intended_end_state)`;
+   enforced by `UNIQUE`. Start/Resume reserves its proposed `lifecycle_run_id`
+   before the identity is committed; Stop binds the currently active run. A
+   transport retry returns the existing result with no new effect and no error; a
    genuine re-request returns a typed reason; the UI shows the control disabled
-   with a backend-authored tooltip.
+   with a backend-authored tooltip. A command for run 2 therefore cannot collide
+   with the same action recorded for run 1.
 10. **Capture-before-contact is absolute:** `synchronous=FULL`; the intent commit
     fsyncs before any broker call. Write latency is tracked, not traded away.
-11. **The database enforces the single writer** (`BEGIN IMMEDIATE` +
-    `busy_timeout`), retiring the honor-system single-worker footgun.
+11. **The database serializes mutations** (`BEGIN IMMEDIATE` + `busy_timeout`),
+    and the topology/lease/work-claim fence owns broker contact. SQLite alone
+    does not prove one process, stream consumer, or reconciler.
 12. **Disaster recovery = a write-only append mirror** (never read except to
-    rebuild a corrupt DB) — graceful degradation and a rebuild source without a
-    second authority.
+    rebuild a corrupt DB) with a two-phase DB↔mirror fence — graceful degradation
+    and a rebuild source without a second authority.
 13. **The log is hash-chained** for tamper- and corruption-evidence; rebuild
     verifies integrity.
 14. **Uncertainty has two blast-radius scopes,** `BOT` and `ACCOUNT_CLERK`;
@@ -162,9 +170,10 @@ owns resolution, which actions remain safe, or when evidence was last checked.
 
 If the local authority disappears or corrupts, attribution and command identity
 are lost even if Alpaca is reachable. The system must not create an empty
-database and infer a clean account. Recovery is: fail closed → rebuild from the
-append mirror if possible (integrity-verified via the hash chain) → otherwise an
-explicit operator reset with fresh broker proof and a new generation.
+database and infer a clean account. Recovery is: fail closed → rebuild only from
+a contiguous finalized append-mirror sequence (integrity-verified via the hash
+chain) → otherwise an explicit operator reset with fresh broker proof and a new
+generation.
 
 ## 4. Goals
 
@@ -173,8 +182,8 @@ explicit operator reset with fresh broker proof and a new generation.
 2. Preserve capture-before-contact: no broker write without a committed,
    `synchronous=FULL` local intent.
 3. Make command reservation, effect creation, custody transition, current-state
-   fold, revision advancement, and mirror append atomic — one local decision, one
-   transaction.
+   fold, and revision advancement one SQLite transaction; complete the separate
+   fsync'd mirror finalization fence before external acceptance or broker contact.
 4. Make retries safe across transport loss, browser reload, and service restart
    via content-addressed idempotency.
 5. Provide indexed, bounded current-state and history reads for the UI without
@@ -313,7 +322,8 @@ Authority rules:
    facts become application authority only after the Clerk validates and commits
    them (as a transition) with provenance.
 4. The write-only mirror is a rebuild source, never a second authority and never
-   read on the hot path.
+   read on the hot path. Its prepare/commit fence makes only finalized mirror
+   records eligible for rebuild.
 5. Angular renders backend contracts and may format time. It cannot infer safety,
    primary action, or freshness.
 6. SSE publishes revisions or snapshots. It is transport, not truth.
@@ -342,9 +352,11 @@ The implementation must enable and verify:
 - WAL journal mode;
 - **`synchronous = FULL`** (capture-before-contact must survive power loss);
 - foreign-key enforcement;
-- **`BEGIN IMMEDIATE`** for all mutations + a bounded `busy_timeout` (the DB is
-  the single-writer enforcer);
-- one application-owned write coordinator (belt-and-suspenders over the DB lock);
+- **`BEGIN IMMEDIATE`** for all mutations + a bounded `busy_timeout`;
+- one application-owned write coordinator, plus a durable per-account execution
+  lease and transactionally claimed operation work before every broker contact;
+- a startup topology fence that requires the supported one-worker deployment and
+  rejects duplicate scheduler, stream-consumer, or reconciler registration;
 - explicit transactions for all mutations;
 - startup integrity (`integrity_check`), identity, and hash-chain checks.
 
@@ -370,12 +382,15 @@ code.
 | `reconciliations` | Reconciliation attempts and terminal receipts | Insert plus terminal fold |
 | `receipts` | Permanent terminal command/effect proof | Insert once |
 | `custody_transitions` | **Canonical** immutable, hash-chained, operation-first log | Append only |
+| `mirror_fence` | Mirror prepare/finalize identities, sequence, hash, and recovery evidence | Append plus guarded finalization |
 
-`custody_transitions` is the authority; every other row above is a fold of it,
-written in the same transaction as the append. There is **no `projection_outbox`
-table** (PostgreSQL is out of scope). Physical normalization may change, but no
-design may remove the identities, uniqueness, causal links, hash chain, or
-transaction guarantees named here.
+`custody_transitions` is the authority; every business-state row above is a fold
+of it, written in the same transaction as the append. `mirror_fence` is derived
+delivery/recovery metadata, never custody authority, and is reconciled against
+the database and mirror before service resumes. There is **no
+`projection_outbox` table** (PostgreSQL is out of scope). Physical normalization
+may change, but no design may remove the identities, uniqueness, causal links,
+hash chain, or transaction guarantees named here.
 
 ### 9.4 Required uniqueness and immutability
 
@@ -483,24 +498,31 @@ Rules:
    registry or stored receipt text, never inferred by Angular.
 6. Opaque IDs, broker references, hashes, and URLs remain exact.
 7. Timeline paging uses stable sequence/keyset semantics.
-8. **The append, the current-state fold, and the mirror append commit in one
-   transaction.**
+8. **The log append and current-state fold commit in one SQLite transaction.** A
+   separate fsync'd mirror finalization fence completes before the command is
+   externally accepted or broker-eligible (§12 R1/R9); SQLite and a plain file
+   are not one atomic transaction.
 
 ## 12. Functional requirements
 
 ### R1 — Capture before broker contact
 - The command, effect operation, broker order reference, current-state fold,
-  transition (with hash link), revision, and mirror append required by
-  acceptance commit **before** the first broker write, under `synchronous=FULL`.
-- A failed commit produces no broker call.
-- A crash after commit but before broker contact leaves a recoverable accepted
-  operation that reconciliation classifies conservatively.
+  transition (with hash link), revision, and mirror prepare record commit in the
+  SQLite transaction **before** the first broker write, under `synchronous=FULL`.
+- A fsync'd mirror finalization record is required **after** that SQLite commit
+  but **before** the command is returned as accepted or becomes broker-eligible.
+  It is the externally visible acceptance fence.
+- A failed prepare, SQLite commit, or finalization produces no broker call.
+- A crash after the SQLite commit but before finalization may be finalized from
+  an intact DB on restart; if the DB is corrupt, the preparation is not treated
+  as an accepted operation and no broker effect could have occurred.
 - Write latency is recorded as an observable.
 
 ### R2 — Content-addressed idempotency and conflict detection
 - Idempotency identity is content-addressed and `UNIQUE`-enforced: strategy
   `(sid, decision_id)`; operator lifecycle
-  `(account, sid, action, intended_end_state)`.
+  `(account, sid, lifecycle_run_id, action, intended_end_state)`. Start/Resume
+  commits its proposed run identity first; Stop uses the active run identity.
 - The backend canonically hashes action, target, account, instance, run, the
   immutable semantic payload, and any operator reason that changes meaning.
 - **Transport retry** (same identity, same hash) returns the existing resource
@@ -589,8 +611,10 @@ facts_json
 - DNR and reduce-only are distinct broker concepts and are not modeled as
   equivalent.
 - Historical order listing respects Alpaca's `after`/`until` timestamp contract
-  and does not invent order-ID pagination; the fixed 500-item page bound is made
-  explicit and logged when it truncates.
+  and supports the documented exclusive `after_order_id`/`before_order_id`
+  cursors. Cursor pagination must not combine either order-ID cursor with
+  `after`/`until`; a continuation selects one supported mode and fails closed if
+  it cannot prove a complete sweep beyond the 500-item page bound.
 
 ### R8 — Current projections (folds, not replay)
 Indexed current-state queries answer without custody-history replay: current
@@ -600,15 +624,30 @@ uncertainties; latest reconciliation and evidence ages; recent terminal
 receipts; Account Clerk generation and health; monotonic control revision.
 
 ### R9 — Disaster-recovery append mirror (replaces the former Postgres outbox)
-- Every committed transition is also appended to a plain fsync'd mirror file in
-  the same transaction boundary.
-- The mirror is **never read on the hot path** — only to rebuild a corrupt
-  `clerk.db`.
-- Rebuild replays the mirror, verifies the hash chain, and reconstructs the log
-  and all folds; a hash-chain break fails closed rather than importing tampered
-  data.
-- Mirror growth is bounded by a documented retention/rotation policy aligned with
-  the authority generation.
+SQLite cannot atomically commit a database transaction and a separate plain file.
+The mirror protocol therefore uses this ordered, fsync'd fence for each sequence:
+
+1. Under the per-account write coordinator, append and fsync a **prepare** record
+   containing the authority generation, sequence, canonical transition bytes,
+   predecessor hash, and row hash.
+2. In one `synchronous=FULL` SQLite transaction, verify that prepared identity,
+   append the canonical transition, apply every fold, record the matching
+   `mirror_fence` row, and commit.
+3. Append and fsync the matching **finalize** record to the mirror. Only after
+   that finalization may the backend return accepted or claim the operation for
+   broker contact.
+
+The mirror is **never read on the hot path**. On restart with an intact DB, a
+prepare with a committed DB transition is finalized before the service accepts or
+executes more work. A prepare without a committed DB transition is recorded as
+an aborted preparation and has no broker effect, because broker contact is gated
+after finalization. If database corruption prevents that comparison, only a
+contiguous, hash-verified sequence of finalized records may rebuild the authority;
+prepare-only records are excluded and the account remains failed closed until its
+recovery workflow proves fresh broker truth. A sequence gap, duplicate sequence
+with a different hash, or hash-chain break fails closed rather than importing
+ambiguous data. Mirror growth is bounded by a documented retention/rotation
+policy aligned with the authority generation.
 
 ### R10 — REST and versioned SSE (reuse existing infrastructure)
 1. The UI fetches an initial versioned REST snapshot.
@@ -654,7 +693,16 @@ primary action nor freshness.
 - Missing/corrupt authority produces `ACCOUNT_CLERK` uncertainty and blocks new
   exposure.
 - On corruption, the DB is preserved for diagnosis (never overwritten); recovery
-  attempts a hash-verified rebuild from the mirror before proposing a reset.
+  rebuilds only from a contiguous, hash-verified sequence of **finalized** mirror
+  records. A prepare-only record is never imported as accepted. Any mirror gap or
+  ambiguity leaves the account failed closed and requires fresh broker proof
+  before reset or a new generation.
+- A raw copy of `clerk.db` is never a backup while WAL is enabled. Backup uses
+  SQLite's [online backup API](https://www.sqlite.org/backup.html) (or an
+  equivalently verified SQLite snapshot), then verifies identity,
+  `integrity_check`, hash chain, generation, and sequence before fsync + atomic
+  publish of the snapshot and its manifest. Restore accepts only that verified
+  snapshot or the finalized-mirror recovery protocol.
 - The service never silently creates an empty database for an account previously
   known to have Clerk authority.
 - Reset requires an explicit operator workflow, fresh Alpaca positions and open
@@ -742,14 +790,16 @@ database/WAL/mirror size, and query plans. Do not encode unmeasured claims.
 
 ### 15.1 Atomicity and idempotency
 - Kill before the command commit: no command, no broker call.
-- Kill after commit but before broker contact: recovery finds one accepted
-  operation and performs no blind duplicate.
+- Kill after mirror finalization but before broker contact: recovery finds one
+  accepted operation and performs no blind duplicate.
 - Lose the broker HTTP response after acceptance: command becomes `UNKNOWN` and
   resolves by exact client order identity.
 - Post the same content-addressed command concurrently: one effect, one intent.
 - Transport-retry a completed command: existing result returned, no error, no new
   effect.
 - Reuse the identity with a changed payload: durable conflict, no broker call.
+- Resume run 2 after run 1 is stopped, then retry Resume/Stop: only the matching
+  run identity deduplicates; no run-1 lifecycle result is reused for run 2.
 
 ### 15.2 Broker races
 - Original fills while a (future) replacement is pending: no phantom exposure.
@@ -770,16 +820,22 @@ database/WAL/mirror size, and query plans. Do not encode unmeasured claims.
 
 ### 15.4 Database failure and mirror recovery
 - Corrupt a database page/WAL and prove fail-closed startup.
-- **Rebuild a corrupt `clerk.db` from the mirror; prove the hash chain verifies
-  and every fold reconstructs identically.**
+- Kill after mirror prepare but before SQLite commit: prove no broker call and
+  that the prepare is excluded from a corrupt-DB rebuild.
+- Kill after SQLite commit but before mirror finalization: prove no acceptance
+  response or broker call; an intact DB finalizes on restart, while corrupt-DB
+  recovery remains failed closed rather than inventing an accepted operation.
+- **Rebuild a corrupt `clerk.db` from contiguous finalized mirror records; prove
+  the hash chain verifies and every included fold reconstructs identically.**
 - **Tamper with a mirror line and prove hash-chain-break detection fails closed
   (no tampered import).**
 - Substitute another account's database and prove identity-mismatch rejection.
 - Remove `clerk.db` after authority was established and prove it is not recreated.
 - Fill the disk during a transaction and prove no broker call crosses an
   uncommitted intent.
-- Interrupt WAL checkpoint/backup and prove the last committed authority remains
-  readable or fails closed.
+- Interrupt the SQLite online backup and prove that the previously published
+  snapshot remains usable or the incomplete candidate is rejected; never restore
+  from a raw `clerk.db` copy that omits committed WAL state.
 - Attempt reset with positions/open orders and prove rejection.
 - Complete an explicit flat/order-free reset and prove a new generation.
 
@@ -802,7 +858,8 @@ database/WAL/mirror size, and query plans. Do not encode unmeasured claims.
 
 ### Phase 1 — Event-sourced SQLite repository behind the Clerk boundary
 - Implement the account-scoped repository: append-only hash-chained log, the fold
-  into current-state, the mirror append, `synchronous=FULL`, `BEGIN IMMEDIATE`.
+  into current-state, prepare/finalize mirror fence, `synchronous=FULL`,
+  `BEGIN IMMEDIATE`, execution lease, and transactional operation work claim.
 - Keep SQL private to the repository; keep the fold a pure, replayable function.
 - Pass focused atomicity, idempotency, identity, corruption, and
   rebuild-from-mirror tests.
@@ -847,7 +904,8 @@ but production cutover has exactly one canonical writer.
    decisions (done; requires acceptance).
 2. Canonical domain glossary alignment for command, effect, custody, receipt,
    `UNKNOWN`, `BOT`, `ACCOUNT_CLERK` (cross-referenced from `CONTEXT.md`).
-3. SQLite schema and transaction-boundary reference (log + fold + mirror).
+3. SQLite schema and transaction-boundary reference (log + fold + two-phase
+   mirror fence).
 4. Command and operation state-machine diagrams.
 5. Operation-first custody timeline + hash-chain contract.
 6. Source-backed Alpaca guarantee and uncertainty matrix.
@@ -862,8 +920,10 @@ but production cutover has exactly one canonical writer.
 
 The source-backed Alpaca matrix must record:
 
-- `GET /v2/orders` exposes a maximum `limit` of 500 and timestamp-based
-  `after`/`until` filters; it does not document `after_order_id`/`before_order_id`.
+- `GET /v2/orders` exposes a maximum `limit` of 500, timestamp-based
+  `after`/`until` filters, and exclusive `after_order_id`/`before_order_id`
+  cursors. The order-ID cursors are mutually exclusive with each other and with
+  `after`/`until` ([Alpaca API reference](https://docs.alpaca.markets/us/reference/getallorders-1)).
 - DNR and reduce-only are separate concepts.
 - Replacement HTTP success is nonterminal; replacement buying power uses the
   larger of the old and replacement orders (relevant only if PATCH is built).
@@ -886,9 +946,11 @@ The source-backed Alpaca matrix must record:
 - Warm UI reads perform no full custody-history replay.
 - The system runs with no PostgreSQL dependency.
 - Missing/corrupt/substituted SQLite authority never appears as a clean account;
-  a corrupt DB rebuilds from the hash-verified mirror or fails closed.
+  a corrupt DB rebuilds only from a contiguous, finalized hash-verified mirror
+  sequence or fails closed.
 - All timestamps remain `int64 ms UTC` at storage and wire boundaries.
-- The one-worker topology is enforced by the database, not by convention alone.
+- The one-worker topology is enforced by startup validation plus durable
+  execution leases and transactional work claims, not by convention alone.
 - The frontend derives no safety, primary action, or freshness.
 
 ## 19. Definition of done
@@ -899,7 +961,8 @@ The source-backed Alpaca matrix must record:
   write-only mirror exists for rebuild.
 - No production JSONL control writer, file idempotency ledger, or Postgres
   projection remains for the cutover scope.
-- The log append, current-state fold, and mirror append commit atomically.
+- The log append and current-state fold commit atomically in SQLite; the mirror
+  prepare/finalize fence completes before acceptance or broker contact.
 - Commands, effects, orders, fills, runs, positions, holds, uncertainties,
   reconciliations, receipts, revisions have explicit SQLite fold authority over
   the one log.
@@ -913,7 +976,8 @@ The source-backed Alpaca matrix must record:
 - Broker/source, Clerk-observation, and durable-record times are preserved and
   shown.
 - Recovery actions are evidence-backed; generic clear/retry/blind-flatten do not
-  exist; `Rebuild from mirror` and `Reset authority` are available on failure.
+  exist; `Rebuild from mirror` is available only for a contiguous finalized
+  sequence, and `Reset authority` is available on failure.
 - Corruption, loss, identity mismatch, disk-full, mirror-rebuild, hash-chain
   tamper, and reset tests pass.
 - REST/SSE delivery meets performance and interaction-stability budgets.
