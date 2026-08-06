@@ -7,6 +7,9 @@ from dataclasses import replace
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.projection_models import (
+    ProjectedOrder,
+    ProjectedPosition,
+    ProjectedReconciliation,
     ProjectedRun,
     ProjectedUncertainty,
 )
@@ -19,6 +22,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     build_recovery_catalog,
     recheck_recovery_action,
 )
+from app.schemas.alpaca_clerk_sqlite import RecoveryCapabilityResponse
 
 
 def _context(**overrides) -> RecoveryPolicyContext:
@@ -41,10 +45,10 @@ def _context(**overrides) -> RecoveryPolicyContext:
                 stopped_at_ms=None,
             ),
         ),
-        "operations": (),
+        "current_orders": (),
         "positions": (),
         "uncertainties": (),
-        "latest_reconciliation": None,
+        "latest_account_reconciliation": None,
     }
     values.update(overrides)
     return RecoveryPolicyContext(**values)
@@ -152,6 +156,352 @@ def test_current_but_unavailable_action_is_a_typed_conflict() -> None:
         )
 
     assert captured.value.capability.unavailable_reason_code == "NO_ACTIVE_BOT_RUN"
+
+
+def test_safe_flatten_prepares_versioned_exact_close_plan() -> None:
+    context = _context(
+        strategy_instance_id=None,
+        positions=(
+            ProjectedPosition(
+                strategy_instance_id="spy-bot",
+                symbol="SPY",
+                attributed_qty=1.25,
+                updated_at_ms=1_700_000_008_000,
+            ),
+            ProjectedPosition(
+                strategy_instance_id="qqq-bot",
+                symbol="QQQ",
+                attributed_qty=-2.5,
+                updated_at_ms=1_700_000_009_000,
+            ),
+        ),
+        latest_account_reconciliation=ProjectedReconciliation(
+            reconciliation_id="reconciliation-17",
+            effect_operation_id=None,
+            order_ref=None,
+            trigger="operator",
+            attempted_at_ms=1_700_000_009_000,
+            outcome="RESOLVED_SUCCESS",
+            evidence_age_ms=1_000,
+            evidence_refs=("alpaca:positions:17", "alpaca:orders:17"),
+        ),
+    )
+
+    capability = next(
+        action
+        for action in build_recovery_catalog(context)
+        if action.action_id == "prepare_safe_flatten"
+    )
+
+    assert capability.available is True
+    assert capability.reduction_plan is not None
+    assert capability.reduction_plan.version_token == capability.concurrency_token
+    assert capability.reduction_plan.account_id == context.account_id
+    assert capability.reduction_plan.authority_generation == context.authority_generation
+    assert capability.reduction_plan.db_identity_token == context.db_identity_token
+    assert capability.reduction_plan.control_revision == context.control_revision
+    assert capability.reduction_plan.scope == "ACCOUNT_CLERK"
+    assert capability.reduction_plan.strategy_instance_id is None
+    assert capability.reduction_plan.reconciliation_id == "reconciliation-17"
+    assert capability.reduction_plan.prepared_at_ms == context.now_ms
+    assert capability.reduction_plan.expires_at_ms == 1_700_000_039_000
+    assert tuple(
+        (
+            leg.strategy_instance_id,
+            leg.symbol,
+            leg.side,
+            leg.quantity,
+            leg.position_updated_at_ms,
+        )
+        for leg in capability.reduction_plan.legs
+    ) == (
+        (
+            "qqq-bot",
+            "QQQ",
+            "buy",
+            2.5,
+            1_700_000_009_000,
+        ),
+        (
+            "spy-bot",
+            "SPY",
+            "sell",
+            1.25,
+            1_700_000_008_000,
+        ),
+    )
+    wire_plan = RecoveryCapabilityResponse.model_validate(
+        capability
+    ).model_dump(mode="json")["reduction_plan"]
+    assert wire_plan is not None
+    assert wire_plan["version_token"] == capability.concurrency_token
+    assert wire_plan["legs"] == [
+        {
+            "strategy_instance_id": "qqq-bot",
+            "symbol": "QQQ",
+            "side": "buy",
+            "quantity": 2.5,
+            "position_updated_at_ms": 1_700_000_009_000,
+        },
+        {
+            "strategy_instance_id": "spy-bot",
+            "symbol": "SPY",
+            "side": "sell",
+            "quantity": 1.25,
+            "position_updated_at_ms": 1_700_000_008_000,
+        },
+    ]
+
+
+def test_safe_flatten_plan_token_rejects_newer_position_evidence() -> None:
+    position = ProjectedPosition(
+        strategy_instance_id="spy-bot",
+        symbol="SPY",
+        attributed_qty=1.25,
+        updated_at_ms=1_700_000_008_000,
+    )
+    context = _context(
+        positions=(position,),
+        latest_account_reconciliation=ProjectedReconciliation(
+            reconciliation_id="reconciliation-17",
+            effect_operation_id=None,
+            order_ref=None,
+            trigger="operator",
+            attempted_at_ms=1_700_000_009_000,
+            outcome="RESOLVED_SUCCESS",
+            evidence_age_ms=1_000,
+            evidence_refs=("alpaca:positions:17",),
+        ),
+    )
+    capability = next(
+        action
+        for action in build_recovery_catalog(context)
+        if action.action_id == "prepare_safe_flatten"
+    )
+
+    with pytest.raises(StaleRecoveryTokenError):
+        recheck_recovery_action(
+            replace(
+                context,
+                positions=(replace(position, updated_at_ms=position.updated_at_ms + 1),),
+            ),
+            action_id=capability.action_id,
+            concurrency_token=capability.concurrency_token,
+        )
+
+
+def test_unavailable_safe_flatten_never_advertises_a_plan() -> None:
+    capability = next(
+        action
+        for action in build_recovery_catalog(_context())
+        if action.action_id == "prepare_safe_flatten"
+    )
+
+    assert capability.available is False
+    assert capability.reduction_plan is None
+
+
+@pytest.mark.parametrize("quantity", [float("inf"), float("-inf"), float("nan")])
+def test_safe_flatten_fails_closed_for_non_finite_attributed_quantity(
+    quantity: float,
+) -> None:
+    capability = next(
+        action
+        for action in build_recovery_catalog(
+            _context(
+                positions=(
+                    ProjectedPosition(
+                        strategy_instance_id="spy-bot",
+                        symbol="SPY",
+                        attributed_qty=quantity,
+                        updated_at_ms=1_700_000_008_000,
+                    ),
+                ),
+                latest_account_reconciliation=ProjectedReconciliation(
+                    reconciliation_id="reconciliation-17",
+                    effect_operation_id=None,
+                    order_ref=None,
+                    trigger="operator",
+                    attempted_at_ms=1_700_000_009_000,
+                    outcome="RESOLVED_SUCCESS",
+                    evidence_age_ms=1_000,
+                    evidence_refs=("alpaca:positions:17",),
+                ),
+            )
+        )
+        if action.action_id == "prepare_safe_flatten"
+    )
+
+    assert capability.available is False
+    assert capability.unavailable_reason_code == "EXPOSURE_NOT_PROVEN"
+    assert capability.reduction_plan is None
+
+
+def test_account_safe_flatten_blocks_on_any_bot_uncertainty() -> None:
+    reconciliation = ProjectedReconciliation(
+        reconciliation_id="account-reconciliation-17",
+        effect_operation_id=None,
+        order_ref=None,
+        trigger="OPERATOR_RECONCILE_NOW",
+        attempted_at_ms=1_700_000_009_000,
+        outcome="RESOLVED_SUCCESS",
+        evidence_age_ms=1_000,
+        evidence_refs=("fresh_account_snapshot",),
+    )
+    capability = next(
+        action
+        for action in build_recovery_catalog(
+            _context(
+                strategy_instance_id=None,
+                positions=(
+                    ProjectedPosition(
+                        strategy_instance_id="spy-bot",
+                        symbol="SPY",
+                        attributed_qty=1.0,
+                        updated_at_ms=1_700_000_008_000,
+                    ),
+                ),
+                uncertainties=(
+                    ProjectedUncertainty(
+                        uncertainty_id="spy-uncertainty",
+                        scope="BOT",
+                        severity="warning",
+                        blocks_new_exposure=True,
+                        allows_reduction=False,
+                        custody_owner="ACCOUNT_CLERK",
+                        strategy_instance_id="spy-bot",
+                        reason_code="ORDER_OUTCOME_UNKNOWN",
+                        headline="SPY custody is uncertain",
+                        explanation="The broker outcome is not proven.",
+                        operator_impact="Account reduction is not proven.",
+                        next_step="Reconcile the account.",
+                        observed_at_ms=1_700_000_009_000,
+                        evidence_age_ms=1_000,
+                        evidence_refs=("order:spy",),
+                    ),
+                ),
+                latest_account_reconciliation=reconciliation,
+            )
+        )
+        if action.action_id == "prepare_safe_flatten"
+    )
+
+    assert capability.available is False
+    assert capability.unavailable_reason_code == "EXPOSURE_NOT_PROVEN"
+    assert capability.reduction_plan is None
+
+
+def test_safe_flatten_requires_account_wide_reconciliation() -> None:
+    effect_reconciliation = ProjectedReconciliation(
+        reconciliation_id="effect-reconciliation-17",
+        effect_operation_id="effect:spy-bot:decision-17",
+        order_ref="order:spy-bot:decision-17",
+        trigger="AUTOMATIC",
+        attempted_at_ms=1_700_000_009_000,
+        outcome="RESOLVED_SUCCESS",
+        evidence_age_ms=1_000,
+        evidence_refs=("order:spy-bot:decision-17",),
+    )
+    capability = next(
+        action
+        for action in build_recovery_catalog(
+            _context(
+                positions=(
+                    ProjectedPosition(
+                        strategy_instance_id="spy-bot",
+                        symbol="SPY",
+                        attributed_qty=1.0,
+                        updated_at_ms=1_700_000_008_000,
+                    ),
+                ),
+                latest_account_reconciliation=effect_reconciliation,
+            )
+        )
+        if action.action_id == "prepare_safe_flatten"
+    )
+
+    assert capability.available is False
+    assert capability.unavailable_reason_code == "CLEAN_RECONCILIATION_REQUIRED"
+    assert capability.reduction_plan is None
+
+
+def test_safe_flatten_rejects_position_observed_after_reconciliation() -> None:
+    reconciliation = ProjectedReconciliation(
+        reconciliation_id="account-reconciliation-17",
+        effect_operation_id=None,
+        order_ref=None,
+        trigger="OPERATOR_RECONCILE_NOW",
+        attempted_at_ms=1_700_000_008_000,
+        outcome="RESOLVED_SUCCESS",
+        evidence_age_ms=2_000,
+        evidence_refs=("fresh_account_snapshot",),
+    )
+    capability = next(
+        action
+        for action in build_recovery_catalog(
+            _context(
+                positions=(
+                    ProjectedPosition(
+                        strategy_instance_id="spy-bot",
+                        symbol="SPY",
+                        attributed_qty=1.0,
+                        updated_at_ms=1_700_000_009_000,
+                    ),
+                ),
+                latest_account_reconciliation=reconciliation,
+            )
+        )
+        if action.action_id == "prepare_safe_flatten"
+    )
+
+    assert capability.available is False
+    assert capability.unavailable_reason_code == "POSITION_EVIDENCE_NOT_RECONCILED"
+    assert capability.reduction_plan is None
+
+
+def test_safe_flatten_checks_complete_current_orders_not_operation_page() -> None:
+    reconciliation = ProjectedReconciliation(
+        reconciliation_id="account-reconciliation-17",
+        effect_operation_id=None,
+        order_ref=None,
+        trigger="OPERATOR_RECONCILE_NOW",
+        attempted_at_ms=1_700_000_009_000,
+        outcome="RESOLVED_SUCCESS",
+        evidence_age_ms=1_000,
+        evidence_refs=("fresh_account_snapshot",),
+    )
+    capability = next(
+        action
+        for action in build_recovery_catalog(
+            _context(
+                current_orders=(
+                    ProjectedOrder(
+                        order_ref="order:older-working",
+                        client_order_id="order:older-working",
+                        broker_order_id="alpaca-order-17",
+                        role="ENTRY",
+                        broker_state="accepted",
+                        submitted_at_ms=1_700_000_007_000,
+                        updated_at_ms=1_700_000_009_000,
+                    ),
+                ),
+                positions=(
+                    ProjectedPosition(
+                        strategy_instance_id="spy-bot",
+                        symbol="SPY",
+                        attributed_qty=1.0,
+                        updated_at_ms=1_700_000_008_000,
+                    ),
+                ),
+                latest_account_reconciliation=reconciliation,
+            )
+        )
+        if action.action_id == "prepare_safe_flatten"
+    )
+
+    assert capability.available is False
+    assert capability.unavailable_reason_code == "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
+    assert capability.reduction_plan is None
 
 
 def test_bot_uncertainty_authors_scope_impact_and_next_step() -> None:

@@ -56,6 +56,54 @@ describe('BrokerV2PanelService run evidence', () => {
 
     await expect(response).resolves.toEqual({ runs: [], next_cursor: null });
   });
+
+  it('checks the bot-scoped safe-flatten plan without using the mutation endpoint', async () => {
+    const action = {
+      action_id: 'prepare_safe_flatten',
+      revision: 17,
+      concurrency_token: 'plan-token-17',
+      enabled: true,
+      label: 'Prepare safe flatten',
+      explanation: 'Prepare the exact reduction plan.',
+      blockers: [],
+      confirmation: null,
+    } satisfies PanelAction;
+
+    const response = service.checkSqliteSafeFlattenPlan('PA / 1', 'bot / 1', action);
+    const request = http.expectOne(
+      '/api/alpaca-clerk-sqlite/accounts/PA%20%2F%201/bots/bot%20%2F%201/recovery-actions/check',
+    );
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({
+      action_id: 'prepare_safe_flatten',
+      concurrency_token: 'plan-token-17',
+    });
+    request.flush({
+      capability: {
+        action_id: 'prepare_safe_flatten',
+        label: 'Prepare safe flatten',
+        explanation: 'Prepare the exact reduction plan.',
+        available: true,
+        unavailable_reason_code: null,
+        unavailable_reason: null,
+        scope: 'BOT',
+        freshness: 'fresh',
+        evidence: [],
+        reduction_plan: null,
+        confirmation: null,
+        next_step: 'Review the plan.',
+        concurrency_token: 'plan-token-17',
+        execution_ref: null,
+        mutation: false,
+        primary: false,
+      },
+    });
+
+    await expect(response).resolves.toMatchObject({
+      action_id: 'prepare_safe_flatten',
+      mutation: false,
+    });
+  });
 });
 
 describe('BrokerV2PanelService resilient action retry (defect #10)', () => {

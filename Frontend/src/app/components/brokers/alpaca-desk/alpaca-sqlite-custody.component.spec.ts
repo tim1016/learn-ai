@@ -7,6 +7,7 @@ import type {
   SqliteClerkProjection,
   SqliteRecoveryAction,
   SqliteRecoveryResult,
+  SqliteSafeFlattenPlan,
   SqliteTimelinePage,
 } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
@@ -14,6 +15,26 @@ import { TypedHaltConfirmComponent } from '../../broker/bot-control/reused/typed
 import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
 
 const NOW = 1_700_000_000_000;
+
+const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
+  version_token: 'plan-token-17',
+  account_id: 'PA1',
+  authority_generation: 4,
+  db_identity_token: 'db-generation-4',
+  control_revision: 17,
+  scope: 'ACCOUNT_CLERK',
+  strategy_instance_id: null,
+  reconciliation_id: 'reconciliation-17',
+  prepared_at_ms: NOW,
+  expires_at_ms: 4_102_444_800_000,
+  legs: [{
+    strategy_instance_id: 'spy-bot',
+    symbol: 'SPY',
+    side: 'sell',
+    quantity: 1.25,
+    position_updated_at_ms: NOW - 100,
+  }],
+};
 
 function action(
   overrides: Partial<SqliteRecoveryAction> = {},
@@ -28,6 +49,7 @@ function action(
     scope: 'ACCOUNT_CLERK',
     freshness: 'not_required',
     evidence: [],
+    reduction_plan: null,
     confirmation: null,
     next_step: 'Run the account comparison now.',
     concurrency_token: 'token-17',
@@ -249,6 +271,38 @@ describe('AlpacaSqliteCustodyComponent', () => {
       expect(executeSqliteRecoveryAction).toHaveBeenCalledWith('PA1', cancel);
     });
     expect(await screen.findByText('order:entry:12')).toBeTruthy();
+  });
+
+  it('refreshes and renders the safe-flatten plan without executing a mutation', async () => {
+    const prepare = action({
+      action_id: 'prepare_safe_flatten',
+      label: 'Prepare safe flatten',
+      explanation: 'Prepare a fresh reduction plan without submitting an order.',
+      freshness: 'fresh',
+      mutation: false,
+      primary: false,
+    });
+    const checkSqliteRecoveryAction = vi.fn().mockResolvedValue({
+      ...prepare,
+      reduction_plan: SAFE_FLATTEN_PLAN,
+      next_step: 'Review the exact attributed quantity in the plan.',
+    });
+    const executeSqliteRecoveryAction = vi.fn();
+    await renderCustody({
+      getSqliteClerkProjection: vi.fn().mockResolvedValue(projection([prepare])),
+      checkSqliteRecoveryAction,
+      executeSqliteRecoveryAction,
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: prepare.label }));
+
+    expect(await screen.findByRole('region', {
+      name: 'Prepared safe-flatten reduction plan',
+    })).toBeTruthy();
+    expect(screen.getByText('Spy')).toBeTruthy();
+    expect(screen.getByText('1.25')).toBeTruthy();
+    expect(checkSqliteRecoveryAction).toHaveBeenCalledWith('PA1', prepare);
+    expect(executeSqliteRecoveryAction).not.toHaveBeenCalled();
   });
 
   it('never auto-retries a stale action and refreshes the projection', async () => {

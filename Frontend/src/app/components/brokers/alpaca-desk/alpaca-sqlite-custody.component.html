@@ -67,6 +67,10 @@
       <p class="sqlite-custody__notice" role="status">{{ notice }}</p>
     }
 
+    @if (reductionPlan(); as plan) {
+      <app-safe-flatten-plan [plan]="plan" />
+    }
+
     @if (receipt(); as actionReceipt) {
       <app-panel-action-receipt
         [receipt]="actionReceipt"

@@ -1,13 +1,18 @@
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { HttpErrorResponse } from '@angular/common/http';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
+import type {
+  SqliteRecoveryAction,
+  SqliteSafeFlattenPlan,
+} from '../../../../api/alpaca.types';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type {
   BotPanelView,
   BotPanelLiveSnapshot,
   BotRunView,
+  PanelAction,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
@@ -123,6 +128,56 @@ const PANEL: BotPanelView = {
   open_pnl: null,
 };
 
+const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
+  version_token: 'plan-token-17',
+  account_id: 'DUM284968',
+  authority_generation: 4,
+  db_identity_token: 'db-generation-4',
+  control_revision: 17,
+  scope: 'BOT',
+  strategy_instance_id: 'sid-001',
+  reconciliation_id: 'reconciliation-17',
+  prepared_at_ms: 1_753_800_000_000,
+  expires_at_ms: 4_102_444_800_000,
+  legs: [{
+    strategy_instance_id: 'sid-001',
+    symbol: 'QQQ',
+    side: 'sell',
+    quantity: 2.5,
+    position_updated_at_ms: 1_753_799_999_000,
+  }],
+};
+
+const PREPARE_SAFE_FLATTEN_ACTION = {
+  action_id: 'prepare_safe_flatten',
+  revision: 17,
+  concurrency_token: 'plan-token-17',
+  enabled: true,
+  label: 'Prepare safe flatten',
+  explanation: 'Prepare a fresh reduction plan without submitting an order.',
+  blockers: [],
+  confirmation: null,
+} satisfies PanelAction;
+
+const SAFE_FLATTEN_CAPABILITY: SqliteRecoveryAction = {
+  action_id: 'prepare_safe_flatten',
+  label: 'Prepare safe flatten',
+  explanation: 'Prepare a fresh reduction plan without submitting an order.',
+  available: true,
+  unavailable_reason_code: null,
+  unavailable_reason: null,
+  scope: 'BOT',
+  freshness: 'fresh',
+  evidence: [],
+  reduction_plan: SAFE_FLATTEN_PLAN,
+  confirmation: null,
+  next_step: 'Review the exact attributed quantity in the plan.',
+  concurrency_token: 'plan-token-17',
+  execution_ref: null,
+  mutation: false,
+  primary: false,
+};
+
 const LIVE_CHART = {
   strategy_instance_id: 'sid-001',
   symbol: 'QQQ',
@@ -142,6 +197,34 @@ function liveSnapshot(panel: BotPanelView = PANEL): BotPanelLiveSnapshot {
     panel,
     live_chart: LIVE_CHART,
   };
+}
+
+function safeFlattenSnapshot(): BotPanelLiveSnapshot {
+  return liveSnapshot({
+    ...PANEL,
+    revision: 17,
+    actions: [PREPARE_SAFE_FLATTEN_ACTION],
+    readiness_checks: [{
+      operation: PREPARE_SAFE_FLATTEN_ACTION.action_id,
+      label: PREPARE_SAFE_FLATTEN_ACTION.label,
+      ready: true,
+      scope: 'bot',
+      authority: 'Alpaca SQLite Clerk',
+      explanation: PREPARE_SAFE_FLATTEN_ACTION.explanation,
+      evidence: {},
+      evaluated_at_ms: 1_753_800_000_000,
+      cure: null,
+    }],
+    readiness_ready_count: 1,
+  });
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolvePromise: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
 }
 
 class StubEventSource {
@@ -254,6 +337,7 @@ const mockService = {
     concurrency_token: 'start-token',
     message: 'Bot start requested.',
   }),
+  checkSqliteSafeFlattenPlan: vi.fn().mockResolvedValue(SAFE_FLATTEN_CAPABILITY),
 };
 
 function openDisclosure(label: string): void {
@@ -303,6 +387,87 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(screen.getByText('run-current')).toBeTruthy();
+  });
+
+  it('refreshes and renders the safe-flatten plan without posting a panel mutation', async () => {
+    mockService.getLiveSnapshot.mockResolvedValueOnce(safeFlattenSnapshot());
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(screen.getByRole('button', {
+      name: /Ready Prepare safe flatten/i,
+    }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
+
+    const planRegion = await screen.findByRole('region', {
+      name: 'Prepared safe-flatten reduction plan',
+    });
+    expect(within(planRegion).getByText('Qqq')).toBeTruthy();
+    expect(within(planRegion).getByText('2.5')).toBeTruthy();
+    expect(mockService.checkSqliteSafeFlattenPlan).toHaveBeenCalledWith(
+      'DUM284968',
+      'sid-001',
+      PREPARE_SAFE_FLATTEN_ACTION,
+    );
+    expect(mockService.runBotAction).not.toHaveBeenCalled();
+
+    fixture.componentRef.setInput('sid', 'sid-002');
+    fixture.detectChanges();
+
+    expect(screen.queryByRole('region', {
+      name: 'Prepared safe-flatten reduction plan',
+    })).toBeNull();
+  });
+
+  it('discards a safe-flatten response after route identity changes', async () => {
+    const pendingCapability = deferred<SqliteRecoveryAction>();
+    mockService.getLiveSnapshot.mockResolvedValueOnce(safeFlattenSnapshot());
+    mockService.checkSqliteSafeFlattenPlan.mockReturnValueOnce(
+      pendingCapability.promise,
+    );
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(screen.getByRole('button', {
+      name: /Ready Prepare safe flatten/i,
+    }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
+
+    fixture.componentRef.setInput('sid', 'sid-002');
+    fixture.detectChanges();
+    pendingCapability.resolve(SAFE_FLATTEN_CAPABILITY);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(screen.queryByRole('region', {
+      name: 'Prepared safe-flatten reduction plan',
+    })).toBeNull();
   });
 
   it('keeps lens navigation above the hero and run evidence out of Trader', async () => {

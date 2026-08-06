@@ -40,6 +40,7 @@ const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
   stop: 'danger',
   flatten_stop: 'danger',
   reconcile_now: 'neutral',
+  prepare_safe_flatten: 'neutral',
   clear_hold: 'warning',
   record_inventory_baseline: 'warning',
 };

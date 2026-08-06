@@ -10,13 +10,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, TypeGuard
 
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     AuthorityHealth,
     ClerkScope,
-    ProjectedOperation,
     ProjectedOrder,
     ProjectedPosition,
     ProjectedReconciliation,
@@ -26,6 +26,8 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     RecoveryCapability,
     RecoveryConfirmation,
     RecoveryEvidence,
+    SafeFlattenPlan,
+    SafeFlattenPlanLeg,
 )
 
 RecoveryActionId = Literal[
@@ -84,10 +86,10 @@ class RecoveryPolicyContext:
     control_revision: int
     now_ms: int
     runs: tuple[ProjectedRun, ...]
-    operations: tuple[ProjectedOperation, ...]
+    current_orders: tuple[ProjectedOrder, ...]
     positions: tuple[ProjectedPosition, ...]
     uncertainties: tuple[ProjectedUncertainty, ...]
-    latest_reconciliation: ProjectedReconciliation | None
+    latest_account_reconciliation: ProjectedReconciliation | None
     recovery_proof: AuthorityRecoveryProof = AuthorityRecoveryProof()
 
 
@@ -265,28 +267,59 @@ def _relevant_runs(ctx: RecoveryPolicyContext) -> tuple[ProjectedRun, ...]:
     )
 
 
-def _relevant_positions(ctx: RecoveryPolicyContext) -> tuple[ProjectedPosition, ...]:
+def _scoped_positions(ctx: RecoveryPolicyContext) -> tuple[ProjectedPosition, ...]:
     return tuple(
-        position
-        for position in ctx.positions
-        if abs(position.attributed_qty) > 0
-        and (
-            ctx.strategy_instance_id is None
-            or position.strategy_instance_id == ctx.strategy_instance_id
+        sorted(
+            (
+                position
+                for position in ctx.positions
+                if (
+                    ctx.strategy_instance_id is None
+                    or position.strategy_instance_id == ctx.strategy_instance_id
+                )
+            ),
+            key=lambda position: (position.strategy_instance_id, position.symbol),
         )
     )
 
 
+def _relevant_positions(ctx: RecoveryPolicyContext) -> tuple[ProjectedPosition, ...]:
+    return tuple(
+        position
+        for position in _scoped_positions(ctx)
+        if math.isfinite(position.attributed_qty)
+        and abs(position.attributed_qty) > 0
+    )
+
+
+def _non_finite_positions(ctx: RecoveryPolicyContext) -> tuple[ProjectedPosition, ...]:
+    return tuple(
+        position
+        for position in _scoped_positions(ctx)
+        if not math.isfinite(position.attributed_qty)
+    )
+
+
 def _working_orders(ctx: RecoveryPolicyContext) -> tuple[ProjectedOrder, ...]:
-    orders = (
+    working = (
         order
-        for operation in ctx.operations
-        for order in operation.orders
+        for order in ctx.current_orders
         if order.broker_order_id is not None
         and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
     )
-    unique = {order.order_ref: order for order in orders}
+    unique = {order.order_ref: order for order in working}
     return tuple(sorted(unique.values(), key=lambda order: order.order_ref))
+
+
+def _is_successful_account_reconciliation(
+    reconciliation: ProjectedReconciliation | None,
+) -> TypeGuard[ProjectedReconciliation]:
+    return (
+        reconciliation is not None
+        and reconciliation.effect_operation_id is None
+        and reconciliation.order_ref is None
+        and reconciliation.outcome == "RESOLVED_SUCCESS"
+    )
 
 
 def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decision:
@@ -386,8 +419,9 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
 
 def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     positions = _relevant_positions(ctx)
+    non_finite_positions = _non_finite_positions(ctx)
     working_orders = _working_orders(ctx)
-    reconciliation = ctx.latest_reconciliation
+    reconciliation = ctx.latest_account_reconciliation
     reconciliation_evidence = _evidence(
         ctx,
         reference=(
@@ -395,19 +429,25 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
             if reconciliation is not None
             else "reconciliation:missing"
         ),
-        label="Latest reconciliation",
+        label="Latest account reconciliation",
         observed_at_ms=(reconciliation.attempted_at_ms if reconciliation is not None else None),
         required_fresh=True,
     )
     relevant_uncertainties = tuple(
         uncertainty
         for uncertainty in ctx.uncertainties
-        if uncertainty.scope == "ACCOUNT_CLERK"
+        if ctx.strategy_instance_id is None
+        or uncertainty.scope == "ACCOUNT_CLERK"
         or uncertainty.strategy_instance_id == ctx.strategy_instance_id
     )
     reason_code: str | None = None
     reason: str | None = None
-    if not positions:
+    if non_finite_positions:
+        reason_code = "EXPOSURE_NOT_PROVEN"
+        reason = (
+            "Attributed exposure is not finite, so a reduction quantity cannot be proven."
+        )
+    elif not positions:
         reason_code = "NO_ATTRIBUTED_EXPOSURE"
         reason = "No attributed exposure requires a flatten plan."
     elif working_orders:
@@ -416,9 +456,17 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     elif relevant_uncertainties:
         reason_code = "EXPOSURE_NOT_PROVEN"
         reason = "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
-    elif reconciliation is None or reconciliation.outcome != "RESOLVED_SUCCESS":
+    elif not _is_successful_account_reconciliation(reconciliation):
         reason_code = "CLEAN_RECONCILIATION_REQUIRED"
-        reason = "A successful reconciliation is required before preparing reduction."
+        reason = "A successful account reconciliation is required before preparing reduction."
+    elif any(
+        position.updated_at_ms > reconciliation.attempted_at_ms
+        for position in positions
+    ):
+        reason_code = "POSITION_EVIDENCE_NOT_RECONCILED"
+        reason = (
+            "Attributed position evidence changed after the account reconciliation."
+        )
     elif reconciliation_evidence.freshness != "fresh":
         reason_code = "RECONCILIATION_EVIDENCE_STALE"
         reason = "The successful reconciliation is too old for a reduction decision."
@@ -430,7 +478,8 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         freshness=reconciliation_evidence.freshness,
         evidence=(reconciliation_evidence,),
         next_step=(
-            "Review the exact attributed quantity and confirm the generated reduction plan."
+            "Review the exact attributed quantities in the generated plan; "
+            "no order was submitted."
             if available
             else (
                 "Cancel verified working orders first."
@@ -440,8 +489,22 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         ),
         token_facts={
             "positions": [
-                (position.strategy_instance_id, position.symbol, position.attributed_qty)
+                (
+                    position.strategy_instance_id,
+                    position.symbol,
+                    position.attributed_qty,
+                    position.updated_at_ms,
+                )
                 for position in positions
+            ],
+            "non_finite_positions": [
+                (
+                    position.strategy_instance_id,
+                    position.symbol,
+                    repr(position.attributed_qty),
+                    position.updated_at_ms,
+                )
+                for position in non_finite_positions
             ],
             "working_orders": [
                 (order.order_ref, order.broker_state, order.updated_at_ms)
@@ -461,6 +524,55 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
                 )
             ),
         },
+    )
+
+
+def _build_safe_flatten_plan(
+    ctx: RecoveryPolicyContext,
+    *,
+    version_token: str,
+) -> SafeFlattenPlan:
+    """Build the read-only exact-close plan for proven attributed positions.
+
+    Formula: signed close quantity = -attributed_qty; side is SELL for a
+      positive attributed quantity and BUY for a negative attributed quantity;
+      displayed quantity = abs(attributed_qty).
+    Reference: docs/prds/alpaca-account-clerk-sqlite-control-plane.md R6-R7;
+      docs/references/alpaca-sqlite-clerk-recovery-language.md.
+    Canonical implementation: this file.
+    Validated against:
+      tests/broker/alpaca/clerk/sqlite/test_recovery_policy.py::
+      test_safe_flatten_prepares_versioned_exact_close_plan and the adjacent
+      account-reconciliation, position-clock, uncertainty, and order gates.
+    """
+    reconciliation = ctx.latest_account_reconciliation
+    if not _is_successful_account_reconciliation(reconciliation):
+        raise AssertionError(
+            "available safe-flatten plan requires successful account reconciliation"
+        )
+    return SafeFlattenPlan(
+        version_token=version_token,
+        account_id=ctx.account_id,
+        authority_generation=ctx.authority_generation,
+        db_identity_token=ctx.db_identity_token,
+        control_revision=ctx.control_revision,
+        scope=_scope(ctx),
+        strategy_instance_id=ctx.strategy_instance_id,
+        reconciliation_id=reconciliation.reconciliation_id,
+        prepared_at_ms=ctx.now_ms,
+        expires_at_ms=(
+            reconciliation.attempted_at_ms + FRESH_EVIDENCE_MAX_AGE_MS
+        ),
+        legs=tuple(
+            SafeFlattenPlanLeg(
+                strategy_instance_id=position.strategy_instance_id,
+                symbol=position.symbol,
+                side="sell" if position.attributed_qty > 0 else "buy",
+                quantity=abs(position.attributed_qty),
+                position_updated_at_ms=position.updated_at_ms,
+            )
+            for position in _relevant_positions(ctx)
+        ),
     )
 
 
@@ -537,6 +649,11 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
     capabilities: list[RecoveryCapability] = []
     for descriptor in descriptors:
         decision = _decision(ctx, descriptor.action_id)
+        concurrency_token = _token(
+            ctx,
+            descriptor.action_id,
+            decision.token_facts,
+        )
         capabilities.append(
             RecoveryCapability(
                 action_id=descriptor.action_id,
@@ -548,9 +665,18 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
                 scope=_scope(ctx),
                 freshness=decision.freshness,
                 evidence=decision.evidence,
+                reduction_plan=(
+                    _build_safe_flatten_plan(
+                        ctx,
+                        version_token=concurrency_token,
+                    )
+                    if descriptor.action_id == "prepare_safe_flatten"
+                    and decision.available
+                    else None
+                ),
                 confirmation=descriptor.confirmation,
                 next_step=decision.next_step,
-                concurrency_token=_token(ctx, descriptor.action_id, decision.token_facts),
+                concurrency_token=concurrency_token,
                 execution_ref=decision.execution_ref,
                 mutation=descriptor.mutation,
                 primary=False,
@@ -602,6 +728,7 @@ def recheck_recovery_action(
                 scope=_scope(ctx),
                 freshness="unavailable",
                 evidence=(),
+                reduction_plan=None,
                 confirmation=None,
                 next_step="Refresh the Clerk surface.",
                 concurrency_token="",

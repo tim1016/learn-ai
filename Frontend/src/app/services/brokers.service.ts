@@ -16,6 +16,7 @@ import type {
   OrderSubmitResult,
   SqliteClerkProjection,
   SqliteRecoveryAction,
+  SqliteRecoveryActionCheck,
   SqliteRecoveryResult,
   SqliteTimelinePage,
 } from '../api/alpaca.types';
@@ -196,6 +197,26 @@ export class BrokersService {
         `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/timeline${params}`,
       ),
     );
+  }
+
+  async checkSqliteRecoveryAction(
+    accountId: string,
+    action: Pick<SqliteRecoveryAction, 'action_id' | 'concurrency_token'>,
+    strategyInstanceId: string | null = null,
+  ): Promise<SqliteRecoveryAction> {
+    const botScope = strategyInstanceId === null
+      ? ''
+      : `/bots/${encodeURIComponent(strategyInstanceId)}`;
+    const response = await firstValueFrom(
+      this.http.post<SqliteRecoveryActionCheck>(
+        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}${botScope}/recovery-actions/check`,
+        {
+          action_id: action.action_id,
+          concurrency_token: action.concurrency_token,
+        },
+      ),
+    );
+    return response.capability;
   }
 
   executeSqliteRecoveryAction(
