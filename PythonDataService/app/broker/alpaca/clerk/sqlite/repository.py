@@ -146,6 +146,7 @@ class ClerkSqliteRepository:
         self._lease_owner = lease_owner
         self._lease_ttl_ms = lease_ttl_ms
         self._poisoned = False
+        self._reconciliation_in_progress = False
         # Pinned contracts doc §2: "one application-owned write coordinator
         # ... belt-and-suspenders, not a substitute for BEGIN IMMEDIATE."
         # BEGIN IMMEDIATE's lock only protects from the point it's acquired;
@@ -498,6 +499,24 @@ class ClerkSqliteRepository:
             ).fetchone()
             return RunResource(**dict(row)) if row is not None else None
 
+    def begin_reconciliation(self) -> None:
+        """Install the process-local account gate before reading broker truth."""
+        with self._write_lock:
+            if self._reconciliation_in_progress:
+                raise ClerkSqliteError(
+                    f"account {self._account_id!r} reconciliation is already in progress"
+                )
+            self._reconciliation_in_progress = True
+
+    def end_reconciliation(self) -> None:
+        """Release the account gate only after the final safety verdict is durable."""
+        with self._write_lock:
+            self._reconciliation_in_progress = False
+
+    def reconciliation_in_progress(self) -> bool:
+        with self._write_lock:
+            return self._reconciliation_in_progress
+
     # ------------------------------------------------------------------
     # Operation claims — CAS fencing before broker contact (Scope D). The
     # claim primitive is implemented and tested here; no broker call is
@@ -692,6 +711,10 @@ class ClerkSqliteRepository:
         with self._write_lock:
             return reads.orders_for_effect_operation(self._conn, effect_operation_id)
 
+    def all_order_refs(self) -> frozenset[str]:
+        with self._write_lock:
+            return reads.all_order_refs(self._conn)
+
     def entry_orders_for_strategy(self, strategy_instance_id: str) -> list[OrderResource]:
         with self._write_lock:
             return reads.entry_orders_for_strategy(self._conn, strategy_instance_id)
@@ -725,6 +748,14 @@ class ClerkSqliteRepository:
     def attributed_positions_by_symbol(self) -> dict[str, float]:
         with self._write_lock:
             return reads.attributed_positions_by_symbol(self._conn)
+
+    def attributed_positions_for_strategy(
+        self, strategy_instance_id: str
+    ) -> dict[str, float]:
+        with self._write_lock:
+            return reads.attributed_positions_for_strategy(
+                self._conn, strategy_instance_id
+            )
 
     def active_hold(self, *, scope: str, reason_code: str) -> dict | None:
         """No ``strategy_instance_id`` filter — safe today because every
@@ -857,6 +888,7 @@ class ClerkSqliteRepository:
         facts_json: str,
         build_raise: Callable[[], TransitionInput],
         build_refresh: Callable[[], TransitionInput],
+        refresh_unchanged: bool = False,
     ) -> str:
         """Atomically raise, refresh, or leave one uncertainty episode."""
         with self._write_lock:
@@ -869,7 +901,7 @@ class ClerkSqliteRepository:
             if active is None:
                 self.append_transition(build_raise())
                 return "raised"
-            if active["facts_json"] == facts_json:
+            if active["facts_json"] == facts_json and not refresh_unchanged:
                 return "unchanged"
             self.append_transition(build_refresh())
             return "refreshed"

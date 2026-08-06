@@ -24,6 +24,7 @@ class ReconciliationSweep:
         read: BrokerReadPort,
         trade: BrokerTradePort,
         interval_s: float = 15.0,
+        max_backoff_s: float = 300.0,
         sleep: Sleep = asyncio.sleep,
         max_passes: int | None = None,
     ) -> None:
@@ -31,6 +32,7 @@ class ReconciliationSweep:
         self._read = read
         self._trade = trade
         self._interval_s = interval_s
+        self._max_backoff_s = max(max_backoff_s, interval_s)
         self._sleep = sleep
         self._max_passes = max_passes
         self._task: asyncio.Task[None] | None = None
@@ -55,21 +57,32 @@ class ReconciliationSweep:
 
     async def run(self) -> None:
         passes = 0
+        consecutive_failures = 0
         while True:
-            await self._run_one_pass()
+            succeeded = await self._run_one_pass()
+            consecutive_failures = 0 if succeeded else consecutive_failures + 1
             passes += 1
             if self._max_passes is not None and passes >= self._max_passes:
                 return
-            await self._sleep(self._interval_s)
+            delay = (
+                self._interval_s
+                if consecutive_failures == 0
+                else min(
+                    self._interval_s * (2**consecutive_failures),
+                    self._max_backoff_s,
+                )
+            )
+            await self._sleep(delay)
 
-    async def _run_one_pass(self) -> None:
+    async def _run_one_pass(self) -> bool:
         try:
-            await reconcile_account(
+            result = await reconcile_account(
                 self._repo,
                 read=self._read,
                 trade=self._trade,
                 trigger="AUTOMATIC",
             )
+            return result.verdict != "stale"
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -78,6 +91,7 @@ class ReconciliationSweep:
                 extra={"action": "reconcile_sweep_error", "account_id": self._repo.account_id},
                 exc_info=True,
             )
+            return False
 
 
 __all__ = ["ReconciliationSweep"]

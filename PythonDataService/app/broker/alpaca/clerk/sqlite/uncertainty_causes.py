@@ -14,6 +14,7 @@ from typing import Any
 POSITION_DRIFT_REASON_CODE = "POSITION_DRIFT"
 BROKER_SNAPSHOT_STALE_REASON_CODE = "BROKER_SNAPSHOT_STALE"
 ORDER_OUTCOME_UNKNOWN_REASON_CODE = "ORDER_OUTCOME_UNKNOWN"
+EXIT_NOT_FLAT_REASON_CODE = "EXIT_NOT_FLAT"
 
 
 def _require_exact_keys(value: dict[str, Any], expected: set[str]) -> None:
@@ -63,7 +64,8 @@ class PositionDriftCause:
     positions: tuple[PositionDriftObservation, ...]
 
     def to_mapping(self) -> dict[str, Any]:
-        return {"positions": [position.to_mapping() for position in self.positions]}
+        positions = sorted(self.positions, key=lambda position: position.symbol)
+        return {"positions": [position.to_mapping() for position in positions]}
 
     @classmethod
     def from_mapping(cls, value: Any) -> PositionDriftCause:
@@ -78,6 +80,30 @@ class PositionDriftCause:
         if symbols != sorted(set(symbols)):
             raise ValueError("position drift observations must have unique sorted symbols")
         return cls(positions=positions)
+
+
+@dataclass(frozen=True)
+class ExitNotFlatCause:
+    symbol: str
+    attributed_qty: float
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {"symbol": self.symbol, "attributed_qty": self.attributed_qty}
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> ExitNotFlatCause:
+        if not isinstance(value, dict):
+            raise ValueError("EXIT-not-flat cause must be an object")
+        _require_exact_keys(value, {"symbol", "attributed_qty"})
+        symbol = value["symbol"]
+        if not isinstance(symbol, str) or not symbol or symbol != symbol.upper():
+            raise ValueError("EXIT-not-flat symbol must be a non-empty uppercase string")
+        return cls(
+            symbol=symbol,
+            attributed_qty=_finite_number(
+                value["attributed_qty"], field_name="attributed_qty"
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -109,7 +135,11 @@ class OrderOutcomeUnknownCause:
     identities: tuple[UnknownOrderIdentity, ...]
 
     def to_mapping(self) -> dict[str, Any]:
-        return {"identities": [identity.to_mapping() for identity in self.identities]}
+        identities = sorted(
+            self.identities,
+            key=lambda identity: (identity.effect_operation_id, identity.order_ref),
+        )
+        return {"identities": [identity.to_mapping() for identity in identities]}
 
     @classmethod
     def from_mapping(cls, value: Any) -> OrderOutcomeUnknownCause:
@@ -132,8 +162,10 @@ def broker_snapshot_stale_cause_is_valid(value: Any) -> bool:
 
 __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
+    "EXIT_NOT_FLAT_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
+    "ExitNotFlatCause",
     "OrderOutcomeUnknownCause",
     "PositionDriftCause",
     "PositionDriftObservation",

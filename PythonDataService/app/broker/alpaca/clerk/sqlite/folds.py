@@ -370,7 +370,7 @@ def _fold_exit_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> No
         "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
         "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
         "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, 'EXIT', 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
         (
             payload["effect_operation_id"],
             payload["authority_generation"],
@@ -378,6 +378,7 @@ def _fold_exit_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> No
             payload["command_id"],
             payload["strategy_instance_id"],
             payload["run_id"],
+            facts.effect_kind,
             payload["recorded_at_ms"],
             payload["recorded_at_ms"],
         ),
@@ -673,7 +674,12 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
         "ON CONFLICT(strategy_instance_id, symbol) DO UPDATE SET "
         "attributed_qty = attributed_qty + excluded.attributed_qty, "
         "updated_at_ms = excluded.updated_at_ms",
-        (payload["strategy_instance_id"], facts.symbol, signed_delta, payload["recorded_at_ms"]),
+        (
+            payload["strategy_instance_id"],
+            facts.symbol.upper(),
+            signed_delta,
+            payload["recorded_at_ms"],
+        ),
     )
 
 

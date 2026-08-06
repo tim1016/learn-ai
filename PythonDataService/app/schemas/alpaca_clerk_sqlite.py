@@ -7,7 +7,7 @@ as given.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,6 +15,13 @@ from app.broker.alpaca.clerk.sqlite.repository import CommandResource
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
+
+ReconciliationVerdict = Literal[
+    "clean",
+    "unexplained_order",
+    "position_drift",
+    "stale",
+]
 
 
 class CommandResponse(BaseModel):
@@ -98,7 +105,7 @@ class ReconciliationResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    verdict: str
+    verdict: ReconciliationVerdict
     resolved_count: int
     foreign_order_count: int
     drifted_symbols: tuple[str, ...]

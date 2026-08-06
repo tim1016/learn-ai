@@ -27,36 +27,24 @@ from app.broker.alpaca.clerk.sqlite.enter import (
     resolve_enter_submission,
     submit_enter,
 )
+from app.broker.alpaca.clerk.sqlite.facts import OrderFillObservedFacts
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
     InvalidIdentityError,
     NoActiveRunError,
     UnknownStrategyInstanceError,
 )
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
 from app.broker.contract.errors import BrokerError, BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
-
-
-class _TestClock:
-    def __init__(self, value: int) -> None:
-        self.value = value
-
-    def __call__(self) -> int:
-        return self.value
-
-    def advance(self, delta_ms: int) -> None:
-        self.value += delta_ms
-
-
-def _clock_at(start_ms: int) -> _TestClock:
-    return _TestClock(start_ms)
 
 
 @pytest.fixture
@@ -317,6 +305,48 @@ async def test_definitive_broker_rejection_folds_failed_not_unknown(
     assert effect is not None and effect.state == "failed"
     command = repo.get_command(submission.command.command_id)
     assert command is not None and command.state == "failed"
+
+
+async def test_cancelled_submit_retains_unknown_custody_before_claim_release(
+    repo: ClerkSqliteRepository,
+) -> None:
+    class BlockingTrade(_FakeTrade):
+        def __init__(self) -> None:
+            super().__init__()
+            self.submit_started = asyncio.Event()
+
+        async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+            self.submit_calls.append((leg, client_order_id))
+            self.submit_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    trade = BlockingTrade()
+    task = asyncio.create_task(
+        submit_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="cancelled-submit",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+            trade=trade,
+        )
+    )
+    await trade.submit_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    effect = repo.effect_operation("effect:spy-bot:cancelled-submit")
+    assert effect is not None and effect.state == "unknown"
+    uncertainty = repo.active_uncertainty(
+        scope="BOT",
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        strategy_instance_id=SID,
+    )
+    assert uncertainty is not None
 
 
 async def test_submit_ack_with_a_mismatched_client_order_id_folds_uncertain_not_a_raw_exception(
@@ -595,6 +625,51 @@ async def test_fills_fold_into_namespace_attributed_exposure_not_account_netting
     assert repo.position(other_sid, "SPY") == 5.0
     fills = repo.fills_for_order(submission_a.order_ref)
     assert len(fills) == 1
+
+
+async def test_position_symbols_are_normalized_at_write_and_read_boundaries(
+    repo: ClerkSqliteRepository,
+) -> None:
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="lowercase-symbol",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(quantity=2),
+    )
+    assert accepted.effect_operation_id is not None
+    assert accepted.order_ref is not None
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None
+    facts = OrderFillObservedFacts(
+        symbol="spy",
+        side="BUY",
+        cumulative_filled_quantity=2.0,
+        avg_price=100.0,
+        is_correction=False,
+    )
+    repo.append_transition(
+        TransitionInput(
+            strategy_instance_id=effect.strategy_instance_id,
+            run_id=effect.run_id,
+            command_id=effect.command_id,
+            effect_operation_id=effect.effect_operation_id,
+            order_ref=accepted.order_ref,
+            transition_kind="ORDER_FILL_OBSERVED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=1_700_000_000_100,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="ORDER_FILL_OBSERVED",
+            facts_json=facts.to_facts_json(),
+        )
+    )
+
+    assert repo.position(SID, "spy") == pytest.approx(2.0)
+    assert repo.position(SID, "SPY") == pytest.approx(2.0)
+    assert repo.attributed_positions_by_symbol() == {"SPY": pytest.approx(2.0)}
 
 
 async def test_duplicate_fill_observation_does_not_double_count(

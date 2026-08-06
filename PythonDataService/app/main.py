@@ -246,10 +246,16 @@ async def lifespan(app: FastAPI):
                     account_id=account_id,
                     artifacts_root=get_clerk_settings().dir,
                 )
-            except (FileNotFoundError, ClerkSqliteError):
+            except FileNotFoundError:
                 logger.info(
                     "SQLite Alpaca Clerk authority is not initialized; "
                     "its reconciliation sweep remains disabled."
+                )
+            except ClerkSqliteError:
+                logger.warning(
+                    "SQLite Alpaca Clerk authority could not be opened; "
+                    "its reconciliation sweep remains disabled.",
+                    exc_info=True,
                 )
             else:
                 sqlite_alpaca_sweep = SqliteReconciliationSweep(

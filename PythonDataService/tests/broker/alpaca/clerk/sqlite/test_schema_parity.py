@@ -65,6 +65,11 @@ def test_partial_unique_indexes_allow_only_one_active_safety_cause() -> None:
             "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
             "opened_at_ms) VALUES ('h2', 'ACCOUNT_CLERK', NULL, 'FOREIGN', 'ACTIVE', 2)"
         )
+    conn.execute("UPDATE holds SET state = 'RESOLVED', resolved_at_ms = 3 WHERE hold_id = 'h1'")
+    conn.execute(
+        "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
+        "opened_at_ms) VALUES ('h2', 'ACCOUNT_CLERK', NULL, 'FOREIGN', 'ACTIVE', 4)"
+    )
 
     conn.execute(
         "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
@@ -81,6 +86,14 @@ def test_partial_unique_indexes_allow_only_one_active_safety_cause() -> None:
             "facts_schema_version, facts_json) VALUES ('u2', 'ACCOUNT_CLERK', 'warning', "
             "1, 0, NULL, 'UNKNOWN', 'h', 'e', 'impact', 'step', 2, 1, '{}')"
         )
+    conn.execute("UPDATE uncertainties SET resolved_at_ms = 3 WHERE uncertainty_id = 'u1'")
+    conn.execute(
+        "INSERT INTO uncertainties (uncertainty_id, scope, severity, blocks_new_exposure, "
+        "allows_reduction, strategy_instance_id, reason_code, headline, explanation, "
+        "operator_impact, next_step, observed_at_ms, facts_schema_version, facts_json) "
+        "VALUES ('u2', 'ACCOUNT_CLERK', 'warning', 1, 0, NULL, 'UNKNOWN', 'h', 'e', "
+        "'impact', 'step', 4, 1, '{}')"
+    )
 
 
 def test_immutability_triggers_block_custody_transitions_mutation() -> None:

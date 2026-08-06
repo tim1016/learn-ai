@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite import process_repositories
 from app.broker.alpaca.clerk.sqlite.facts import (
-    AccountHoldRaisedFacts,
     UncertaintyRaisedFacts,
     UncertaintyResolvedFacts,
 )
@@ -35,6 +35,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     HashChainBroken,
     IntegrityCheckFailed,
 )
+from conftest import _hold_transition
 
 ACCOUNT_ID = "PA-TEST"
 
@@ -48,6 +49,36 @@ def _clock_seq():
         return counter["t"]
 
     return clock
+
+
+def test_process_repository_shutdown_closes_every_cached_handle_after_one_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    closed: list[str] = []
+
+    class FakeRepository:
+        def __init__(self, account_id: str, *, fail: bool = False) -> None:
+            self.account_id = account_id
+            self.fail = fail
+
+        def close(self) -> None:
+            closed.append(self.account_id)
+            if self.fail:
+                raise OSError("close failed")
+
+    with process_repositories._lock:
+        process_repositories._repositories.update(
+            {
+                "PA-FAIL": FakeRepository("PA-FAIL", fail=True),
+                "PA-OK": FakeRepository("PA-OK"),
+            }
+        )
+
+    process_repositories.close_all_repositories()
+
+    assert closed == ["PA-FAIL", "PA-OK"]
+    assert process_repositories._repositories == {}
+    assert "failed to close cached SQLite Alpaca Clerk repository" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -506,23 +537,6 @@ def test_mirror_rebuild_still_fails_closed_on_conflicting_finalize(tmp_path: Pat
 # append_transition() here (no ENTER/reconciliation domain flow needed) —
 # the full sweep-driven flow is covered in test_reconcile.py.
 # ---------------------------------------------------------------------------
-
-
-def _hold_transition(
-    *,
-    reason_code: str = "UNEXPLAINED_ORDER",
-    evidence_refs: list[str] | None = None,
-) -> TransitionInput:
-    facts = AccountHoldRaisedFacts(reason_code=reason_code, evidence_refs=evidence_refs or ["bo-1"])
-    return TransitionInput(
-        transition_kind="ACCOUNT_HOLD_RAISED",
-        custody_owner="ACCOUNT_CLERK",
-        execution_authority="ACCOUNT_CLERK",
-        operation_state="succeeded",
-        clerk_observed_at_ms=1,
-        summary_code="ACCOUNT_HOLD_RAISED",
-        facts_json=facts.to_facts_json(),
-    )
 
 
 def test_account_hold_raised_fold_creates_an_active_account_clerk_hold(tmp_path: Path) -> None:

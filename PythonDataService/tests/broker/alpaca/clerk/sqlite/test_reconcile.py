@@ -19,10 +19,10 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
-from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts
-from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, TransitionInput
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     plan_account_reconciliation,
     reconcile_account,
@@ -30,27 +30,14 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 )
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
+from conftest import _clock_at, _hold_transition
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
-
-
-class _TestClock:
-    def __init__(self, value: int) -> None:
-        self.value = value
-
-    def __call__(self) -> int:
-        return self.value
-
-    def advance(self, delta_ms: int) -> None:
-        self.value += delta_ms
-
-
-def _clock_at(start_ms: int) -> _TestClock:
-    return _TestClock(start_ms)
 
 
 @pytest.fixture
@@ -203,17 +190,33 @@ class _FakeRead:
         return self._positions
 
 
-def _hold_transition(*, reason_code: str) -> TransitionInput:
-    facts = AccountHoldRaisedFacts(reason_code=reason_code, evidence_refs=["bo-1"])
-    return TransitionInput(
-        transition_kind="ACCOUNT_HOLD_RAISED",
-        custody_owner="ACCOUNT_CLERK",
-        execution_authority="ACCOUNT_CLERK",
-        operation_state="succeeded",
-        clerk_observed_at_ms=1,
-        summary_code="ACCOUNT_HOLD_RAISED",
-        facts_json=facts.to_facts_json(),
-    )
+class _SequentialRead(_FakeRead):
+    def __init__(
+        self,
+        *,
+        order_snapshots: list[list[BrokerOrder]],
+        position_snapshots: list[list[BrokerPosition]],
+    ) -> None:
+        super().__init__()
+        self._order_snapshots = list(order_snapshots)
+        self._position_snapshots = list(position_snapshots)
+
+    async def list_orders(
+        self,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        after_ms: int | None = None,
+    ) -> list[BrokerOrder]:
+        del status, limit, after_ms
+        if not self._order_snapshots:
+            raise AssertionError("order snapshot queue exhausted")
+        return self._order_snapshots.pop(0)
+
+    async def list_positions(self) -> list[BrokerPosition]:
+        if not self._position_snapshots:
+            raise AssertionError("position snapshot queue exhausted")
+        return self._position_snapshots.pop(0)
 
 
 async def _make_uncertain_order(
@@ -318,6 +321,7 @@ def test_plan_suppresses_drift_for_a_symbol_with_a_non_terminal_in_flight_order(
         attributed_positions={"SPY": 3.0},
     )
     assert plan.verdict == "clean"
+    assert plan.indeterminate_symbols == ("SPY",)
 
 
 def test_plan_prioritizes_unexplained_order_over_position_drift() -> None:
@@ -498,15 +502,115 @@ async def test_reconcile_account_raises_an_account_clerk_uncertainty_for_positio
     assert uncertainty["allows_reduction"] == 1
 
 
-async def test_reconcile_account_position_drift_uncertainty_is_idempotent(
+async def test_reconcile_uses_post_recovery_broker_snapshot_for_final_verdict(
+    repo: ClerkSqliteRepository,
+) -> None:
+    read = _SequentialRead(
+        order_snapshots=[[], []],
+        position_snapshots=[[], [_position("SPY", quantity=5)]],
+    )
+
+    result = await reconcile_account(repo, read=read, trade=_FakeTrade())
+
+    assert result.verdict == "position_drift"
+    assert result.drifted_symbols == ("SPY",)
+
+
+async def test_reconciliation_fences_enter_before_reading_broker_truth(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingRead(_FakeRead):
+        async def list_orders(
+            self,
+            *,
+            status: str | None = None,
+            limit: int | None = None,
+            after_ms: int | None = None,
+        ) -> list[BrokerOrder]:
+            del status, limit, after_ms
+            entered.set()
+            await release.wait()
+            return []
+
+    task = asyncio.create_task(
+        reconcile_account(repo, read=BlockingRead(), trade=_FakeTrade())
+    )
+    await entered.wait()
+
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="during-reconcile",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+        )
+
+    assert exc_info.value.decision.reason_code == "RECONCILIATION_IN_PROGRESS"
+    release.set()
+    await task
+
+
+async def test_in_flight_mismatch_retains_existing_drift_episode(
+    repo: ClerkSqliteRepository,
+) -> None:
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code="POSITION_DRIFT",
+        headline="drift",
+        explanation="drift",
+        operator_impact="blocked",
+        next_step="reconcile",
+        cause_facts={
+            "positions": [
+                {"symbol": "SPY", "broker_qty": 5.0, "attributed_qty": 0.0}
+            ]
+        },
+    )
+    working = _broker_order(_our_order_ref("working"), status="accepted")
+
+    result = await reconcile_account(
+        repo,
+        read=_FakeRead(orders=[working], positions=[_position("SPY", quantity=5)]),
+        trade=_FakeTrade(),
+    )
+
+    assert result.verdict == "unexplained_order"
+    assert (
+        repo.active_uncertainty(
+            scope="ACCOUNT_CLERK",
+            reason_code="POSITION_DRIFT",
+            strategy_instance_id=None,
+        )
+        is not None
+    )
+
+
+async def test_reconcile_account_refreshes_unchanged_position_drift_evidence(
     repo: ClerkSqliteRepository,
 ) -> None:
     read = _FakeRead(orders=[], positions=[_position("SPY", quantity=5)])
     await reconcile_account(repo, read=read, trade=_FakeTrade())
+    initial = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="POSITION_DRIFT", strategy_instance_id=None
+    )
+    assert initial is not None
     before = len(repo.custody_transitions())
+    repo._clock.advance(1_000)  # type: ignore[attr-defined]
 
     await reconcile_account(repo, read=read, trade=_FakeTrade())
-    assert len(repo.custody_transitions()) == before  # still one ACTIVE uncertainty, no second raise
+    refreshed = repo.active_uncertainty(
+        scope="ACCOUNT_CLERK", reason_code="POSITION_DRIFT", strategy_instance_id=None
+    )
+    assert refreshed is not None
+    assert refreshed["uncertainty_id"] == initial["uncertainty_id"]
+    assert refreshed["observed_at_ms"] > initial["observed_at_ms"]
+    assert len(repo.custody_transitions()) == before + 1
 
 
 async def test_reconcile_folds_recovered_fill_before_computing_position_drift(
@@ -657,13 +761,15 @@ def test_raise_hold_if_none_active_serializes_two_concurrent_callers(
     release_thread_a = threading.Event()
     original_append_transition = ClerkSqliteRepository.append_transition
 
-    def paused_append_transition(self: ClerkSqliteRepository, transition):
+    def paused_append_transition(
+        self: ClerkSqliteRepository, transition: TransitionInput
+    ) -> CommittedTransition:
         result = original_append_transition(self, transition)
         thread_a_appended.set()
         release_thread_a.wait(timeout=5)
         return result
 
-    def build_transition():
+    def build_transition() -> TransitionInput:
         return _hold_transition(reason_code="RACE_TEST")
 
     result_a: list[bool] = []
@@ -822,6 +928,56 @@ async def test_reconcile_account_skips_a_claim_contended_order_but_still_resolve
     assert repo.order(free_ref).broker_order_id is not None  # type: ignore[union-attr]
 
 
+async def test_reconcile_missing_exit_entry_records_failure_and_finishes_pass(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_uncertain_order(repo)
+    filled = _broker_order(
+        entry_ref,
+        status="filled",
+        filled_quantity=1.0,
+        filled_avg_price=100.0,
+    )
+    entry = repo.order(entry_ref)
+    assert entry is not None
+    fold_order_evidence(
+        repo,
+        effect_operation_id=entry.effect_operation_id,
+        order=filled,
+    )
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-with-missing-link",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    with repo._write_lock:
+        repo._conn.execute(
+            "DELETE FROM operation_order_links WHERE effect_operation_id = ?",
+            (accepted.effect_operation_id,),
+        )
+        repo._conn.commit()
+
+    result = await reconcile_account(
+        repo,
+        read=_FakeRead(orders=[], positions=[_position("SPY", quantity=1)]),
+        trade=_FakeTrade(),
+    )
+
+    assert result.resolved_count == 1
+    attempts = [
+        transition
+        for transition in repo.custody_transitions()
+        if transition["effect_operation_id"] == accepted.effect_operation_id
+        and transition["transition_kind"] == "RECONCILIATION_ATTEMPTED"
+    ]
+    assert len(attempts) == 1
+    assert '"outcome":"RESOLVED_FAILURE"' in attempts[0]["facts_json"]
+
+
 async def test_reconcile_account_operator_reconcile_now_trigger_is_recorded(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -859,12 +1015,39 @@ async def test_sweep_survives_a_broker_error_and_continues_to_the_next_pass(
     repo: ClerkSqliteRepository,
 ) -> None:
     read = _FakeRead(error=BrokerUnavailable("down"))
-    sleeps = 0
+    sleep_calls: list[float] = []
 
     async def fake_sleep(seconds: float) -> None:
-        nonlocal sleeps
-        sleeps += 1
+        sleep_calls.append(seconds)
 
     sweep = ReconciliationSweep(repo=repo, read=read, trade=_FakeTrade(), sleep=fake_sleep, max_passes=3)
     await sweep.run()  # must not raise despite every pass hitting BrokerUnavailable
-    assert sleeps == 2  # 3 passes, sleeping only between them
+    assert sleep_calls == [30.0, 60.0]
+
+
+async def test_sweep_backoff_is_capped_and_resets_after_success(
+    repo: ClerkSqliteRepository,
+) -> None:
+    sleep_calls: list[float] = []
+    outcomes = iter([False, False, True, False])
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    class DeterministicSweep(ReconciliationSweep):
+        async def _run_one_pass(self) -> bool:
+            return next(outcomes)
+
+    sweep = DeterministicSweep(
+        repo=repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        interval_s=10.0,
+        max_backoff_s=25.0,
+        sleep=fake_sleep,
+        max_passes=4,
+    )
+
+    await sweep.run()
+
+    assert sleep_calls == [20.0, 25.0, 10.0]

@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteError,
     ClerkSqliteRepository,
     OperationClaimError,
 )
@@ -36,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     POSITION_DRIFT_REASON_CODE,
     AdmissionBlockedError,
     raise_uncertainty,
+    resolve_exit_not_flat_uncertainty,
     resolve_reconciliation_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -68,6 +70,11 @@ class ReconcilePlan:
     verdict: AccountVerdict
     foreign_orders: tuple[BrokerOrder, ...] = field(default_factory=tuple)
     drifted_symbols: tuple[str, ...] = field(default_factory=tuple)
+    indeterminate_symbols: tuple[str, ...] = field(default_factory=tuple)
+
+
+class ReconciliationInvariantError(ClerkSqliteError):
+    """Required local custody state was absent during fail-closed recovery."""
 
 
 def plan_account_reconciliation(
@@ -90,17 +97,28 @@ def plan_account_reconciliation(
         for order in broker_orders
         if order.status.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
     }
-    broker_by_symbol = {
-        position.symbol.upper(): signed_broker_position_quantity(position) for position in broker_positions
-    }
-    symbols = set(broker_by_symbol) | set(attributed_positions)
-    drifted = tuple(
-        sorted(
-            symbol
-            for symbol in symbols
-            if symbol not in in_flight_symbols
-            and abs(broker_by_symbol.get(symbol, 0.0) - attributed_positions.get(symbol, 0.0)) > POSITION_QTY_EPSILON
+    broker_by_symbol: dict[str, float] = {}
+    for position in broker_positions:
+        symbol = position.symbol.upper()
+        broker_by_symbol[symbol] = broker_by_symbol.get(symbol, 0.0) + signed_broker_position_quantity(
+            position
         )
+    attributed_by_symbol: dict[str, float] = {}
+    for symbol, quantity in attributed_positions.items():
+        normalized = symbol.upper()
+        attributed_by_symbol[normalized] = attributed_by_symbol.get(normalized, 0.0) + quantity
+    symbols = set(broker_by_symbol) | set(attributed_by_symbol)
+    mismatched_symbols = {
+        symbol
+        for symbol in symbols
+        if abs(broker_by_symbol.get(symbol, 0.0) - attributed_by_symbol.get(symbol, 0.0))
+        > POSITION_QTY_EPSILON
+    }
+    drifted = tuple(
+        sorted(symbol for symbol in mismatched_symbols if symbol not in in_flight_symbols)
+    )
+    indeterminate = tuple(
+        sorted(symbol for symbol in mismatched_symbols if symbol in in_flight_symbols)
     )
     verdict: AccountVerdict
     if foreign:
@@ -113,6 +131,7 @@ def plan_account_reconciliation(
         verdict=verdict,
         foreign_orders=foreign,
         drifted_symbols=drifted,
+        indeterminate_symbols=indeterminate,
     )
 
 
@@ -125,9 +144,15 @@ async def reconcile_uncertain_order(
 ) -> ReconciliationOutcome:
     """Compatibility surface that dispatches once at effect-operation scope."""
     order = repo.order(order_ref)
-    assert order is not None
+    if order is None:
+        raise ReconciliationInvariantError(
+            f"reconciliation expected captured order {order_ref!r}, but it is missing"
+        )
     effect = repo.active_exit_for_order(order_ref) or repo.effect_operation(order.effect_operation_id)
-    assert effect is not None
+    if effect is None:
+        raise ReconciliationInvariantError(
+            f"reconciliation expected effect {order.effect_operation_id!r} for order {order_ref!r}"
+        )
     return await _reconcile_effect(repo, effect=effect, trigger=trigger, trade=trade)
 
 
@@ -142,30 +167,49 @@ async def _reconcile_effect(
         return "RESOLVED_SUCCESS" if effect.state == "succeeded" else "RESOLVED_FAILURE"
 
     if effect.kind == "EXIT":
+        entry_orders = [
+            item
+            for item in await asyncio.to_thread(
+                repo.orders_for_effect_operation, effect.effect_operation_id
+            )
+            if item.role == "ENTRY"
+        ]
+        if not entry_orders:
+            raise ReconciliationInvariantError(
+                f"EXIT effect {effect.effect_operation_id!r} has no captured ENTRY order"
+            )
+        order = entry_orders[0]
         await resolve_exit(
             repo,
             effect_operation_id=effect.effect_operation_id,
             trade=trade,
         )
-        order = next(
-            item for item in repo.orders_for_effect_operation(effect.effect_operation_id) if item.role == "ENTRY"
-        )
     else:
-        order = repo.order_for_effect_operation(effect.effect_operation_id)
-        assert order is not None
+        order = await asyncio.to_thread(repo.order_for_effect_operation, effect.effect_operation_id)
+        if order is None:
+            raise ReconciliationInvariantError(
+                f"ENTER effect {effect.effect_operation_id!r} has no captured order"
+            )
         await resolve_enter_submission(repo, order_ref=order.order_ref, trade=trade)
 
-    effect_after = repo.effect_operation(effect.effect_operation_id)
-    assert effect_after is not None
-    order_after = repo.order(order.order_ref)
-    assert order_after is not None
+    effect_after = await asyncio.to_thread(repo.effect_operation, effect.effect_operation_id)
+    if effect_after is None:
+        raise ReconciliationInvariantError(
+            f"effect {effect.effect_operation_id!r} disappeared during reconciliation"
+        )
+    order_after = await asyncio.to_thread(repo.order, order.order_ref)
+    if order_after is None:
+        raise ReconciliationInvariantError(
+            f"order {order.order_ref!r} disappeared during reconciliation"
+        )
     if effect_after.state == "succeeded" or (effect_after.kind == "ENTER" and order_after.broker_order_id is not None):
         outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
     elif effect_after.state in ("failed", "rejected"):
         outcome = "RESOLVED_FAILURE"
     else:
         outcome = "STILL_UNKNOWN"
-    _record_reconciliation_attempt(
+    await asyncio.to_thread(
+        _record_reconciliation_attempt,
         repo,
         effect=effect_after,
         order_ref=order.order_ref,
@@ -179,7 +223,7 @@ def _record_reconciliation_attempt(
     repo: ClerkSqliteRepository,
     *,
     effect: EffectOperationResource,
-    order_ref: str,
+    order_ref: str | None,
     trigger: Trigger,
     outcome: ReconciliationOutcome,
 ) -> None:
@@ -255,9 +299,15 @@ def _sync_position_drift(
     repo: ClerkSqliteRepository,
     *,
     drifted_symbols: tuple[str, ...],
+    indeterminate_symbols: tuple[str, ...],
     broker_positions: list[BrokerPosition],
     attributed_positions: dict[str, float],
 ) -> None:
+    if not drifted_symbols and indeterminate_symbols:
+        # A working order can explain the mismatch, but cannot prove that a
+        # previously observed drift disappeared. Keep the active episode until
+        # a pass without in-flight activity proves equality.
+        return
     if not drifted_symbols:
         resolve_reconciliation_uncertainty(
             repo,
@@ -266,9 +316,12 @@ def _sync_position_drift(
         )
         return
     symbols = ", ".join(drifted_symbols)
-    broker_by_symbol = {
-        position.symbol.upper(): signed_broker_position_quantity(position) for position in broker_positions
-    }
+    broker_by_symbol: dict[str, float] = {}
+    for position in broker_positions:
+        symbol = position.symbol.upper()
+        broker_by_symbol[symbol] = broker_by_symbol.get(symbol, 0.0) + signed_broker_position_quantity(
+            position
+        )
     cause = PositionDriftCause(
         positions=tuple(
             PositionDriftObservation(
@@ -292,6 +345,7 @@ def _sync_position_drift(
         next_step="Reconcile now, then review the drifted symbols before resuming.",
         evidence_refs=("fresh_position_snapshot",),
         cause_facts=cause.to_mapping(),
+        refresh_unchanged=True,
     )
 
 
@@ -313,6 +367,21 @@ def _raise_stale_snapshot_uncertainty(repo: ClerkSqliteRepository, why: str) -> 
     )
 
 
+def _resolve_flat_exit_fences(
+    repo: ClerkSqliteRepository, instances: list[dict]
+) -> None:
+    for instance in instances:
+        strategy_instance_id = instance["strategy_instance_id"]
+        attributed = repo.attributed_positions_for_strategy(strategy_instance_id)
+        if any(abs(quantity) >= POSITION_QTY_EPSILON for quantity in attributed.values()):
+            continue
+        resolve_exit_not_flat_uncertainty(
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            evidence_refs=("fresh_account_snapshot", "attributed_flat"),
+        )
+
+
 @dataclass(frozen=True)
 class AccountReconciliationResult:
     verdict: AccountVerdict
@@ -330,14 +399,15 @@ async def _read_account_snapshot(
             read.list_positions(),
         )
     except BrokerError as exc:
-        _raise_stale_snapshot_uncertainty(repo, str(exc))
+        await asyncio.to_thread(_raise_stale_snapshot_uncertainty, repo, str(exc))
         logger.warning(
             "alpaca sqlite reconciliation could not read fresh broker truth",
             extra={"action": "reconcile_account_stale", "account_id": repo.account_id},
         )
         return None
     if len(broker_orders) >= MAX_OPEN_ORDER_SNAPSHOT:
-        _raise_stale_snapshot_uncertainty(
+        await asyncio.to_thread(
+            _raise_stale_snapshot_uncertainty,
             repo,
             "The open-order snapshot reached the 500-row boundary; completeness cannot be proven.",
         )
@@ -347,7 +417,8 @@ async def _read_account_snapshot(
 
 async def _recover_operations(repo: ClerkSqliteRepository, *, trigger: Trigger, trade: BrokerTradePort) -> int:
     resolved_count = 0
-    for effect in repo.reconcilable_effect_operations():
+    effects = await asyncio.to_thread(repo.reconcilable_effect_operations)
+    for effect in effects:
         try:
             outcome = await _reconcile_effect(
                 repo,
@@ -355,6 +426,29 @@ async def _recover_operations(repo: ClerkSqliteRepository, *, trigger: Trigger, 
                 trigger=trigger,
                 trade=trade,
             )
+        except ReconciliationInvariantError as exc:
+            linked_orders = await asyncio.to_thread(
+                repo.orders_for_effect_operation, effect.effect_operation_id
+            )
+            await asyncio.to_thread(
+                _record_reconciliation_attempt,
+                repo,
+                effect=effect,
+                order_ref=linked_orders[0].order_ref if linked_orders else None,
+                trigger=trigger,
+                outcome="RESOLVED_FAILURE",
+            )
+            logger.error(
+                "alpaca sqlite reconciliation found incomplete local custody state",
+                extra={
+                    "action": "reconcile_effect_invariant_failed",
+                    "account_id": repo.account_id,
+                    "effect_operation_id": effect.effect_operation_id,
+                    "reason": str(exc),
+                },
+            )
+            resolved_count += 1
+            continue
         except (OperationClaimError, AdmissionBlockedError):
             logger.info(
                 "alpaca sqlite reconciliation deferred a contended or policy-blocked effect",
@@ -389,11 +483,38 @@ async def reconcile_account(
 ) -> AccountReconciliationResult:
     """Serialize snapshot-to-verdict passes for one live account authority."""
     async with _reconciliation_lock(repo):
-        return await _reconcile_account_serialized(
+        await asyncio.to_thread(repo.begin_reconciliation)
+        try:
+            return await _reconcile_account_serialized(
+                repo,
+                read=read,
+                trade=trade,
+                trigger=trigger,
+            )
+        finally:
+            await asyncio.to_thread(repo.end_reconciliation)
+
+
+def _fold_snapshot_evidence(
+    repo: ClerkSqliteRepository, broker_orders: list[BrokerOrder]
+) -> None:
+    for broker_order in broker_orders:
+        if broker_order.client_order_id is None:
+            continue
+        local_order = repo.order(broker_order.client_order_id)
+        if local_order is None:
+            continue
+        owner = repo.active_exit_for_order(local_order.order_ref) or repo.effect_operation(
+            local_order.effect_operation_id
+        )
+        if owner is None:
+            raise ReconciliationInvariantError(
+                f"captured order {local_order.order_ref!r} has no owning effect"
+            )
+        fold_order_evidence(
             repo,
-            read=read,
-            trade=trade,
-            trigger=trigger,
+            effect_operation_id=owner.effect_operation_id,
+            order=broker_order,
         )
 
 
@@ -410,47 +531,34 @@ async def _reconcile_account_serialized(
         return AccountReconciliationResult(verdict="stale")
     broker_orders, broker_positions = snapshot
 
-    resolve_reconciliation_uncertainty(
+    await asyncio.to_thread(
+        resolve_reconciliation_uncertainty,
         repo,
         reason_code=BROKER_SNAPSHOT_STALE_REASON_CODE,
         evidence_refs=("fresh_open_orders", "fresh_positions"),
     )
 
-    known_order_refs: set[str] = set()
-    for broker_order in broker_orders:
-        if broker_order.client_order_id is None:
-            continue
-        local_order = repo.order(broker_order.client_order_id)
-        if local_order is None:
-            continue
-        known_order_refs.add(local_order.order_ref)
-        owner = repo.active_exit_for_order(local_order.order_ref) or repo.effect_operation(
-            local_order.effect_operation_id
-        )
-        assert owner is not None
-        fold_order_evidence(
-            repo,
-            effect_operation_id=owner.effect_operation_id,
-            order=broker_order,
-        )
+    # Capture every local identity before recovery can terminalize an effect.
+    known_order_refs = set(await asyncio.to_thread(repo.all_order_refs))
+    await asyncio.to_thread(_fold_snapshot_evidence, repo, broker_orders)
 
     resolved_count = await _recover_operations(repo, trigger=trigger, trade=trade)
 
-    # Include every locally captured identity, not only orders present in the
-    # open snapshot. A namespace-shaped but uncaptured broker order is foreign.
-    for effect in repo.reconcilable_effect_operations():
-        known_order_refs.update(
-            order.order_ref for order in repo.orders_for_effect_operation(effect.effect_operation_id)
-        )
-    for instance in repo.strategy_instances():
-        known_order_refs.update(
-            order.order_ref for order in repo.entry_orders_for_strategy(instance["strategy_instance_id"])
-        )
+    # Recovery can poll fills, cancel entries, or submit a reducing order.
+    # Re-read broker truth and fold the newest open-order evidence before the
+    # final broker-vs-attributed comparison.
+    final_snapshot = await _read_account_snapshot(repo, read)
+    if final_snapshot is None:
+        return AccountReconciliationResult(verdict="stale", resolved_count=resolved_count)
+    broker_orders, broker_positions = final_snapshot
+    await asyncio.to_thread(_fold_snapshot_evidence, repo, broker_orders)
+    known_order_refs.update(await asyncio.to_thread(repo.all_order_refs))
 
+    instances = await asyncio.to_thread(repo.strategy_instances)
     namespaces = frozenset(
-        build_bot_order_namespace(instance["strategy_instance_id"]) for instance in repo.strategy_instances()
+        build_bot_order_namespace(instance["strategy_instance_id"]) for instance in instances
     )
-    attributed_positions = repo.attributed_positions_by_symbol()
+    attributed_positions = await asyncio.to_thread(repo.attributed_positions_by_symbol)
     plan = plan_account_reconciliation(
         namespaces=namespaces,
         broker_orders=broker_orders,
@@ -458,13 +566,17 @@ async def _reconcile_account_serialized(
         attributed_positions=attributed_positions,
         known_order_refs=frozenset(known_order_refs),
     )
-    _sync_unexplained_order_hold(repo, plan.foreign_orders)
-    _sync_position_drift(
+    await asyncio.to_thread(_sync_unexplained_order_hold, repo, plan.foreign_orders)
+    await asyncio.to_thread(
+        _sync_position_drift,
         repo,
         drifted_symbols=plan.drifted_symbols,
+        indeterminate_symbols=plan.indeterminate_symbols,
         broker_positions=broker_positions,
         attributed_positions=attributed_positions,
     )
+    if plan.verdict == "clean" and not plan.indeterminate_symbols:
+        await asyncio.to_thread(_resolve_flat_exit_fences, repo, instances)
     return AccountReconciliationResult(
         verdict=plan.verdict,
         resolved_count=resolved_count,
@@ -476,6 +588,7 @@ async def _reconcile_account_serialized(
 __all__ = [
     "AccountReconciliationResult",
     "ReconcilePlan",
+    "ReconciliationInvariantError",
     "plan_account_reconciliation",
     "reconcile_account",
     "reconcile_uncertain_order",

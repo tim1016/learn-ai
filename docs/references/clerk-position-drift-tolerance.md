@@ -26,6 +26,17 @@ independent invention. The duplication is a migration artifact, not a
 permanent one: `exposure.py`'s JSONL-journal implementation is retired at the
 SQLite cutover (#1382), at which point this is the sole implementation.
 
+This duplication is explicitly exempt from a shared-corpus parity test under
+the numerical-concept guideline recorded in `docs/math-sources-of-truth.md`.
+`exposure.py::account_exposure_deltas` consumes the production JSONL journal,
+while `plan_account_reconciliation` consumes the replacement SQLite
+`positions` projection; those inputs cannot produce comparable outputs from a
+single corpus without first completing the authority cutover the comparison is
+meant to qualify. During migration, `plan_account_reconciliation` is the
+canonical implementation of the SQLite residual-drift calculation. The JSONL
+implementation remains production authority only until #1382 and is then
+retired, rather than retained as a second numerical authority.
+
 An absolute tolerance, not relative: share quantities are compared directly, so
 scaling the accepted error with position size would hide real drift on small
 positions — same reasoning as `docs/references/clerk-fill-quantity-tolerance.md`'s

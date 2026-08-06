@@ -133,6 +133,12 @@ def orders_for_effect_operation(
     return [OrderResource(**dict(row)) for row in rows]
 
 
+def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
+    """Every immutable broker identity captured by this authority."""
+    rows = conn.execute("SELECT order_ref FROM orders").fetchall()
+    return frozenset(row["order_ref"] for row in rows)
+
+
 def entry_orders_for_strategy(
     conn: sqlite3.Connection, strategy_instance_id: str
 ) -> list[OrderResource]:
@@ -200,7 +206,7 @@ def reconcilable_effect_operations(conn: sqlite3.Connection) -> list[EffectOpera
 def position(conn: sqlite3.Connection, strategy_instance_id: str, symbol: str) -> float:
     row = conn.execute(
         "SELECT attributed_qty FROM positions WHERE strategy_instance_id = ? AND symbol = ?",
-        (strategy_instance_id, symbol),
+        (strategy_instance_id, symbol.upper()),
     ).fetchone()
     return row["attributed_qty"] if row is not None else 0.0
 
@@ -235,7 +241,19 @@ def attributed_positions_by_symbol(conn: sqlite3.Connection) -> dict[str, float]
     against the broker's own account-wide position snapshot. Never nets
     against the raw broker position; this is our side of that comparison."""
     rows = conn.execute(
-        "SELECT symbol, SUM(attributed_qty) AS qty FROM positions GROUP BY symbol"
+        "SELECT UPPER(symbol) AS symbol, SUM(attributed_qty) AS qty "
+        "FROM positions GROUP BY UPPER(symbol)"
+    ).fetchall()
+    return {row["symbol"]: row["qty"] for row in rows}
+
+
+def attributed_positions_for_strategy(
+    conn: sqlite3.Connection, strategy_instance_id: str
+) -> dict[str, float]:
+    rows = conn.execute(
+        "SELECT UPPER(symbol) AS symbol, SUM(attributed_qty) AS qty FROM positions "
+        "WHERE strategy_instance_id = ? GROUP BY UPPER(symbol)",
+        (strategy_instance_id,),
     ).fetchall()
     return {row["symbol"]: row["qty"] for row in rows}
 

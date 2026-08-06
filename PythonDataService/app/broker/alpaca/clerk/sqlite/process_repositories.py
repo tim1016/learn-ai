@@ -9,10 +9,13 @@ single-worker topology (decision 1).
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _repositories: dict[str, ClerkSqliteRepository] = {}
@@ -32,9 +35,20 @@ def get_or_open_repository(*, account_id: str, artifacts_root: Path) -> ClerkSql
 def close_all_repositories() -> None:
     """Close and drop every cached repository during process shutdown."""
     with _lock:
-        for repo in _repositories.values():
-            repo.close()
+        repositories = list(_repositories.items())
         _repositories.clear()
+    for account_id, repo in repositories:
+        try:
+            repo.close()
+        except Exception:
+            logger.warning(
+                "failed to close cached SQLite Alpaca Clerk repository",
+                extra={
+                    "action": "close_sqlite_clerk_repository_failed",
+                    "account_id": account_id,
+                },
+                exc_info=True,
+            )
 
 
 def reset_for_testing() -> None:

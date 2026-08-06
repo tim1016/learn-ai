@@ -15,12 +15,84 @@ from httpx import ASGITransport
 from app.broker.alpaca.clerk.journal import get_clerk_settings, reset_clerk_settings_for_testing
 from app.broker.alpaca.clerk.sqlite import process_repositories
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    RepositoryPoisoned,
+)
+from app.broker.contract.errors import BrokerUnavailable
+from app.broker.contract.models import BrokerAccountSnapshot
 from app.routers import alpaca_clerk_sqlite
 from app.routers.alpaca_clerk_sqlite import router
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
+
+
+def _account(account_id: str = ACCOUNT_ID) -> BrokerAccountSnapshot:
+    return BrokerAccountSnapshot(
+        broker="alpaca",
+        account_id=account_id,
+        account_mode="paper",
+        account_status="ACTIVE",
+        currency="USD",
+        cash=1_000.0,
+        equity=1_000.0,
+        buying_power=2_000.0,
+        portfolio_value=1_000.0,
+        long_market_value=0.0,
+        short_market_value=0.0,
+        pattern_day_trader=False,
+        trading_blocked=False,
+        account_blocked=False,
+        created_at_ms=None,
+        observed_at_ms=1_700_000_000_000,
+    )
+
+
+class FakeAlpacaPort:
+    broker_id = "alpaca"
+
+    def __init__(self, *, account_id: str = ACCOUNT_ID) -> None:
+        self._account_id = account_id
+
+    def capabilities(self):
+        return None
+
+    async def get_account(self) -> BrokerAccountSnapshot:
+        return _account(self._account_id)
+
+    async def list_positions(self):
+        return []
+
+    async def list_orders(self, *, status=None, limit=None, after_ms=None):
+        return []
+
+    async def list_activities(self, *, after_ms=None, limit=100):
+        return []
+
+    async def list_assets(self, *, status=None, limit=100):
+        return []
+
+    async def get_clock_evidence(self):
+        raise AssertionError("not called")
+
+    async def submit(self, leg, *, client_order_id):
+        raise AssertionError("not called")
+
+    async def cancel(self, order_id):
+        raise AssertionError("not called")
+
+    async def get_order_by_client_order_id(self, client_order_id):
+        return None
+
+
+class FakeRegistry:
+    def __init__(self, port: FakeAlpacaPort | None = None) -> None:
+        self._port = port or FakeAlpacaPort()
+
+    def resolve(self, broker_id: str) -> FakeAlpacaPort:
+        assert broker_id == "alpaca"
+        return self._port
 
 
 @pytest.fixture
@@ -280,23 +352,6 @@ async def test_lease_lost_returns_typed_503(api: FastAPI, monkeypatch: pytest.Mo
 async def test_reconcile_now_runs_operator_pass(
     api: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    class FakeAlpacaPort:
-        broker_id = "alpaca"
-
-        async def submit(self, leg, *, client_order_id):  # pragma: no cover - protocol seam
-            raise AssertionError("not called")
-
-        async def cancel(self, order_id):  # pragma: no cover - protocol seam
-            raise AssertionError("not called")
-
-        async def get_order_by_client_order_id(self, client_order_id):
-            return None
-
-    class FakeRegistry:
-        def resolve(self, broker_id: str) -> FakeAlpacaPort:
-            assert broker_id == "alpaca"
-            return FakeAlpacaPort()
-
     observed: dict[str, object] = {}
 
     async def fake_reconcile(repo, *, read, trade, trigger):
@@ -324,3 +379,66 @@ async def test_reconcile_now_runs_operator_pass(
     }
     assert observed["trigger"] == "OPERATOR_RECONCILE_NOW"
     assert observed["read"] is observed["trade"]
+
+
+@pytest.mark.asyncio
+async def test_reconcile_now_translates_broker_failure(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_reconcile(*_args, **_kwargs):
+        raise BrokerUnavailable("broker offline")
+
+    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: FakeRegistry())
+    monkeypatch.setattr(alpaca_clerk_sqlite, "reconcile_account", fake_reconcile)
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/reconcile"
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "broker_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_now_translates_poisoned_repository(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_reconcile(*_args, **_kwargs):
+        raise RepositoryPoisoned("mirror finalize failed")
+
+    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: FakeRegistry())
+    monkeypatch.setattr(alpaca_clerk_sqlite, "reconcile_account", fake_reconcile)
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/reconcile"
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "sqlite_authority_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_now_rejects_mismatched_broker_account_before_recovery(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called = False
+
+    async def fake_reconcile(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("must not reconcile the wrong broker account")
+
+    registry = FakeRegistry(FakeAlpacaPort(account_id="PA-OTHER"))
+    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: registry)
+    monkeypatch.setattr(alpaca_clerk_sqlite, "reconcile_account", fake_reconcile)
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/reconcile"
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "broker_account_mismatch"
+    assert called is False

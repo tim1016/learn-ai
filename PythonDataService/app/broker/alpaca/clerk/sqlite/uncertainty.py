@@ -21,8 +21,10 @@ from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     BROKER_SNAPSHOT_STALE_REASON_CODE,
+    EXIT_NOT_FLAT_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
     POSITION_DRIFT_REASON_CODE,
+    ExitNotFlatCause,
     PositionDriftCause,
     broker_snapshot_stale_cause_is_valid,
 )
@@ -61,6 +63,14 @@ def _order_outcome_unknown_cause_is_valid(value: Any) -> bool:
     return isinstance(value, dict)
 
 
+def _exit_not_flat_cause_is_valid(value: Any) -> bool:
+    try:
+        ExitNotFlatCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
 _REASON_POLICIES: dict[str, ReasonPolicy] = {
     POSITION_DRIFT_REASON_CODE: ReasonPolicy(
         scope="ACCOUNT_CLERK",
@@ -79,6 +89,12 @@ _REASON_POLICIES: dict[str, ReasonPolicy] = {
         blocks_new_exposure=True,
         allows_reduction=False,
         cause_is_valid=_order_outcome_unknown_cause_is_valid,
+    ),
+    EXIT_NOT_FLAT_REASON_CODE: ReasonPolicy(
+        scope="BOT",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        cause_is_valid=_exit_not_flat_cause_is_valid,
     ),
 }
 
@@ -106,6 +122,7 @@ def raise_uncertainty(
     evidence_refs: tuple[str, ...] = (),
     cause_facts: dict[str, Any] | None = None,
     severity: str = "warning",
+    refresh_unchanged: bool = False,
 ) -> bool:
     """Raise or refresh one typed episode; unknown causes fail closed account-wide."""
     policy, scope, effective_strategy_instance_id = _effective_identity(
@@ -147,6 +164,7 @@ def raise_uncertainty(
         facts_json=facts_json,
         build_raise=lambda: build_transition("UNCERTAINTY_RAISED"),
         build_refresh=lambda: build_transition("UNCERTAINTY_REFRESHED"),
+        refresh_unchanged=refresh_unchanged,
     )
     return outcome != "unchanged"
 
@@ -184,6 +202,39 @@ def resolve_reconciliation_uncertainty(
         scope="ACCOUNT_CLERK",
         reason_code=reason_code,
         strategy_instance_id=None,
+        build_transition=build_transition,
+    )
+
+
+def resolve_exit_not_flat_uncertainty(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    evidence_refs: tuple[str, ...],
+) -> bool:
+    """Close only the bot-scoped non-flat fence after attributed-flat proof."""
+
+    def build_transition(uncertainty_id: str) -> TransitionInput:
+        facts = UncertaintyResolvedFacts(
+            uncertainty_id=uncertainty_id,
+            resolution_kind="ATTRIBUTED_FLAT_PROVEN",
+            evidence_refs=list(evidence_refs),
+        )
+        return TransitionInput(
+            strategy_instance_id=strategy_instance_id,
+            transition_kind="UNCERTAINTY_RESOLVED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="EXIT_NOT_FLAT_RESOLVED",
+            facts_json=facts.to_facts_json(),
+        )
+
+    return repo.resolve_uncertainty_if_active(
+        scope="BOT",
+        reason_code=EXIT_NOT_FLAT_REASON_CODE,
+        strategy_instance_id=strategy_instance_id,
         build_transition=build_transition,
     )
 
@@ -263,6 +314,20 @@ def _position_drift_allows_action(
     ) and _moves_toward_zero_without_crossing(current_attributed, intent.signed_delta)
 
 
+def _exit_not_flat_allows_action(
+    *,
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+) -> bool:
+    if intent is None or intent.quantity <= 0 or intent.side.upper() not in {"BUY", "SELL"}:
+        return False
+    try:
+        cause = ExitNotFlatCause.from_mapping(facts.cause_facts)
+    except ValueError:
+        return False
+    return cause.symbol == intent.symbol.upper()
+
+
 def decide_capability(
     repo: ClerkSqliteRepository,
     *,
@@ -275,6 +340,13 @@ def decide_capability(
         return CapabilityDecision(allowed=True, capability=capability)
 
     if capability is Capability.NEW_EXPOSURE:
+        if repo.reconciliation_in_progress():
+            return CapabilityDecision(
+                allowed=False,
+                capability=capability,
+                reason_code="RECONCILIATION_IN_PROGRESS",
+                why="Account reconciliation is proving fresh broker truth.",
+            )
         active_exit = repo.active_exit_for_strategy(strategy_instance_id)
         if active_exit is not None:
             return CapabilityDecision(
@@ -310,12 +382,31 @@ def decide_capability(
                 and policy is not None
                 and policy.allows_reduction
                 and uncertainty["allows_reduction"]
-                and reason_code == POSITION_DRIFT_REASON_CODE
-                and _position_drift_allows_action(
-                    repo,
-                    uncertainty=uncertainty,
-                    facts=facts,
-                    intent=reduction_intent,
+                and (
+                    (
+                        reason_code == POSITION_DRIFT_REASON_CODE
+                        and _position_drift_allows_action(
+                            repo,
+                            uncertainty=uncertainty,
+                            facts=facts,
+                            intent=reduction_intent,
+                        )
+                    )
+                    or (
+                        reason_code == EXIT_NOT_FLAT_REASON_CODE
+                        and _exit_not_flat_allows_action(
+                            facts=facts,
+                            intent=reduction_intent,
+                        )
+                        and reduction_intent is not None
+                        and _moves_toward_zero_without_crossing(
+                            repo.position(
+                                strategy_instance_id,
+                                reduction_intent.symbol.upper(),
+                            ),
+                            reduction_intent.signed_delta,
+                        )
+                    )
                 )
             )
         )
@@ -371,6 +462,7 @@ def require_admission(repo: ClerkSqliteRepository, *, strategy_instance_id: str)
 __all__ = [
     "BROKER_SNAPSHOT_STALE_REASON_CODE",
     "DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS",
+    "EXIT_NOT_FLAT_REASON_CODE",
     "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
     "POSITION_DRIFT_REASON_CODE",
     "AdmissionBlockedError",
@@ -382,5 +474,6 @@ __all__ = [
     "raise_uncertainty",
     "require_admission",
     "require_capability",
+    "resolve_exit_not_flat_uncertainty",
     "resolve_reconciliation_uncertainty",
 ]

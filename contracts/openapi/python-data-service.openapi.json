@@ -36490,6 +36490,12 @@
             "type": "integer"
           },
           "verdict": {
+            "enum": [
+              "clean",
+              "unexplained_order",
+              "position_drift",
+              "stale"
+            ],
             "title": "Verdict",
             "type": "string"
           }

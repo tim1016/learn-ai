@@ -8,7 +8,9 @@ raise/resolve are idempotent.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,13 +27,19 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     require_admission,
     resolve_reconciliation_uncertainty,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    OrderOutcomeUnknownCause,
+    PositionDriftCause,
+    PositionDriftObservation,
+    UnknownOrderIdentity,
+)
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 OTHER_SID = "qqq-bot"
 
 
-def _clock_seq():
+def _clock_seq() -> Callable[[], int]:
     counter = {"t": 1_700_000_000_000}
 
     def clock() -> int:
@@ -42,7 +50,7 @@ def _clock_seq():
 
 
 @pytest.fixture
-def repo(tmp_path: Path):
+def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
     r.register_strategy_instance(strategy_instance_id=OTHER_SID, symbol="QQQ", config_hash="h2")
@@ -50,8 +58,13 @@ def repo(tmp_path: Path):
     r.close()
 
 
-def _raise(repo: ClerkSqliteRepository, *, strategy_instance_id: str | None, **overrides) -> bool:
-    kwargs = {
+def _raise(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str | None,
+    **overrides: Any,
+) -> bool:
+    kwargs: dict[str, Any] = {
         "reason_code": "ORDER_OUTCOME_UNKNOWN",
         "headline": "headline",
         "explanation": "explanation",
@@ -60,6 +73,27 @@ def _raise(repo: ClerkSqliteRepository, *, strategy_instance_id: str | None, **o
     }
     kwargs.update(overrides)
     return raise_uncertainty(repo, strategy_instance_id=strategy_instance_id, **kwargs)
+
+
+def test_cause_encoders_emit_the_unique_sorted_order_required_by_decoders() -> None:
+    position_cause = PositionDriftCause(
+        positions=(
+            PositionDriftObservation(symbol="SPY", broker_qty=2.0, attributed_qty=1.0),
+            PositionDriftObservation(symbol="QQQ", broker_qty=3.0, attributed_qty=1.0),
+        )
+    )
+    order_cause = OrderOutcomeUnknownCause(
+        identities=(
+            UnknownOrderIdentity(effect_operation_id="effect:b", order_ref="order:2"),
+            UnknownOrderIdentity(effect_operation_id="effect:a", order_ref="order:1"),
+        )
+    )
+
+    assert PositionDriftCause.from_mapping(position_cause.to_mapping()).positions[0].symbol == "QQQ"
+    assert (
+        OrderOutcomeUnknownCause.from_mapping(order_cause.to_mapping()).identities[0].effect_operation_id
+        == "effect:a"
+    )
 
 
 # ── raise_uncertainty / resolve_uncertainty ─────────────────────────────────
@@ -271,6 +305,32 @@ def test_admit_new_exposure_blocked_by_an_active_hold(repo: ClerkSqliteRepositor
     decision = admit_new_exposure(repo, strategy_instance_id=SID)
     assert decision.allowed is False
     assert decision.reason_code == "UNEXPLAINED_ORDER"
+
+
+@pytest.mark.parametrize("capability", [Capability.CANCEL, Capability.RECONCILE])
+def test_safety_capabilities_remain_allowed_under_active_hold(
+    repo: ClerkSqliteRepository, capability: Capability
+) -> None:
+    facts = AccountHoldRaisedFacts(reason_code="UNEXPLAINED_ORDER", evidence_refs=["bo-1"])
+    repo.append_transition(
+        TransitionInput(
+            transition_kind="ACCOUNT_HOLD_RAISED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="ACCOUNT_HOLD_RAISED",
+            facts_json=facts.to_facts_json(),
+        )
+    )
+
+    decision = decide_capability(
+        repo,
+        capability=capability,
+        strategy_instance_id=SID,
+    )
+
+    assert decision.allowed is True
 
 
 # ── require_admission ────────────────────────────────────────────────────────

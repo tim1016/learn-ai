@@ -22057,8 +22057,11 @@ export interface components {
             foreign_order_count: number;
             /** Resolved Count */
             resolved_count: number;
-            /** Verdict */
-            verdict: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "clean" | "unexplained_order" | "position_drift" | "stale";
         };
         /**
          * ReconciliationSummary

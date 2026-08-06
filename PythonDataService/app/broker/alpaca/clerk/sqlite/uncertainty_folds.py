@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +18,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     OrderOutcomeUnknownCause,
     UnknownOrderIdentity,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _transition_sequence(conn: sqlite3.Connection) -> int:
@@ -41,13 +44,28 @@ def _unknown_outcome_envelope(*, cause: OrderOutcomeUnknownCause, why: str) -> U
     )
 
 
+def _log_unreadable_active_uncertainty(
+    *, active: sqlite3.Row, strategy_instance_id: str, reason: str
+) -> None:
+    logger.warning(
+        "active broker-outcome uncertainty has an unreadable facts envelope",
+        extra={
+            "action": "unknown_outcome_envelope_unreadable",
+            "uncertainty_id": active["uncertainty_id"],
+            "strategy_instance_id": strategy_instance_id,
+            "facts_schema_version": active["facts_schema_version"],
+            "reason": reason,
+        },
+    )
+
+
 def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Atomically pair an UNKNOWN effect state with its fail-closed episode."""
     strategy_instance_id = payload["strategy_instance_id"]
     effect_operation_id = payload["effect_operation_id"]
     order_ref = payload["order_ref"]
     active = conn.execute(
-        "SELECT facts_schema_version, facts_json FROM uncertainties "
+        "SELECT uncertainty_id, facts_schema_version, facts_json FROM uncertainties "
         "WHERE scope = 'BOT' AND strategy_instance_id = ? AND reason_code = ? "
         "AND resolved_at_ms IS NULL",
         (strategy_instance_id, ORDER_OUTCOME_UNKNOWN_REASON_CODE),
@@ -61,10 +79,12 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
             "blocks_new_exposure, allows_reduction, custody_owner, strategy_instance_id, "
             "reason_code, headline, explanation, operator_impact, next_step, observed_at_ms, "
             "resolved_at_ms, evidence_refs_json, facts_schema_version, facts_json) "
-            "VALUES (?, 'BOT', ?, 1, 0, 'ACCOUNT_CLERK', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+            "VALUES (?, 'BOT', ?, ?, ?, 'ACCOUNT_CLERK', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
             (
                 f"uncertainty:{_transition_sequence(conn)}",
                 facts.severity,
+                1 if facts.blocks_new_exposure else 0,
+                1 if facts.allows_reduction else 0,
                 strategy_instance_id,
                 facts.reason_code,
                 facts.headline,
@@ -82,11 +102,21 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
     # Never bless or replace an envelope from an unknown schema/shape. It
     # stays active and fail-closed until an operator-supported migration.
     if active["facts_schema_version"] != FACTS_SCHEMA_VERSION:
+        _log_unreadable_active_uncertainty(
+            active=active,
+            strategy_instance_id=strategy_instance_id,
+            reason="facts_schema_version_mismatch",
+        )
         return
     try:
         prior_facts = UncertaintyRaisedFacts.from_facts_json(active["facts_json"])
         prior_cause = OrderOutcomeUnknownCause.from_mapping(prior_facts.cause_facts)
     except (TypeError, ValueError, KeyError):
+        _log_unreadable_active_uncertainty(
+            active=active,
+            strategy_instance_id=strategy_instance_id,
+            reason="facts_parse_failed",
+        )
         return
     cause = OrderOutcomeUnknownCause(
         identities=tuple(
@@ -129,11 +159,21 @@ def resolve_unknown_outcome_if_proven(conn: sqlite3.Connection, payload: dict[st
     if active is None:
         return UnknownEvidenceDisposition(False, False, False)
     if active["facts_schema_version"] != FACTS_SCHEMA_VERSION:
+        _log_unreadable_active_uncertainty(
+            active=active,
+            strategy_instance_id=payload["strategy_instance_id"],
+            reason="facts_schema_version_mismatch",
+        )
         return UnknownEvidenceDisposition(False, True, True)
     try:
         facts = UncertaintyRaisedFacts.from_facts_json(active["facts_json"])
         cause = OrderOutcomeUnknownCause.from_mapping(facts.cause_facts)
     except (TypeError, ValueError, KeyError):
+        _log_unreadable_active_uncertainty(
+            active=active,
+            strategy_instance_id=payload["strategy_instance_id"],
+            reason="facts_parse_failed",
+        )
         return UnknownEvidenceDisposition(False, True, True)
     proven = UnknownOrderIdentity(
         effect_operation_id=payload["effect_operation_id"],

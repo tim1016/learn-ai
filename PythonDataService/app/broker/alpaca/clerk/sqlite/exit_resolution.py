@@ -27,10 +27,14 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    EXIT_NOT_FLAT_REASON_CODE,
     Capability,
     ReductionIntent,
+    raise_uncertainty,
     require_capability,
+    resolve_exit_not_flat_uncertainty,
 )
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from app.broker.contract.ports import BrokerTradePort
@@ -156,6 +160,27 @@ async def _resolve_claimed(
             why=f"attributed_qty={final_qty} remains for {symbol!r} after terminal evidence.",
             transition_kind="EXIT_NOT_FLAT",
         )
+        raise_uncertainty(
+            repo,
+            strategy_instance_id=effect.strategy_instance_id,
+            reason_code=EXIT_NOT_FLAT_REASON_CODE,
+            headline="A completed EXIT left attributed exposure",
+            explanation=(
+                f"The reducing order became terminal while {final_qty:g} {symbol} "
+                "remained attributed to this strategy."
+            ),
+            operator_impact=(
+                "New exposure is paused for this strategy; exact risk reduction "
+                "and reconciliation remain available."
+            ),
+            next_step="Run another EXIT or reconcile until attributed exposure is flat.",
+            evidence_refs=(reducing.order_ref,),
+            cause_facts=ExitNotFlatCause(
+                symbol=symbol.upper(),
+                attributed_qty=final_qty,
+            ).to_mapping(),
+            severity="error",
+        )
     return _snapshot(repo, effect_operation_id)
 
 
@@ -194,13 +219,14 @@ async def _cancel_and_prove_entry(
     entry: OrderResource,
     broker: ClaimedBrokerIO,
 ) -> bool:
+    cancel_error: BrokerError | None = None
     if not _is_terminal(entry.broker_state) and entry.broker_order_id is not None:
         _append_order_phase_once(repo, effect_operation_id, entry, "ORDER_CANCEL_REQUESTED")
         try:
             # Reissuing cancel for the same broker identity is a retry of the
             # durable phase, not a second intent. This makes a lost cancel
             # response recoverable when the exact poll still shows working.
-            await broker.cancel(entry.broker_order_id)
+            await broker.cancel(entry.broker_order_id, order_ref=entry.order_ref)
         except BrokerUnavailable as exc:
             fold_uncertain(
                 repo,
@@ -210,9 +236,9 @@ async def _cancel_and_prove_entry(
                 transition_kind="ORDER_CANCEL_UNCERTAIN",
             )
             return False
-        except BrokerError:
+        except BrokerError as exc:
             # The exact lookup below, not the cancel response, proves state.
-            pass
+            cancel_error = exc
 
     observed = await broker.observe_exact(entry.client_order_id)
     if isinstance(observed, BrokerError) or observed is None:
@@ -220,7 +246,13 @@ async def _cancel_and_prove_entry(
             repo,
             effect_operation_id=effect_operation_id,
             order_ref=entry.order_ref,
-            why=(str(observed) if isinstance(observed, BrokerError) else "No exact order evidence yet."),
+            why=(
+                str(observed)
+                if isinstance(observed, BrokerError)
+                else str(cancel_error)
+                if cancel_error is not None
+                else "No exact order evidence yet."
+            ),
             transition_kind="ORDER_CANCEL_UNCERTAIN",
         )
         return False
@@ -442,6 +474,11 @@ def _fold_attributed_flat(repo: ClerkSqliteRepository, effect_operation_id: str,
             facts_json=canonicalize({}),
         )
     )
+    resolve_exit_not_flat_uncertainty(
+        repo,
+        strategy_instance_id=effect.strategy_instance_id,
+        evidence_refs=(order_ref,),
+    )
 
 
 def _primary_entry_ref(repo: ClerkSqliteRepository, entries: list[OrderResource]) -> str:
@@ -461,7 +498,26 @@ def _reducing_order_facts(repo: ClerkSqliteRepository, order_ref: str) -> ExitRe
 
 def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
     transitions = repo.transitions_for_order(order_ref)
-    return repo.clock() - transitions[0]["recorded_at_ms"] >= UNCERTAIN_SUBMIT_GRACE_MS
+    uncertainty_times = [
+        transition["recorded_at_ms"]
+        for transition in transitions
+        if transition["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN"
+    ]
+    if uncertainty_times:
+        anchor_ms = max(uncertainty_times)
+    else:
+        created = next(
+            (
+                transition
+                for transition in transitions
+                if transition["transition_kind"] == "EXIT_REDUCING_ORDER_CREATED"
+            ),
+            None,
+        )
+        if created is None:
+            raise AssertionError(f"no reducing-order creation transition for {order_ref!r}")
+        anchor_ms = created["recorded_at_ms"]
+    return repo.clock() - anchor_ms >= UNCERTAIN_SUBMIT_GRACE_MS
 
 
 def _deterministic_intent_id(effect_operation_id: str) -> str:

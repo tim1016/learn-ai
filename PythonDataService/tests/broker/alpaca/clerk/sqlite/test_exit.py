@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
-from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import (
     ExitSubmission,
     accept_exit,
@@ -40,25 +40,11 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
-
-
-class _TestClock:
-    def __init__(self, value: int) -> None:
-        self.value = value
-
-    def __call__(self) -> int:
-        return self.value
-
-    def advance(self, delta_ms: int) -> None:
-        self.value += delta_ms
-
-
-def _clock_at(start_ms: int) -> _TestClock:
-    return _TestClock(start_ms)
 
 
 @pytest.fixture
@@ -166,7 +152,7 @@ class _FakeTrade:
             raise self._lookup_error
         if self._lookup_results is not None:
             if not self._lookup_results:
-                return None
+                raise AssertionError("configured lookup_results queue was exhausted")
             result = self._lookup_results.pop(0)
             if result is not None:
                 return result.model_copy(update={"client_order_id": client_order_id})
@@ -577,6 +563,85 @@ async def test_lost_poll_response_stays_uncertain(repo: ClerkSqliteRepository) -
     assert trade.submit_calls == []
 
 
+async def test_cancel_error_reason_is_preserved_when_exact_poll_is_absent(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-cancel-reason",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    trade = _FakeTrade(
+        cancel_error=BrokerRequestInvalid("not cancelable", broker="alpaca"),
+        lookup_results=[None],
+    )
+
+    await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=trade,
+    )
+
+    uncertain = [
+        transition
+        for transition in repo.transitions_for_order(entry_ref)
+        if transition["transition_kind"] == "ORDER_CANCEL_UNCERTAIN"
+    ]
+    assert len(uncertain) == 1
+    assert "not cancelable" in uncertain[0]["facts_json"]
+
+
+async def test_cancelled_cancel_retains_unknown_custody_before_claim_release(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-cancelled-cancel",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+
+    class BlockingCancelTrade(_FakeTrade):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancel_started = asyncio.Event()
+
+        async def cancel(self, order_id: str) -> None:
+            self.cancel_calls.append(order_id)
+            self.cancel_started.set()
+            await asyncio.Event().wait()
+
+    trade = BlockingCancelTrade()
+    task = asyncio.create_task(
+        resolve_exit(
+            repo,
+            effect_operation_id=accepted.effect_operation_id,
+            trade=trade,
+        )
+    )
+    await trade.cancel_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    assert any(
+        transition["transition_kind"] == "ORDER_CANCEL_UNCERTAIN"
+        for transition in repo.transitions_for_order(entry_ref)
+    )
+
+
 async def test_a_mismatched_client_order_id_on_the_cancel_poll_stays_uncertain(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -758,6 +823,45 @@ async def test_a_later_resolve_call_resolves_the_reducing_orders_lost_submit(
     assert reducing_order is not None and reducing_order.broker_order_id is not None
 
 
+async def test_each_absent_reducing_poll_rearms_the_submit_grace(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-rearmed-grace",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    first = await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=_FakeTrade(submit_error=BrokerUnavailable("timeout")),
+    )
+    assert first.reducing_order_ref is not None
+
+    repo._clock.advance(20_000)  # type: ignore[attr-defined]
+    first_absent = _FakeTrade(lookup_results=[None])
+    await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=first_absent,
+    )
+    assert first_absent.submit_calls == []
+
+    repo._clock.advance(11_000)  # type: ignore[attr-defined]
+    second_absent = _FakeTrade(lookup_results=[None])
+    await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=second_absent,
+    )
+    assert second_absent.submit_calls == []
+
+
 async def test_acknowledged_reducing_order_is_polled_until_terminal(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -858,6 +962,22 @@ async def test_reducing_order_resolves_without_flattening_folds_a_precise_failur
     assert effect is not None and effect.state == "failed"
     transitions = repo.transitions_for_order(result.reducing_order_ref)  # type: ignore[arg-type]
     assert any(t["summary_code"] == "EXIT_NOT_FLAT" for t in transitions)
+    uncertainty = repo.active_uncertainty(
+        scope="BOT",
+        reason_code="EXIT_NOT_FLAT",
+        strategy_instance_id=SID,
+    )
+    assert uncertainty is not None
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="enter-after-nonflat-exit",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(quantity=1),
+        )
+    assert exc_info.value.decision.reason_code == "EXIT_NOT_FLAT"
 
 
 async def test_mismatched_client_order_id_on_reducing_submit_stays_uncertain(
@@ -1004,6 +1124,61 @@ async def test_same_process_overlapping_exit_resolvers_submit_one_reduction(
         )
         == 1
     )
+
+
+async def test_in_flight_duplicate_submit_exit_returns_existing_snapshot(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+
+    class BlockingTrade(_FakeTrade):
+        def __init__(self) -> None:
+            super().__init__(
+                submit_result=_broker_order(
+                    "placeholder",
+                    side="sell",
+                    status="filled",
+                    filled_quantity=10,
+                    filled_avg_price=101,
+                )
+            )
+            self.submit_started = asyncio.Event()
+            self.release_submit = asyncio.Event()
+
+        async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+            self.submit_started.set()
+            await self.release_submit.wait()
+            return await super().submit(leg, client_order_id=client_order_id)
+
+    trade = BlockingTrade()
+    first = asyncio.create_task(
+        submit_exit(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="exit-in-flight-retry",
+            lifecycle_run_id=RUN_ID,
+            entry_order_ref=entry_ref,
+            trade=trade,
+        )
+    )
+    await trade.submit_started.wait()
+
+    duplicate = await submit_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-in-flight-retry",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+        trade=trade,
+    )
+
+    assert duplicate.created is False
+    assert duplicate.reducing_order_ref is not None
+    trade.release_submit.set()
+    await first
+    assert len(trade.submit_calls) == 1
 
 
 async def test_nested_timeline_carries_the_exit_effect_operation_id_not_the_enters(

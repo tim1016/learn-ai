@@ -23,7 +23,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
     TransitionInput,
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    OperationClaimError,
+)
 from app.broker.contract.ports import BrokerTradePort
 
 ACTION_EXIT = "EXIT"
@@ -162,11 +165,19 @@ async def submit_exit(
         entry_order_ref=entry_order_ref,
     )
     assert accepted.effect_operation_id is not None
-    resolved = await resolve_exit(
-        repo,
-        effect_operation_id=accepted.effect_operation_id,
-        trade=trade,
-    )
+    try:
+        resolved = await resolve_exit(
+            repo,
+            effect_operation_id=accepted.effect_operation_id,
+            trade=trade,
+        )
+    except OperationClaimError:
+        if accepted.created:
+            raise
+        # A concurrent attempt already owns the broker-contact claim for this
+        # exact durable EXIT. A transport retry returns the existing snapshot;
+        # it must not turn idempotency into a 500 or contact the broker again.
+        return accepted
     return replace(resolved, created=accepted.created)
 
 

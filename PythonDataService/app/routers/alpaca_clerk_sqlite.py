@@ -39,7 +39,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     RepositoryPoisoned,
 )
 from app.broker.contract.errors import BrokerError, UnknownBrokerError
-from app.broker.contract.ports import BrokerTradePort
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.broker.contract.registry import get_broker_registry
 from app.schemas.alpaca_clerk_sqlite import (
     CommandResponse,
@@ -208,7 +208,7 @@ async def reconcile_now(account_id: str) -> ReconciliationResponse:
             status_code=503,
             detail={"reason": "alpaca_broker_unavailable", "message": str(exc)},
         ) from exc
-    if not isinstance(port, BrokerTradePort):
+    if not isinstance(port, BrokerReadPort) or not isinstance(port, BrokerTradePort):
         raise HTTPException(
             status_code=503,
             detail={
@@ -217,6 +217,18 @@ async def reconcile_now(account_id: str) -> ReconciliationResponse:
             },
         )
     try:
+        broker_account = await port.get_account()
+        if broker_account.account_id != account_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "broker_account_mismatch",
+                    "message": (
+                        f"Requested SQLite authority {account_id!r}, but the configured "
+                        f"Alpaca adapter is bound to {broker_account.account_id!r}."
+                    ),
+                },
+            )
         result = await reconcile_account(
             repo,
             read=port,
