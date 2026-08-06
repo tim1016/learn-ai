@@ -59,7 +59,7 @@ def repo(tmp_path: Path):
 
 
 def test_schema_version_includes_bounded_projection_indexes() -> None:
-    assert schema.SCHEMA_VERSION == 5
+    assert schema.SCHEMA_VERSION == 6
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
@@ -71,6 +71,63 @@ def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
 
     with pytest.raises(SchemaVersionMismatch):
         ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+
+def test_v4_authority_upgrades_in_place_on_open(tmp_path: Path) -> None:
+    """#1396 P2: the v4->v5 SCHEMA_VERSION bump added no upgrade path, so an
+    account initialized on schema-4 could no longer be opened after
+    deployment. Downgrade a real db to look like v4 (drop the v5-only
+    indexes, set schema_version back to 4) and confirm `open()` migrates it
+    in place instead of raising `SchemaVersionMismatch`."""
+    clock = _clock_seq()
+    r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    v5_only_indexes = tuple(statement.split()[5] for statement in schema.SCHEMA_MIGRATIONS[4])
+    for index_name in v5_only_indexes:
+        r._conn.execute(f"DROP INDEX {index_name}")
+    r._conn.execute("UPDATE control_meta SET schema_version = 4 WHERE id = 1")
+    r._conn.commit()
+    r.close()
+
+    reopened = ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    try:
+        row = reopened._conn.execute(
+            "SELECT schema_version FROM control_meta WHERE id = 1"
+        ).fetchone()
+        assert row["schema_version"] == schema.SCHEMA_VERSION
+        existing_indexes = {
+            index_row[0]
+            for index_row in reopened._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'"
+            )
+        }
+        assert set(v5_only_indexes) <= existing_indexes
+    finally:
+        reopened.close()
+
+
+def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> None:
+    assert schema.is_upgradable_to_current(schema.SCHEMA_VERSION) is True
+    assert schema.is_upgradable_to_current(4) is True
+    assert schema.is_upgradable_to_current(1) is False
+
+
+def test_migrate_schema_rejects_an_unregistered_version_without_mutating() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    schema.configure_connection(conn)
+    schema.apply_schema(conn)
+    conn.execute(
+        "INSERT INTO control_meta (id, schema_version, broker, account_id, "
+        "db_identity_token, authority_generation, control_revision, created_at_ms, "
+        "last_open_at_ms) VALUES (1, 1, 'alpaca', 'PA-TEST', 'tok', 1, 0, 1, 1)"
+    )
+    conn.commit()
+
+    with pytest.raises(ValueError, match="no registered migration"):
+        schema.migrate_schema(conn, from_version=1)
+
+    row = conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()
+    assert row["schema_version"] == 1
 
 
 def test_genesis_prev_hash_column_is_not_null(repo: ClerkSqliteRepository) -> None:

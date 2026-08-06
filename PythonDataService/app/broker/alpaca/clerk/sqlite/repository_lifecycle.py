@@ -193,7 +193,16 @@ def _validate_control_identity(
             f"{db_path} embeds account_id {control_row['account_id']!r}, "
             f"requested {account_id!r}"
         )
-    if control_row["schema_version"] != schema.SCHEMA_VERSION:
+    if control_row["schema_version"] < schema.SCHEMA_VERSION:
+        try:
+            schema.migrate_schema(conn, from_version=control_row["schema_version"])
+        except ValueError as exc:
+            conn.close()
+            raise SchemaVersionMismatch(
+                f"{db_path} schema_version={control_row['schema_version']}, "
+                f"expected {schema.SCHEMA_VERSION}: {exc}"
+            ) from exc
+    elif control_row["schema_version"] > schema.SCHEMA_VERSION:
         conn.close()
         raise SchemaVersionMismatch(
             f"{db_path} schema_version={control_row['schema_version']}, "

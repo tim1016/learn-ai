@@ -157,6 +157,61 @@ def test_timeline_exposes_source_observation_and_record_clocks(tmp_path: Path) -
     assert entry.recorded_at_ms > 0
 
 
+def test_bot_snapshot_is_one_coherent_read_despite_a_concurrent_commit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """#1396 P2: `_snapshot` issues its reads (`_meta`, `_runs`, `_operations`,
+    ..., `_uncertainties`) without wrapping them in one transaction, so the
+    Python lock alone cannot stop the live repository connection from
+    committing a fold in between two of them. Simulate exactly that: commit a
+    brand-new account-wide uncertainty while `_snapshot` is mid-read (right
+    after `_runs`, before `_uncertainties`) and assert the returned
+    projection reflects neither that uncertainty nor a control_revision
+    ahead of the point where the read began — one coherent snapshot, not a
+    mix of two."""
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    submit_start_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+        clock=clock,
+    )
+    control_revision_before = repo.control_meta_snapshot().control_revision
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    injected_control_revision: list[int] = []
+    original_runs = reader._runs
+
+    def _runs_then_concurrent_write(strategy_instance_id: str | None):
+        result = original_runs(strategy_instance_id)
+        raise_uncertainty(
+            repo,
+            strategy_instance_id=None,
+            reason_code="CONCURRENT_WRITE_DURING_READ",
+            headline="Injected mid-read write",
+            explanation="Proves the reader's transaction isolates a concurrent commit.",
+            operator_impact="none — test only",
+            next_step="none",
+        )
+        injected_control_revision.append(repo.control_meta_snapshot().control_revision)
+        return result
+
+    monkeypatch.setattr(reader, "_runs", _runs_then_concurrent_write)
+
+    try:
+        snapshot = reader.bot_snapshot(SID)
+    finally:
+        reader.close()
+        repo.close()
+
+    assert injected_control_revision, "the concurrent write must have actually landed"
+    assert injected_control_revision[0] > control_revision_before
+    assert snapshot is not None
+    assert snapshot.control_revision == control_revision_before
+    assert snapshot.uncertainties == ()
+
+
 def test_operation_page_is_stable_when_a_new_operation_appends(tmp_path: Path) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)
@@ -212,6 +267,70 @@ def test_operation_page_is_stable_when_a_new_operation_appends(tmp_path: Path) -
     assert operation_ids == {
         f"effect:{SID}:decision-1",
         f"effect:{SID}:decision-2",
+    }
+
+
+def test_operation_page_does_not_drop_an_operation_whose_updated_at_ms_advances_mid_traversal(
+    tmp_path: Path,
+) -> None:
+    """#1396 P2: the keyset cursor must anchor on an immutable key. Folding a
+    fill (or any other evidence) onto a not-yet-paged operation moves its
+    `updated_at_ms` forward — if the cursor anchored on that mutable column,
+    the operation would jump above the anchor and vanish from every
+    remaining page. It must still be reachable via the next page."""
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    submit_start_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+        clock=clock,
+    )
+    leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
+    for decision_id in ("decision-1", "decision-2", "decision-3"):
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id=decision_id,
+            lifecycle_run_id="run-1",
+            leg=leg,
+        )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        first = reader.operation_page(strategy_instance_id=SID, page_size=1)
+        assert first.next_cursor is not None
+        assert {op.effect_operation_id for op in first.operations} == {
+            f"effect:{SID}:decision-3"
+        }
+
+        # decision-1 is the oldest operation, not yet shown on any page.
+        # Advance its `updated_at_ms` far past every other operation's,
+        # exactly as a fold would on new evidence — without touching
+        # `created_at_ms`, the immutable key the cursor now anchors on.
+        repo._conn.execute(
+            "UPDATE effect_operations SET updated_at_ms = ? WHERE effect_operation_id = ?",
+            (clock() + 1_000_000, f"effect:{SID}:decision-1"),
+        )
+        repo._conn.commit()
+
+        second = reader.operation_page(
+            strategy_instance_id=SID,
+            cursor=first.next_cursor,
+            page_size=10,
+        )
+    finally:
+        reader.close()
+        repo.close()
+
+    operation_ids = {
+        operation.effect_operation_id for operation in (*first.operations, *second.operations)
+    }
+    assert operation_ids == {
+        f"effect:{SID}:decision-1",
+        f"effect:{SID}:decision-2",
+        f"effect:{SID}:decision-3",
     }
 
 

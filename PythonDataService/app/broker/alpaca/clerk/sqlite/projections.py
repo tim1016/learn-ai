@@ -11,7 +11,8 @@ import base64
 import json
 import sqlite3
 import threading
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -83,8 +84,30 @@ class SqliteClerkProjectionReader:
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA query_only = ON")
-        with self._lock:
+        with self._read_transaction():
             self._verify_identity()
+
+    @contextmanager
+    def _read_transaction(self) -> Iterator[None]:
+        """One coherent snapshot for a multi-query projection read (#1396 P2).
+
+        The ``threading.Lock`` alone only serializes this reader against
+        itself; it does not stop the live repository connection from
+        committing a fold between two of this reader's own ``SELECT``s, which
+        could combine an old ``control_revision`` with newer rows. An
+        explicit ``BEGIN`` closes that gap: in WAL mode every read inside one
+        transaction sees the snapshot as of ``BEGIN``, regardless of writer
+        commits landing concurrently.
+        """
+        with self._lock:
+            self._conn.execute("BEGIN")
+            try:
+                yield
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+            else:
+                self._conn.execute("COMMIT")
 
     @classmethod
     def from_repository(
@@ -123,7 +146,7 @@ class SqliteClerkProjectionReader:
         operation_limit: int = DEFAULT_OPERATION_LIMIT,
     ) -> ClerkProjection | None:
         operation_limit = _bounded_limit(operation_limit)
-        with self._lock:
+        with self._read_transaction():
             self._verify_identity()
             exists = self._conn.execute(
                 "SELECT 1 FROM strategy_instances WHERE strategy_instance_id = ?",
@@ -144,7 +167,7 @@ class SqliteClerkProjectionReader:
     ) -> ClerkProjection:
         operation_limit = _bounded_limit(operation_limit)
         now_ms = self._clock()
-        with self._lock:
+        with self._read_transaction():
             self._verify_identity()
             meta = self._meta()
             runs = self._runs(strategy_instance_id)
@@ -229,7 +252,7 @@ class SqliteClerkProjectionReader:
         page_size: int = DEFAULT_TIMELINE_PAGE_SIZE,
     ) -> TimelinePage:
         page_size = min(max(page_size, 1), MAX_TIMELINE_PAGE_SIZE)
-        with self._lock:
+        with self._read_transaction():
             self._verify_identity()
             meta = self._meta()
             if cursor is None:
@@ -305,7 +328,7 @@ class SqliteClerkProjectionReader:
     ) -> OperationPage:
         """Read one keyset page from the materialized operation fold."""
         page_size = min(max(page_size, 1), MAX_TIMELINE_PAGE_SIZE)
-        with self._lock:
+        with self._read_transaction():
             self._verify_identity()
             meta = self._meta()
             high_water = self._conn.execute(
@@ -320,7 +343,7 @@ class SqliteClerkProjectionReader:
                 anchor = (
                     None
                     if head is None
-                    else (int(head["updated_at_ms"]), str(head["effect_operation_id"]))
+                    else (int(head["created_at_ms"]), str(head["effect_operation_id"]))
                 )
                 before = None
             else:
@@ -348,7 +371,7 @@ class SqliteClerkProjectionReader:
                 lifecycle_state=lifecycle_state,
                 run_id=run_id,
                 anchor=anchor,
-                before=(last.updated_at_ms, last.effect_operation_id),
+                before=(last.created_at_ms, last.effect_operation_id),
             )
         return OperationPage(
             account_id=self._account_id,
@@ -362,7 +385,7 @@ class SqliteClerkProjectionReader:
 
     def operation_timeline(self, effect_operation_id: str) -> tuple[TimelineEntry, ...]:
         """Return bounded immutable events for one exact Clerk operation."""
-        with self._lock:
+        with self._read_transaction():
             self._verify_identity()
             rows = self._conn.execute(
                 "SELECT sequence, effect_operation_id, command_id, order_ref, broker_order_id, "
@@ -376,7 +399,7 @@ class SqliteClerkProjectionReader:
 
     def operation(self, effect_operation_id: str) -> ProjectedOperation | None:
         """Read one exact materialized operation and its nested orders."""
-        with self._lock:
+        with self._read_transaction():
             self._verify_identity()
             rows = self._operation_rows(
                 strategy_instance_id=None,
@@ -515,16 +538,22 @@ class SqliteClerkProjectionReader:
             if value is not None:
                 clauses.append(f"{column} = ?")
                 parameters.append(value)
+        # Anchored/paged by `created_at_ms` (#1396 P2), not `updated_at_ms`: the
+        # latter is mutated by every fold (SUBMIT_ACKED, fill, reconciliation),
+        # so an operation below the first page could jump above the anchor
+        # mid-traversal and silently vanish from every remaining page. Each
+        # `effect_operation_id` row's `created_at_ms` is written once at
+        # ENTER/EXIT acceptance and never updated — an immutable ordering key.
         if anchor is not None:
             clauses.append(
-                "(e.updated_at_ms < ? OR "
-                "(e.updated_at_ms = ? AND e.effect_operation_id <= ?))"
+                "(e.created_at_ms < ? OR "
+                "(e.created_at_ms = ? AND e.effect_operation_id <= ?))"
             )
             parameters.extend((anchor[0], anchor[0], anchor[1]))
         if before is not None:
             clauses.append(
-                "(e.updated_at_ms < ? OR "
-                "(e.updated_at_ms = ? AND e.effect_operation_id < ?))"
+                "(e.created_at_ms < ? OR "
+                "(e.created_at_ms = ? AND e.effect_operation_id < ?))"
             )
             parameters.extend((before[0], before[0], before[1]))
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -542,7 +571,7 @@ class SqliteClerkProjectionReader:
             "WHERE t.effect_operation_id = e.effect_operation_id) AS transition_count "
             "FROM effect_operations e "
             f"JOIN commands c ON c.command_id = e.command_id {where} "
-            "ORDER BY e.updated_at_ms DESC, e.effect_operation_id DESC LIMIT ?",
+            "ORDER BY e.created_at_ms DESC, e.effect_operation_id DESC LIMIT ?",
             (*parameters, limit),
         ).fetchall()
 

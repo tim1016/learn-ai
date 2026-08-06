@@ -246,6 +246,13 @@ CREATE INDEX ix_effect_operations_updated_at
     ON effect_operations(updated_at_ms DESC, effect_operation_id DESC);
 CREATE INDEX ix_effect_operations_strategy_updated_at
     ON effect_operations(strategy_instance_id, updated_at_ms DESC, effect_operation_id DESC);
+-- keyset-paginated by created_at_ms, not updated_at_ms (#1396 P2): the
+-- latter is mutated by every fold, so an operation below the first page
+-- could jump above the anchor mid-traversal and vanish from later pages.
+CREATE INDEX ix_effect_operations_created_at
+    ON effect_operations(created_at_ms DESC, effect_operation_id DESC);
+CREATE INDEX ix_effect_operations_strategy_created_at
+    ON effect_operations(strategy_instance_id, created_at_ms DESC, effect_operation_id DESC);
 
 -- ============================================================
 -- orders — one row per broker/client order identity (R7)

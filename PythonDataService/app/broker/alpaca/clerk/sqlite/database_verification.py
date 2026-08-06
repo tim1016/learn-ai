@@ -125,7 +125,9 @@ def _verify_control(
     expected_generation: int | None,
     expected_db_identity: str | None,
 ) -> None:
-    if control["schema_version"] != schema.SCHEMA_VERSION:
+    if control["schema_version"] != schema.SCHEMA_VERSION and not schema.is_upgradable_to_current(
+        control["schema_version"]
+    ):
         raise DatabaseVerificationFailed(
             f"{path} schema_version={control['schema_version']}, expected {schema.SCHEMA_VERSION}"
         )
