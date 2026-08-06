@@ -51,7 +51,10 @@
                 </div>
                 <dl>
                   <div><dt>Quantity</dt><dd>{{ order.quantity ?? 'Not reported' }}</dd></div>
-                  <div><dt>Filled</dt><dd>{{ order.filled_quantity }}</dd></div>
+                  <div>
+                    <dt>Filled</dt>
+                    <dd>{{ order.filled_quantity === null ? 'Unavailable from custody folds' : order.filled_quantity }}</dd>
+                  </div>
                 </dl>
                 <code>{{ order.order_ref }}</code>
               </li>

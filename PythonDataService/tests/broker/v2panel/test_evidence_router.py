@@ -21,12 +21,20 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk import reset_alpaca_clerk_for_testing, set_alpaca_clerk
+from app.broker.alpaca.clerk.active_authority import (
+    ActiveClerkRuntime,
+    set_active_clerk_runtime,
+)
 from app.broker.alpaca.clerk.journal import (
     OrderJournal,
     get_clerk_settings,
     reset_clerk_settings_for_testing,
 )
 from app.broker.alpaca.clerk.models import ClerkStatus, HoldState, ReconciliationSummary
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
@@ -35,7 +43,12 @@ from app.routers.broker_v2_panel import router
 from app.schemas.broker_bots import BotStatusView
 from app.services.bot_runner import set_bot_task_registry
 from app.services.broker_v2_panel.account_projection_owner import reset_owners_for_testing
-from app.services.broker_v2_panel.evidence_service import PAGE_SIZE_MAX
+from app.services.broker_v2_panel.evidence_service import (
+    _SQLITE_CUSTODY_COPY,
+    _SQLITE_OPERATION_STATE_COPY,
+    _SQLITE_TRANSITION_COPY,
+    PAGE_SIZE_MAX,
+)
 from tests.broker.v2panel.fixtures import (
     ACCT,
     OTHER_SID,
@@ -112,6 +125,7 @@ def app_and_tmp(tmp_path: Path, monkeypatch):
     reset_clerk_settings_for_testing()
     reset_broker_registry_for_testing()
     reset_alpaca_clerk_for_testing()
+    set_active_clerk_runtime(None)
     reset_owners_for_testing()
 
     get_broker_registry().register(_FakeReadPort())  # type: ignore[arg-type]
@@ -126,6 +140,7 @@ def app_and_tmp(tmp_path: Path, monkeypatch):
     finally:
         set_bot_task_registry(None)
         set_alpaca_clerk(None)
+        set_active_clerk_runtime(None)
         reset_broker_registry_for_testing()
         reset_clerk_settings_for_testing()
         reset_owners_for_testing()
@@ -138,6 +153,19 @@ def _write_journal(tmp_path: Path, entries: list) -> None:
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
+
+
+def test_sqlite_evidence_copy_covers_closed_fold_and_state_vocabularies() -> None:
+    assert set(_SQLITE_TRANSITION_COPY) == DEFAULT_FOLD_REGISTRY.registered_kinds
+    assert set(_SQLITE_OPERATION_STATE_COPY) == {
+        "accepted",
+        "failed",
+        "in_progress",
+        "rejected",
+        "succeeded",
+        "unknown",
+    }
+    assert set(_SQLITE_CUSTODY_COPY) == {"ACCOUNT_CLERK"}
 
 
 @pytest.mark.asyncio
@@ -168,6 +196,64 @@ async def test_evidence_returns_bot_entries_newest_first(app_and_tmp) -> None:
     # Newest first: i2 before i1.
     assert entries[0]["intent_id"] == "i2"
     assert entries[1]["intent_id"] == "i1"
+
+
+@pytest.mark.asyncio
+async def test_evidence_uses_active_sqlite_timeline_with_opaque_stable_cursor(
+    app_and_tmp,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fast_app, tmp_path = app_and_tmp
+    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path)
+    repo.register_strategy_instance(
+        strategy_instance_id=SID,
+        symbol="SPY",
+        config_hash="config-1",
+    )
+    submit_start_run(
+        repo,
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=_FakeReadPort(),  # type: ignore[arg-type]
+        trade=_FakeReadPort(),  # type: ignore[arg-type]
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="sqlite", clerk=facade)
+    )
+
+    def forbid_jsonl_read(_journal) -> list:
+        raise AssertionError("active SQLite evidence must not read the JSONL journal")
+
+    monkeypatch.setattr(OrderJournal, "read_entries", forbid_jsonl_read)
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app), base_url="http://test"
+    ) as client:
+        first = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/evidence",
+            params={"page_size": 1},
+        )
+        assert first.status_code == 200
+        first_body = first.json()
+        assert isinstance(first_body["next_cursor"], str)
+        assert first_body["entries"][0]["operation_ref"]
+        assert first_body["entries"][0]["clerk_observed_at_ms"]
+        assert first_body["entries"][0]["recorded_at_ms"]
+
+        second = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/evidence",
+            params={"page_size": 1, "cursor": first_body["next_cursor"]},
+        )
+
+    assert second.status_code == 200
+    assert {
+        first_body["entries"][0]["seq"],
+        second.json()["entries"][0]["seq"],
+    } == {1, 2}
+    repo.close()
 
 
 @pytest.mark.asyncio

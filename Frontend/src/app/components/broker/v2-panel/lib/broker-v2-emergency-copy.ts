@@ -103,6 +103,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Cancel order',
     explanation: 'Cancel one working order at the broker.',
   },
+  cancel_verified_working_orders: {
+    label: 'Cancel verified working orders',
+    explanation:
+      'Cancel only working orders whose exact Clerk and broker identities are proven.',
+  },
   clean: {
     label: 'Clean',
     explanation: 'The last sweep found the journal and the broker in agreement.',
@@ -129,6 +134,10 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     explanation:
       'The last sweep found broker inventory or an owned order that does not match the durable journal exposure.',
   },
+  open_custody_timeline: {
+    label: 'Open custody timeline',
+    explanation: 'Inspect the immutable operation-first evidence timeline.',
+  },
   not_applicable: {
     label: 'Not applicable',
     explanation: 'This broker or mode has no such station.',
@@ -136,6 +145,14 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
   reconcile_now: {
     label: 'Reconcile now',
     explanation: 'Run a reconciliation sweep against the broker immediately.',
+  },
+  prepare_safe_flatten: {
+    label: 'Prepare safe flatten',
+    explanation: 'Prepare a fresh reduction plan without submitting an order.',
+  },
+  rebuild_from_mirror: {
+    label: 'Rebuild from mirror',
+    explanation: 'Rebuild a failed authority only from a contiguous verified mirror.',
   },
   record_inventory_baseline: {
     label: 'Recover inventory baseline',
@@ -159,6 +176,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     explanation:
       'Create a new run of this unchanged strategy instance after backend admission.',
   },
+  reset_authority: {
+    label: 'Reset authority',
+    explanation:
+      'Create a new authority generation only after fresh flat and order-free proof.',
+  },
   pause: {
     label: 'Pause',
     explanation:
@@ -173,6 +195,11 @@ export const BROKER_V2_EMERGENCY_COPY: Readonly<Record<string, VocabularyCopy>> 
     label: 'Stop',
     explanation:
       "Stop evaluating bars and cancel this bot's working entry orders. Exposure is left untouched.",
+  },
+  stop_bot_decisions: {
+    label: 'Stop bot decisions',
+    explanation:
+      'Stop new decisions while existing exposure remains under Clerk custody.',
   },
   unexplained_order: {
     label: 'Unexplained order',

@@ -1,11 +1,9 @@
-"""SQLite Alpaca Clerk command endpoints (#1376, repaired by the corrective
-foundation slice).
+"""Control and read endpoints for the activation-selected SQLite Alpaca Clerk.
 
-Purely-local operator-lifecycle commands (Start/Stop a run) proving out the
-full R2 content-addressed command lifecycle ahead of the broker-facing
-slices (#1377+). This router is additive and self-contained: it does not
-touch the existing JSONL-backed Alpaca clerk routers, which remain
-canonical until the cutover (#1382).
+Every handler resolves only the boot-selected, activation-verified authority.
+Legacy accounts receive a typed conflict; activated authorities that failed
+startup expose fail-closed account recovery state without installing a broker
+mutation capability.
 
 Every repository call is dispatched via ``asyncio.to_thread`` — the
 repository is synchronous blocking I/O (SQLite + fsync), and calling it
@@ -18,10 +16,12 @@ FastAPI event loop").
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from typing import TypeVar
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
-from app.broker.alpaca.clerk.journal import get_clerk_settings
+from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.sqlite.commands import (
     DurableConflictError,
     InvalidIdentityError,
@@ -30,54 +30,99 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     submit_start_run,
     submit_stop_run,
 )
-from app.broker.alpaca.clerk.sqlite.process_repositories import get_or_open_repository
+from app.broker.alpaca.clerk.sqlite.projections import (
+    InvalidTimelineCursor,
+    ProjectionReadError,
+    SqliteClerkProjectionReader,
+)
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
+from app.broker.alpaca.clerk.sqlite.recovery_execution import (
+    RecoveryExecutionError,
+    RecoveryExecutionRequest,
+    execute_recovery_action,
+)
+from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    RecoveryActionUnavailableError,
+    StaleRecoveryTokenError,
+    recheck_recovery_action,
+)
 from app.broker.alpaca.clerk.sqlite.repository import (
-    ClerkSqliteError,
     ClerkSqliteRepository,
     ExecutionLeaseLost,
     RepositoryPoisoned,
 )
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerError, UnknownBrokerError
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.broker.contract.registry import get_broker_registry
 from app.schemas.alpaca_clerk_sqlite import (
+    ClerkProjectionResponse,
     CommandResponse,
     ReconciliationResponse,
+    RecoveryActionCheckRequest,
+    RecoveryActionCheckResponse,
+    RecoveryActionExecuteRequest,
+    RecoveryActionExecuteResponse,
+    RecoveryCapabilityResponse,
     StartRunRequest,
     StopRunRequest,
+    TimelinePageResponse,
 )
+from app.services.sqlite_clerk_compat import failed_sqlite_projection
 
 router = APIRouter(prefix="/api/alpaca-clerk-sqlite", tags=["alpaca-clerk-sqlite"])
+ReadResult = TypeVar("ReadResult")
 
 
 async def _repo(account_id: str) -> ClerkSqliteRepository:
-    """Open (or reuse) this process's repository for ``account_id``.
+    """Resolve only the boot-selected, activation-verified SQLite authority."""
+    return _active_sqlite_facade(account_id).repository
 
-    Until the cutover (#1382) runs, most accounts have no ``clerk.db`` yet —
-    that is expected, not a bug, so it gets a typed 503 rather than an
-    unhandled 500.
-    """
-    try:
-        return await asyncio.to_thread(
-            get_or_open_repository, account_id=account_id, artifacts_root=get_clerk_settings().dir
-        )
-    except FileNotFoundError as exc:
+
+def _active_sqlite_facade(account_id: str) -> SqliteAlpacaClerkFacade:
+    """Return the one boot-selected SQLite facade or fail closed."""
+    runtime = get_active_clerk_runtime()
+    if runtime is None:
         raise HTTPException(
             status_code=503,
             detail={
-                "reason": "sqlite_authority_not_initialized",
-                "message": (
-                    f"Account {account_id!r} has no SQLite Clerk authority yet "
-                    "(pre-cutover; see issue #1382)."
-                ),
+                "reason": "active_clerk_not_started",
+                "message": "The active Alpaca Clerk has not completed boot selection.",
             },
-        ) from exc
-    except ClerkSqliteError as exc:
+        )
+    if runtime.authority_kind == "legacy":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "sqlite_authority_inactive",
+                "message": "This account is still governed by the legacy Clerk authority.",
+            },
+        )
+    if runtime.authority_kind != "sqlite" or not isinstance(
+        runtime.clerk, SqliteAlpacaClerkFacade
+    ):
+        failure = runtime.startup_failure
         raise HTTPException(
             status_code=503,
-            detail={"reason": "sqlite_authority_unavailable", "message": str(exc)},
-        ) from exc
+            detail={
+                "reason": (
+                    failure.reason_code.lower()
+                    if failure is not None
+                    else "sqlite_authority_unavailable"
+                ),
+                "message": (
+                    failure.recovery
+                    if failure is not None
+                    else "No verified SQLite Clerk authority is installed."
+                ),
+            },
+        )
+    if runtime.clerk.account_id != account_id:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "sqlite_account_not_active"},
+        )
+    return runtime.clerk
 
 
 def _conflict_response(exc: DurableConflictError) -> HTTPException:
@@ -106,6 +151,27 @@ def _unknown_bot_response(exc: UnknownStrategyInstanceError) -> HTTPException:
         detail={
             "reason": "unknown_strategy_instance",
             "message": f"No bot {exc.strategy_instance_id!r} is registered on this account.",
+        },
+    )
+
+
+def _read_projection(  # noqa: UP047 - Python 3.11 runtime; PEP 695 needs 3.12.
+    repo: ClerkSqliteRepository,
+    read: Callable[[SqliteClerkProjectionReader], ReadResult],
+) -> ReadResult:
+    reader = SqliteClerkProjectionReader.from_repository(repo)
+    try:
+        return read(reader)
+    finally:
+        reader.close()
+
+
+def _projection_read_error(exc: ProjectionReadError) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "reason": "sqlite_projection_unavailable",
+            "message": str(exc),
         },
     )
 
@@ -192,6 +258,307 @@ async def get_command(account_id: str, command_id: str) -> CommandResponse:
     if resource is None:
         raise HTTPException(status_code=404, detail={"reason": "command_not_found"})
     return CommandResponse.from_resource(resource)
+
+
+@router.get(
+    "/accounts/{account_id}/snapshot",
+    response_model=ClerkProjectionResponse,
+)
+async def get_account_snapshot(account_id: str) -> ClerkProjectionResponse:
+    """Return the account-wide fold projection; never replay transition history."""
+    failed = failed_sqlite_projection(
+        account_id=account_id,
+        strategy_instance_id=None,
+    )
+    if failed is not None:
+        return ClerkProjectionResponse.from_projection(failed)
+    repo = await _repo(account_id)
+    try:
+        projection = await asyncio.to_thread(
+            _read_projection,
+            repo,
+            lambda reader: reader.account_snapshot(),
+        )
+    except ProjectionReadError as exc:
+        raise _projection_read_error(exc) from exc
+    return ClerkProjectionResponse.from_projection(projection)
+
+
+@router.get(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/snapshot",
+    response_model=ClerkProjectionResponse,
+)
+async def get_bot_snapshot(
+    account_id: str,
+    strategy_instance_id: str,
+) -> ClerkProjectionResponse:
+    """Return one bot's fold projection plus account-wide fail-closed facts."""
+    failed = failed_sqlite_projection(
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+    )
+    if failed is not None:
+        return ClerkProjectionResponse.from_projection(failed)
+    repo = await _repo(account_id)
+    try:
+        projection = await asyncio.to_thread(
+            _read_projection,
+            repo,
+            lambda reader: reader.bot_snapshot(strategy_instance_id),
+        )
+    except ProjectionReadError as exc:
+        raise _projection_read_error(exc) from exc
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "unknown_strategy_instance"},
+        )
+    return ClerkProjectionResponse.from_projection(projection)
+
+
+async def _timeline(
+    account_id: str,
+    *,
+    strategy_instance_id: str | None,
+    cursor: str | None,
+    page_size: int,
+) -> TimelinePageResponse:
+    repo = await _repo(account_id)
+    try:
+        page = await asyncio.to_thread(
+            _read_projection,
+            repo,
+            lambda reader: reader.timeline_page(
+                strategy_instance_id=strategy_instance_id,
+                cursor=cursor,
+                page_size=page_size,
+            ),
+        )
+    except InvalidTimelineCursor as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "invalid_timeline_cursor", "message": str(exc)},
+        ) from exc
+    except ProjectionReadError as exc:
+        raise _projection_read_error(exc) from exc
+    return TimelinePageResponse.from_page(page)
+
+
+@router.get(
+    "/accounts/{account_id}/timeline",
+    response_model=TimelinePageResponse,
+)
+async def get_account_timeline(
+    account_id: str,
+    cursor: str | None = Query(default=None, max_length=1024),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> TimelinePageResponse:
+    return await _timeline(
+        account_id,
+        strategy_instance_id=None,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+@router.get(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/timeline",
+    response_model=TimelinePageResponse,
+)
+async def get_bot_timeline(
+    account_id: str,
+    strategy_instance_id: str,
+    cursor: str | None = Query(default=None, max_length=1024),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> TimelinePageResponse:
+    return await _timeline(
+        account_id,
+        strategy_instance_id=strategy_instance_id,
+        cursor=cursor,
+        page_size=page_size,
+    )
+
+
+async def _check_recovery_action(
+    account_id: str,
+    *,
+    strategy_instance_id: str | None,
+    body: RecoveryActionCheckRequest,
+) -> RecoveryActionCheckResponse:
+    """Re-evaluate the exact presentation policy without performing an effect.
+
+    Mutation executors call the same ``recheck_recovery_action`` immediately
+    before their durable command/effect path.  This transport seam lets the
+    existing confirmation component refresh evidence before confirmation.
+    """
+    repo = await _repo(account_id)
+    try:
+        context = await asyncio.to_thread(
+            _read_projection,
+            repo,
+            lambda reader: reader.recovery_context(
+                strategy_instance_id=strategy_instance_id,
+            ),
+        )
+    except ProjectionReadError as exc:
+        raise _projection_read_error(exc) from exc
+    if context is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "unknown_strategy_instance"},
+        )
+    try:
+        capability = recheck_recovery_action(
+            context,
+            action_id=body.action_id,
+            concurrency_token=body.concurrency_token,
+        )
+    except StaleRecoveryTokenError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "stale_action_token", "message": str(exc)},
+        ) from exc
+    except RecoveryActionUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "recovery_action_unavailable",
+                "message": str(exc),
+                "capability": RecoveryCapabilityResponse.model_validate(
+                    exc.capability
+                ).model_dump(mode="json"),
+            },
+        ) from exc
+    return RecoveryActionCheckResponse(
+        capability=RecoveryCapabilityResponse.model_validate(capability)
+    )
+
+
+@router.post(
+    "/accounts/{account_id}/recovery-actions/check",
+    response_model=RecoveryActionCheckResponse,
+)
+async def check_account_recovery_action(
+    account_id: str,
+    body: RecoveryActionCheckRequest,
+) -> RecoveryActionCheckResponse:
+    return await _check_recovery_action(
+        account_id,
+        strategy_instance_id=None,
+        body=body,
+    )
+
+
+@router.post(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/check",
+    response_model=RecoveryActionCheckResponse,
+)
+async def check_bot_recovery_action(
+    account_id: str,
+    strategy_instance_id: str,
+    body: RecoveryActionCheckRequest,
+) -> RecoveryActionCheckResponse:
+    return await _check_recovery_action(
+        account_id,
+        strategy_instance_id=strategy_instance_id,
+        body=body,
+    )
+
+
+async def _execute_presented_recovery_action(
+    account_id: str,
+    *,
+    strategy_instance_id: str | None,
+    body: RecoveryActionExecuteRequest,
+) -> RecoveryActionExecuteResponse:
+    facade = _active_sqlite_facade(account_id)
+
+    async def current_context():
+        context = await asyncio.to_thread(
+            _read_projection,
+            facade.repository,
+            lambda reader: reader.recovery_context(
+                strategy_instance_id=strategy_instance_id,
+            ),
+        )
+        if context is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"reason": "unknown_strategy_instance"},
+            )
+        return context
+
+    try:
+        result = await execute_recovery_action(
+            facade,
+            request=RecoveryExecutionRequest(
+                action_id=body.action_id,
+                concurrency_token=body.concurrency_token,
+                execution_ref=body.execution_ref,
+                reason=body.reason,
+            ),
+            current_context=current_context,
+        )
+    except StaleRecoveryTokenError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "stale_action_token", "message": str(exc)},
+        ) from exc
+    except RecoveryActionUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "recovery_action_unavailable",
+                "message": str(exc),
+                "capability": RecoveryCapabilityResponse.model_validate(
+                    exc.capability
+                ).model_dump(mode="json"),
+            },
+        ) from exc
+    except RecoveryExecutionError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "recovery_execution_rejected", "message": str(exc)},
+        ) from exc
+    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+        raise _unavailable_response(exc) from exc
+    except BrokerError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "broker_unavailable", "message": str(exc)},
+        ) from exc
+    return RecoveryActionExecuteResponse.from_result(result)
+
+
+@router.post(
+    "/accounts/{account_id}/recovery-actions/execute",
+    response_model=RecoveryActionExecuteResponse,
+)
+async def execute_account_recovery_action(
+    account_id: str,
+    body: RecoveryActionExecuteRequest,
+) -> RecoveryActionExecuteResponse:
+    return await _execute_presented_recovery_action(
+        account_id,
+        strategy_instance_id=None,
+        body=body,
+    )
+
+
+@router.post(
+    "/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/execute",
+    response_model=RecoveryActionExecuteResponse,
+)
+async def execute_bot_recovery_action(
+    account_id: str,
+    strategy_instance_id: str,
+    body: RecoveryActionExecuteRequest,
+) -> RecoveryActionExecuteResponse:
+    return await _execute_presented_recovery_action(
+        account_id,
+        strategy_instance_id=strategy_instance_id,
+        body=body,
+    )
 
 
 @router.post(

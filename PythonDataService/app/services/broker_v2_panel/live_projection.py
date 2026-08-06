@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Literal
 
 from app.schemas.broker_v2_panel import BotPanelLiveSnapshot
@@ -12,6 +13,7 @@ from app.services.surface_hub import SurfaceHub, SurfaceHubRegistry
 _HUBS: SurfaceHubRegistry[BotPanelLiveSnapshot] = SurfaceHubRegistry()
 _HUB_RETIREMENT_TASKS: dict[str, asyncio.Task[None]] = {}
 _HUB_IDLE_SECONDS = 30.0
+logger = logging.getLogger(__name__)
 
 
 def _hub_key(
@@ -121,6 +123,41 @@ async def stop_live_projection_hubs() -> None:
     if retirement_tasks:
         await asyncio.gather(*retirement_tasks, return_exceptions=True)
     await _HUBS.stop_all()
+
+
+async def refresh_live_projection_hubs(
+    broker: str,
+    account_id: str,
+    sid: str,
+) -> None:
+    """Prompt every existing bot hub after a committed control mutation.
+
+    No hub is created here.  REST/SSE demand still owns producer lifecycle;
+    the normal five-second producer cadence remains the bounded fallback.
+    """
+    hubs = tuple(
+        hub
+        for resolution in ("5s", "1m")
+        if (hub := _HUBS.get(_hub_key(broker, account_id, sid, resolution)))
+        is not None
+    )
+    if not hubs:
+        return
+    results = await asyncio.gather(
+        *(hub.refresh() for hub in hubs),
+        return_exceptions=True,
+    )
+    for result in results:
+        if isinstance(result, BaseException):
+            logger.warning(
+                "live panel prompt refresh failed after a committed control action",
+                extra={
+                    "broker": broker,
+                    "account_id": account_id,
+                    "strategy_instance_id": sid,
+                    "exception": repr(result),
+                },
+            )
 
 
 def reset_live_projection_hubs_for_testing() -> None:

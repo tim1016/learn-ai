@@ -59,6 +59,7 @@ __all__ = [
     "InvalidIdentityError",
     "NoActiveRunError",
     "UnknownStrategyInstanceError",
+    "stop_command_resource",
     "submit_start_run",
     "submit_stop_run",
 ]
@@ -326,3 +327,21 @@ def submit_stop_run(
         payload_hash=payload_hash,
         build_transition=build_transition,
     )
+
+
+def stop_command_resource(
+    repo: ClerkSqliteRepository,
+    *,
+    account_id: str,
+    strategy_instance_id: str,
+    lifecycle_run_id: str,
+) -> CommandResource | None:
+    """Return the durable STOP resource for a lost-response transport retry."""
+    idempotency_key = _operator_lifecycle_key(
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+        lifecycle_run_id=lifecycle_run_id,
+        action=ACTION_STOP,
+        intended_end_state=INTENDED_END_STATE_STOPPED,
+    )
+    return repo.get_command(f"cmd:{idempotency_key}")

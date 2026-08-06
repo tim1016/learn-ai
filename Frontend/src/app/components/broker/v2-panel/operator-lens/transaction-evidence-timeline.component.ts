@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import type { EvidenceEntry } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 
@@ -17,7 +18,7 @@ import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 @Component({
   selector: 'app-transaction-evidence-timeline',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TimestampDisplayComponent],
+  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
   templateUrl: './transaction-evidence-timeline.component.html',
   styleUrl: './transaction-evidence-timeline.component.scss',
 })
@@ -31,7 +32,7 @@ export class TransactionEvidenceTimelineComponent {
   private requestGeneration = 0;
 
   protected readonly entries = signal<readonly EvidenceEntry[]>([]);
-  protected readonly nextCursor = signal<number | null>(null);
+  protected readonly nextCursor = signal<string | number | null>(null);
   protected readonly totalEntries = signal(0);
   protected readonly loading = signal(false);
   protected readonly loadError = signal<string | null>(null);
@@ -70,7 +71,7 @@ export class TransactionEvidenceTimelineComponent {
   }
 
   private async loadPage(
-    cursor: number | undefined,
+    cursor: string | number | undefined,
     replace: boolean,
     generation: number,
   ): Promise<void> {

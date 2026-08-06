@@ -26,6 +26,13 @@ class EvidenceEntry(BaseModel):
     # capture time and re-verified at response time (§14).
     summary: str
     has_more_detail: bool
+    operation_ref: str | None = None
+    operation_state: str | None = None
+    broker_state: str | None = None
+    custody_owner: str | None = None
+    proof_reference: str | None = None
+    source_event_at_ms: int | None = None
+    clerk_observed_at_ms: int | None = None
 
 
 class EvidencePage(BaseModel):
@@ -38,7 +45,7 @@ class EvidencePage(BaseModel):
     transaction_ref: str | None
     entries: list[EvidenceEntry]
     # Cursor for the next page; ``None`` when this is the last page.
-    next_cursor: int | None
+    next_cursor: str | int | None
     total_entries: int
     truncated: bool
     # The operator identity attached to the audit log for this read (§14).
@@ -60,7 +67,7 @@ class EvidenceAuditEntry(BaseModel):
     transaction_ref: str | None
     operator_identity: str
     read_at_ms: int
-    page_cursor: int | None
+    page_cursor: str | int | None
     page_size: int
     entries_returned: int
     client_hint: str | None = Field(default=None, max_length=256)

@@ -17,7 +17,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -77,6 +77,9 @@ CREATE UNIQUE INDEX ux_runs_lifecycle_run_id ON runs(strategy_instance_id, lifec
 -- run_id is already globally unique (PK), this pins the (instance, run) pair
 -- so a cross-bot FK reference is rejected rather than silently satisfiable:
 CREATE UNIQUE INDEX ux_runs_instance_run ON runs(strategy_instance_id, run_id);
+CREATE INDEX ix_runs_started_at ON runs(started_at_ms DESC);
+CREATE INDEX ix_runs_strategy_started_at
+    ON runs(strategy_instance_id, started_at_ms DESC);
 
 -- ============================================================
 -- commands — content-addressed request identity (R2)
@@ -105,6 +108,9 @@ CREATE TABLE commands (
 -- unique content-addressed command identity within the authority generation (§9.4):
 CREATE UNIQUE INDEX ux_commands_idempotency
     ON commands(authority_generation, idempotency_key);
+CREATE INDEX ix_commands_updated_at ON commands(updated_at_ms DESC, command_id DESC);
+CREATE INDEX ix_commands_strategy_updated_at
+    ON commands(strategy_instance_id, updated_at_ms DESC, command_id DESC);
 
 -- ============================================================
 -- effect_operations — Clerk-owned ENTER/EXIT/cancel/recovery work (§7)
@@ -148,6 +154,10 @@ CREATE UNIQUE INDEX ux_effect_operations_idempotency
 -- unique fencing token while claimed (§9.4 extension, Scope D):
 CREATE UNIQUE INDEX ux_effect_operations_claim_token
     ON effect_operations(claim_token) WHERE claim_token IS NOT NULL;
+CREATE INDEX ix_effect_operations_updated_at
+    ON effect_operations(updated_at_ms DESC, effect_operation_id DESC);
+CREATE INDEX ix_effect_operations_strategy_updated_at
+    ON effect_operations(strategy_instance_id, updated_at_ms DESC, effect_operation_id DESC);
 
 -- ============================================================
 -- orders — one row per broker/client order identity (R7)
@@ -166,6 +176,7 @@ CREATE TABLE orders (
 CREATE UNIQUE INDEX ux_orders_client_order_id ON orders(client_order_id);
 CREATE UNIQUE INDEX ux_orders_broker_order_id ON orders(broker_order_id)
     WHERE broker_order_id IS NOT NULL;
+CREATE INDEX ix_orders_effect_operation_id ON orders(effect_operation_id);
 
 -- Immutable order provenance lives on orders.effect_operation_id. Later
 -- operations acquire resolution custody through replayable links instead of
@@ -229,6 +240,8 @@ CREATE TABLE holds (
 CREATE UNIQUE INDEX ux_holds_one_active_cause
     ON holds(scope, reason_code, COALESCE(strategy_instance_id, ''))
     WHERE state = 'ACTIVE';
+CREATE INDEX ix_holds_active_strategy_opened_at
+    ON holds(strategy_instance_id, opened_at_ms DESC) WHERE state = 'ACTIVE';
 
 -- ============================================================
 -- uncertainties — active nonterminal unknowns; fold of the log. Columns are
@@ -259,6 +272,9 @@ CREATE TABLE uncertainties (
 CREATE UNIQUE INDEX ux_uncertainties_one_active_cause
     ON uncertainties(scope, reason_code, COALESCE(strategy_instance_id, ''))
     WHERE resolved_at_ms IS NULL;
+CREATE INDEX ix_uncertainties_active_strategy_observed_at
+    ON uncertainties(strategy_instance_id, observed_at_ms DESC)
+    WHERE resolved_at_ms IS NULL;
 
 -- ============================================================
 -- reconciliations — reconciliation attempts and terminal receipts
@@ -272,6 +288,10 @@ CREATE TABLE reconciliations (
     outcome                   TEXT NOT NULL CHECK (outcome IN ('STILL_UNKNOWN','RESOLVED_SUCCESS','RESOLVED_FAILURE')),
     evidence_refs_json        TEXT
 );
+CREATE INDEX ix_reconciliations_attempted_at
+    ON reconciliations(attempted_at_ms DESC);
+CREATE INDEX ix_reconciliations_effect_attempted_at
+    ON reconciliations(effect_operation_id, attempted_at_ms DESC);
 
 -- ============================================================
 -- receipts — permanent terminal command/effect proof; insert once
@@ -286,6 +306,9 @@ CREATE TABLE receipts (
     recorded_at_ms                 INTEGER NOT NULL,
     facts_json                      TEXT
 );
+CREATE INDEX ix_receipts_recorded_at ON receipts(recorded_at_ms DESC);
+CREATE INDEX ix_receipts_command_recorded_at
+    ON receipts(command_id, recorded_at_ms DESC);
 
 -- ============================================================
 -- custody_transitions — THE canonical, append-only, hash-chained,
@@ -318,6 +341,10 @@ CREATE TABLE custody_transitions (
 -- order_ref is scanned by both the §3c ack idempotency guard and recovery's
 -- transitions_for_order (#1377) — an index keeps both O(log n), not O(n):
 CREATE INDEX ix_custody_transitions_order_ref ON custody_transitions(order_ref);
+CREATE INDEX ix_custody_transitions_strategy_sequence
+    ON custody_transitions(strategy_instance_id, sequence DESC);
+CREATE INDEX ix_custody_transitions_effect_sequence
+    ON custody_transitions(effect_operation_id, sequence DESC);
 -- immutable sequence/payload/hash-chain-link after commit (§9.4): enforced by
 -- the triggers below, not just by Slice 2's repository boundary declining to
 -- issue UPDATE/DELETE. A dedicated test asserts both hold.

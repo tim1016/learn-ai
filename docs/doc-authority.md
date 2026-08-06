@@ -89,6 +89,7 @@ have their decision preserved here.
 |---|---|---|---|
 | `docs/architecture/options-math-authorities.md` | Options math | `docs/architecture/options-routes-research.md` (cleanup record) | 2026-04-29 |
 | `docs/bot-control-operator-manual.md` | **Sole current** Bot Control + Account Clerk operating and implementation-reference authority; source rendered at `/broker/bot-manual` | Former operator runbooks/quick procedures, AccountOwner snapshots, cockpit/cohort guides, controller plans, and point-in-time audits | 2026-07-29 |
+| `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by the sole Bot Control manual; no independent policy authority | — | 2026-08-06 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR — design rationale ("why") | — | — |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
@@ -127,6 +128,9 @@ have their decision preserved here.
 | `docs/engine-phase-1-2-refined-plan.md` | Strategy Lab deprecation lineage | Keep until Strategy Lab is fully removed |
 | `docs/indicator-reliability-methodology.md` | Indicator reliability details | Backs `indicator-reliability-authority.md` |
 | `docs/lean-engine-phase1-verification-report.md` | Engine correctness evidence | Evidential artifact |
+| `docs/references/alpaca-sqlite-clerk-invariant-traceability.md` | ADR 0035 invariant-to-code/test evidence | Supports ADR 0035 and issue #1395 review |
+| `docs/references/alpaca-sqlite-clerk-recovery-language.md` | Trader/operator action-language matrix | Backend-authored wording contract evidence; operator policy remains in the manuals |
+| `docs/references/alpaca-sqlite-clerk-source-guarantees.md` | Alpaca guarantee-to-implementation matrix | Official-source provenance for adapter constraints |
 | `docs/math-rigor.md` | Variance-time and FRED rate backing | Cited by `math-sources-of-truth.md` — keep for traceability |
 | `docs/options-companion-format.md` | Options companion data format | Operational reference |
 | `docs/options-cross-section-overview.md` | Options cross-section research | Useful pipeline context |

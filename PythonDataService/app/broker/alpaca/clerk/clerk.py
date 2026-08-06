@@ -24,9 +24,11 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.broker.alpaca.clerk import derive, diagnosis, reconcile, recovery
+from app.broker.alpaca.clerk.active_protocol import ActiveAlpacaClerk
 from app.broker.alpaca.clerk.activity_recovery import AlpacaActivityRecovery
 from app.broker.alpaca.clerk.custody import (
     CustodyReconciliationResult,
@@ -94,6 +96,9 @@ from app.engine.live.order_identity import (
     parse_order_ref,
 )
 
+if TYPE_CHECKING:
+    from app.services.bot_binding_repository import BrokerBotBinding
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,7 +114,22 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
     constructed lazily on first submit, once the account id is known.
     """
 
+    authority_kind = "legacy"
     broker_id = BROKER_ID
+
+    async def register_strategy_run(self, _binding: BrokerBotBinding) -> None:
+        """Legacy compatibility hook; JSONL has no separate run registry."""
+        return
+
+    async def stop_strategy_run(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        reason: str | None = None,
+    ) -> None:
+        """Legacy compatibility hook; desired-state remains its STOP authority."""
+        del strategy_instance_id, run_id, reason
 
     def __init__(
         self,
@@ -999,6 +1019,10 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
         """
         await recovery.recover(self)
 
+    async def unresolved_effect_count(self) -> int:
+        """Return the legacy journal's unresolved economic intents."""
+        return len(derive.unresolved_intents(await self.read_journal_entries()))
+
     async def _resolve_intent(
         self,
         identity: LegIdentity,
@@ -1204,9 +1228,9 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
             )
         return plan.verdict
 
-_clerk: AlpacaClerk | None = None
+_clerk: ActiveAlpacaClerk | None = None
 
-def get_alpaca_clerk() -> AlpacaClerk | None:
+def get_alpaca_clerk() -> ActiveAlpacaClerk | None:
     """Return the process-wide Alpaca clerk, or ``None`` when unconfigured.
 
     The clerk is installed in the app lifespan only when Alpaca keys are
@@ -1214,7 +1238,7 @@ def get_alpaca_clerk() -> AlpacaClerk | None:
     """
     return _clerk
 
-def set_alpaca_clerk(clerk: AlpacaClerk | None) -> None:
+def set_alpaca_clerk(clerk: ActiveAlpacaClerk | None) -> None:
     """Install (or clear) the process-wide Alpaca clerk — lifespan wiring."""
     global _clerk
     _clerk = clerk

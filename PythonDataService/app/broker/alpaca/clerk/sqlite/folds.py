@@ -65,6 +65,11 @@ class FoldRegistry:
             raise ValueError(f"transition_kind {transition_kind!r} already registered")
         self._folds[transition_kind] = fold
 
+    @property
+    def registered_kinds(self) -> frozenset[str]:
+        """Expose the closed transition vocabulary for projection-copy checks."""
+        return frozenset(self._folds)
+
     def apply(self, conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
         """Look up and run the fold for ``payload['transition_kind']``.
 
@@ -441,13 +446,31 @@ _ORDER_STATE_PRECEDENCE = {
 }
 
 
+def order_observation_advances(
+    *,
+    current_state: str | None,
+    prior_source_time: int | None,
+    incoming_state: str | None,
+    incoming_source_time: int | None,
+) -> bool:
+    """Apply the canonical timestamp/state ordering to one broker snapshot."""
+    current = (current_state or "").lower()
+    incoming = (incoming_state or "").lower()
+    if current in _TERMINAL_ORDER_STATES:
+        return False
+    if incoming_source_time is None:
+        return incoming in _TERMINAL_ORDER_STATES or not current
+    if prior_source_time is None or incoming_source_time > prior_source_time:
+        return True
+    if incoming_source_time < prior_source_time:
+        return False
+    return _ORDER_STATE_PRECEDENCE.get(incoming, 0) >= _ORDER_STATE_PRECEDENCE.get(current, 0)
+
+
 def _ack_advances_order(conn: sqlite3.Connection, payload: dict[str, Any]) -> bool:
     """Whether this observation may advance the materialized order snapshot."""
     row = conn.execute("SELECT broker_state FROM orders WHERE order_ref = ?", (payload["order_ref"],)).fetchone()
-    current_state = (row["broker_state"] or "").lower()
-    incoming_state = (payload["broker_state"] or "").lower()
-    if current_state in _TERMINAL_ORDER_STATES:
-        return False
+    current_state = row["broker_state"]
 
     current_sequence = _this_transition_sequence(conn)
     prior_source_time = conn.execute(
@@ -455,14 +478,12 @@ def _ack_advances_order(conn: sqlite3.Connection, payload: dict[str, Any]) -> bo
         "WHERE order_ref = ? AND transition_kind = 'ORDER_SUBMIT_ACKED' AND sequence < ?",
         (payload["order_ref"], current_sequence),
     ).fetchone()["latest"]
-    incoming_source_time = payload["source_event_at_ms"]
-    if incoming_source_time is None:
-        return incoming_state in _TERMINAL_ORDER_STATES or not current_state
-    if prior_source_time is None or incoming_source_time > prior_source_time:
-        return True
-    if incoming_source_time < prior_source_time:
-        return False
-    return _ORDER_STATE_PRECEDENCE.get(incoming_state, 0) >= _ORDER_STATE_PRECEDENCE.get(current_state, 0)
+    return order_observation_advances(
+        current_state=current_state,
+        prior_source_time=prior_source_time,
+        incoming_state=payload["broker_state"],
+        incoming_source_time=payload["source_event_at_ms"],
+    )
 
 
 def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:

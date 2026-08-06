@@ -68,6 +68,7 @@ class CustodyDiagnosis(BaseModel):
     resolution_posture: Literal["paper", "live"] = "paper"
     resolvable: bool = False
     blocked_reason: str | None = None
+    authority_kind: Literal["legacy", "sqlite"] = "legacy"
     divergences: tuple[CustodyDivergence, ...] = ()
     resolution_plan: tuple[CustodyResolutionStep, ...] = ()
 

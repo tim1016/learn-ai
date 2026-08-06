@@ -32,7 +32,7 @@ function entry(seq: number, summary: string): EvidenceEntry {
 function page(
   transactionRef: string,
   entries: readonly EvidenceEntry[],
-  nextCursor: number | null = null,
+  nextCursor: string | number | null = null,
   totalEntries = nextCursor === null ? entries.length : entries.length + 1,
 ): EvidencePage {
   return {
@@ -124,5 +124,31 @@ describe('TransactionEvidenceTimelineComponent', () => {
 
     expect(await screen.findByText('Recovered event')).toBeTruthy();
     expect(getEvidence).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders source, observation, and record clocks from SQLite custody evidence', async () => {
+    const sqliteEntry: EvidenceEntry = {
+      ...entry(7, 'Order fill observed.'),
+      operation_ref: 'effect:spy-bot:decision-7',
+      custody_owner: 'Account clerk',
+      source_event_at_ms: 1_700_000_000_007,
+      clerk_observed_at_ms: 1_700_000_000_017,
+      recorded_at_ms: 1_700_000_000_027,
+    };
+    await render(TransactionEvidenceTimelineComponent, {
+      inputs: inputs(),
+      providers: [
+        {
+          provide: BrokerV2PanelService,
+          useValue: { getEvidence: vi.fn().mockResolvedValue(page('tx-1', [sqliteEntry])) },
+        },
+      ],
+    });
+
+    expect(await screen.findByText('Source event')).toBeTruthy();
+    expect(screen.getByText('Clerk observed')).toBeTruthy();
+    expect(screen.getByText('effect:spy-bot:decision-7')).toBeTruthy();
+    expect(screen.getByText('Account clerk')).toBeTruthy();
+    expect(screen.getAllByText(/2023/)).toHaveLength(3);
   });
 });

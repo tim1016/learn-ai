@@ -34,10 +34,19 @@ from app.broker.alpaca.clerk.models import (
     ClerkCustodySnapshot,
     CustodyCountFact,
     CustodyExposureFact,
+    EffectOperationReceipt,
+    EffectPurpose,
     HoldState,
     InstanceCustodyProof,
+    ReconciliationVerdict,
 )
-from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.models import (
+    BrokerAccountSnapshot,
+    BrokerOrder,
+    BrokerOrderLeg,
+)
 from app.engine.execution.portfolio import Portfolio
 from app.engine.live.account_artifacts import RestartIntensityPolicy
 from app.engine.live.bot_lifecycle_state import BotDutyOutcome
@@ -180,9 +189,49 @@ class _CancellationSuppressingFeed(_FakeFeed):
 
 
 class _CustodyClerk:
+    authority_kind = "test"
+    broker_id = "alpaca"
+
     def __init__(self, proof: InstanceCustodyProof) -> None:
         self.proof = proof
         self.cancel_calls: list[str] = []
+        self.registered_runs: list[str] = []
+        self.stopped_runs: list[str] = []
+
+    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+        self.registered_runs.append(binding.run_id)
+
+    async def recover(self) -> None:
+        return
+
+    async def unresolved_effect_count(self) -> int:
+        return 0
+
+    async def reconcile_once(self) -> ReconciliationVerdict:
+        return self.proof.reconciliation_verdict
+
+    async def execute_for_instance(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        decision_id: str,
+        purpose: EffectPurpose,
+        action_plan: ActionPlan,
+        quantity: int,
+    ) -> EffectOperationReceipt:
+        del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity
+        raise AssertionError("custody-only test Clerk cannot execute effects")
+
+    async def stop_strategy_run(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        reason: str | None = None,
+    ) -> None:
+        del strategy_instance_id, reason
+        self.stopped_runs.append(run_id)
 
     async def cancel_working_entries_for_instance(self, sid: str) -> tuple:
         self.cancel_calls.append(sid)
@@ -225,6 +274,120 @@ class _CustodyClerk:
             evidence_refs=("test-clerk:1",),
             observed_at_ms=now_ms_utc(),
         )
+
+
+class _OrderingClerk(_CustodyClerk):
+    def __init__(self, proof: InstanceCustodyProof) -> None:
+        super().__init__(proof)
+        self.registration_saw_bot_task = False
+        self.stop_committed = asyncio.Event()
+        self.fail_stop = False
+
+    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+        self.registration_saw_bot_task = any(
+            task.get_name() == f"bot:{binding.strategy_instance_id}"
+            for task in asyncio.all_tasks()
+        )
+        await super().register_strategy_run(binding)
+
+    async def stop_strategy_run(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        reason: str | None = None,
+    ) -> None:
+        if self.fail_stop:
+            raise RuntimeError("durable STOP failed")
+        await super().stop_strategy_run(
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+            reason=reason,
+        )
+        self.stop_committed.set()
+
+
+class _StopOrderingFeed(_FakeFeed):
+    def __init__(self, clerk: _OrderingClerk) -> None:
+        super().__init__([], mode="hold")
+        self._clerk = clerk
+        self.cancelled_after_stop = False
+
+    async def stream_bars(self, symbol: str, *, use_rth: bool = True):
+        del symbol, use_rth
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled_after_stop = self._clerk.stop_committed.is_set()
+            raise
+        if False:
+            yield
+
+
+class _SqliteRuntimeBroker:
+    broker_id = "alpaca"
+
+    def __init__(self) -> None:
+        self.orders: dict[str, BrokerOrder] = {}
+        self.cancellations: list[str] = []
+
+    async def list_orders(self, **_kwargs) -> list[BrokerOrder]:
+        return list(self.orders.values())
+
+    async def list_positions(self) -> list:
+        return []
+
+    async def submit(
+        self,
+        leg: BrokerOrderLeg,
+        *,
+        client_order_id: str,
+    ) -> BrokerOrder:
+        order = BrokerOrder(
+            broker="alpaca",
+            order_id=f"broker-{len(self.orders) + 1}",
+            client_order_id=client_order_id,
+            symbol=leg.symbol,
+            asset_class="us_equity",
+            side=leg.side,
+            order_type="market",
+            time_in_force="day",
+            quantity=leg.quantity,
+            filled_quantity=0,
+            limit_price=None,
+            stop_price=None,
+            filled_avg_price=None,
+            status="accepted",
+            submitted_at_ms=_T0,
+            created_at_ms=_T0,
+            updated_at_ms=_T0,
+            filled_at_ms=None,
+            canceled_at_ms=None,
+            expired_at_ms=None,
+            events=[],
+            observed_at_ms=_T0,
+        )
+        self.orders[client_order_id] = order
+        return order
+
+    async def cancel(self, order_id: str) -> None:
+        self.cancellations.append(order_id)
+        for client_order_id, order in self.orders.items():
+            if order.order_id == order_id:
+                self.orders[client_order_id] = order.model_copy(
+                    update={
+                        "status": "canceled",
+                        "updated_at_ms": _T0 + 1,
+                        "canceled_at_ms": _T0 + 1,
+                    }
+                )
+                return
+
+    async def get_order_by_client_order_id(
+        self,
+        client_order_id: str,
+    ) -> BrokerOrder | None:
+        return self.orders.get(client_order_id)
 
 
 def _custody_proof(
@@ -1483,7 +1646,7 @@ async def test_approved_carryover_resumes_for_the_explicitly_supported_strategy(
         carryover_allowed=True,
         start_custody_guard=clerk.start_admission_snapshot,
     )
-    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+    set_alpaca_clerk(clerk)
     try:
         deployed = await registry.deploy(
             broker="alpaca",
@@ -1522,7 +1685,7 @@ async def test_ema_resume_refuses_carried_exposure_without_restorable_exit_state
         carryover_allowed=True,
         start_custody_guard=clerk.start_admission_snapshot,
     )
-    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+    set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
             broker="alpaca",
@@ -1555,7 +1718,7 @@ async def test_ema_resume_allows_freshly_proven_flat_custody(
         carryover_allowed=True,
         start_custody_guard=clerk.start_admission_snapshot,
     )
-    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+    set_alpaca_clerk(clerk)
     try:
         deployed = await registry.deploy(
             broker="alpaca",
@@ -1590,7 +1753,7 @@ async def test_carryover_resume_refuses_quantity_mismatch_without_side_effect(
         carryover_allowed=True,
         start_custody_guard=clerk.start_admission_snapshot,
     )
-    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+    set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
             broker="alpaca",
@@ -1622,7 +1785,7 @@ async def test_forbidden_carryover_requires_flatten_before_resume(
         feed,
         start_custody_guard=clerk.start_admission_snapshot,
     )
-    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+    set_alpaca_clerk(clerk)
     try:
         await registry.deploy(
             broker="alpaca",
@@ -1670,7 +1833,7 @@ async def test_account_policy_must_remain_enabled_for_carryover_resume(
         carryover_allowed=True,
         start_custody_guard=clerk.start_admission_snapshot,
     )
-    set_alpaca_clerk(clerk)  # type: ignore[arg-type]
+    set_alpaca_clerk(clerk)
     try:
         await enabled_registry.deploy(
             broker="alpaca",
@@ -1698,6 +1861,122 @@ async def test_account_policy_must_remain_enabled_for_carryover_resume(
 
 
 # ── shutdown ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_trade_run_registration_precedes_order_capable_task_creation(
+    tmp_path: Path,
+) -> None:
+    clerk = _OrderingClerk(_custody_proof(exposure={}))
+    feed = _StopOrderingFeed(clerk)
+    registry = _registry(
+        tmp_path,
+        feed,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
+    set_alpaca_clerk(clerk)
+    try:
+        deployed = await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+            mode="trade",
+        )
+
+        assert clerk.registered_runs == [deployed.active_run_id]
+        assert not clerk.registration_saw_bot_task
+        await registry.stop("alpaca", _SID)
+    finally:
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
+async def test_stop_commits_clerk_stop_before_task_cancellation(tmp_path: Path) -> None:
+    clerk = _OrderingClerk(_custody_proof(exposure={}))
+    feed = _StopOrderingFeed(clerk)
+    registry = _registry(
+        tmp_path,
+        feed,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
+    set_alpaca_clerk(clerk)
+    try:
+        deployed = await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+            mode="trade",
+        )
+
+        await registry.stop("alpaca", _SID)
+
+        assert clerk.stopped_runs == [deployed.active_run_id]
+        assert feed.cancelled_after_stop
+    finally:
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
+async def test_failed_clerk_stop_closes_run_gate_without_cancelling_task(
+    tmp_path: Path,
+) -> None:
+    clerk = _OrderingClerk(_custody_proof(exposure={}))
+    feed = _StopOrderingFeed(clerk)
+    registry = _registry(
+        tmp_path,
+        feed,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+            mode="trade",
+        )
+        clerk.fail_stop = True
+
+        with pytest.raises(RuntimeError, match="durable STOP failed"):
+            await registry.stop("alpaca", _SID)
+
+        managed = registry._bots[_SID]
+        assert not managed.run_gate.is_set()
+        assert not managed.task.done()
+        assert not feed.cancelled_after_stop
+
+        clerk.fail_stop = False
+        await registry.stop("alpaca", _SID)
+    finally:
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
+async def test_stop_all_commits_each_trade_run_before_task_cancellation(
+    tmp_path: Path,
+) -> None:
+    clerk = _OrderingClerk(_custody_proof(exposure={}))
+    feed = _StopOrderingFeed(clerk)
+    registry = _registry(
+        tmp_path,
+        feed,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
+    set_alpaca_clerk(clerk)
+    try:
+        deployed = await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+            mode="trade",
+        )
+
+        await registry.stop_all()
+
+        assert clerk.stopped_runs == [deployed.active_run_id]
+        assert feed.cancelled_after_stop
+    finally:
+        set_alpaca_clerk(None)
 
 
 @pytest.mark.asyncio
@@ -1821,6 +2100,57 @@ def _green_bar(end_ms: int, symbol: str = "SPY") -> MarketDataBar:
     return _trade_bar(end_ms, open_price="400.00", close_price="401.00", symbol=symbol)
 
 
+@pytest.mark.asyncio
+async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path / "clerk",
+    )
+    broker = _SqliteRuntimeBroker()
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    base = _WIN_START_MS + 60_000
+    feed = _FakeFeed(
+        [
+            _green_bar(base),
+            _green_bar(base + 60_000),
+            _red_bar(base + 120_000),
+            _red_bar(base + 180_000),
+            _red_bar(base + 240_000),
+        ],
+        mode="hold",
+    )
+    registry = _registry(
+        tmp_path / "runner",
+        feed,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+            mode="trade",
+        )
+        await _wait_for(lambda: bool(broker.cancellations))
+
+        transition_kinds = {
+            transition["transition_kind"]
+            for transition in repo.custody_transitions()
+        }
+        assert "ENTER_ACCEPTED" in transition_kinds
+        assert "EXIT_ACCEPTED" in transition_kinds
+        assert broker.orders
+        assert all(order.client_order_id in repo.all_order_refs() for order in broker.orders.values())
+        await registry.stop("alpaca", _SID)
+        assert repo.active_run(_SID) is None
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
 class _FakeEffectResult:
     """Minimal Clerk-authored effect receipt used by the strategy adapter."""
 
@@ -1835,7 +2165,22 @@ class _FakeClerk:
     def __init__(self, *, should_raise: Exception | None = None) -> None:
         self.calls: list[dict] = []
         self.stop_cancellations: list[str] = []
+        self.registered_runs: list[str] = []
+        self.stopped_runs: list[str] = []
         self._should_raise = should_raise
+
+    async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
+        self.registered_runs.append(binding.run_id)
+
+    async def stop_strategy_run(
+        self,
+        *,
+        strategy_instance_id: str,
+        run_id: str,
+        reason: str | None = None,
+    ) -> None:
+        del strategy_instance_id, reason
+        self.stopped_runs.append(run_id)
 
     async def cancel_working_entries_for_instance(self, strategy_instance_id: str) -> tuple[()]:
         """Test-double boundary for Clerk-owned STOP custody."""

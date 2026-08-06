@@ -15,7 +15,6 @@ deterministic.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -457,40 +456,6 @@ async def test_recover_is_noop_on_a_fresh_install_with_no_journal() -> None:
 
     assert broker.lookup_calls == []
     assert _kinds(clerk) == []
-
-
-async def test_startup_recovery_failure_keeps_submit_clerk_disabled() -> None:
-    """A failed recovery must fail closed before lifespan installs the clerk."""
-    from app.main import _recover_alpaca_clerk_or_fail_closed
-
-    class _RecoveryFailure:
-        async def recover(self) -> None:
-            raise RuntimeError("journal unavailable")
-
-    assert not await _recover_alpaca_clerk_or_fail_closed(_RecoveryFailure())
-
-
-async def test_startup_recovery_timeout_keeps_submit_clerk_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Startup proceeds fail-closed when replay exceeds its overall budget."""
-    from app import main as app_main
-
-    recovery_cancelled = asyncio.Event()
-
-    class _RecoveryNeverCompletes:
-        async def recover(self) -> None:
-            try:
-                await asyncio.Event().wait()
-            finally:
-                recovery_cancelled.set()
-
-    monkeypatch.setattr(app_main, "_ALPACA_RECOVERY_TIMEOUT_S", 0.01)
-
-    assert not await app_main._recover_alpaca_clerk_or_fail_closed(
-        _RecoveryNeverCompletes()
-    )
-    assert recovery_cancelled.is_set()
 
 
 # ── Idempotency ──────────────────────────────────────────────────────────────

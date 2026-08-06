@@ -58,8 +58,8 @@ def repo(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_bumped_for_immutable_operation_order_links() -> None:
-    assert schema.SCHEMA_VERSION == 4
+def test_schema_version_includes_bounded_projection_indexes() -> None:
+    assert schema.SCHEMA_VERSION == 5
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
@@ -460,9 +460,10 @@ def test_first_mirror_write_fsyncs_parent_directory(
 
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
-    assert len(calls) == 0  # initialize() writes control_meta only, no transition yet
+    # Initialization publishes the generation binding before any transition.
+    assert calls == [r.mirror_path.parent]
     r.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")
-    assert len(calls) == 1  # the mirror's first PREPARE line creates the file
+    assert len(calls) == 1  # PREPARE appends to the already-durable mirror
     r.register_strategy_instance(strategy_instance_id=SID_B, symbol="QQQ", config_hash="h2")
     assert len(calls) == 1  # subsequent writes to the existing file do not re-fsync the dir
     r.close()

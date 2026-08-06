@@ -37,7 +37,7 @@ class ClerkTransactionEventRow(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    event_id: str = Field(min_length=1, max_length=96)
+    event_id: str = Field(min_length=1, max_length=512)
     # The broker is explicit because the shared grid never infers lifecycle
     # semantics from a receipt shape.  ``ibkr`` remains the compatibility
     # default for rows projected before the Alpaca parity migration.
@@ -92,7 +92,7 @@ class ClerkTransactionRow(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    transaction_id: str = Field(min_length=1, max_length=96)
+    transaction_id: str = Field(min_length=1, max_length=512)
     broker: Literal["ibkr", "alpaca"] = "ibkr"
     account_id: str = Field(min_length=1, max_length=64)
     journal_seq: int = Field(ge=1)
@@ -122,7 +122,7 @@ class ClerkTransactionSummaryRow(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    transaction_id: str = Field(min_length=1, max_length=96)
+    transaction_id: str = Field(min_length=1, max_length=512)
     broker: Literal["ibkr", "alpaca"] = "ibkr"
     account_id: str = Field(min_length=1, max_length=64)
     journal_seq: int = Field(ge=1)

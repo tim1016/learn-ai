@@ -100,4 +100,17 @@ describe('AlpacaHoldBannerComponent', () => {
       );
     });
   });
+
+  it('removes generic clear-hold when SQLite custody is active', async () => {
+    await renderBanner({
+      getClerkStatus: () => Promise.resolve(heldStatus({
+        authority_kind: 'sqlite',
+        generic_hold_clear_available: false,
+        generic_hold_clear_explanation: 'Use the evidence-bound recovery catalog.',
+      })),
+    });
+
+    expect(await screen.findByText('Use the evidence-bound recovery catalog.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Clear hold/ })).toBeNull();
+  });
 });

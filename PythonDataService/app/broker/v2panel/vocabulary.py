@@ -93,6 +93,12 @@ ActionId = Literal[
     "clear_hold",
     "record_inventory_baseline",
     "reconcile_now",
+    "cancel_verified_working_orders",
+    "prepare_safe_flatten",
+    "stop_bot_decisions",
+    "open_custody_timeline",
+    "rebuild_from_mirror",
+    "reset_authority",
 ]
 ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "deploy",
@@ -106,6 +112,12 @@ ACTION_IDS: Final[tuple[ActionId, ...]] = (
     "clear_hold",
     "record_inventory_baseline",
     "reconcile_now",
+    "cancel_verified_working_orders",
+    "prepare_safe_flatten",
+    "stop_bot_decisions",
+    "open_custody_timeline",
+    "rebuild_from_mirror",
+    "reset_authority",
 )
 
 
@@ -273,6 +285,30 @@ OPERATOR_COPY: Final[dict[str, OperatorCopy]] = {
     ),
     "reconcile_now": OperatorCopy(
         "Reconcile now", "Run a reconciliation sweep against the broker immediately."
+    ),
+    "cancel_verified_working_orders": OperatorCopy(
+        "Cancel verified working orders",
+        "Cancel only working orders whose exact Clerk and broker identities are proven.",
+    ),
+    "prepare_safe_flatten": OperatorCopy(
+        "Prepare safe flatten",
+        "Prepare a fresh reduction plan without submitting an order.",
+    ),
+    "stop_bot_decisions": OperatorCopy(
+        "Stop bot decisions",
+        "Stop new decisions while existing exposure remains under Clerk custody.",
+    ),
+    "open_custody_timeline": OperatorCopy(
+        "Open custody timeline",
+        "Inspect the immutable operation-first evidence timeline.",
+    ),
+    "rebuild_from_mirror": OperatorCopy(
+        "Rebuild from mirror",
+        "Rebuild a failed authority only from a contiguous verified mirror.",
+    ),
+    "reset_authority": OperatorCopy(
+        "Reset authority",
+        "Create a new authority generation only after fresh flat and order-free proof.",
     ),
 }
 

@@ -12,13 +12,18 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport
 
-from app.broker.alpaca.clerk.journal import get_clerk_settings, reset_clerk_settings_for_testing
-from app.broker.alpaca.clerk.sqlite import process_repositories
+from app.broker.alpaca.clerk.active_authority import (
+    ActiveClerkRuntime,
+    ClerkStartupFailure,
+    set_active_clerk_runtime,
+)
+from app.broker.alpaca.clerk.journal import reset_clerk_settings_for_testing
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     RepositoryPoisoned,
 )
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.routers import alpaca_clerk_sqlite
@@ -99,25 +104,70 @@ class FakeRegistry:
 def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
     reset_clerk_settings_for_testing()
-    assert get_clerk_settings().dir == tmp_path
-
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
-    # Close the setup handle so the cached process repository (opened lazily
-    # by the router on first request) is the sole open connection+lease.
-    repo.close()
+    port = FakeAlpacaPort()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=port, trade=port)
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="sqlite", clerk=facade)
+    )
 
     app = FastAPI()
     app.include_router(router)
     try:
         yield app
     finally:
-        process_repositories.reset_for_testing()
+        set_active_clerk_runtime(None)
+        repo.close()
         reset_clerk_settings_for_testing()
 
 
 def _client(app: FastAPI) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.mark.asyncio
+async def test_failed_activated_authority_exposes_typed_account_recovery_state() -> None:
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(
+            authority_kind="unavailable",
+            startup_failure=ClerkStartupFailure(
+                reason_code="SQLITE_CLERK_STARTUP_FAILED",
+                account_id=ACCOUNT_ID,
+                scope="ACCOUNT_CLERK",
+                impact="Broker-mutating Alpaca Clerk capability is not installed.",
+                recovery="The activated database failed integrity verification.",
+                observed_at_ms=1_700_000_000_000,
+                activation_detected=True,
+                authority_generation=3,
+                db_identity_token="db-generation-3",
+            ),
+        )
+    )
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        async with _client(app) as client:
+            response = await client.get(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/snapshot"
+            )
+    finally:
+        set_active_clerk_runtime(None)
+
+    assert response.status_code == 200
+    projection = response.json()
+    assert projection["authority_health"] == "failed"
+    assert projection["authority_generation"] == 3
+    assert projection["db_identity_token"] == "db-generation-3"
+    assert projection["guidance"]["scope"] == "ACCOUNT_CLERK"
+    assert projection["guidance"]["may_create_exposure"] is False
+    actions = {action["action_id"]: action for action in projection["recovery_actions"]}
+    assert set(actions) == {
+        "open_custody_timeline",
+        "rebuild_from_mirror",
+        "reset_authority",
+    }
+    assert all(action["available"] is False for action in actions.values())
 
 
 @pytest.mark.asyncio
@@ -250,6 +300,75 @@ async def test_stop_retry_after_run_stopped_replays_the_completed_result_over_ht
 
 
 @pytest.mark.asyncio
+async def test_presented_stop_rechecks_policy_and_replays_durable_lost_response(
+    api: FastAPI,
+) -> None:
+    async with _client(api) as client:
+        await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+            json={"lifecycle_run_id": "run-1"},
+        )
+        snapshot = await client.get(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/snapshot"
+        )
+        action = next(
+            item
+            for item in snapshot.json()["recovery_actions"]
+            if item["action_id"] == "stop_bot_decisions"
+        )
+        request = {
+            "action_id": action["action_id"],
+            "concurrency_token": action["concurrency_token"],
+            "execution_ref": action["execution_ref"],
+            "reason": "Operator stopped decisions from the custody projection.",
+        }
+
+        first = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+            json=request,
+        )
+        retry = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+            json=request,
+        )
+
+    assert first.status_code == retry.status_code == 200
+    assert first.json()["applied"] is True
+    assert retry.json()["applied"] is False
+    assert first.json()["command"]["command_id"] == retry.json()["command"]["command_id"]
+    assert first.json()["receipt_id"] == first.json()["command"]["command_id"]
+    assert retry.json()["receipt_id"] == first.json()["receipt_id"]
+    assert first.json()["recorded_at_ms"] == first.json()["command"]["updated_at_ms"]
+
+
+@pytest.mark.asyncio
+async def test_presented_reconciliation_returns_its_durable_receipt_clock(
+    api: FastAPI,
+) -> None:
+    async with _client(api) as client:
+        snapshot = await client.get(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/snapshot"
+        )
+        action = next(
+            item
+            for item in snapshot.json()["recovery_actions"]
+            if item["action_id"] == "reconcile_now"
+        )
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/recovery-actions/execute",
+            json={
+                "action_id": action["action_id"],
+                "concurrency_token": action["concurrency_token"],
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["receipt_id"].startswith("reconciliation:")
+    assert body["recorded_at_ms"] > 0
+
+
+@pytest.mark.asyncio
 async def test_start_on_unknown_bot_returns_typed_404(api: FastAPI) -> None:
     async with _client(api) as client:
         response = await client.post(
@@ -271,11 +390,12 @@ async def test_get_unknown_command_returns_typed_404(api: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
-async def test_uninitialized_account_returns_typed_503(
+async def test_missing_active_runtime_returns_typed_503(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path))
     reset_clerk_settings_for_testing()
+    set_active_clerk_runtime(None)
     app = FastAPI()
     app.include_router(router)
     try:
@@ -284,9 +404,9 @@ async def test_uninitialized_account_returns_typed_503(
                 "/api/alpaca-clerk-sqlite/accounts/PA-NEVER-INITIALIZED/commands/cmd:x"
             )
         assert response.status_code == 503
-        assert response.json()["detail"]["reason"] == "sqlite_authority_not_initialized"
+        assert response.json()["detail"]["reason"] == "active_clerk_not_started"
     finally:
-        process_repositories.reset_for_testing()
+        set_active_clerk_runtime(None)
         reset_clerk_settings_for_testing()
 
 

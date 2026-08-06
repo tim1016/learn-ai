@@ -221,6 +221,19 @@ export class BotPanelShellComponent {
 
   protected async onActionRequested({ action, reason }: PanelActionTrigger): Promise<void> {
     if (this.actionPending()) return;
+    if (action.action_id === 'open_custody_timeline') {
+      this.selectLens('operator');
+      return;
+    }
+    if (action.action_id === 'prepare_safe_flatten') {
+      this.selectLens('operator');
+      this.messageService.add({
+        severity: 'info',
+        summary: action.label,
+        detail: action.explanation,
+      });
+      return;
+    }
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     try {

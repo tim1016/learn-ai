@@ -31,7 +31,13 @@ export type ActionId =
   | 'cancel_order'
   | 'clear_hold'
   | 'record_inventory_baseline'
-  | 'reconcile_now';
+  | 'reconcile_now'
+  | 'cancel_verified_working_orders'
+  | 'prepare_safe_flatten'
+  | 'stop_bot_decisions'
+  | 'open_custody_timeline'
+  | 'rebuild_from_mirror'
+  | 'reset_authority';
 
 // ── Operator-blocker reuse (OperatorBlocker contract) ────────────────────────
 
@@ -182,6 +188,13 @@ export interface EvidenceEntry {
   readonly intent_id: string | null;
   readonly summary: string;
   readonly has_more_detail: boolean;
+  readonly operation_ref?: string | null;
+  readonly operation_state?: string | null;
+  readonly broker_state?: string | null;
+  readonly custody_owner?: string | null;
+  readonly proof_reference?: string | null;
+  readonly source_event_at_ms?: number | null;
+  readonly clerk_observed_at_ms?: number | null;
 }
 
 export interface EvidencePage {
@@ -189,7 +202,7 @@ export interface EvidencePage {
   readonly account_id: string;
   readonly transaction_ref: string | null;
   readonly entries: readonly EvidenceEntry[];
-  readonly next_cursor: number | null;
+  readonly next_cursor: string | number | null;
   readonly total_entries: number;
   readonly truncated: boolean;
   readonly read_by: string;

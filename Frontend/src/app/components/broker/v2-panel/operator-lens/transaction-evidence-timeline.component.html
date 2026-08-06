@@ -25,13 +25,41 @@
             <app-timestamp-display [value]="entry.recorded_at_ms" mode="local" />
           </div>
           <p>{{ entry.summary }}</p>
-          @if (entry.intent_id || entry.order_ref) {
+          @if (entry.operation_ref || entry.intent_id || entry.order_ref || entry.custody_owner) {
             <dl>
+              @if (entry.operation_ref) {
+                <div><dt>Operation</dt><dd><code>{{ entry.operation_ref }}</code></dd></div>
+              }
               @if (entry.intent_id) {
                 <div><dt>Intent</dt><dd><code>{{ entry.intent_id }}</code></dd></div>
               }
               @if (entry.order_ref) {
                 <div><dt>Order</dt><dd><code>{{ entry.order_ref }}</code></dd></div>
+              }
+              @if (entry.custody_owner) {
+                <div><dt>Custody</dt><dd>{{ entry.custody_owner }}</dd></div>
+              }
+              @if (entry.operation_state) {
+                <div><dt>Operation state</dt><dd>{{ entry.operation_state | receiptLabel }}</dd></div>
+              }
+              @if (entry.broker_state) {
+                <div><dt>Broker state</dt><dd>{{ entry.broker_state | receiptLabel }}</dd></div>
+              }
+            </dl>
+          }
+          @if (entry.source_event_at_ms || entry.clerk_observed_at_ms) {
+            <dl aria-label="Evidence clocks">
+              @if (entry.source_event_at_ms) {
+                <div>
+                  <dt>Source event</dt>
+                  <dd><app-timestamp-display [value]="entry.source_event_at_ms" mode="local" /></dd>
+                </div>
+              }
+              @if (entry.clerk_observed_at_ms) {
+                <div>
+                  <dt>Clerk observed</dt>
+                  <dd><app-timestamp-display [value]="entry.clerk_observed_at_ms" mode="local" /></dd>
+                </div>
               }
             </dl>
           }

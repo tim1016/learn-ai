@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite import schema, writes
 from app.broker.alpaca.clerk.sqlite.folds import FoldRegistry
-from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile
+from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, MirrorIdentity
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.paths import fsync_directory_chain
 from app.utils.timestamps import Clock
@@ -44,12 +44,23 @@ def rebuild_repository_from_mirror(
             f"{db_path} exists — move it aside before rebuild_from_mirror()"
         )
 
-    rebuilt_rows = MirrorFile(mirror_path).rebuild()
     established = EstablishedAccountsRegistry(accounts_root).latest(account_id)
     if established is None:
         raise DatabaseMissingAfterEstablishment(
             f"no established-accounts registry entry for {account_id!r}; "
             "cannot rebuild an authority that was never established"
+        )
+    rebuilt_rows = MirrorFile(
+        mirror_path,
+        expected_identity=MirrorIdentity(
+            account_id=account_id,
+            authority_generation=established.authority_generation,
+            db_identity_token=established.db_identity_token,
+        ),
+    ).rebuild()
+    if any(row.authority_generation != established.authority_generation for row in rebuilt_rows):
+        raise DatabaseMissingAfterEstablishment(
+            "mirror contains a transition from a different authority generation"
         )
 
     account_dir.mkdir(parents=True, exist_ok=True)

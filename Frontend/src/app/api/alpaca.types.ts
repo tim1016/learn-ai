@@ -39,3 +39,10 @@ export type CustodyPositionDelta = components['schemas']['CustodyPositionDelta']
 export type CustodyResolutionRequest = components['schemas']['CustodyResolutionRequest'];
 export type CustodyResolutionReceipt = components['schemas']['CustodyResolutionReceipt'];
 export type CustodyResolutionStepResult = components['schemas']['CustodyResolutionStepResult'];
+
+// Activated SQLite Account Clerk projection and evidence-bound recovery.
+export type SqliteClerkProjection = components['schemas']['ClerkProjectionResponse'];
+export type SqliteRecoveryAction = components['schemas']['RecoveryCapabilityResponse'];
+export type SqliteRecoveryResult = components['schemas']['RecoveryActionExecuteResponse'];
+export type SqliteTimelineEntry = components['schemas']['TimelineEntryResponse'];
+export type SqliteTimelinePage = components['schemas']['TimelinePageResponse'];

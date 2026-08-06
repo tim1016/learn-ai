@@ -127,8 +127,8 @@ class BotCatalogView(BaseModel):
     status_explanation: str
     # Rollups (S0 BotRollup) — never account-net; attributed to this bot.
     exposure: dict[str, float]
-    fills_today: int
-    realized_pnl_today: float
+    fills_today: int | None
+    realized_pnl_today: float | None
     open_pnl: float | None
     last_activity_at_ms: int | None
     needs_attention: bool
@@ -293,7 +293,7 @@ class WorkingOrderView(BaseModel):
     symbol: str
     side: str
     quantity: float | None
-    filled_quantity: float
+    filled_quantity: float | None
     status: str
     observed_at_ms: int
 
@@ -385,8 +385,8 @@ class BotPanelView(BaseModel):
     recent_fills: list[RecentFillView]
     # S0 rollup summary — backend-computed FIFO P&L (§10).  Frontend renders,
     # never recomputes.  "Fees not reported" renders when fee_fidelity="none".
-    fills_today: int
-    realized_pnl_today: float
+    fills_today: int | None
+    realized_pnl_today: float | None
     open_pnl: float | None
 
 

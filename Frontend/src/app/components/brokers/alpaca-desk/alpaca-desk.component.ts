@@ -17,6 +17,7 @@ import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
 import { AlpacaCustodyResolutionComponent } from './alpaca-custody-resolution.component';
 import { AlpacaHoldBannerComponent } from './alpaca-hold-banner.component';
 import { AlpacaOrderEntryComponent } from './alpaca-order-entry.component';
+import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
 import { AlpacaOrdersTableComponent } from './alpaca-orders-table.component';
 import { AlpacaPositionsTableComponent } from './alpaca-positions-table.component';
 import { BrokersService } from '../../../services/brokers.service';
@@ -37,6 +38,7 @@ import { parseManualOrderTicketQuery } from '../../broker/lib/manual-order-navig
     AlpacaPositionsTableComponent,
     AlpacaOrdersTableComponent,
     AlpacaOrderEntryComponent,
+    AlpacaSqliteCustodyComponent,
     ButtonModule,
     DialogModule,
     TagModule,
@@ -75,11 +77,16 @@ export class AlpacaDeskComponent {
       : null;
   });
   protected readonly orderEntryOpen = signal(false);
+  protected readonly legacyManualOrdersAvailable = signal(false);
   protected readonly ordersRefreshVersion = signal(0);
 
   constructor() {
     effect(() => {
-      if (this.orderPrefill() !== null) this.orderEntryOpen.set(true);
+      if (!this.legacyManualOrdersAvailable()) {
+        this.orderEntryOpen.set(false);
+      } else if (this.orderPrefill() !== null) {
+        this.orderEntryOpen.set(true);
+      }
     });
   }
 

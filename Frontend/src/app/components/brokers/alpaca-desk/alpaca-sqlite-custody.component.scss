@@ -1,0 +1,75 @@
+.sqlite-custody {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 0.75rem;
+  background: var(--surface-card);
+}
+
+.sqlite-custody > header,
+.sqlite-custody__guidance,
+.sqlite-action,
+.sqlite-custody__timeline li {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.sqlite-custody > header {
+  grid-template-columns: 1fr auto;
+  align-items: start;
+}
+
+.sqlite-custody h2,
+.sqlite-custody h3,
+.sqlite-custody p {
+  margin: 0;
+}
+
+.sqlite-custody__eyebrow,
+.sqlite-custody small,
+.sqlite-custody__state {
+  color: var(--text-color-secondary);
+}
+
+.sqlite-custody__actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.75rem;
+}
+
+.sqlite-action,
+.sqlite-custody__timeline li {
+  padding: 0.75rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 0.5rem;
+}
+
+.sqlite-action button {
+  justify-self: start;
+}
+
+.sqlite-custody__uncertainties,
+.sqlite-custody__timeline ol {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.sqlite-custody__timeline dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.sqlite-custody__timeline dl div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.sqlite-custody__notice,
+.sqlite-custody__state--error {
+  color: var(--red-600);
+}

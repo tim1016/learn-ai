@@ -1,7 +1,7 @@
 # ADR 0035: Alpaca Account Clerk — event-sourced SQLite authority (append-only log + folded state), no Postgres in scope
 
 - **Date:** 2026-08-04
-- **Status:** Proposed (requires acceptance + qualification before implementation authority)
+- **Status:** Proposed (implementation and qualification evidence exist; human acceptance and account activation remain in #1383)
 - **Context:** Alpaca Account Clerk control-plane; the SQLite control-plane PRD
   (`docs/prds/alpaca-account-clerk-sqlite-control-plane.md`); an architecture
   grilling session on 2026-08-04.
@@ -10,6 +10,12 @@
   IBKR is unchanged; those ADRs remain in force everywhere else.
 
 ## Context
+
+> **Implementation note — 2026-08-06:** issue #1395 completed the activation-gated
+> runtime, operator recovery/cutover tooling, adversarial campaign, and 1M-row
+> qualification artifacts. This does not activate an account or accept this ADR.
+> The separate human cutover task #1383 owns that decision; until then, accounts
+> without a valid activation fence continue to use the legacy JSONL Clerk.
 
 The Alpaca Account Clerk today (`PythonDataService/app/broker/alpaca/clerk/`,
 ~6,745 lines) is an in-process async service whose durable authority is two
@@ -205,8 +211,10 @@ ADR's Status is unchanged by its existence.
 
 ## Qualification gate
 
-Both gate before this ADR moves to Accepted-for-implementation: (a) the
+Implementation evidence for both gates is published in
+`docs/audits/alpaca-sqlite-clerk-qualification-{smoke,full}.{json,md}`: (a) the
 adversarial correctness matrix (atomicity, idempotency, broker races, custody/
 uncertainty, database failure incl. mirror-rebuild and hash-chain verification,
 UI delivery), and (b) the performance budgets at the 1/10/100-bot and
-10k/100k/1M-row fixtures. Live-money trading stays disabled throughout.
+10k/100k/1M-row fixtures. Human review and activation remain in #1383, so this
+ADR intentionally remains Proposed. Live-money trading stays disabled throughout.

@@ -265,6 +265,36 @@ jobs:
           extra="${{ steps.changed.outputs.extra }}"
           python -m pytest "${baseline_dirs[@]}" $extra -v -k "not slow" --tb=short
 
+  alpaca-sqlite-qualification-smoke:
+    name: Alpaca SQLite Qualification Smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: PythonDataService
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: PythonDataService/requirements*.txt
+      - run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
+      - name: Run bounded deterministic qualification
+        run: |
+          mkdir -p TestResults
+          python -m scripts.run_alpaca_sqlite_qualification \
+            --profile smoke \
+            --json-output TestResults/alpaca-sqlite-qualification-smoke.json \
+            --markdown-output TestResults/alpaca-sqlite-qualification-smoke.md
+      - name: Upload qualification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpaca-sqlite-qualification-smoke
+          path: PythonDataService/TestResults/alpaca-sqlite-qualification-smoke.*
+          if-no-files-found: error
+
   validate-golden-manifest:
     name: Validate Golden Manifest
     runs-on: ubuntu-latest

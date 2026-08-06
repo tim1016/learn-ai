@@ -25,6 +25,7 @@
     "UNEXPLAINED_ORDER_HOLD",
     "blocked",
     "cancel_order",
+    "cancel_verified_working_orders",
     "clean",
     "clear_hold",
     "continue",
@@ -33,14 +34,19 @@
     "healthy",
     "missing_intent",
     "not_applicable",
+    "open_custody_timeline",
     "pause",
+    "prepare_safe_flatten",
+    "rebuild_from_mirror",
     "reconcile_now",
     "record_inventory_baseline",
+    "reset_authority",
     "resume",
     "retire",
     "satisfied",
     "stale",
     "stop",
+    "stop_bot_decisions",
     "unexplained_order",
     "unhealthy",
     "unknown",
@@ -128,6 +134,10 @@
       "label": "Cancel order",
       "explanation": "Cancel one working order at the broker."
     },
+    "cancel_verified_working_orders": {
+      "label": "Cancel verified working orders",
+      "explanation": "Cancel only working orders whose exact Clerk and broker identities are proven."
+    },
     "clean": {
       "label": "Clean",
       "explanation": "The last sweep found the journal and the broker in agreement."
@@ -160,9 +170,21 @@
       "label": "Not applicable",
       "explanation": "This broker or mode has no such station."
     },
+    "open_custody_timeline": {
+      "label": "Open custody timeline",
+      "explanation": "Inspect the immutable operation-first evidence timeline."
+    },
     "pause": {
       "label": "Pause",
       "explanation": "Hold bar evaluation while keeping the current process and run identity alive."
+    },
+    "prepare_safe_flatten": {
+      "label": "Prepare safe flatten",
+      "explanation": "Prepare a fresh reduction plan without submitting an order."
+    },
+    "rebuild_from_mirror": {
+      "label": "Rebuild from mirror",
+      "explanation": "Rebuild a failed authority only from a contiguous verified mirror."
     },
     "reconcile_now": {
       "label": "Reconcile now",
@@ -171,6 +193,10 @@
     "record_inventory_baseline": {
       "label": "Recover inventory baseline",
       "explanation": "Record the freshly observed broker positions as the account accounting cutover, retiring prior bot attribution without deleting history or assigning current positions to a bot."
+    },
+    "reset_authority": {
+      "label": "Reset authority",
+      "explanation": "Create a new authority generation only after fresh flat and order-free proof."
     },
     "resume": {
       "label": "Resume",
@@ -191,6 +217,10 @@
     "stop": {
       "label": "Stop",
       "explanation": "Stop evaluating bars and cancel this bot's working entry orders. Exposure is left untouched."
+    },
+    "stop_bot_decisions": {
+      "label": "Stop bot decisions",
+      "explanation": "Stop new decisions while existing exposure remains under Clerk custody."
     },
     "unexplained_order": {
       "label": "Unexplained order",

@@ -9,13 +9,15 @@
         </div>
       </div>
 
-      <p-button
-        label="New order"
-        icon="pi pi-plus"
-        size="small"
-        ariaLabel="Create a new Alpaca order"
-        (onClick)="orderEntryOpen.set(true)"
-      />
+      @if (legacyManualOrdersAvailable()) {
+        <p-button
+          label="New order"
+          icon="pi pi-plus"
+          size="small"
+          ariaLabel="Create a new Alpaca order"
+          (onClick)="orderEntryOpen.set(true)"
+        />
+      }
     </div>
 
     <app-alpaca-account-card />
@@ -28,6 +30,13 @@
   }
 
   <app-alpaca-custody-resolution />
+
+  @if (ticketAccountId(); as accountId) {
+    <app-alpaca-sqlite-custody
+      [accountId]="accountId"
+      (legacyAuthorityChanged)="legacyManualOrdersAvailable.set($event)"
+    />
+  }
 
   <div class="desk-grid">
     <section class="desk-section positions-section" aria-labelledby="positions-title">
@@ -55,7 +64,7 @@
 
 <p-dialog
   header="Create Alpaca order"
-  [visible]="orderEntryOpen()"
+  [visible]="legacyManualOrdersAvailable() && orderEntryOpen()"
   (visibleChange)="orderEntryOpen.set($event)"
   [modal]="true"
   [dismissableMask]="true"
