@@ -142,6 +142,30 @@ class RecoveryConfirmation:
 
 
 @dataclass(frozen=True)
+class SafeFlattenPlanLeg:
+    strategy_instance_id: str
+    symbol: str
+    side: Literal["buy", "sell"]
+    quantity: float
+    position_updated_at_ms: int
+
+
+@dataclass(frozen=True)
+class SafeFlattenPlan:
+    version_token: str
+    account_id: str
+    authority_generation: int
+    db_identity_token: str
+    control_revision: int
+    scope: ClerkScope
+    strategy_instance_id: str | None
+    reconciliation_id: str
+    prepared_at_ms: int
+    expires_at_ms: int
+    legs: tuple[SafeFlattenPlanLeg, ...]
+
+
+@dataclass(frozen=True)
 class RecoveryCapability:
     action_id: str
     label: str
@@ -152,6 +176,7 @@ class RecoveryCapability:
     scope: ClerkScope
     freshness: EvidenceFreshness
     evidence: tuple[RecoveryEvidence, ...]
+    reduction_plan: SafeFlattenPlan | None
     confirmation: RecoveryConfirmation | None
     next_step: str
     concurrency_token: str

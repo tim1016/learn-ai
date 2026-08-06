@@ -48,6 +48,10 @@
     />
   }
 
+  @if (reductionPlan(); as plan) {
+    <app-safe-flatten-plan [plan]="plan" />
+  }
+
   <app-panel-header
     [panel]="panelData"
     [actionPending]="actionPending()"

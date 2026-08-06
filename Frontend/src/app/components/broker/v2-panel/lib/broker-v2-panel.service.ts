@@ -3,6 +3,10 @@ import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type { components } from '../../../../api/broker.types';
 import type {
+  SqliteRecoveryAction,
+  SqliteRecoveryActionCheck,
+} from '../../../../api/alpaca.types';
+import type {
   BotCatalogView,
   BotPanelView,
   BotPanelLiveSnapshot,
@@ -47,6 +51,23 @@ export class BrokerV2PanelService {
     return firstValueFrom(
       this.http.get<PanelProfile>(`/api/brokers/${encodeURIComponent(broker)}/panel-profile`),
     );
+  }
+
+  async checkSqliteSafeFlattenPlan(
+    accountId: string,
+    sid: string,
+    action: Pick<PanelAction, 'action_id' | 'concurrency_token'>,
+  ): Promise<SqliteRecoveryAction> {
+    const response = await firstValueFrom(
+      this.http.post<SqliteRecoveryActionCheck>(
+        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/bots/${encodeURIComponent(sid)}/recovery-actions/check`,
+        {
+          action_id: action.action_id,
+          concurrency_token: action.concurrency_token,
+        },
+      ),
+    );
+    return response.capability;
   }
 
   deployBot(

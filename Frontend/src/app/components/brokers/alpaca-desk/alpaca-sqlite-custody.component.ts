@@ -16,8 +16,10 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { BrokersService } from '../../../services/brokers.service';
 import type {
   SqliteRecoveryAction,
+  SqliteSafeFlattenPlan,
   SqliteTimelineEntry,
 } from '../../../api/alpaca.types';
+import { SafeFlattenPlanComponent } from '../../broker/bot-control/reused/safe-flatten-plan/safe-flatten-plan.component';
 import { TypedHaltConfirmComponent } from '../../broker/bot-control/reused/typed-halt-confirm/typed-halt-confirm.component';
 import {
   type ActionReceiptView,
@@ -31,6 +33,7 @@ import {
   imports: [
     PanelActionReceiptComponent,
     ReceiptLabelPipe,
+    SafeFlattenPlanComponent,
     TimestampDisplayComponent,
     TypedHaltConfirmComponent,
   ],
@@ -55,6 +58,7 @@ export class AlpacaSqliteCustodyComponent {
   protected readonly busyActionId = signal<string | null>(null);
   protected readonly actionNotice = signal<string | null>(null);
   protected readonly confirmationAction = signal<SqliteRecoveryAction | null>(null);
+  protected readonly reductionPlan = signal<SqliteSafeFlattenPlan | null>(null);
   protected readonly receipt = signal<ActionReceiptView | null>(null);
   protected readonly isLegacyAuthority = computed(() => {
     const error = this.projection.error();
@@ -80,6 +84,10 @@ export class AlpacaSqliteCustodyComponent {
     if (!action.available || this.busyActionId() !== null) return;
     if (action.action_id === 'open_custody_timeline') {
       await this.openTimeline();
+      return;
+    }
+    if (action.action_id === 'prepare_safe_flatten') {
+      await this.prepareSafeFlatten(action);
       return;
     }
     if (!action.mutation) {
@@ -127,6 +135,29 @@ export class AlpacaSqliteCustodyComponent {
         error instanceof HttpErrorResponse && error.status === 409
           ? 'Clerk evidence changed. Review the refreshed action before trying again.'
           : 'The Account Clerk could not complete this action.',
+      );
+      this.projection.reload();
+    } finally {
+      this.busyActionId.set(null);
+    }
+  }
+
+  private async prepareSafeFlatten(action: SqliteRecoveryAction): Promise<void> {
+    this.busyActionId.set(action.action_id);
+    this.actionNotice.set(null);
+    this.reductionPlan.set(null);
+    try {
+      const refreshed = await this.brokers.checkSqliteRecoveryAction(
+        this.accountId(),
+        action,
+      );
+      this.reductionPlan.set(refreshed.reduction_plan);
+      this.actionNotice.set(refreshed.next_step);
+    } catch (error) {
+      this.actionNotice.set(
+        error instanceof HttpErrorResponse && error.status === 409
+          ? 'Clerk evidence changed. Review the refreshed action before trying again.'
+          : 'The Account Clerk could not prepare a safe-flatten plan.',
       );
       this.projection.reload();
     } finally {

@@ -1,0 +1,74 @@
+<section class="safe-flatten-plan" aria-label="Prepared safe-flatten reduction plan">
+  <header class="safe-flatten-plan__header">
+    <div>
+      <span class="safe-flatten-plan__eyebrow">Read-only preparation</span>
+      <h3>Safe-flatten reduction plan</h3>
+    </div>
+    <span class="safe-flatten-plan__scope">{{ plan().scope | receiptLabel }}</span>
+  </header>
+
+  <p class="safe-flatten-plan__notice">
+    No order has been submitted. The Account Clerk must recheck this plan before any later
+    reduction action.
+  </p>
+
+  <dl class="safe-flatten-plan__facts">
+    <div>
+      <dt>Prepared</dt>
+      <dd><app-timestamp-display [value]="plan().prepared_at_ms" mode="local" /></dd>
+    </div>
+    <div>
+      <dt>Expires</dt>
+      <dd><app-timestamp-display [value]="plan().expires_at_ms" mode="local" /></dd>
+    </div>
+    <div>
+      <dt>Authority</dt>
+      <dd>Generation {{ plan().authority_generation }}</dd>
+    </div>
+    <div>
+      <dt>Control revision</dt>
+      <dd>{{ plan().control_revision }}</dd>
+    </div>
+    <div>
+      <dt>Database identity</dt>
+      <dd><code>{{ plan().db_identity_token }}</code></dd>
+    </div>
+    <div>
+      <dt>Reconciliation</dt>
+      <dd><code>{{ plan().reconciliation_id }}</code></dd>
+    </div>
+  </dl>
+
+  <div class="safe-flatten-plan__table-wrap">
+    <table>
+      <caption>Exact attributed quantities proposed for risk reduction</caption>
+      <thead>
+        <tr>
+          <th scope="col">Bot</th>
+          <th scope="col">Symbol</th>
+          <th scope="col">Closing side</th>
+          <th scope="col">Quantity</th>
+          <th scope="col">Position evidence</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (leg of plan().legs; track trackLeg($index, leg)) {
+          <tr>
+            <td><code>{{ leg.strategy_instance_id }}</code></td>
+            <td>{{ leg.symbol }}</td>
+            <td>{{ leg.side | receiptLabel }}</td>
+            <td>{{ leg.quantity }}</td>
+            <td>
+              <app-timestamp-display [value]="leg.position_updated_at_ms" mode="local" />
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+
+  <div class="safe-flatten-plan__version">
+    <span>Plan version</span>
+    <code>{{ plan().version_token }}</code>
+  </div>
+</section>

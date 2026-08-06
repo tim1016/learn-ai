@@ -260,6 +260,32 @@ class RecoveryConfirmationResponse(BaseModel):
     confirm_label: str
 
 
+class SafeFlattenPlanLegResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    strategy_instance_id: str
+    symbol: str
+    side: Literal["buy", "sell"]
+    quantity: float
+    position_updated_at_ms: int
+
+
+class SafeFlattenPlanResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    version_token: str
+    account_id: str
+    authority_generation: int
+    db_identity_token: str
+    control_revision: int
+    scope: Literal["BOT", "ACCOUNT_CLERK"]
+    strategy_instance_id: str | None
+    reconciliation_id: str
+    prepared_at_ms: int
+    expires_at_ms: int
+    legs: tuple[SafeFlattenPlanLegResponse, ...]
+
+
 class RecoveryCapabilityResponse(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
@@ -280,6 +306,7 @@ class RecoveryCapabilityResponse(BaseModel):
     scope: Literal["BOT", "ACCOUNT_CLERK"]
     freshness: Literal["fresh", "stale", "not_required", "unavailable"]
     evidence: tuple[RecoveryEvidenceResponse, ...]
+    reduction_plan: SafeFlattenPlanResponse | None
     confirmation: RecoveryConfirmationResponse | None
     next_step: str
     concurrency_token: str

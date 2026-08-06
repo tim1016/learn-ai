@@ -1,13 +1,15 @@
-import { fireEvent, render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import { HttpErrorResponse } from '@angular/common/http';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
+import type { SqliteSafeFlattenPlan } from '../../../../api/alpaca.types';
 import { BotPanelShellComponent } from './bot-panel-shell.component';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type {
   BotPanelView,
   BotPanelLiveSnapshot,
   BotRunView,
+  PanelAction,
   PanelProfile,
 } from '../lib/broker-v2-panel.types';
 import { provideRouter, Router } from '@angular/router';
@@ -121,6 +123,26 @@ const PANEL: BotPanelView = {
   fills_today: 0,
   realized_pnl_today: 0.0,
   open_pnl: null,
+};
+
+const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
+  version_token: 'plan-token-17',
+  account_id: 'DUM284968',
+  authority_generation: 4,
+  db_identity_token: 'db-generation-4',
+  control_revision: 17,
+  scope: 'BOT',
+  strategy_instance_id: 'sid-001',
+  reconciliation_id: 'reconciliation-17',
+  prepared_at_ms: 1_753_800_000_000,
+  expires_at_ms: 1_753_800_030_000,
+  legs: [{
+    strategy_instance_id: 'sid-001',
+    symbol: 'QQQ',
+    side: 'sell',
+    quantity: 2.5,
+    position_updated_at_ms: 1_753_799_999_000,
+  }],
 };
 
 const LIVE_CHART = {
@@ -254,6 +276,24 @@ const mockService = {
     concurrency_token: 'start-token',
     message: 'Bot start requested.',
   }),
+  checkSqliteSafeFlattenPlan: vi.fn().mockResolvedValue({
+    action_id: 'prepare_safe_flatten',
+    label: 'Prepare safe flatten',
+    explanation: 'Prepare a fresh reduction plan without submitting an order.',
+    available: true,
+    unavailable_reason_code: null,
+    unavailable_reason: null,
+    scope: 'BOT',
+    freshness: 'fresh',
+    evidence: [],
+    reduction_plan: SAFE_FLATTEN_PLAN,
+    confirmation: null,
+    next_step: 'Review the exact attributed quantity in the plan.',
+    concurrency_token: 'plan-token-17',
+    execution_ref: null,
+    mutation: false,
+    primary: false,
+  }),
 };
 
 function openDisclosure(label: string): void {
@@ -303,6 +343,68 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     expect(screen.getByText('run-current')).toBeTruthy();
+  });
+
+  it('refreshes and renders the safe-flatten plan without posting a panel mutation', async () => {
+    const prepareAction = {
+      action_id: 'prepare_safe_flatten',
+      revision: 17,
+      concurrency_token: 'plan-token-17',
+      enabled: true,
+      label: 'Prepare safe flatten',
+      explanation: 'Prepare a fresh reduction plan without submitting an order.',
+      blockers: [],
+      confirmation: null,
+    } satisfies PanelAction;
+    mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
+      ...PANEL,
+      revision: 17,
+      actions: [prepareAction],
+      readiness_checks: [{
+        operation: prepareAction.action_id,
+        label: prepareAction.label,
+        ready: true,
+        scope: 'bot',
+        authority: 'Alpaca SQLite Clerk',
+        explanation: prepareAction.explanation,
+        evidence: {},
+        evaluated_at_ms: 1_753_800_000_000,
+        cure: null,
+      }],
+      readiness_ready_count: 1,
+    }));
+    const { fixture } = await render(BotPanelShellComponent, {
+      inputs: { broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: MessageService, useValue: messageService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(screen.getByRole('button', {
+      name: /Ready Prepare safe flatten/i,
+    }));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare safe flatten' }));
+
+    const planRegion = await screen.findByRole('region', {
+      name: 'Prepared safe-flatten reduction plan',
+    });
+    expect(within(planRegion).getByText('QQQ')).toBeTruthy();
+    expect(within(planRegion).getByText('2.5')).toBeTruthy();
+    expect(mockService.checkSqliteSafeFlattenPlan).toHaveBeenCalledWith(
+      'DUM284968',
+      'sid-001',
+      prepareAction,
+    );
+    expect(mockService.runBotAction).not.toHaveBeenCalled();
   });
 
   it('keeps lens navigation above the hero and run evidence out of Trader', async () => {

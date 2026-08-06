@@ -14,6 +14,8 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 import { MessageService } from 'primeng/api';
 
+import type { SqliteSafeFlattenPlan } from '../../../../api/alpaca.types';
+import { SafeFlattenPlanComponent } from '../../bot-control/reused/safe-flatten-plan/safe-flatten-plan.component';
 import type {
   ChartHistoryPreset,
   ChartLiveResolution,
@@ -61,6 +63,7 @@ type PanelLens = 'trader' | 'operator';
   imports: [
     PanelHeaderComponent,
     PanelActionReceiptComponent,
+    SafeFlattenPlanComponent,
     TraderLensComponent,
     OperatorLensComponent,
   ],
@@ -102,6 +105,7 @@ export class BotPanelShellComponent {
   protected readonly selectedTransactionRef = signal<string | null>(null);
   protected readonly actionPending = signal(false);
   protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
+  protected readonly reductionPlan = signal<SqliteSafeFlattenPlan | null>(null);
 
   protected readonly panel = computed(() => this.liveStore.snapshot()?.panel ?? null);
   protected readonly liveChart = computed(() => {
@@ -226,12 +230,7 @@ export class BotPanelShellComponent {
       return;
     }
     if (action.action_id === 'prepare_safe_flatten') {
-      this.selectLens('operator');
-      this.messageService.add({
-        severity: 'info',
-        summary: action.label,
-        detail: action.explanation,
-      });
+      await this.prepareSafeFlatten(action);
       return;
     }
     this.actionPending.set(true);
@@ -258,6 +257,35 @@ export class BotPanelShellComponent {
       // operator's last-seen panel state is now stale relative to whatever
       // changed underneath it — refresh so "Ready to resume" doesn't linger
       // after a resume was just refused for no longer being ready.
+      await this.liveStore.refresh();
+    } finally {
+      this.actionPending.set(false);
+    }
+  }
+
+  private async prepareSafeFlatten(action: PanelAction): Promise<void> {
+    this.selectLens('operator');
+    this.actionPending.set(true);
+    this.actionReceipt.set(null);
+    this.reductionPlan.set(null);
+    try {
+      const capability = await this.panelSvc.checkSqliteSafeFlattenPlan(
+        this.accountId(),
+        this.sid(),
+        action,
+      );
+      this.reductionPlan.set(capability.reduction_plan);
+      this.messageService.add({
+        severity: 'info',
+        summary: capability.label,
+        detail: capability.next_step,
+      });
+    } catch (error) {
+      const receipt = this.errorReceipt(error, action);
+      this.actionReceipt.set(receipt);
+      this.messageService.add(
+        actionOutcomeToast(receipt.outcome, receipt.message, receipt.remediation),
+      );
       await this.liveStore.refresh();
     } finally {
       this.actionPending.set(false);

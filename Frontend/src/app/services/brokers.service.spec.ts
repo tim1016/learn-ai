@@ -224,12 +224,25 @@ describe('BrokersService', () => {
       unavailable_reason: null,
       freshness: 'not_required',
       evidence: [],
+      reduction_plan: null,
       next_step: 'Run reconciliation.',
       concurrency_token: 'token-1',
       execution_ref: null,
       confirmation: null,
       primary: true,
     } satisfies SqliteRecoveryAction;
+    const checkPromise = service.checkSqliteRecoveryAction('PA1', action, 'bot / 1');
+    const check = httpMock.expectOne(
+      '/api/alpaca-clerk-sqlite/accounts/PA1/bots/bot%20%2F%201/recovery-actions/check',
+    );
+    expect(check.request.method).toBe('POST');
+    expect(check.request.body).toEqual({
+      action_id: 'reconcile_now',
+      concurrency_token: 'token-1',
+    });
+    check.flush({ capability: action });
+    await expect(checkPromise).resolves.toEqual(action);
+
     const executePromise = service.executeSqliteRecoveryAction('PA1', action);
     const execute = httpMock.expectOne(
       '/api/alpaca-clerk-sqlite/accounts/PA1/recovery-actions/execute',
