@@ -58,8 +58,8 @@ def repo(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_bumped_for_the_corrective_ddl_changes() -> None:
-    assert schema.SCHEMA_VERSION == 3
+def test_schema_version_bumped_for_immutable_operation_order_links() -> None:
+    assert schema.SCHEMA_VERSION == 4
 
 
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
@@ -537,6 +537,9 @@ def test_operation_claim_cas_fences_a_second_owner_until_expiry(repo: ClerkSqlit
 
     claim = repo.claim_effect_operation(effect_operation_id="eff:1", owner="worker-1", ttl_ms=10_000)
     assert repo.verify_operation_claim(effect_operation_id="eff:1", token=claim.token)
+    assert repo.renew_operation_claim(
+        effect_operation_id="eff:1", token=claim.token, ttl_ms=10_000
+    )
     assert not repo.verify_operation_claim(effect_operation_id="eff:1", token="wrong-token")
 
     with pytest.raises(OperationClaimError):
@@ -550,8 +553,14 @@ def test_operation_claim_cas_fences_a_second_owner_until_expiry(repo: ClerkSqlit
         "WHERE effect_operation_id = 'eff:1'"
     )
     repo._conn.commit()
+    assert not repo.renew_operation_claim(
+        effect_operation_id="eff:1", token=claim.token, ttl_ms=10_000
+    )
     takeover = repo.claim_effect_operation(effect_operation_id="eff:1", owner="worker-2", ttl_ms=10_000)
     assert takeover.owner == "worker-2"
+    assert repo.renew_operation_claim(
+        effect_operation_id="eff:1", token=takeover.token, ttl_ms=10_000
+    )
     assert not repo.verify_operation_claim(effect_operation_id="eff:1", token=claim.token)
 
 
@@ -560,13 +569,10 @@ def test_operation_claim_cas_fences_a_second_owner_until_expiry(repo: ClerkSqlit
 # ---------------------------------------------------------------------------
 
 
-def test_operation_claim_lets_the_live_owner_renew_before_expiry(
+def test_operation_claim_blocks_same_owner_overlap_until_attempt_releases(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """The docstring promises renewal ("Claim (or renew this owner's own
-    claim on)"), but the original CAS predicate only admitted unclaimed or
-    expired rows — a live owner renewing its own long-running claim got
-    OperationClaimError instead of an extended lease."""
+    """Process identity must not make overlapping coroutines re-entrant."""
     submission = submit_start_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
@@ -580,12 +586,16 @@ def test_operation_claim_lets_the_live_owner_renew_before_expiry(
     repo._conn.commit()
 
     first = repo.claim_effect_operation(effect_operation_id="eff:3", owner="worker-1", ttl_ms=10_000)
-    renewed = repo.claim_effect_operation(effect_operation_id="eff:3", owner="worker-1", ttl_ms=10_000)
-    assert renewed.owner == "worker-1"
-    assert renewed.expires_at_ms >= first.expires_at_ms
-    # A different owner is still fenced out while the renewal is live.
+    with pytest.raises(OperationClaimError):
+        repo.claim_effect_operation(effect_operation_id="eff:3", owner="worker-1", ttl_ms=10_000)
     with pytest.raises(OperationClaimError):
         repo.claim_effect_operation(effect_operation_id="eff:3", owner="worker-2", ttl_ms=10_000)
+
+    assert repo.release_operation_claim(effect_operation_id="eff:3", token=first.token)
+    next_attempt = repo.claim_effect_operation(
+        effect_operation_id="eff:3", owner="worker-1", ttl_ms=10_000
+    )
+    assert next_attempt.token != first.token
 
 
 def test_operation_claim_fields_must_be_all_null_or_all_complete(

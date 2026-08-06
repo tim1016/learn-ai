@@ -28,7 +28,7 @@ outer ``custody_transitions`` column, so its ``facts_json`` is legitimately
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -155,10 +155,10 @@ class OrderSubmitFailedFacts:
 @dataclass(frozen=True)
 class ExitAcceptedFacts:
     """``EXIT_ACCEPTED`` (#1379): command idempotency key/hash/kind/action,
-    the decision id, the effect idempotency key, and the ``entry_order_ref``
-    this EXIT targets — everything ``_fold_exit_accepted`` needs to rebuild
-    the ``commands``/``effect_operations`` rows and the entry-order
-    ownership reassignment from a finalized mirror line alone. Unlike
+    the decision id, the effect idempotency key, the primary
+    ``entry_order_ref``, and every captured sibling reference — everything
+    ``_fold_exit_accepted`` needs to rebuild the command, operation, and
+    immutable-provenance custody links from a finalized mirror line. Unlike
     ``EnterAcceptedFacts``, no ``leg`` is captured here: the reducing
     order's side/quantity aren't known at acceptance time (they depend on
     how the entry's cancellation resolves), so there is nothing immutable
@@ -175,6 +175,7 @@ class ExitAcceptedFacts:
     effect_kind: str
     decision_id: str
     entry_order_ref: str
+    entry_order_refs: list[str]
 
     def to_facts_json(self) -> str:
         return canonicalize(asdict(self))
@@ -245,6 +246,21 @@ class AccountHoldRaisedFacts:
 
 
 @dataclass(frozen=True)
+class AccountHoldResolvedFacts:
+    """Evidence-backed closure of one Account Clerk hold episode."""
+
+    reason_code: str
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> AccountHoldResolvedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
 class UncertaintyRaisedFacts:
     """``UNCERTAINTY_RAISED`` (#1380): the R5 envelope, minus what's already
     an outer ``custody_transitions``/``uncertainties`` column —
@@ -264,6 +280,7 @@ class UncertaintyRaisedFacts:
     operator_impact: str
     next_step: str
     evidence_refs: list[str]
+    cause_facts: dict[str, Any] = field(default_factory=dict)
 
     def to_facts_json(self) -> str:
         return canonicalize(asdict(self))
@@ -281,7 +298,8 @@ class UncertaintyResolvedFacts:
     facts for the fold to know which ``uncertainties`` row to close."""
 
     uncertainty_id: str
-    resolution_note: str
+    resolution_kind: str
+    evidence_refs: list[str]
 
     def to_facts_json(self) -> str:
         return canonicalize(asdict(self))

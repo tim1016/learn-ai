@@ -56,9 +56,7 @@ def _clock_seq():
 
 
 def test_initialize_creates_db_mirror_and_registry_entry(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     assert repo.db_path.is_file()
     snapshot = repo.control_meta_snapshot()
     assert snapshot.account_id == ACCOUNT_ID
@@ -73,29 +71,21 @@ def test_initialize_creates_db_mirror_and_registry_entry(tmp_path: Path) -> None
 
 
 def test_initialize_twice_raises_already_initialized(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     repo.close()
     with pytest.raises(AlreadyInitialized):
-        ClerkSqliteRepository.initialize(
-            account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-        )
+        ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
 
 
 def test_open_a_never_initialized_account_raises_file_not_found(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
-        ClerkSqliteRepository.open(
-            account_id="NEVER-SEEN", artifacts_root=tmp_path, clock=_clock_seq()
-        )
+        ClerkSqliteRepository.open(account_id="NEVER-SEEN", artifacts_root=tmp_path, clock=_clock_seq())
 
 
 def test_remove_db_after_established_is_not_silently_recreated(tmp_path: Path) -> None:
     """PRD §15.4: 'remove clerk.db after authority was established and prove
     it is not recreated.' Closes the gap the Slice-1 review found."""
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     db_path = repo.db_path
     repo.close()
     db_path.unlink()
@@ -220,9 +210,7 @@ def test_tampered_custody_transitions_row_fails_hash_chain_check(tmp_path: Path)
     # way an out-of-band tamper effectively would.
     conn = sqlite3.connect(db_path)
     conn.execute("DROP TRIGGER trg_custody_transitions_immutable_update")
-    conn.execute(
-        "UPDATE custody_transitions SET operation_state = 'in_progress' WHERE sequence = 1"
-    )
+    conn.execute("UPDATE custody_transitions SET operation_state = 'in_progress' WHERE sequence = 1")
     conn.commit()
     conn.close()
 
@@ -252,9 +240,7 @@ def test_execution_lease_blocks_a_second_concurrent_open(tmp_path: Path) -> None
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_owner="process-A"
     )
     with pytest.raises(ExecutionLeaseHeld):
-        ClerkSqliteRepository.open(
-            account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_owner="process-B"
-        )
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_owner="process-B")
     repo.close()
     # After close (which releases the lease), a second process may open it.
     other = ClerkSqliteRepository.open(
@@ -299,9 +285,7 @@ def test_rebuild_from_mirror_reconstructs_identical_state(tmp_path: Path) -> Non
     corrupt_path = db_path.with_suffix(".db.corrupt")
     db_path.rename(corrupt_path)
 
-    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
-    )
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     assert rebuilt.custody_transitions() == original_transitions
     assert rebuilt.strategy_instances() == original_instances
     rebuilt.close()
@@ -313,9 +297,7 @@ def test_rebuild_refuses_when_db_path_already_exists(tmp_path: Path) -> None:
     repo.close()
 
     with pytest.raises(AlreadyInitialized):
-        ClerkSqliteRepository.rebuild_from_mirror(
-            account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
-        )
+        ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
 
 def test_tampered_mirror_line_fails_closed_on_rebuild(tmp_path: Path) -> None:
@@ -345,9 +327,7 @@ def test_tampered_mirror_line_fails_closed_on_rebuild(tmp_path: Path) -> None:
     mirror_path.write_text("\n".join([tampered, *lines[1:]]) + "\n")
 
     with pytest.raises(MirrorChainBroken):
-        ClerkSqliteRepository.rebuild_from_mirror(
-            account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
-        )
+        ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     # No half-built database was left behind.
     assert not db_path.is_file()
 
@@ -371,9 +351,7 @@ def test_mirror_sequence_gap_fails_closed_on_rebuild(tmp_path: Path) -> None:
     mirror_path.write_text("\n".join(remaining) + "\n")
 
     with pytest.raises(MirrorChainBroken):
-        ClerkSqliteRepository.rebuild_from_mirror(
-            account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
-        )
+        ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
 
 def test_mirror_prepare_without_finalize_is_excluded_not_imported(tmp_path: Path) -> None:
@@ -516,9 +494,7 @@ def test_mirror_rebuild_still_fails_closed_on_conflicting_finalize(tmp_path: Pat
                 recorded_at_ms=recorded_at,
             )
         )
-        mirror.finalize(
-            sequence=1, authority_generation=1, row_hash=row_hash, recorded_at_ms=recorded_at
-        )
+        mirror.finalize(sequence=1, authority_generation=1, row_hash=row_hash, recorded_at_ms=recorded_at)
 
     with pytest.raises(MirrorChainBroken):
         mirror.rebuild()
@@ -532,7 +508,11 @@ def test_mirror_rebuild_still_fails_closed_on_conflicting_finalize(tmp_path: Pat
 # ---------------------------------------------------------------------------
 
 
-def _hold_transition(*, reason_code: str = "UNEXPLAINED_ORDER", evidence_refs: list[str] | None = None):
+def _hold_transition(
+    *,
+    reason_code: str = "UNEXPLAINED_ORDER",
+    evidence_refs: list[str] | None = None,
+) -> TransitionInput:
     facts = AccountHoldRaisedFacts(reason_code=reason_code, evidence_refs=evidence_refs or ["bo-1"])
     return TransitionInput(
         transition_kind="ACCOUNT_HOLD_RAISED",
@@ -546,9 +526,7 @@ def _hold_transition(*, reason_code: str = "UNEXPLAINED_ORDER", evidence_refs: l
 
 
 def test_account_hold_raised_fold_creates_an_active_account_clerk_hold(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     repo.append_transition(_hold_transition(evidence_refs=["bo-1", "bo-2"]))
 
     hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER")
@@ -560,9 +538,7 @@ def test_account_hold_raised_fold_creates_an_active_account_clerk_hold(tmp_path:
 
 
 def test_active_hold_returns_none_when_no_hold_of_that_reason_exists(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER") is None
     repo.close()
 
@@ -572,9 +548,7 @@ def test_two_hold_transitions_each_mint_a_distinct_hold_id(tmp_path: Path) -> No
     directly exercising the fold twice) must never collide on hold_id — the
     id is minted from the transition's own globally-unique sequence, not
     from content or a timestamp that a fast test clock could repeat."""
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     repo.append_transition(_hold_transition(reason_code="UNEXPLAINED_ORDER"))
     repo.append_transition(_hold_transition(reason_code="OTHER_REASON"))
 
@@ -590,9 +564,7 @@ def test_attributed_positions_by_symbol_sums_across_bots(tmp_path: Path) -> None
     attributed position, not any single bot's row (schema.py's ``positions``
     comment: never derived by netting the raw broker position, but the
     account-wide sweep still needs one number per symbol to compare)."""
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     with repo._write_lock:
         repo._conn.execute(
             "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
@@ -604,22 +576,22 @@ def test_attributed_positions_by_symbol_sums_across_bots(tmp_path: Path) -> None
         )
         repo._conn.execute(
             "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-            "VALUES ('bot-a', 'SPY', 3.0, 1)"
+            "VALUES ('bot-a', 'SPY', 0.1, 1)"
         )
         repo._conn.execute(
             "INSERT INTO positions (strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
-            "VALUES ('bot-b', 'SPY', 2.0, 1)"
+            "VALUES ('bot-b', 'SPY', 0.2, 1)"
         )
         repo._conn.commit()
 
-    assert repo.attributed_positions_by_symbol() == {"SPY": 5.0}
+    # Golden fractional aggregation; the tolerance is the source-backed
+    # contract in docs/references/clerk-position-drift-tolerance.md.
+    assert repo.attributed_positions_by_symbol() == {"SPY": pytest.approx(0.3, abs=1e-9)}
     repo.close()
 
 
 def test_uncertain_orders_is_empty_on_a_fresh_repository(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     assert repo.uncertain_orders() == []
     repo.close()
 
@@ -663,14 +635,10 @@ def _uncertainty_transition(
 def test_uncertainty_raised_fold_creates_an_active_account_clerk_uncertainty(
     tmp_path: Path,
 ) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     repo.append_transition(_uncertainty_transition(strategy_instance_id=None))
 
-    uncertainty = repo.active_uncertainty(
-        scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None
-    )
+    uncertainty = repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None)
     assert uncertainty is not None
     assert uncertainty["scope"] == "ACCOUNT_CLERK"
     assert uncertainty["strategy_instance_id"] is None
@@ -683,9 +651,7 @@ def test_uncertainty_raised_fold_creates_an_active_account_clerk_uncertainty(
 def test_uncertainty_raised_fold_creates_an_active_bot_scoped_uncertainty(
     tmp_path: Path,
 ) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     with repo._write_lock:
         repo._conn.execute(
             "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
@@ -695,36 +661,24 @@ def test_uncertainty_raised_fold_creates_an_active_bot_scoped_uncertainty(
 
     repo.append_transition(_uncertainty_transition(strategy_instance_id="spy-bot"))
 
-    uncertainty = repo.active_uncertainty(
-        scope="BOT", reason_code="TEST_REASON", strategy_instance_id="spy-bot"
-    )
+    uncertainty = repo.active_uncertainty(scope="BOT", reason_code="TEST_REASON", strategy_instance_id="spy-bot")
     assert uncertainty is not None
     assert uncertainty["scope"] == "BOT"
     assert uncertainty["strategy_instance_id"] == "spy-bot"
 
     # A different bot's identical reason_code must not collide.
-    assert (
-        repo.active_uncertainty(scope="BOT", reason_code="TEST_REASON", strategy_instance_id="qqq-bot")
-        is None
-    )
+    assert repo.active_uncertainty(scope="BOT", reason_code="TEST_REASON", strategy_instance_id="qqq-bot") is None
     repo.close()
 
 
 def test_active_uncertainty_returns_none_when_none_exists(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
-    assert (
-        repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None)
-        is None
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
+    assert repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None) is None
     repo.close()
 
 
 def test_raise_uncertainty_if_none_active_is_idempotent(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     first = repo.raise_uncertainty_if_none_active(
         scope="ACCOUNT_CLERK",
         reason_code="TEST_REASON",
@@ -745,17 +699,15 @@ def test_raise_uncertainty_if_none_active_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_uncertainty_resolved_fold_closes_the_active_row(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     repo.append_transition(_uncertainty_transition(strategy_instance_id=None))
-    uncertainty = repo.active_uncertainty(
-        scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None
-    )
+    uncertainty = repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None)
     assert uncertainty is not None
 
     resolved_facts = UncertaintyResolvedFacts(
-        uncertainty_id=uncertainty["uncertainty_id"], resolution_note="fixed"
+        uncertainty_id=uncertainty["uncertainty_id"],
+        resolution_kind="CLEAN_BROKER_RECONCILIATION",
+        evidence_refs=["fresh_snapshot"],
     )
     repo.append_transition(
         TransitionInput(
@@ -769,19 +721,14 @@ def test_uncertainty_resolved_fold_closes_the_active_row(tmp_path: Path) -> None
         )
     )
 
-    assert (
-        repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None)
-        is None
-    )
+    assert repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None) is None
     repo.close()
 
 
 def test_active_uncertainties_for_admission_includes_account_and_bot_scope(
     tmp_path: Path,
 ) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     with repo._write_lock:
         repo._conn.execute(
             "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "
@@ -793,15 +740,9 @@ def test_active_uncertainties_for_admission_includes_account_and_bot_scope(
         )
         repo._conn.commit()
 
-    repo.append_transition(
-        _uncertainty_transition(strategy_instance_id=None, reason_code="ACCOUNT_WIDE")
-    )
-    repo.append_transition(
-        _uncertainty_transition(strategy_instance_id="spy-bot", reason_code="SPY_ONLY")
-    )
-    repo.append_transition(
-        _uncertainty_transition(strategy_instance_id="qqq-bot", reason_code="QQQ_ONLY")
-    )
+    repo.append_transition(_uncertainty_transition(strategy_instance_id=None, reason_code="ACCOUNT_WIDE"))
+    repo.append_transition(_uncertainty_transition(strategy_instance_id="spy-bot", reason_code="SPY_ONLY"))
+    repo.append_transition(_uncertainty_transition(strategy_instance_id="qqq-bot", reason_code="QQQ_ONLY"))
 
     for_spy = {u["reason_code"] for u in repo.active_uncertainties_for_admission(strategy_instance_id="spy-bot")}
     assert for_spy == {"ACCOUNT_WIDE", "SPY_ONLY"}  # not QQQ_ONLY
@@ -812,9 +753,7 @@ def test_active_uncertainties_for_admission_includes_account_and_bot_scope(
 
 
 def test_active_holds_for_admission_includes_account_and_bot_scope(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq()
-    )
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     with repo._write_lock:
         repo._conn.execute(
             "INSERT INTO strategy_instances (strategy_instance_id, symbol, config_hash, "

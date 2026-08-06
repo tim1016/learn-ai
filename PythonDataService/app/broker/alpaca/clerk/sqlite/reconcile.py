@@ -1,53 +1,13 @@
-"""Automatic reconciliation and UNKNOWN resolution over the SQLite spine
-(#1378).
-
-Two independent concerns, both driven by the same broker-facing pass:
-
-- :func:`reconcile_uncertain_order` — resolve one order still sitting in
-  ``unknown`` (R4) by asking the broker whether it landed, exactly the way
-  :func:`~app.broker.alpaca.clerk.sqlite.enter.resolve_enter_submission`
-  already does for a lost submit response. This module does not duplicate
-  that resolution logic; it wraps it and records the *attempt* (durable
-  ``reconciliations`` audit row) so an operator's "Reconcile now" and the
-  automatic sweep are both auditable — an already-resolved order is a no-op,
-  never a second write (#1378 acceptance: "creates no second intent").
-- :func:`plan_account_reconciliation` — a pure decision function (no I/O)
-  over one freshly-read broker snapshot: a foreign order (not ours by
-  namespace) outranks a position drift, and a symbol with our own
-  non-terminal in-flight order is never flagged as drift (a fill/ack still
-  in transit is expected, not corruption). :func:`reconcile_account` is the
-  I/O wrapper: read broker orders/positions, run the plan, raise the
-  ``ACCOUNT_CLERK`` hold the plan calls for (idempotent — a persistent
-  foreign order re-raises nothing after the first, same bounded-growth
-  policy the pre-SQLite Alpaca clerk's ``reconcile.py`` used), and resolve
-  every currently-uncertain order.
-
-A ``position_drift`` verdict also raises a durable, ``ACCOUNT_CLERK``-scoped
-R5 uncertainty (#1380) — the same idempotent, bounded-growth discipline
-``_raise_account_hold`` already established for ``unexplained_order``: a
-persistent drift re-raises nothing after the first. It blocks new exposure
-account-wide (``blocks_new_exposure=True``) but explicitly allows reduction
-— proven cancellation and closing exposure are never gated by it. Admission
-enforcement itself (actually blocking a new ENTER) lives in
-:func:`~app.broker.alpaca.clerk.sqlite.uncertainty.require_admission`,
-called from :func:`~app.broker.alpaca.clerk.sqlite.enter.accept_enter`; this
-module's job is only to raise the uncertainty, never to enforce it.
-
-Deliberately deferred: the 6 named, backend-authored recovery actions (#1380
-Part B) an operator would consult to resolve a raised uncertainty/hold —
-this module raises the uncertainty and stops there, the same way
-``_raise_account_hold`` already does for ``unexplained_order``. HTTP wiring
-(an operator "Reconcile now" endpoint) is deferred alongside #1377's own
-undelivered ENTER endpoint, per that slice's own scope note.
-"""
+"""Ordered account reconciliation and effect-operation recovery."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+import threading
 from dataclasses import dataclass, field
 from typing import Literal
+from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.exposure import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
@@ -57,39 +17,54 @@ from app.broker.alpaca.clerk.sqlite.enter import resolve_enter_submission
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import (
     AccountHoldRaisedFacts,
+    AccountHoldResolvedFacts,
     ReconciliationAttemptedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
-from app.broker.alpaca.clerk.sqlite.models import TransitionInput
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
-from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.models import (
+    EffectOperationResource,
+    TransitionInput,
+)
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    OperationClaimError,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    BROKER_SNAPSHOT_STALE_REASON_CODE,
+    POSITION_DRIFT_REASON_CODE,
+    AdmissionBlockedError,
+    raise_uncertainty,
+    resolve_reconciliation_uncertainty,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    PositionDriftCause,
+    PositionDriftObservation,
+)
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerPosition
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
-from app.engine.live.order_identity import build_bot_order_namespace, order_ref_namespace_matches
+from app.engine.live.order_identity import (
+    build_bot_order_namespace,
+    order_ref_namespace_matches,
+)
 
 logger = logging.getLogger(__name__)
 
 UNEXPLAINED_ORDER_REASON_CODE = "UNEXPLAINED_ORDER"
-POSITION_DRIFT_REASON_CODE = "POSITION_DRIFT"
+MAX_OPEN_ORDER_SNAPSHOT = 500
+
+_RECONCILIATION_LOCKS: WeakKeyDictionary[ClerkSqliteRepository, asyncio.Lock] = WeakKeyDictionary()
+_RECONCILIATION_LOCKS_GUARD = threading.Lock()
 
 Trigger = Literal["AUTOMATIC", "OPERATOR_RECONCILE_NOW"]
 ReconciliationOutcome = Literal["STILL_UNKNOWN", "RESOLVED_SUCCESS", "RESOLVED_FAILURE"]
 AccountVerdict = Literal["clean", "unexplained_order", "position_drift", "stale"]
 
-__all__ = [
-    "AccountReconciliationResult",
-    "ReconcilePlan",
-    "plan_account_reconciliation",
-    "reconcile_account",
-    "reconcile_uncertain_order",
-]
-
 
 @dataclass(frozen=True)
 class ReconcilePlan:
-    """What one account-level reconciliation pass decided (pure, no I/O)."""
-
     verdict: AccountVerdict
     foreign_orders: tuple[BrokerOrder, ...] = field(default_factory=tuple)
     drifted_symbols: tuple[str, ...] = field(default_factory=tuple)
@@ -101,26 +76,15 @@ def plan_account_reconciliation(
     broker_orders: list[BrokerOrder],
     broker_positions: list[BrokerPosition],
     attributed_positions: dict[str, float],
+    known_order_refs: frozenset[str] | None = None,
 ) -> ReconcilePlan:
-    """Decide the account-level verdict from one freshly-read broker snapshot.
-
-    Priority (highest first): ``unexplained_order`` (any order whose
-    ``client_order_id`` does not parse into one of our own bot namespaces) ->
-    ``position_drift`` (a symbol where the broker's signed position disagrees
-    with our attributed sum by more than the tolerance, AND we have no
-    non-terminal order of our own working that symbol) -> ``clean``.
-    ``stale`` is decided by the caller (:func:`reconcile_account`) when the
-    broker read itself fails, never by this function.
-    """
+    """Derive residual account safety only after local evidence was folded."""
     foreign = tuple(
-        order for order in broker_orders if not order_ref_namespace_matches(order.client_order_id, namespaces)
+        order
+        for order in broker_orders
+        if not order_ref_namespace_matches(order.client_order_id, namespaces)
+        or (known_order_refs is not None and order.client_order_id not in known_order_refs)
     )
-    if foreign:
-        return ReconcilePlan(verdict="unexplained_order", foreign_orders=foreign)
-
-    # broker_orders here is guaranteed all-ours: the `if foreign: return` above
-    # already exited for any order outside our namespaces, so no explicit
-    # ownership filter is needed on this pass over the same list.
     in_flight_symbols = {
         order.symbol.upper()
         for order in broker_orders
@@ -135,185 +99,285 @@ def plan_account_reconciliation(
             symbol
             for symbol in symbols
             if symbol not in in_flight_symbols
-            and abs(broker_by_symbol.get(symbol, 0.0) - attributed_positions.get(symbol, 0.0))
-            > POSITION_QTY_EPSILON
+            and abs(broker_by_symbol.get(symbol, 0.0) - attributed_positions.get(symbol, 0.0)) > POSITION_QTY_EPSILON
         )
     )
-    if drifted:
-        return ReconcilePlan(verdict="position_drift", drifted_symbols=drifted)
-    return ReconcilePlan(verdict="clean")
+    verdict: AccountVerdict
+    if foreign:
+        verdict = "unexplained_order"
+    elif drifted:
+        verdict = "position_drift"
+    else:
+        verdict = "clean"
+    return ReconcilePlan(
+        verdict=verdict,
+        foreign_orders=foreign,
+        drifted_symbols=drifted,
+    )
 
 
 async def reconcile_uncertain_order(
-    repo: ClerkSqliteRepository, *, order_ref: str, trigger: Trigger, trade: BrokerTradePort
+    repo: ClerkSqliteRepository,
+    *,
+    order_ref: str,
+    trigger: Trigger,
+    trade: BrokerTradePort,
 ) -> ReconciliationOutcome:
-    """Resolve one uncertain order and record the attempt (#1378).
+    """Compatibility surface that dispatches once at effect-operation scope."""
+    order = repo.order(order_ref)
+    assert order is not None
+    effect = repo.active_exit_for_order(order_ref) or repo.effect_operation(order.effect_operation_id)
+    assert effect is not None
+    return await _reconcile_effect(repo, effect=effect, trigger=trigger, trade=trade)
 
-    Already-resolved (terminal effect) is a true no-op: no broker call, no
-    new transition — "Reconcile now" on an operation that already finished
-    creates no second intent.
 
-    Dispatches on the owning effect's ``kind`` rather than treating every
-    uncertain order identically, because "resolved" means something
-    different for each (#1379 correction — see
-    ``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`` §6):
+async def _reconcile_effect(
+    repo: ClerkSqliteRepository,
+    *,
+    effect: EffectOperationResource,
+    trigger: Trigger,
+    trade: BrokerTradePort,
+) -> ReconciliationOutcome:
+    if effect.state in ("succeeded", "failed", "rejected"):
+        return "RESOLVED_SUCCESS" if effect.state == "succeeded" else "RESOLVED_FAILURE"
 
-    - **EXIT** — delegates to
-      :func:`~app.broker.alpaca.clerk.sqlite.exit.resolve_exit`, which
-      already knows how to advance an EXIT's cancel/reduce/verify state
-      machine from wherever it currently stands (possibly completing the
-      whole operation in this pass). Outcome comes from the EXIT effect's
-      *own* terminal state after that call. Checking
-      ``order.broker_order_id is not None`` here — as the ENTER path below
-      does — would be wrong for the reassigned entry order: that field was
-      set by the *original* ENTER submission long before EXIT ever began,
-      and proves nothing about whether EXIT's cancel has resolved. Before
-      this dispatch existed, that exact conflation made the sweep silently
-      report ``RESOLVED_SUCCESS`` for an entry stuck in cancel-uncertainty,
-      with no broker call and no audit row at all.
-    - **ENTER** (or any other kind) — delegates to
-      :func:`~app.broker.alpaca.clerk.sqlite.enter.resolve_enter_submission`
-      (never duplicated here) and derives the outcome from the before/after
-      snapshot rather than threading a new return shape through that
-      function — deliberately, to avoid widening an already-shipped
-      function's return contract for one new caller. This does couple the
-      derivation to ``resolve_enter_submission``'s current, exhaustively-
-      enumerated set of outcomes (found-and-acked, confirmed-absent-past-
-      grace, or unchanged); a future outcome shape it doesn't already know
-      about would read here as ``STILL_UNKNOWN`` rather than fail loudly.
-    """
-    order_before = repo.order(order_ref)
-    assert order_before is not None
-    effect_before = repo.effect_operation(order_before.effect_operation_id)
-    assert effect_before is not None
-
-    if effect_before.state in ("succeeded", "failed"):
-        return "RESOLVED_SUCCESS" if effect_before.state == "succeeded" else "RESOLVED_FAILURE"
-
-    if effect_before.kind == "EXIT":
-        await resolve_exit(repo, effect_operation_id=effect_before.effect_operation_id, trade=trade)
-        effect_after = repo.effect_operation(effect_before.effect_operation_id)
-        assert effect_after is not None
-        if effect_after.state == "succeeded":
-            outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
-        elif effect_after.state == "failed":
-            outcome = "RESOLVED_FAILURE"
-        else:
-            outcome = "STILL_UNKNOWN"
+    if effect.kind == "EXIT":
+        await resolve_exit(
+            repo,
+            effect_operation_id=effect.effect_operation_id,
+            trade=trade,
+        )
+        order = next(
+            item for item in repo.orders_for_effect_operation(effect.effect_operation_id) if item.role == "ENTRY"
+        )
     else:
-        if order_before.broker_order_id is not None:
-            return "RESOLVED_SUCCESS"
+        order = repo.order_for_effect_operation(effect.effect_operation_id)
+        assert order is not None
+        await resolve_enter_submission(repo, order_ref=order.order_ref, trade=trade)
 
-        await resolve_enter_submission(repo, order_ref=order_ref, trade=trade)
+    effect_after = repo.effect_operation(effect.effect_operation_id)
+    assert effect_after is not None
+    order_after = repo.order(order.order_ref)
+    assert order_after is not None
+    if effect_after.state == "succeeded" or (effect_after.kind == "ENTER" and order_after.broker_order_id is not None):
+        outcome: ReconciliationOutcome = "RESOLVED_SUCCESS"
+    elif effect_after.state in ("failed", "rejected"):
+        outcome = "RESOLVED_FAILURE"
+    else:
+        outcome = "STILL_UNKNOWN"
+    _record_reconciliation_attempt(
+        repo,
+        effect=effect_after,
+        order_ref=order.order_ref,
+        trigger=trigger,
+        outcome=outcome,
+    )
+    return outcome
 
-        order_after = repo.order(order_ref)
-        assert order_after is not None
-        effect_after = repo.effect_operation(order_after.effect_operation_id)
-        assert effect_after is not None
 
-        if order_after.broker_order_id is not None:
-            outcome = "RESOLVED_SUCCESS"
-        elif effect_after.state == "failed":
-            outcome = "RESOLVED_FAILURE"
-        else:
-            outcome = "STILL_UNKNOWN"
-
+def _record_reconciliation_attempt(
+    repo: ClerkSqliteRepository,
+    *,
+    effect: EffectOperationResource,
+    order_ref: str,
+    trigger: Trigger,
+    outcome: ReconciliationOutcome,
+) -> None:
     facts = ReconciliationAttemptedFacts(
         trigger=trigger,
         outcome=outcome,
-        why=f"reconciliation ({trigger}) resolved {order_ref!r} to {outcome}",
+        why=f"reconciliation ({trigger}) resolved {effect.effect_operation_id!r} to {outcome}",
     )
     repo.append_transition(
         TransitionInput(
-            strategy_instance_id=effect_after.strategy_instance_id,
-            run_id=effect_after.run_id,
-            command_id=effect_after.command_id,
-            effect_operation_id=effect_after.effect_operation_id,
+            strategy_instance_id=effect.strategy_instance_id,
+            run_id=effect.run_id,
+            command_id=effect.command_id,
+            effect_operation_id=effect.effect_operation_id,
             order_ref=order_ref,
             transition_kind="RECONCILIATION_ATTEMPTED",
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
-            operation_state=effect_after.state,
+            operation_state=effect.state,
             clerk_observed_at_ms=repo.clock(),
             summary_code="RECONCILIATION_ATTEMPTED",
             facts_json=facts.to_facts_json(),
         )
     )
-    return outcome
 
 
-def _raise_account_hold(repo: ClerkSqliteRepository, *, foreign_orders: tuple[BrokerOrder, ...]) -> None:
-    """Idempotent: a hold already ``ACTIVE`` for this reason code re-raises
-    nothing (bounded growth — see the module docstring). The check and the
-    append happen atomically under one continuous lock hold
-    (:meth:`~.repository.ClerkSqliteRepository.raise_hold_if_none_active`)
-    so two genuinely concurrent callers (the sweep and an operator's
-    "Reconcile now" landing at the same instant) can never both observe "no
-    active hold" and both append one."""
-
-    def build_transition() -> TransitionInput:
-        facts = AccountHoldRaisedFacts(
+def _sync_unexplained_order_hold(repo: ClerkSqliteRepository, foreign_orders: tuple[BrokerOrder, ...]) -> None:
+    evidence_refs = sorted(order.order_id for order in foreign_orders)
+    if not evidence_refs:
+        facts = AccountHoldResolvedFacts(
             reason_code=UNEXPLAINED_ORDER_REASON_CODE,
-            evidence_refs=[order.order_id for order in foreign_orders],
+            evidence_refs=[],
         )
+        repo.resolve_account_hold_if_active(
+            reason_code=UNEXPLAINED_ORDER_REASON_CODE,
+            build_transition=lambda: TransitionInput(
+                transition_kind="ACCOUNT_HOLD_RESOLVED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded",
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="ACCOUNT_HOLD_RESOLVED_BY_RECONCILIATION",
+                facts_json=facts.to_facts_json(),
+            ),
+        )
+        return
+
+    facts = AccountHoldRaisedFacts(
+        reason_code=UNEXPLAINED_ORDER_REASON_CODE,
+        evidence_refs=evidence_refs,
+    )
+
+    def transition(kind: str) -> TransitionInput:
         return TransitionInput(
-            transition_kind="ACCOUNT_HOLD_RAISED",
+            transition_kind=kind,
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
             operation_state="succeeded",
             clerk_observed_at_ms=repo.clock(),
-            summary_code="ACCOUNT_HOLD_RAISED",
+            summary_code=kind,
             facts_json=facts.to_facts_json(),
         )
 
-    repo.raise_hold_if_none_active(
-        scope="ACCOUNT_CLERK",
+    repo.observe_account_hold(
         reason_code=UNEXPLAINED_ORDER_REASON_CODE,
-        build_transition=build_transition,
+        evidence_refs_json=canonicalize(evidence_refs),
+        build_raise=lambda: transition("ACCOUNT_HOLD_RAISED"),
+        build_refresh=lambda: transition("ACCOUNT_HOLD_REFRESHED"),
     )
 
 
-def _raise_position_drift_uncertainty(
-    repo: ClerkSqliteRepository, *, drifted_symbols: tuple[str, ...]
+def _sync_position_drift(
+    repo: ClerkSqliteRepository,
+    *,
+    drifted_symbols: tuple[str, ...],
+    broker_positions: list[BrokerPosition],
+    attributed_positions: dict[str, float],
 ) -> None:
-    """#1380: a position-drift verdict raises a durable, ``ACCOUNT_CLERK``-
-    scoped R5 uncertainty — idempotent via
-    :func:`~.uncertainty.raise_uncertainty`'s own atomic check-then-raise, so
-    a persistent drift re-raises nothing after the first (bounded growth,
-    same policy as :func:`_raise_account_hold`). Blocks new exposure
-    account-wide but explicitly allows reduction: an operator investigating
-    drift must still be able to close existing positions."""
+    if not drifted_symbols:
+        resolve_reconciliation_uncertainty(
+            repo,
+            reason_code=POSITION_DRIFT_REASON_CODE,
+            evidence_refs=("fresh_position_snapshot",),
+        )
+        return
     symbols = ", ".join(drifted_symbols)
+    broker_by_symbol = {
+        position.symbol.upper(): signed_broker_position_quantity(position) for position in broker_positions
+    }
+    cause = PositionDriftCause(
+        positions=tuple(
+            PositionDriftObservation(
+                symbol=symbol,
+                broker_qty=broker_by_symbol.get(symbol, 0.0),
+                attributed_qty=attributed_positions.get(symbol, 0.0),
+            )
+            for symbol in drifted_symbols
+        )
+    )
     raise_uncertainty(
         repo,
         strategy_instance_id=None,
         reason_code=POSITION_DRIFT_REASON_CODE,
         headline="Account position doesn't match broker records",
         explanation=(
-            f"The broker's reported position for {symbols} differs from what the Clerk "
-            "has recorded, outside the accepted tolerance."
+            f"The broker's reported position for {symbols} differs from the Clerk's "
+            "attributed exposure outside the accepted tolerance."
         ),
-        operator_impact=(
-            "New positions are paused account-wide until this is resolved. Existing "
-            "positions can still be reduced or closed."
-        ),
+        operator_impact=("New positions are paused account-wide. Recognized risk reduction remains available."),
         next_step="Reconcile now, then review the drifted symbols before resuming.",
-        evidence_refs=drifted_symbols,
-        blocks_new_exposure=True,
-        allows_reduction=True,
+        evidence_refs=("fresh_position_snapshot",),
+        cause_facts=cause.to_mapping(),
+    )
+
+
+def _raise_stale_snapshot_uncertainty(repo: ClerkSqliteRepository, why: str) -> None:
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=BROKER_SNAPSHOT_STALE_REASON_CODE,
+        headline="Broker account truth is unavailable",
+        explanation=why,
+        operator_impact=(
+            "New exposure and unproven reduction are paused account-wide until a fresh "
+            "snapshot succeeds. Cancellation and reconciliation remain available."
+        ),
+        next_step="Reconcile now after broker connectivity is restored.",
+        evidence_refs=(),
+        cause_facts={"snapshot": "open_orders_and_positions"},
+        severity="error",
     )
 
 
 @dataclass(frozen=True)
 class AccountReconciliationResult:
     verdict: AccountVerdict
-    #: Orders that reached a terminal outcome (``RESOLVED_SUCCESS`` or
-    #: ``RESOLVED_FAILURE``) this pass — excludes an order that stayed
-    #: ``STILL_UNKNOWN`` (still within its R4 grace window, or a lookup
-    #: ``BrokerError``) and one skipped this pass for live claim contention.
     resolved_count: int = 0
     foreign_order_count: int = 0
     drifted_symbols: tuple[str, ...] = field(default_factory=tuple)
+
+
+async def _read_account_snapshot(
+    repo: ClerkSqliteRepository, read: BrokerReadPort
+) -> tuple[list[BrokerOrder], list[BrokerPosition]] | None:
+    try:
+        broker_orders, broker_positions = await asyncio.gather(
+            read.list_orders(status="open", limit=MAX_OPEN_ORDER_SNAPSHOT),
+            read.list_positions(),
+        )
+    except BrokerError as exc:
+        _raise_stale_snapshot_uncertainty(repo, str(exc))
+        logger.warning(
+            "alpaca sqlite reconciliation could not read fresh broker truth",
+            extra={"action": "reconcile_account_stale", "account_id": repo.account_id},
+        )
+        return None
+    if len(broker_orders) >= MAX_OPEN_ORDER_SNAPSHOT:
+        _raise_stale_snapshot_uncertainty(
+            repo,
+            "The open-order snapshot reached the 500-row boundary; completeness cannot be proven.",
+        )
+        return None
+    return broker_orders, broker_positions
+
+
+async def _recover_operations(repo: ClerkSqliteRepository, *, trigger: Trigger, trade: BrokerTradePort) -> int:
+    resolved_count = 0
+    for effect in repo.reconcilable_effect_operations():
+        try:
+            outcome = await _reconcile_effect(
+                repo,
+                effect=effect,
+                trigger=trigger,
+                trade=trade,
+            )
+        except (OperationClaimError, AdmissionBlockedError):
+            logger.info(
+                "alpaca sqlite reconciliation deferred a contended or policy-blocked effect",
+                extra={
+                    "action": "reconcile_effect_deferred",
+                    "account_id": repo.account_id,
+                    "effect_operation_id": effect.effect_operation_id,
+                },
+            )
+            continue
+        if outcome != "STILL_UNKNOWN":
+            resolved_count += 1
+    return resolved_count
+
+
+def _reconciliation_lock(repo: ClerkSqliteRepository) -> asyncio.Lock:
+    """One account pass at a time, shared by automatic and operator callers."""
+    with _RECONCILIATION_LOCKS_GUARD:
+        lock = _RECONCILIATION_LOCKS.get(repo)
+        if lock is None:
+            lock = asyncio.Lock()
+            _RECONCILIATION_LOCKS[repo] = lock
+        return lock
 
 
 async def reconcile_account(
@@ -323,65 +387,84 @@ async def reconcile_account(
     trade: BrokerTradePort,
     trigger: Trigger = "AUTOMATIC",
 ) -> AccountReconciliationResult:
-    """One reconciliation pass for this account: read broker truth, raise a
-    hold for any foreign order, and resolve every order still ``unknown``.
+    """Serialize snapshot-to-verdict passes for one live account authority."""
+    async with _reconciliation_lock(repo):
+        return await _reconcile_account_serialized(
+            repo,
+            read=read,
+            trade=trade,
+            trigger=trigger,
+        )
 
-    A broker read failure is a **truthful stale verdict** (#1378 acceptance):
-    no hold is raised, no order is resolved, nothing is fabricated as clean
-    or terminal — the pass simply reports it does not have fresh evidence
-    this time and returns.
-    """
-    try:
-        broker_orders, broker_positions = await asyncio.gather(
-            read.list_orders(status="all", limit=500), read.list_positions()
-        )
-    except BrokerError:
-        logger.warning(
-            "alpaca sqlite reconciliation sweep could not read the broker; reporting stale",
-            extra={"action": "reconcile_account_stale", "account_id": repo.account_id},
-        )
+
+async def _reconcile_account_serialized(
+    repo: ClerkSqliteRepository,
+    *,
+    read: BrokerReadPort,
+    trade: BrokerTradePort,
+    trigger: Trigger,
+) -> AccountReconciliationResult:
+    """Fold fresh order truth, recover operations, then derive residual safety."""
+    snapshot = await _read_account_snapshot(repo, read)
+    if snapshot is None:
         return AccountReconciliationResult(verdict="stale")
+    broker_orders, broker_positions = snapshot
+
+    resolve_reconciliation_uncertainty(
+        repo,
+        reason_code=BROKER_SNAPSHOT_STALE_REASON_CODE,
+        evidence_refs=("fresh_open_orders", "fresh_positions"),
+    )
+
+    known_order_refs: set[str] = set()
+    for broker_order in broker_orders:
+        if broker_order.client_order_id is None:
+            continue
+        local_order = repo.order(broker_order.client_order_id)
+        if local_order is None:
+            continue
+        known_order_refs.add(local_order.order_ref)
+        owner = repo.active_exit_for_order(local_order.order_ref) or repo.effect_operation(
+            local_order.effect_operation_id
+        )
+        assert owner is not None
+        fold_order_evidence(
+            repo,
+            effect_operation_id=owner.effect_operation_id,
+            order=broker_order,
+        )
+
+    resolved_count = await _recover_operations(repo, trigger=trigger, trade=trade)
+
+    # Include every locally captured identity, not only orders present in the
+    # open snapshot. A namespace-shaped but uncaptured broker order is foreign.
+    for effect in repo.reconcilable_effect_operations():
+        known_order_refs.update(
+            order.order_ref for order in repo.orders_for_effect_operation(effect.effect_operation_id)
+        )
+    for instance in repo.strategy_instances():
+        known_order_refs.update(
+            order.order_ref for order in repo.entry_orders_for_strategy(instance["strategy_instance_id"])
+        )
 
     namespaces = frozenset(
         build_bot_order_namespace(instance["strategy_instance_id"]) for instance in repo.strategy_instances()
     )
+    attributed_positions = repo.attributed_positions_by_symbol()
     plan = plan_account_reconciliation(
         namespaces=namespaces,
         broker_orders=broker_orders,
         broker_positions=broker_positions,
-        attributed_positions=repo.attributed_positions_by_symbol(),
+        attributed_positions=attributed_positions,
+        known_order_refs=frozenset(known_order_refs),
     )
-    if plan.verdict == "unexplained_order":
-        _raise_account_hold(repo, foreign_orders=plan.foreign_orders)
-    elif plan.verdict == "position_drift":
-        _raise_position_drift_uncertainty(repo, drifted_symbols=plan.drifted_symbols)
-
-    resolved_count = 0
-    for order_row in repo.uncertain_orders():
-        try:
-            outcome = await reconcile_uncertain_order(
-                repo, order_ref=order_row.order_ref, trigger=trigger, trade=trade
-            )
-        except OperationClaimError:
-            # A live claim held by a concurrent submit_enter/resolve for this
-            # *specific* order is transient contention, not a pass-wide
-            # failure — one stuck order must not block the rest of this
-            # pass's otherwise-unrelated, perfectly resolvable orders. It
-            # simply waits for the next pass (or "Reconcile now" on it
-            # directly), same as an order this pass never got to.
-            logger.info(
-                "alpaca sqlite reconciliation: order claimed by a live concurrent owner, "
-                "deferring to a later pass",
-                extra={
-                    "action": "reconcile_order_claim_contended",
-                    "account_id": repo.account_id,
-                    "order_ref": order_row.order_ref,
-                },
-            )
-            continue
-        if outcome != "STILL_UNKNOWN":
-            resolved_count += 1
-
+    _sync_unexplained_order_hold(repo, plan.foreign_orders)
+    _sync_position_drift(
+        repo,
+        drifted_symbols=plan.drifted_symbols,
+        broker_positions=broker_positions,
+        attributed_positions=attributed_positions,
+    )
     return AccountReconciliationResult(
         verdict=plan.verdict,
         resolved_count=resolved_count,
@@ -390,75 +473,10 @@ async def reconcile_account(
     )
 
 
-type Sleep = Callable[[float], Awaitable[None]]
-
-_DEFAULT_INTERVAL_S = 15.0
-
-
-class ReconciliationSweep:
-    """Background loop that runs one :func:`reconcile_account` pass per
-    interval for one account's repository — the "bounded cadence" half of
-    #1378's acceptance criteria. Mirrors the pre-SQLite Alpaca clerk's
-    ``sweep.ReconciliationSweep`` shape: an injectable :type:`Sleep` and an
-    optional ``max_passes`` budget keep tests timer-free and deterministic.
-
-    Not wired into any FastAPI lifespan in this slice — like #1377's ENTER,
-    this is the domain-level primitive; lifecycle wiring is deferred until an
-    HTTP surface actually needs it.
-    """
-
-    def __init__(
-        self,
-        *,
-        repo: ClerkSqliteRepository,
-        read: BrokerReadPort,
-        trade: BrokerTradePort,
-        interval_s: float = _DEFAULT_INTERVAL_S,
-        sleep: Sleep = asyncio.sleep,
-        max_passes: int | None = None,
-    ) -> None:
-        self._repo = repo
-        self._read = read
-        self._trade = trade
-        self._interval_s = interval_s
-        self._sleep = sleep
-        self._max_passes = max_passes
-        self._task: asyncio.Task[None] | None = None
-
-    def start(self) -> None:
-        if self._task is not None and not self._task.done():
-            return
-        self._task = asyncio.create_task(self.run(), name="alpaca-sqlite-reconciliation-sweep")
-
-    async def stop(self) -> None:
-        task = self._task
-        if task is None:
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        finally:
-            self._task = None
-
-    async def run(self) -> None:
-        passes = 0
-        while True:
-            await self._run_one_pass()
-            passes += 1
-            if self._max_passes is not None and passes >= self._max_passes:
-                return
-            await self._sleep(self._interval_s)
-
-    async def _run_one_pass(self) -> None:
-        try:
-            await reconcile_account(self._repo, read=self._read, trade=self._trade, trigger="AUTOMATIC")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning(
-                "alpaca sqlite reconciliation sweep pass errored; will retry next interval",
-                extra={"action": "reconcile_sweep_error", "account_id": self._repo.account_id},
-                exc_info=True,
-            )
+__all__ = [
+    "AccountReconciliationResult",
+    "ReconcilePlan",
+    "plan_account_reconciliation",
+    "reconcile_account",
+    "reconcile_uncertain_order",
+]

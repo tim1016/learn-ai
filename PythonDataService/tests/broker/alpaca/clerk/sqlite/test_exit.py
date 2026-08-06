@@ -8,6 +8,8 @@ operation-first timeline.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +28,16 @@ from app.broker.alpaca.clerk.sqlite.idempotency import (
     NoActiveRunError,
     UnknownEntryOrderError,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    OperationClaimError,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty import (
+    BROKER_SNAPSHOT_STALE_REASON_CODE,
+    AdmissionBlockedError,
+    raise_uncertainty,
+)
 from app.broker.contract.errors import BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 
@@ -35,21 +46,23 @@ SID = "spy-bot"
 RUN_ID = "run-1"
 
 
-def _clock_at(start_ms: int):
-    box = {"t": start_ms}
+class _TestClock:
+    def __init__(self, value: int) -> None:
+        self.value = value
 
-    def clock() -> int:
-        return box["t"]
+    def __call__(self) -> int:
+        return self.value
 
-    def advance(delta_ms: int) -> None:
-        box["t"] += delta_ms
+    def advance(self, delta_ms: int) -> None:
+        self.value += delta_ms
 
-    clock.advance = advance  # type: ignore[attr-defined]
-    return clock
+
+def _clock_at(start_ms: int) -> _TestClock:
+    return _TestClock(start_ms)
 
 
 @pytest.fixture
-def repo(tmp_path: Path):
+def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
     clock = _clock_at(1_700_000_000_000)
     r = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
@@ -175,7 +188,9 @@ async def _make_entry(
     partially/fully filled) working order, returning its order_ref."""
     trade = _FakeTrade(
         submit_result=_broker_order(
-            "placeholder", status=status, filled_quantity=filled_quantity,
+            "placeholder",
+            status=status,
+            filled_quantity=filled_quantity,
             filled_avg_price=100.0 if filled_quantity > 0 else None,
         )
     )
@@ -197,7 +212,7 @@ async def _make_entry(
 # ── accept_exit ──────────────────────────────────────────────────────────────
 
 
-async def test_accept_exit_reassigns_entry_custody_before_any_broker_attempt(
+async def test_accept_exit_links_resolution_custody_without_reparenting_origin(
     repo: ClerkSqliteRepository,
 ) -> None:
     entry_ref = await _make_entry(repo)
@@ -215,7 +230,81 @@ async def test_accept_exit_reassigns_entry_custody_before_any_broker_attempt(
     assert effect is not None and effect.kind == "EXIT" and effect.state == "accepted"
     entry_order = repo.order(entry_ref)
     assert entry_order is not None
-    assert entry_order.effect_operation_id == accepted.effect_operation_id
+    assert entry_order.effect_operation_id != accepted.effect_operation_id
+    linked = repo.orders_for_effect_operation(accepted.effect_operation_id)
+    assert [order.order_ref for order in linked] == [entry_ref]
+
+
+async def test_accept_exit_captures_every_same_symbol_sibling_entry(
+    repo: ClerkSqliteRepository,
+) -> None:
+    first = await _make_entry(repo, decision_id="enter-1", quantity=5, status="filled", filled_quantity=5)
+    second = await _make_entry(repo, decision_id="enter-2", quantity=5, status="filled", filled_quantity=5)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=first,
+    )
+    assert accepted.effect_operation_id is not None
+    linked = repo.orders_for_effect_operation(accepted.effect_operation_id)
+    assert {order.order_ref for order in linked if order.role == "ENTRY"} == {first, second}
+
+    first_filled = _broker_order(first, status="filled", filled_quantity=5, filled_avg_price=100)
+    second_filled = _broker_order(
+        second,
+        order_id="bo-2",
+        status="filled",
+        filled_quantity=5,
+        filled_avg_price=100,
+    )
+    trade = _FakeTrade(
+        lookup_results=[first_filled, second_filled, first_filled, second_filled],
+        submit_result=_broker_order(
+            "placeholder",
+            side="sell",
+            status="filled",
+            filled_quantity=10,
+            filled_avg_price=101,
+        ),
+    )
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+
+    assert set(trade.lookup_calls[:2]) == {first, second}
+    assert trade.lookup_calls[2:4] == trade.lookup_calls[:2]
+    assert len(trade.submit_calls) == 1
+    assert trade.submit_calls[0][0].quantity == pytest.approx(10)
+    assert repo.position(SID, "SPY") == pytest.approx(0)
+
+
+async def test_active_exit_fences_a_concurrent_new_enter(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, status="accepted")
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+
+    with pytest.raises(AdmissionBlockedError) as raised:
+        await submit_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="enter-after-exit",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+            trade=_FakeTrade(),
+        )
+
+    assert raised.value.decision.reason_code == "EXIT_IN_PROGRESS"
 
 
 async def test_accept_exit_rejects_an_unknown_entry_order_ref(repo: ClerkSqliteRepository) -> None:
@@ -287,12 +376,20 @@ async def test_accept_exit_rejects_when_no_active_run_matches(repo: ClerkSqliteR
 async def test_accept_exit_same_decision_is_a_transport_retry(repo: ClerkSqliteRepository) -> None:
     entry_ref = await _make_entry(repo)
     first = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     second = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert not second.created
     assert second.effect_operation_id == first.effect_operation_id
@@ -304,13 +401,21 @@ async def test_accept_exit_same_decision_id_different_entry_is_a_durable_conflic
     entry_ref_1 = await _make_entry(repo, decision_id="enter-1")
     entry_ref_2 = await _make_entry(repo, decision_id="enter-2")
     accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref_1,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref_1,
     )
     with pytest.raises(DurableConflictError):
         accept_exit(
-            repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-            lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref_2,
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="exit-1",
+            lifecycle_run_id=RUN_ID,
+            entry_order_ref=entry_ref_2,
         )
 
 
@@ -328,8 +433,12 @@ async def test_resolve_exit_cancels_the_working_entry_before_computing_quantity(
     follows."""
     entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     trade = _FakeTrade(lookup_results=[_broker_order(entry_ref, status="canceled", filled_quantity=0.0)])
     assert accepted.effect_operation_id is not None
@@ -345,8 +454,12 @@ async def test_resolve_exit_skips_cancel_when_entry_already_terminal(
 ) -> None:
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     trade = _FakeTrade()
     assert accepted.effect_operation_id is not None
@@ -365,13 +478,18 @@ async def test_partial_fill_during_cancel_uses_only_the_clerk_proven_remaining_q
     quantity of 10 (of which only 4 ever became real exposure to close)."""
     entry_ref = await _make_entry(repo, quantity=10, status="accepted", filled_quantity=0.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(
         lookup_results=[
-            _broker_order(entry_ref, status="canceled", filled_quantity=4.0, filled_avg_price=100.0)
+            _broker_order(entry_ref, status="canceled", filled_quantity=4.0, filled_avg_price=100.0),
+            _broker_order(entry_ref, status="canceled", filled_quantity=4.0, filled_avg_price=100.0),
         ]
     )
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
@@ -387,8 +505,12 @@ async def test_lost_cancel_response_blocks_the_closing_order(repo: ClerkSqliteRe
     cancellation/fill truth is proven."""
     entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(cancel_error=BrokerUnavailable("timeout"))
@@ -411,13 +533,20 @@ async def test_a_definitive_cancel_error_falls_through_to_the_poll(
     EXIT proceeds to submit the reducing order in the same pass."""
     entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(
         cancel_error=BrokerRequestInvalid("not cancelable", broker="alpaca"),
-        lookup_results=[_broker_order(entry_ref, status="filled", filled_quantity=10.0, filled_avg_price=100.0)],
+        lookup_results=[
+            _broker_order(entry_ref, status="filled", filled_quantity=10.0, filled_avg_price=100.0),
+            _broker_order(entry_ref, status="filled", filled_quantity=10.0, filled_avg_price=100.0),
+        ],
     )
     result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
 
@@ -432,8 +561,12 @@ async def test_a_definitive_cancel_error_falls_through_to_the_poll(
 async def test_lost_poll_response_stays_uncertain(repo: ClerkSqliteRepository) -> None:
     entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(lookup_error=BrokerUnavailable("timeout"))
@@ -449,8 +582,12 @@ async def test_a_mismatched_client_order_id_on_the_cancel_poll_stays_uncertain(
 ) -> None:
     entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     mismatched = _broker_order("some-other-order-ref", status="canceled")
@@ -476,8 +613,12 @@ async def test_still_working_after_cancel_and_poll_leaves_no_reducing_order(
     is submitted this pass."""
     entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(lookup_results=[_broker_order(entry_ref, status="accepted", filled_quantity=0.0)])
@@ -496,8 +637,12 @@ async def test_zero_remaining_quantity_skips_the_reducing_order_entirely(
 ) -> None:
     entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(lookup_results=[_broker_order(entry_ref, status="canceled", filled_quantity=0.0)])
@@ -516,11 +661,19 @@ async def test_reducing_order_fully_filled_yields_a_succeeded_terminal_receipt(
 ) -> None:
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
-    trade = _FakeTrade(submit_result=_broker_order("placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"))
+    trade = _FakeTrade(
+        submit_result=_broker_order(
+            "placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"
+        )
+    )
     result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
 
     assert result.reducing_order_ref is not None
@@ -538,8 +691,12 @@ async def test_reducing_order_lost_submit_response_stays_uncertain(
     side: a lost submit response never wraps as a generic success."""
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
@@ -548,6 +705,28 @@ async def test_reducing_order_lost_submit_response_stays_uncertain(
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "unknown"
     assert result.reducing_order_ref is not None  # the orders row exists even though unresolved
+
+    # Late evidence for a different order linked to this same EXIT does not
+    # prove the reducing submit's exact (effect, order_ref) identity.
+    fold_order_evidence(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        order=_broker_order(
+            entry_ref,
+            status="filled",
+            filled_quantity=10.0,
+            filled_avg_price=100.0,
+        ),
+    )
+    effect_after_unrelated_ack = repo.effect_operation(accepted.effect_operation_id)
+    assert effect_after_unrelated_ack is not None
+    assert effect_after_unrelated_ack.state == "unknown"
+    uncertainty = repo.active_uncertainty(
+        scope="BOT",
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        strategy_instance_id=SID,
+    )
+    assert uncertainty is not None
 
 
 async def test_a_later_resolve_call_resolves_the_reducing_orders_lost_submit(
@@ -558,8 +737,12 @@ async def test_a_later_resolve_call_resolves_the_reducing_orders_lost_submit(
     (recovery/reconciliation) makes forward progress."""
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     first_trade = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
@@ -575,6 +758,78 @@ async def test_a_later_resolve_call_resolves_the_reducing_orders_lost_submit(
     assert reducing_order is not None and reducing_order.broker_order_id is not None
 
 
+async def test_acknowledged_reducing_order_is_polled_until_terminal(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    first = await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=_FakeTrade(submit_result=_broker_order("placeholder", status="accepted")),
+    )
+    assert first.reducing_order_ref is not None
+
+    terminal = _broker_order(
+        first.reducing_order_ref,
+        side="sell",
+        status="filled",
+        filled_quantity=10,
+        filled_avg_price=101,
+    )
+    trade = _FakeTrade(lookup_results=[terminal])
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+
+    assert trade.submit_calls == []
+    assert trade.lookup_calls == [first.reducing_order_ref]
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None and effect.state == "succeeded"
+
+
+async def test_stale_snapshot_policy_blocks_exit_before_reducing_order_creation(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code=BROKER_SNAPSHOT_STALE_REASON_CODE,
+        headline="stale",
+        explanation="broker snapshot is stale",
+        operator_impact="reductions are paused",
+        next_step="reconcile",
+    )
+    terminal_entry = _broker_order(entry_ref, status="filled", filled_quantity=10, filled_avg_price=100)
+    trade = _FakeTrade(lookup_results=[terminal_entry, terminal_entry])
+
+    with pytest.raises(AdmissionBlockedError):
+        await resolve_exit(
+            repo,
+            effect_operation_id=accepted.effect_operation_id,
+            trade=trade,
+        )
+
+    assert trade.submit_calls == []
+    assert all(order.role != "REDUCING" for order in repo.orders_for_effect_operation(accepted.effect_operation_id))
+
+
 async def test_reducing_order_resolves_without_flattening_folds_a_precise_failure(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -584,8 +839,12 @@ async def test_reducing_order_resolves_without_flattening_folds_a_precise_failur
     never be reported as a generic success."""
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(
@@ -606,8 +865,12 @@ async def test_mismatched_client_order_id_on_reducing_submit_stays_uncertain(
 ) -> None:
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     trade = _FakeTrade(submit_client_order_id_override="learn-ai/other-bot/v1:zzz")
@@ -625,11 +888,19 @@ async def test_resolve_exit_on_an_already_succeeded_operation_is_a_true_noop(
 ) -> None:
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
-    trade = _FakeTrade(submit_result=_broker_order("placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"))
+    trade = _FakeTrade(
+        submit_result=_broker_order(
+            "placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"
+        )
+    )
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
     before = len(repo.custody_transitions())
 
@@ -638,6 +909,101 @@ async def test_resolve_exit_on_an_already_succeeded_operation_is_a_true_noop(
 
     assert len(repo.custody_transitions()) == before
     assert trade2.submit_calls == [] and trade2.cancel_calls == [] and trade2.lookup_calls == []
+
+
+async def test_late_and_duplicate_entry_evidence_cannot_regress_succeeded_exit(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    await resolve_exit(
+        repo,
+        effect_operation_id=accepted.effect_operation_id,
+        trade=_FakeTrade(
+            submit_result=_broker_order(
+                "placeholder",
+                side="sell",
+                status="filled",
+                filled_quantity=10,
+                filled_avg_price=101,
+            )
+        ),
+    )
+    late = _broker_order(entry_ref, status="accepted").model_copy(
+        update={"updated_at_ms": 1_699_999_999_000, "observed_at_ms": 1_700_000_001_000}
+    )
+
+    fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=late)
+    fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=late)
+
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    entry = repo.order(entry_ref)
+    assert effect is not None and effect.state == "succeeded"
+    assert entry is not None and entry.broker_state == "filled"
+    assert repo.position(SID, "SPY") == pytest.approx(0)
+
+
+async def test_same_process_overlapping_exit_resolvers_submit_one_reduction(
+    repo: ClerkSqliteRepository,
+) -> None:
+    entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+
+    class BlockingTrade(_FakeTrade):
+        def __init__(self) -> None:
+            super().__init__(
+                submit_result=_broker_order(
+                    "placeholder",
+                    side="sell",
+                    status="filled",
+                    filled_quantity=10,
+                    filled_avg_price=101,
+                )
+            )
+            self.submit_started = asyncio.Event()
+            self.release_submit = asyncio.Event()
+
+        async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+            self.submit_started.set()
+            await self.release_submit.wait()
+            return await super().submit(leg, client_order_id=client_order_id)
+
+    trade = BlockingTrade()
+    first = asyncio.create_task(resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade))
+    await asyncio.wait_for(trade.submit_started.wait(), timeout=2)
+
+    with pytest.raises(OperationClaimError):
+        await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+
+    trade.release_submit.set()
+    await first
+    assert len(trade.submit_calls) == 1
+    assert (
+        len(
+            [
+                order
+                for order in repo.orders_for_effect_operation(accepted.effect_operation_id)
+                if order.role == "REDUCING"
+            ]
+        )
+        == 1
+    )
 
 
 async def test_nested_timeline_carries_the_exit_effect_operation_id_not_the_enters(
@@ -650,8 +1016,12 @@ async def test_nested_timeline_carries_the_exit_effect_operation_id_not_the_ente
     entry_ref = await _make_entry(repo, status="accepted", filled_quantity=0.0)
     enter_effect_id_before = repo.order(entry_ref).effect_operation_id  # type: ignore[union-attr]
     accepted = accept_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
     )
     assert accepted.effect_operation_id is not None
     assert accepted.effect_operation_id != enter_effect_id_before
@@ -664,7 +1034,7 @@ async def test_nested_timeline_carries_the_exit_effect_operation_id_not_the_ente
     # Everything from EXIT_ACCEPTED onward is unambiguously EXIT's — the
     # entry's own pre-EXIT history (ENTER_ACCEPTED, and ENTER's own initial
     # ORDER_SUBMIT_ACKED from when submit_enter first acked it) correctly
-    # predates the reassignment and still names the ENTER effect.
+    # predates the EXIT custody link and still names the ENTER effect.
     post_accept = [t for t in transitions if t["sequence"] >= exit_accepted_seq]
     assert len(post_accept) >= 2  # EXIT_ACCEPTED itself + at least the cancel-poll evidence
     for transition in post_accept:
@@ -678,7 +1048,11 @@ async def test_nested_timeline_carries_the_exit_effect_operation_id_not_the_ente
 
 async def test_submit_exit_drives_the_full_happy_path_in_one_call(repo: ClerkSqliteRepository) -> None:
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
-    trade = _FakeTrade(submit_result=_broker_order("placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"))
+    trade = _FakeTrade(
+        submit_result=_broker_order(
+            "placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell"
+        )
+    )
 
     result = await submit_exit(
         repo,
@@ -704,18 +1078,30 @@ async def test_submit_exit_on_a_duplicate_decision_still_advances_the_state_mach
     entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
     stalled_trade = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
     first = await submit_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref, trade=stalled_trade,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+        trade=stalled_trade,
     )
     effect = repo.effect_operation(first.effect_operation_id)  # type: ignore[arg-type]
     assert effect is not None and effect.state == "unknown"
 
     resuming_trade = _FakeTrade(
-        lookup_results=[_broker_order("placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell")]
+        lookup_results=[
+            _broker_order("placeholder", status="filled", filled_quantity=10.0, filled_avg_price=101.0, side="sell")
+        ]
     )
     second = await submit_exit(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="exit-1",
-        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref, trade=resuming_trade,
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+        trade=resuming_trade,
     )
     assert not second.created  # accept_exit itself sees the transport retry
     assert resuming_trade.submit_calls == []  # never re-submitted a duplicate reducing order

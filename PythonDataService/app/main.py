@@ -178,6 +178,7 @@ async def lifespan(app: FastAPI):
     from app.broker.alpaca.broker import AlpacaBroker
     from app.broker.alpaca.clerk import AlpacaClerk, get_clerk_settings, set_alpaca_clerk
 
+    sqlite_alpaca_sweep = None
     if _alpaca_clerk_configuration_is_valid():
         from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
@@ -228,6 +229,34 @@ async def lifespan(app: FastAPI):
                 artifacts_root=get_clerk_settings().dir,
                 account_id=account_id,
             )
+
+            # The SQLite authority is pre-cutover and may not exist yet. When
+            # it does, keep its independent broker-evidence recovery loop live;
+            # otherwise leave the canonical JSONL Clerk lifecycle unchanged.
+            from app.broker.alpaca.clerk.sqlite.process_repositories import (
+                get_or_open_repository,
+            )
+            from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
+                ReconciliationSweep as SqliteReconciliationSweep,
+            )
+            from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
+
+            try:
+                sqlite_repo = get_or_open_repository(
+                    account_id=account_id,
+                    artifacts_root=get_clerk_settings().dir,
+                )
+            except (FileNotFoundError, ClerkSqliteError):
+                logger.info(
+                    "SQLite Alpaca Clerk authority is not initialized; "
+                    "its reconciliation sweep remains disabled."
+                )
+            else:
+                sqlite_alpaca_sweep = SqliteReconciliationSweep(
+                    repo=sqlite_repo,
+                    read=alpaca_broker,
+                    trade=alpaca_broker,
+                )
 
             # Alpaca live-lifecycle consumer (phase 2, S4) — the owned
             # trade_updates websocket. Started alongside the Clerk (Alpaca is a peer
@@ -477,6 +506,9 @@ async def lifespan(app: FastAPI):
     if _pending_sweep is not None:
         _pending_sweep.start()
         logger.info("Alpaca reconciliation sweep started (S6, post-boot-recovery).")
+    if sqlite_alpaca_sweep is not None:
+        sqlite_alpaca_sweep.start()
+        logger.info("SQLite Alpaca Clerk reconciliation sweep started.")
 
     # ADR-0028 Stage 2 — each visible bot gets one producer-owned status
     # snapshot before the API begins serving normal reads. The producer owns
@@ -509,12 +541,19 @@ async def lifespan(app: FastAPI):
         if alpaca_sweep is not None:
             await alpaca_sweep.stop()
             set_reconciliation_sweep(None)
+        if sqlite_alpaca_sweep is not None:
+            await sqlite_alpaca_sweep.stop()
 
         alpaca_trade_updates = get_trade_updates_consumer()
         if alpaca_trade_updates is not None:
             await alpaca_trade_updates.stop()
             set_trade_updates_consumer(None)
         set_alpaca_clerk(None)
+        from app.broker.alpaca.clerk.sqlite.process_repositories import (
+            close_all_repositories,
+        )
+
+        close_all_repositories()
         from app.services.broker_v2_panel.live_projection import stop_live_projection_hubs
 
         await stop_live_projection_hubs()

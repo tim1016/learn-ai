@@ -106,14 +106,14 @@ def require_owned_entry_order(
 ) -> OrderResource:
     """Called from inside a ``build_transition`` closure, same rule as
     :func:`require_strategy_instance` — must run under the write lock so a
-    concurrent EXIT accept can never reassign the same order between this
-    check and the accept it gates.
+    concurrent EXIT accept can never link the same order between this check
+    and the accept it gates.
 
     Rejects: the order doesn't exist, belongs to a different bot, isn't
     ``ENTRY``-role (targeting a REDUCING order, or a foreign role, makes no
     sense for a fresh EXIT), or is already owned by a different, still-live
-    EXIT (a second EXIT decision racing the first would otherwise silently
-    reassign custody out from under it) — this last case is intentionally
+    EXIT (a second EXIT decision racing the first would otherwise create
+    conflicting live custody) — this last case is intentionally
     conservative rather than a full conflicting-concurrent-operation policy,
     which is R6/#1380 territory.
     """
@@ -125,6 +125,6 @@ def require_owned_entry_order(
         raise UnknownEntryOrderError(entry_order_ref)
     if order.role != "ENTRY":
         raise UnknownEntryOrderError(entry_order_ref)
-    if effect.kind == "EXIT" and effect.state not in ("succeeded", "failed"):
+    if repo.active_exit_for_order(entry_order_ref) is not None:
         raise UnknownEntryOrderError(entry_order_ref)
     return order

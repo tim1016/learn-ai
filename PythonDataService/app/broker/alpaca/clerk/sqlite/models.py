@@ -120,6 +120,17 @@ class OrderResource:
 
 
 @dataclass(frozen=True)
+class ExitSubmission:
+    """Current resource snapshot for one EXIT effect operation."""
+
+    command: CommandResource
+    effect_operation_id: str | None
+    entry_order_ref: str
+    reducing_order_ref: str | None
+    created: bool
+
+
+@dataclass(frozen=True)
 class CommandCreated:
     """A fresh idempotency key: the transition committed and the fold
     created the durable command resource in the same transaction."""

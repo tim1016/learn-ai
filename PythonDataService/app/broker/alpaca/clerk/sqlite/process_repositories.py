@@ -29,9 +29,14 @@ def get_or_open_repository(*, account_id: str, artifacts_root: Path) -> ClerkSql
         return repo
 
 
-def reset_for_testing() -> None:
-    """Close and drop every cached repository. Test-only seam."""
+def close_all_repositories() -> None:
+    """Close and drop every cached repository during process shutdown."""
     with _lock:
         for repo in _repositories.values():
             repo.close()
         _repositories.clear()
+
+
+def reset_for_testing() -> None:
+    """Test-only alias for production shutdown cleanup."""
+    close_all_repositories()

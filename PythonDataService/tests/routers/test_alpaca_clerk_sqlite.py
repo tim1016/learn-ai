@@ -14,6 +14,7 @@ from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.journal import get_clerk_settings, reset_clerk_settings_for_testing
 from app.broker.alpaca.clerk.sqlite import process_repositories
+from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.routers import alpaca_clerk_sqlite
 from app.routers.alpaca_clerk_sqlite import router
@@ -273,3 +274,53 @@ async def test_lease_lost_returns_typed_503(api: FastAPI, monkeypatch: pytest.Mo
         )
         assert response.status_code == 503
         assert response.json()["detail"]["reason"] == "sqlite_authority_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_now_runs_operator_pass(
+    api: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeAlpacaPort:
+        broker_id = "alpaca"
+
+        async def submit(self, leg, *, client_order_id):  # pragma: no cover - protocol seam
+            raise AssertionError("not called")
+
+        async def cancel(self, order_id):  # pragma: no cover - protocol seam
+            raise AssertionError("not called")
+
+        async def get_order_by_client_order_id(self, client_order_id):
+            return None
+
+    class FakeRegistry:
+        def resolve(self, broker_id: str) -> FakeAlpacaPort:
+            assert broker_id == "alpaca"
+            return FakeAlpacaPort()
+
+    observed: dict[str, object] = {}
+
+    async def fake_reconcile(repo, *, read, trade, trigger):
+        observed.update(repo=repo, read=read, trade=trade, trigger=trigger)
+        return AccountReconciliationResult(
+            verdict="position_drift",
+            resolved_count=2,
+            drifted_symbols=("SPY",),
+        )
+
+    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: FakeRegistry())
+    monkeypatch.setattr(alpaca_clerk_sqlite, "reconcile_account", fake_reconcile)
+
+    async with _client(api) as client:
+        response = await client.post(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/reconcile"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "verdict": "position_drift",
+        "resolved_count": 2,
+        "foreign_order_count": 0,
+        "drifted_symbols": ["SPY"],
+    }
+    assert observed["trigger"] == "OPERATOR_RECONCILE_NOW"
+    assert observed["read"] is observed["trade"]

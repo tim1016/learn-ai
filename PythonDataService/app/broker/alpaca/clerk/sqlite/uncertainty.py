@@ -1,68 +1,97 @@
-"""Typed uncertainty envelope and admission (#1380, Part A).
+"""Typed uncertainty causes and one backend capability policy.
 
-Two primitives, both pure/deterministic given the repository's current
-state:
-
-- :func:`raise_uncertainty` — the one gate for durably recording a typed R5
-  uncertainty (severity, the two independent admission axes
-  ``blocks_new_exposure``/``allows_reduction``, and the four backend-
-  authored operator-facing strings) against the schema's already-scaffolded
-  ``uncertainties`` table. Idempotent — a caller re-raising the identical
-  ``(strategy_instance_id, reason_code)`` pair while one is still active is
-  a no-op, the same bounded-growth discipline
-  :func:`~.reconcile._raise_account_hold` established for holds. Scope is
-  never a caller-supplied parameter: passing a ``strategy_instance_id``
-  means ``BOT``, passing ``None`` means ``ACCOUNT_CLERK`` — the same
-  truthful scope/identity coupling the schema already enforces for holds.
-  A caller that does not (yet) know how to classify some new situation gets
-  the fail-closed default for free just by using this function's own
-  defaults (``blocks_new_exposure=True``, no ``strategy_instance_id``
-  override unless the caller explicitly narrows it) — satisfying "an
-  unrecognized reason defaults to ``ACCOUNT_CLERK`` and blocks new
-  exposure" as a consequence of the API's shape, not a separate registry
-  of "known" reason codes to validate against.
-- :func:`admit_new_exposure` — the one admission function, reused verbatim
-  by both a future preview surface and real enforcement (#1380 acceptance:
-  "the same policy authors capability and effect"). Folds both the rich
-  uncertainty envelope and the simpler #1378 hold mechanism behind one
-  surface, since a caller submitting a new decision must be blocked by
-  either. An ``ACCOUNT_CLERK``-scoped block applies to every bot; a
-  ``BOT``-scoped block applies only to the matching bot — unrelated bots
-  keep trading (#1380 acceptance).
-
-:func:`require_admission` is the ``enter.py``-facing enforcement wrapper,
-following the exact existing pattern of
-:func:`~.idempotency.require_strategy_instance`/
-:func:`~.idempotency.require_active_run`: called from inside a
-``build_transition`` closure, under the write lock, so a concurrently-raised
-uncertainty can never race past the check.
-
-Deliberately deferred (see the module docstring precedent in ``enter.py``/
-``exit.py``): the 6 named, backend-authored recovery actions (Reconcile now,
-Cancel verified working orders, Prepare safe flatten, Stop bot decisions,
-Open custody timeline, Rebuild from mirror / Reset authority) with their
-own availability/reason/scope/freshness/next-step metadata are #1380's
-remaining scope, not built here — this slice ships the envelope and the
-admission policy those actions will eventually consult, not the action
-catalog itself.
+The stored R5 envelope is descriptive evidence. Authorization is granted only
+when this module recognizes the reason, facts schema, and capability. Unknown
+causes are account-wide and fail closed; no generic clear primitive exists.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any
 
-from app.broker.alpaca.clerk.sqlite.facts import UncertaintyRaisedFacts, UncertaintyResolvedFacts
+from app.broker.alpaca.clerk.sqlite.facts import (
+    FACTS_SCHEMA_VERSION,
+    UncertaintyRaisedFacts,
+    UncertaintyResolvedFacts,
+)
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    BROKER_SNAPSHOT_STALE_REASON_CODE,
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE,
+    POSITION_DRIFT_REASON_CODE,
+    PositionDriftCause,
+    broker_snapshot_stale_cause_is_valid,
+)
 
-__all__ = [
-    "AdmissionBlockedError",
-    "AdmissionDecision",
-    "admit_new_exposure",
-    "raise_uncertainty",
-    "require_admission",
-    "resolve_uncertainty",
-]
+DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS = 30_000
+REDUCTION_QTY_EPSILON = 1e-9
+
+
+class Capability(StrEnum):
+    NEW_EXPOSURE = "NEW_EXPOSURE"
+    CANCEL = "CANCEL"
+    REDUCE = "REDUCE"
+    RECONCILE = "RECONCILE"
+
+
+@dataclass(frozen=True)
+class ReasonPolicy:
+    scope: str
+    blocks_new_exposure: bool
+    allows_reduction: bool
+    cause_is_valid: Callable[[Any], bool]
+    facts_schema_version: int = FACTS_SCHEMA_VERSION
+
+
+def _position_drift_cause_is_valid(value: Any) -> bool:
+    try:
+        PositionDriftCause.from_mapping(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _order_outcome_unknown_cause_is_valid(value: Any) -> bool:
+    # An unknown broker outcome is never reduction-authorizing.  Its strict
+    # decoder lives with the atomic fold that opens and closes the episode.
+    return isinstance(value, dict)
+
+
+_REASON_POLICIES: dict[str, ReasonPolicy] = {
+    POSITION_DRIFT_REASON_CODE: ReasonPolicy(
+        scope="ACCOUNT_CLERK",
+        blocks_new_exposure=True,
+        allows_reduction=True,
+        cause_is_valid=_position_drift_cause_is_valid,
+    ),
+    BROKER_SNAPSHOT_STALE_REASON_CODE: ReasonPolicy(
+        scope="ACCOUNT_CLERK",
+        blocks_new_exposure=True,
+        allows_reduction=False,
+        cause_is_valid=broker_snapshot_stale_cause_is_valid,
+    ),
+    ORDER_OUTCOME_UNKNOWN_REASON_CODE: ReasonPolicy(
+        scope="BOT",
+        blocks_new_exposure=True,
+        allows_reduction=False,
+        cause_is_valid=_order_outcome_unknown_cause_is_valid,
+    ),
+}
+
+
+def _effective_identity(
+    *, reason_code: str, strategy_instance_id: str | None
+) -> tuple[ReasonPolicy | None, str, str | None]:
+    policy = _REASON_POLICIES.get(reason_code)
+    if policy is None:
+        return None, "ACCOUNT_CLERK", None
+    if policy.scope == "BOT" and strategy_instance_id is not None:
+        return policy, "BOT", strategy_instance_id
+    return policy, "ACCOUNT_CLERK", None
 
 
 def raise_uncertainty(
@@ -75,116 +104,283 @@ def raise_uncertainty(
     operator_impact: str,
     next_step: str,
     evidence_refs: tuple[str, ...] = (),
+    cause_facts: dict[str, Any] | None = None,
     severity: str = "warning",
-    blocks_new_exposure: bool = True,
-    allows_reduction: bool = True,
 ) -> bool:
-    """Raise a typed uncertainty if none is already ``ACTIVE`` for this
-    ``(scope, reason_code, strategy_instance_id)``. Returns ``True`` if a
-    new one was appended, ``False`` if one was already active (no-op)."""
-    scope = "BOT" if strategy_instance_id is not None else "ACCOUNT_CLERK"
+    """Raise or refresh one typed episode; unknown causes fail closed account-wide."""
+    policy, scope, effective_strategy_instance_id = _effective_identity(
+        reason_code=reason_code, strategy_instance_id=strategy_instance_id
+    )
+    blocks_new_exposure = True if policy is None else policy.blocks_new_exposure
+    allows_reduction = False if policy is None else policy.allows_reduction
+    facts = UncertaintyRaisedFacts(
+        severity=severity,
+        blocks_new_exposure=blocks_new_exposure,
+        allows_reduction=allows_reduction,
+        reason_code=reason_code,
+        headline=headline,
+        explanation=explanation,
+        operator_impact=operator_impact,
+        next_step=next_step,
+        evidence_refs=list(evidence_refs),
+        cause_facts=cause_facts or {},
+    )
+    facts_json = facts.to_facts_json()
 
-    def build_transition() -> TransitionInput:
-        facts = UncertaintyRaisedFacts(
-            severity=severity,
-            blocks_new_exposure=blocks_new_exposure,
-            allows_reduction=allows_reduction,
-            reason_code=reason_code,
-            headline=headline,
-            explanation=explanation,
-            operator_impact=operator_impact,
-            next_step=next_step,
-            evidence_refs=list(evidence_refs),
-        )
+    def build_transition(transition_kind: str) -> TransitionInput:
         return TransitionInput(
-            strategy_instance_id=strategy_instance_id,
-            transition_kind="UNCERTAINTY_RAISED",
+            strategy_instance_id=effective_strategy_instance_id,
+            transition_kind=transition_kind,
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
             operation_state="succeeded",
             clerk_observed_at_ms=repo.clock(),
-            summary_code="UNCERTAINTY_RAISED",
-            facts_json=facts.to_facts_json(),
+            summary_code=transition_kind,
+            facts_schema_version=FACTS_SCHEMA_VERSION,
+            facts_json=facts_json,
         )
 
-    return repo.raise_uncertainty_if_none_active(
+    outcome = repo.observe_uncertainty(
         scope=scope,
         reason_code=reason_code,
-        strategy_instance_id=strategy_instance_id,
-        build_transition=build_transition,
+        strategy_instance_id=effective_strategy_instance_id,
+        facts_json=facts_json,
+        build_raise=lambda: build_transition("UNCERTAINTY_RAISED"),
+        build_refresh=lambda: build_transition("UNCERTAINTY_REFRESHED"),
     )
+    return outcome != "unchanged"
 
 
-def resolve_uncertainty(
-    repo: ClerkSqliteRepository, *, uncertainty_id: str, resolution_note: str
-) -> None:
-    """Close an ``ACTIVE`` uncertainty. Idempotent on the fold's own
-    ``resolved_at_ms IS NULL`` guard — resolving an already-resolved
-    uncertainty a second time appends an audit transition but changes
-    nothing."""
-    facts = UncertaintyResolvedFacts(uncertainty_id=uncertainty_id, resolution_note=resolution_note)
-    repo.append_transition(
-        TransitionInput(
+_RECONCILIATION_RESOLVABLE_REASONS = frozenset({POSITION_DRIFT_REASON_CODE, BROKER_SNAPSHOT_STALE_REASON_CODE})
+
+
+def resolve_reconciliation_uncertainty(
+    repo: ClerkSqliteRepository,
+    *,
+    reason_code: str,
+    evidence_refs: tuple[str, ...],
+) -> bool:
+    """Resolve only a cause whose clean broker prerequisite was just proven."""
+    if reason_code not in _RECONCILIATION_RESOLVABLE_REASONS:
+        raise ValueError(f"{reason_code!r} has no reconciliation-backed recovery policy")
+
+    def build_transition(uncertainty_id: str) -> TransitionInput:
+        facts = UncertaintyResolvedFacts(
+            uncertainty_id=uncertainty_id,
+            resolution_kind="CLEAN_BROKER_RECONCILIATION",
+            evidence_refs=list(evidence_refs),
+        )
+        return TransitionInput(
             transition_kind="UNCERTAINTY_RESOLVED",
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
             operation_state="succeeded",
             clerk_observed_at_ms=repo.clock(),
-            summary_code="UNCERTAINTY_RESOLVED",
+            summary_code="UNCERTAINTY_RESOLVED_BY_RECONCILIATION",
             facts_json=facts.to_facts_json(),
         )
+
+    return repo.resolve_uncertainty_if_active(
+        scope="ACCOUNT_CLERK",
+        reason_code=reason_code,
+        strategy_instance_id=None,
+        build_transition=build_transition,
     )
 
 
 @dataclass(frozen=True)
-class AdmissionDecision:
+class CapabilityDecision:
     allowed: bool
+    capability: Capability
     reason_code: str | None = None
     why: str | None = None
 
 
-def admit_new_exposure(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> AdmissionDecision:
-    """The one admission function (#1380): reused verbatim by both a future
-    preview surface and real enforcement. Holds are checked first (they
-    always block, by their existing #1378 design — there is no
-    ``allows_reduction``-style exception for a hold); an uncertainty only
-    blocks if its own ``blocks_new_exposure`` flag says so, since some
-    uncertainties (proven cancellation, reconciliation, and risk reduction
-    are meant to stay available per the issue's own framing) are
-    deliberately allowed to coexist with continued new exposure.
-    """
-    for hold in repo.active_holds_for_admission(strategy_instance_id=strategy_instance_id):
-        return AdmissionDecision(
-            allowed=False,
-            reason_code=hold["reason_code"],
-            why=f"An active {hold['scope'].lower()}-scoped hold ({hold['reason_code']}) blocks new exposure.",
-        )
-    for uncertainty in repo.active_uncertainties_for_admission(strategy_instance_id=strategy_instance_id):
-        if uncertainty["blocks_new_exposure"]:
-            return AdmissionDecision(
+@dataclass(frozen=True)
+class ReductionIntent:
+    """The exact broker action being authorized, not a generic reduce flag."""
+
+    symbol: str
+    side: str
+    quantity: float
+
+    @property
+    def signed_delta(self) -> float:
+        return self.quantity if self.side.upper() == "BUY" else -self.quantity
+
+
+def _strict_uncertainty_facts(uncertainty: dict[str, Any], policy: ReasonPolicy) -> UncertaintyRaisedFacts | None:
+    if uncertainty["facts_schema_version"] != policy.facts_schema_version:
+        return None
+    try:
+        facts = UncertaintyRaisedFacts.from_facts_json(uncertainty["facts_json"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    if (
+        facts.reason_code != uncertainty["reason_code"]
+        or facts.blocks_new_exposure != bool(uncertainty["blocks_new_exposure"])
+        or facts.allows_reduction != bool(uncertainty["allows_reduction"])
+        or not policy.cause_is_valid(facts.cause_facts)
+    ):
+        return None
+    return facts
+
+
+def _moves_toward_zero_without_crossing(quantity: float, delta: float) -> bool:
+    if abs(quantity) < REDUCTION_QTY_EPSILON or quantity * delta >= 0:
+        return False
+    after = quantity + delta
+    return abs(after) < REDUCTION_QTY_EPSILON or (quantity * after > 0 and abs(after) < abs(quantity))
+
+
+def _position_drift_allows_action(
+    repo: ClerkSqliteRepository,
+    *,
+    uncertainty: dict[str, Any],
+    facts: UncertaintyRaisedFacts,
+    intent: ReductionIntent | None,
+) -> bool:
+    if intent is None or intent.quantity <= 0 or intent.side.upper() not in {"BUY", "SELL"}:
+        return False
+    age_ms = repo.clock() - uncertainty["observed_at_ms"]
+    if age_ms < 0 or age_ms > DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS:
+        return False
+    try:
+        cause = PositionDriftCause.from_mapping(facts.cause_facts)
+    except ValueError:
+        return False
+    observation = next(
+        (position for position in cause.positions if position.symbol == intent.symbol.upper()),
+        None,
+    )
+    if observation is None:
+        return False
+    current_attributed = repo.attributed_positions_by_symbol().get(intent.symbol.upper(), 0.0)
+    if abs(current_attributed - observation.attributed_qty) > REDUCTION_QTY_EPSILON:
+        return False
+    return _moves_toward_zero_without_crossing(
+        observation.broker_qty, intent.signed_delta
+    ) and _moves_toward_zero_without_crossing(current_attributed, intent.signed_delta)
+
+
+def decide_capability(
+    repo: ClerkSqliteRepository,
+    *,
+    capability: Capability,
+    strategy_instance_id: str,
+    reduction_intent: ReductionIntent | None = None,
+) -> CapabilityDecision:
+    """Author both preview and execution policy from the same typed snapshot."""
+    if capability in (Capability.CANCEL, Capability.RECONCILE):
+        return CapabilityDecision(allowed=True, capability=capability)
+
+    if capability is Capability.NEW_EXPOSURE:
+        active_exit = repo.active_exit_for_strategy(strategy_instance_id)
+        if active_exit is not None:
+            return CapabilityDecision(
                 allowed=False,
-                reason_code=uncertainty["reason_code"],
+                capability=capability,
+                reason_code="EXIT_IN_PROGRESS",
+                why=(
+                    f"EXIT {active_exit.effect_operation_id} is still canceling and "
+                    "flattening this strategy's captured exposure."
+                ),
+            )
+
+    holds = repo.active_holds_for_admission(strategy_instance_id=strategy_instance_id)
+    if holds:
+        hold = holds[0]
+        return CapabilityDecision(
+            allowed=False,
+            capability=capability,
+            reason_code=hold["reason_code"],
+            why=f"An active {hold['scope'].lower()}-scoped hold blocks {capability.value.lower()}.",
+        )
+
+    for uncertainty in repo.active_uncertainties_for_admission(strategy_instance_id=strategy_instance_id):
+        reason_code = uncertainty["reason_code"]
+        policy = _REASON_POLICIES.get(reason_code)
+        facts = None if policy is None else _strict_uncertainty_facts(uncertainty, policy)
+        understood = facts is not None
+        blocked = (
+            bool(uncertainty["blocks_new_exposure"])
+            if capability is Capability.NEW_EXPOSURE
+            else not (
+                understood
+                and policy is not None
+                and policy.allows_reduction
+                and uncertainty["allows_reduction"]
+                and reason_code == POSITION_DRIFT_REASON_CODE
+                and _position_drift_allows_action(
+                    repo,
+                    uncertainty=uncertainty,
+                    facts=facts,
+                    intent=reduction_intent,
+                )
+            )
+        )
+        if blocked:
+            return CapabilityDecision(
+                allowed=False,
+                capability=capability,
+                reason_code=reason_code,
                 why=uncertainty["explanation"],
             )
-    return AdmissionDecision(allowed=True)
+    return CapabilityDecision(allowed=True, capability=capability)
 
 
 class AdmissionBlockedError(Exception):
-    """A backend-authored uncertainty or hold currently blocks new exposure
-    for this bot or account (#1380, R6) — never raised for a decision that
-    only reduces/closes exposure (EXIT is untouched by this check)."""
-
-    def __init__(self, decision: AdmissionDecision) -> None:
+    def __init__(self, decision: CapabilityDecision) -> None:
         self.decision = decision
-        super().__init__(f"new exposure blocked: {decision.reason_code} — {decision.why}")
+        super().__init__(f"{decision.capability.value.lower()} blocked: {decision.reason_code} — {decision.why}")
+
+
+def require_capability(
+    repo: ClerkSqliteRepository,
+    *,
+    capability: Capability,
+    strategy_instance_id: str,
+    reduction_intent: ReductionIntent | None = None,
+) -> None:
+    decision = decide_capability(
+        repo,
+        capability=capability,
+        strategy_instance_id=strategy_instance_id,
+        reduction_intent=reduction_intent,
+    )
+    if not decision.allowed:
+        raise AdmissionBlockedError(decision)
+
+
+def admit_new_exposure(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> CapabilityDecision:
+    return decide_capability(
+        repo,
+        capability=Capability.NEW_EXPOSURE,
+        strategy_instance_id=strategy_instance_id,
+    )
 
 
 def require_admission(repo: ClerkSqliteRepository, *, strategy_instance_id: str) -> None:
-    """Called from inside a ``build_transition`` closure, same rule as
-    :func:`~.idempotency.require_strategy_instance`/
-    :func:`~.idempotency.require_active_run` — must run under the write
-    lock so a concurrently-raised uncertainty can never race past this
-    check between an outside-the-lock preview and the actual accept."""
-    decision = admit_new_exposure(repo, strategy_instance_id=strategy_instance_id)
-    if not decision.allowed:
-        raise AdmissionBlockedError(decision)
+    require_capability(
+        repo,
+        capability=Capability.NEW_EXPOSURE,
+        strategy_instance_id=strategy_instance_id,
+    )
+
+
+__all__ = [
+    "BROKER_SNAPSHOT_STALE_REASON_CODE",
+    "DRIFT_REDUCTION_EVIDENCE_MAX_AGE_MS",
+    "ORDER_OUTCOME_UNKNOWN_REASON_CODE",
+    "POSITION_DRIFT_REASON_CODE",
+    "AdmissionBlockedError",
+    "Capability",
+    "CapabilityDecision",
+    "ReductionIntent",
+    "admit_new_exposure",
+    "decide_capability",
+    "raise_uncertainty",
+    "require_admission",
+    "require_capability",
+    "resolve_reconciliation_uncertainty",
+]
