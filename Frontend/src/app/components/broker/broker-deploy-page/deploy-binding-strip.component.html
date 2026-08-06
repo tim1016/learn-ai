@@ -1,11 +1,8 @@
 <section class="binding-strip" aria-labelledby="deploy-binding-title">
-  <header>
-    <span>Bot binding</span>
-    <h2 id="deploy-binding-title">Name the bot and bind its strategy</h2>
-  </header>
+  <h2 id="deploy-binding-title">Bot binding</h2>
 
-  <div class="binding-strip__rail">
-    <label class="binding-node binding-node--identity">
+  <div class="binding-strip__fields">
+    <label class="binding-field">
       <span>Bot name</span>
       <input
         type="text"
@@ -20,9 +17,7 @@
       @if (instanceIdError(); as error) { <em role="alert">{{ error }}</em> }
     </label>
 
-    <span class="binding-arrow" aria-hidden="true">→</span>
-
-    <div class="binding-node binding-node--strategy">
+    <div class="binding-field binding-field--strategy">
       @if (strategies().length === 1) {
         <span>Validated strategy</span>
         <strong>{{ selectedStrategy()?.label }}</strong>
@@ -37,23 +32,23 @@
           }
         </select>
       }
-      <div class="binding-node__trust">
+      <div class="binding-field__trust">
         <span>✓ Validated</span>
         @if (selectedStrategy(); as selected) {
-          <a routerLink="/strategy-validation" [queryParams]="{ strategy: selected.strategy_key }">
-            View validation
-          </a>
+          <div class="binding-field__actions">
+            <button
+              type="button"
+              class="info-tip"
+              [pTooltip]="selected.explanation"
+              tooltipPosition="top"
+              [attr.aria-label]="'About ' + selected.label + ': ' + selected.explanation"
+            >i</button>
+            <a routerLink="/strategy-validation" [queryParams]="{ strategy: selected.strategy_key }">
+              View validation
+            </a>
+          </div>
         }
       </div>
-      <small>{{ selectedStrategy()?.explanation ?? 'No validated strategy is available.' }}</small>
-    </div>
-
-    <span class="binding-arrow" aria-hidden="true">→</span>
-
-    <div class="binding-node binding-node--target">
-      <span>Broker target</span>
-      <strong>{{ accountLabel() }}</strong>
-      <small>{{ executionLabel() }} execution</small>
     </div>
   </div>
 </section>

@@ -1,39 +1,42 @@
 <section class="readiness" aria-labelledby="deploy-readiness-title">
   <header>
-    <span>Operator view · admission authority</span>
-    <h2 id="deploy-readiness-title">Every deployment gate</h2>
+    <h2 id="deploy-readiness-title">Admission authority</h2>
     <p>These checks come from the same server path that admits or rejects launch.</p>
   </header>
-  <div class="readiness__grid">
+  <div class="readiness__gates">
     @for (check of checks(); track check.gate_id) {
-      <article [class.readiness__check--blocked]="!check.ready">
-        <div class="readiness__check-head">
+      <details
+        class="readiness__gate"
+        [class.readiness__gate--blocked]="!check.ready"
+        [attr.open]="check.ready ? null : ''"
+      >
+        <summary>
           <span>{{ check.ready ? 'Ready' : 'Blocked' }}</span>
           <strong>{{ check.label }}</strong>
           <code>{{ check.gate_id | receiptLabel }}</code>
-        </div>
-        <h3>{{ check.headline }}</h3>
-        <p>{{ check.explanation }}</p>
-        <dl class="readiness__authority">
-          <div><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
-          <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
-          <div><dt>Evidence</dt><dd>{{ check.evidence_summary }}</dd></div>
-        </dl>
-        @if (check.recovery) {
-          <p class="readiness__recovery"><strong>Next:</strong> {{ check.recovery }}</p>
-        }
-        @let entries = evidenceEntries(check);
-        @if (entries.length !== 0) {
-          <details>
-            <summary>Structured gate evidence</summary>
+        </summary>
+        <div class="readiness__body">
+          <h3>{{ check.headline }}</h3>
+          <p>{{ check.explanation }}</p>
+          <dl class="readiness__authority">
+            <div><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
+            <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
+            <div><dt>Evidence</dt><dd>{{ check.evidence_summary }}</dd></div>
+          </dl>
+          @if (check.recovery) {
+            <p class="readiness__recovery"><strong>Next:</strong> {{ check.recovery }}</p>
+          }
+          @let entries = evidenceEntries(check);
+          @if (entries.length !== 0) {
+            <h4>Structured evidence</h4>
             <dl class="readiness__evidence">
               @for (entry of entries; track entry[0]) {
                 <div><dt>{{ entry[0] | receiptLabel }}</dt><dd>{{ entry[1] }}</dd></div>
               }
             </dl>
-          </details>
-        }
-      </article>
+          }
+        </div>
+      </details>
     }
   </div>
 </section>

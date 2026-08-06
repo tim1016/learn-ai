@@ -1,35 +1,53 @@
 <section class="execution-card" aria-labelledby="deploy-execution-title">
-  <header>
-    <span>Broker capability</span>
-    <h2 id="deploy-execution-title">Choose how this bot trades</h2>
-  </header>
+  <h2 id="deploy-execution-title">Trading setup</h2>
 
-  <fieldset class="mode-grid" aria-label="Execution modes">
-    <legend class="sr-only">Execution mode</legend>
-    @for (mode of executionModes(); track mode.mode) {
-      <label
-        class="mode-card"
-        [class.mode-card--selected]="mode.mode === selectedMode()"
-        [class.mode-card--planned]="isPlanned(mode)"
-      >
-        <input
-          type="radio"
-          name="alpaca-execution-mode"
-          [value]="mode.mode"
-          [checked]="mode.mode === selectedMode()"
-          [disabled]="isPlanned(mode)"
-          (change)="changeExecutionMode($event)"
-        />
-        <div><strong>{{ mode.label }}</strong><span>{{ capabilityStatus(mode) }}</span></div>
-        <p>{{ mode.explanation }}</p>
-      </label>
-    }
+  <fieldset class="mode-options">
+    <legend>Execution mode</legend>
+    <div class="mode-options__grid">
+      @for (mode of executionModes(); track mode.mode) {
+        <div
+          class="mode-option"
+          [class.mode-option--selected]="mode.mode === selectedMode()"
+          [class.mode-option--planned]="isPlanned(mode)"
+        >
+          <label>
+            <input
+              type="radio"
+              name="alpaca-execution-mode"
+              [value]="mode.mode"
+              [checked]="mode.mode === selectedMode()"
+              [disabled]="isPlanned(mode)"
+              (change)="changeExecutionMode($event)"
+            />
+            <strong>{{ mode.label }}</strong>
+            <span>{{ capabilityStatus(mode) }}</span>
+          </label>
+          <button
+            type="button"
+            class="info-tip"
+            [pTooltip]="mode.explanation"
+            tooltipPosition="top"
+            [attr.aria-label]="'About ' + mode.label + ': ' + mode.explanation"
+          >i</button>
+        </div>
+      }
+    </div>
   </fieldset>
 
   <div class="execution-fields">
-    <label class="field">
-      <span>Trading symbol</span>
+    <div class="field">
+      <div class="field__label">
+        <label for="deploy-symbol">Trading symbol</label>
+        <button
+          type="button"
+          class="info-tip"
+          [pTooltip]="actionPlanExplanation()"
+          tooltipPosition="top"
+          [attr.aria-label]="'About the trading symbol: ' + actionPlanExplanation()"
+        >i</button>
+      </div>
       <input
+        id="deploy-symbol"
         type="text"
         [value]="symbol()"
         placeholder="SPY"
@@ -39,24 +57,34 @@
         (input)="changeSymbol($event)"
         (blur)="symbolBlur.emit()"
       />
-      <small>{{ actionPlanExplanation() }}</small>
       @if (symbolError(); as error) { <em role="alert">{{ error }}</em> }
-    </label>
+    </div>
 
     <fieldset class="sizing-options">
-      <legend>Size per entry</legend>
-      @for (option of sizingOptions(); track option.preset) {
-        <label [class.sizing-option--selected]="sizingPreset() === option.preset">
-          <input
-            type="radio"
-            name="alpaca-sizing"
-            [value]="option.preset"
-            [checked]="sizingPreset() === option.preset"
-            (change)="changeSizing($event)"
-          />
-          <span><strong>{{ option.label }}</strong><small>{{ option.explanation }}</small></span>
-        </label>
-      }
+      <legend>Position size</legend>
+      <div class="sizing-options__grid">
+        @for (option of sizingOptions(); track option.preset) {
+          <div class="sizing-option" [class.sizing-option--selected]="sizingPreset() === option.preset">
+            <label>
+              <input
+                type="radio"
+                name="alpaca-sizing"
+                [value]="option.preset"
+                [checked]="sizingPreset() === option.preset"
+                (change)="changeSizing($event)"
+              />
+              <strong>{{ sizingOptionLabel(option.preset) }}</strong>
+            </label>
+            <button
+              type="button"
+              class="info-tip"
+              [pTooltip]="option.explanation"
+              tooltipPosition="top"
+              [attr.aria-label]="'About ' + sizingOptionLabel(option.preset) + ': ' + option.explanation"
+            >i</button>
+          </div>
+        }
+      </div>
     </fieldset>
   </div>
 
@@ -77,13 +105,22 @@
   }
 
   @if (selectedMode() === 'dry_run') {
-    <p class="carryover-policy"><strong>When stopped:</strong> Dry Run has no broker exposure to carry over.</p>
+    <p class="carryover-policy"><strong>Stop behavior:</strong> No broker exposure</p>
   } @else if (carryoverAvailable()) {
     <label class="carryover">
       <input type="checkbox" [checked]="carryoverAllowed()" (change)="changeCarryover($event)" />
       <span><strong>{{ carryoverLabel() }}</strong><small>{{ carryoverExplanation() }}</small></span>
     </label>
   } @else {
-    <p class="carryover-policy"><strong>When stopped:</strong> {{ carryoverExplanation() }}</p>
+    <p class="carryover-policy">
+      <strong>Stop behavior:</strong> No carried positions
+      <button
+        type="button"
+        class="info-tip"
+        [pTooltip]="carryoverExplanation()"
+        tooltipPosition="top"
+        [attr.aria-label]="'About stop behavior: ' + carryoverExplanation()"
+      >i</button>
+    </p>
   }
 </section>
