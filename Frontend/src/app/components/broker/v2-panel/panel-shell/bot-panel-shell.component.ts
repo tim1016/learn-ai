@@ -105,7 +105,11 @@ export class BotPanelShellComponent {
   protected readonly selectedTransactionRef = signal<string | null>(null);
   protected readonly actionPending = signal(false);
   protected readonly actionReceipt = signal<ActionReceiptView | null>(null);
-  protected readonly reductionPlan = signal<SqliteSafeFlattenPlan | null>(null);
+  private readonly routeIdentity = computed(() => this.routeParams());
+  protected readonly reductionPlan = linkedSignal({
+    source: this.routeIdentity,
+    computation: (): SqliteSafeFlattenPlan | null => null,
+  });
 
   protected readonly panel = computed(() => this.liveStore.snapshot()?.panel ?? null);
   protected readonly liveChart = computed(() => {
@@ -265,6 +269,7 @@ export class BotPanelShellComponent {
 
   private async prepareSafeFlatten(action: PanelAction): Promise<void> {
     this.selectLens('operator');
+    const requestIdentity = this.routeIdentity();
     this.actionPending.set(true);
     this.actionReceipt.set(null);
     this.reductionPlan.set(null);
@@ -274,6 +279,7 @@ export class BotPanelShellComponent {
         this.sid(),
         action,
       );
+      if (requestIdentity !== this.routeIdentity()) return;
       this.reductionPlan.set(capability.reduction_plan);
       this.messageService.add({
         severity: 'info',
@@ -281,6 +287,7 @@ export class BotPanelShellComponent {
         detail: capability.next_step,
       });
     } catch (error) {
+      if (requestIdentity !== this.routeIdentity()) return;
       const receipt = this.errorReceipt(error, action);
       this.actionReceipt.set(receipt);
       this.messageService.add(

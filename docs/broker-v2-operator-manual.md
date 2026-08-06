@@ -24,7 +24,9 @@ versioned plan: each nonzero attributed position, the closing side and exact
 quantity, its evidence time, and the authority/reconciliation identities that
 make the plan current. Preparing the plan never submits an order. If custody
 evidence changes, prepare again; a future reduction operation may not reuse the
-old plan version.
+old plan version. The backend only prepares one after a complete working-order
+check and an account-wide reconciliation that is at least as new as every
+included position.
 
 ---
 

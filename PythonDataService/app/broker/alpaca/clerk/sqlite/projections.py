@@ -170,29 +170,16 @@ class SqliteClerkProjectionReader:
         with self._read_transaction():
             self._verify_identity()
             meta = self._meta()
-            runs = self._runs(strategy_instance_id)
+            context = self._policy_context(
+                strategy_instance_id=strategy_instance_id,
+                control_revision=meta["control_revision"],
+                now_ms=now_ms,
+            )
             operations = self._operations(strategy_instance_id, operation_limit)
             commands = self._commands(strategy_instance_id, operation_limit)
-            positions = self._positions(strategy_instance_id)
             holds = self._holds(strategy_instance_id)
-            uncertainties = self._uncertainties(strategy_instance_id, now_ms)
             reconciliation = self._latest_reconciliation(strategy_instance_id, now_ms)
             receipts = self._terminal_receipts(strategy_instance_id)
-        context = RecoveryPolicyContext(
-            account_id=self._account_id,
-            strategy_instance_id=strategy_instance_id,
-            authority_generation=self._authority_generation,
-            db_identity_token=self._db_identity_token,
-            authority_health="healthy",
-            authority_health_reason=None,
-            control_revision=meta["control_revision"],
-            now_ms=now_ms,
-            runs=runs,
-            operations=operations,
-            positions=positions,
-            uncertainties=uncertainties,
-            latest_reconciliation=reconciliation,
-        )
         return ClerkProjection(
             account_id=self._account_id,
             strategy_instance_id=strategy_instance_id,
@@ -202,12 +189,12 @@ class SqliteClerkProjectionReader:
             authority_health_reason=None,
             control_revision=meta["control_revision"],
             custody_owner="ACCOUNT_CLERK",
-            runs=runs,
+            runs=context.runs,
             commands=commands,
             operations=operations,
-            positions=positions,
+            positions=context.positions,
             holds=holds,
-            uncertainties=uncertainties,
+            uncertainties=context.uncertainties[:CURRENT_STATE_LIMIT],
             latest_reconciliation=reconciliation,
             terminal_receipts=receipts,
             guidance=build_projection_guidance(context),
@@ -220,27 +207,48 @@ class SqliteClerkProjectionReader:
         *,
         strategy_instance_id: str | None,
     ) -> RecoveryPolicyContext | None:
-        projection = (
-            self.account_snapshot()
-            if strategy_instance_id is None
-            else self.bot_snapshot(strategy_instance_id)
-        )
-        if projection is None:
-            return None
+        now_ms = self._clock()
+        with self._read_transaction():
+            self._verify_identity()
+            if strategy_instance_id is not None:
+                exists = self._conn.execute(
+                    "SELECT 1 FROM strategy_instances WHERE strategy_instance_id = ?",
+                    (strategy_instance_id,),
+                ).fetchone()
+                if exists is None:
+                    return None
+            meta = self._meta()
+            return self._policy_context(
+                strategy_instance_id=strategy_instance_id,
+                control_revision=meta["control_revision"],
+                now_ms=now_ms,
+            )
+
+    def _policy_context(
+        self,
+        *,
+        strategy_instance_id: str | None,
+        control_revision: int,
+        now_ms: int,
+    ) -> RecoveryPolicyContext:
         return RecoveryPolicyContext(
-            account_id=projection.account_id,
-            strategy_instance_id=projection.strategy_instance_id,
-            authority_generation=projection.authority_generation,
-            db_identity_token=projection.db_identity_token,
-            authority_health=projection.authority_health,
-            authority_health_reason=projection.authority_health_reason,
-            control_revision=projection.control_revision,
-            now_ms=projection.generated_at_ms,
-            runs=projection.runs,
-            operations=projection.operations,
-            positions=projection.positions,
-            uncertainties=projection.uncertainties,
-            latest_reconciliation=projection.latest_reconciliation,
+            account_id=self._account_id,
+            strategy_instance_id=strategy_instance_id,
+            authority_generation=self._authority_generation,
+            db_identity_token=self._db_identity_token,
+            authority_health="healthy",
+            authority_health_reason=None,
+            control_revision=control_revision,
+            now_ms=now_ms,
+            runs=self._runs(strategy_instance_id),
+            current_orders=self._current_orders(strategy_instance_id),
+            positions=self._positions(strategy_instance_id),
+            uncertainties=self._uncertainties(strategy_instance_id, now_ms),
+            latest_account_reconciliation=self._latest_reconciliation(
+                None,
+                now_ms,
+                account_wide_only=True,
+            ),
         )
 
     def timeline_page(
@@ -623,6 +631,20 @@ class SqliteClerkProjectionReader:
             )
         return {key: tuple(value) for key, value in grouped.items()}
 
+    def _current_orders(
+        self,
+        strategy_instance_id: str | None,
+    ) -> tuple[ProjectedOrder, ...]:
+        where, params = _scope_filter("e.strategy_instance_id", strategy_instance_id)
+        rows = self._conn.execute(
+            "SELECT o.order_ref, o.client_order_id, o.broker_order_id, o.role, "
+            "o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
+            "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+            f"{where} ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
+            params,
+        ).fetchall()
+        return tuple(ProjectedOrder(**dict(row)) for row in rows)
+
     def _positions(self, strategy_instance_id: str | None) -> tuple[ProjectedPosition, ...]:
         where, params = _scope_filter("strategy_instance_id", strategy_instance_id)
         rows = self._conn.execute(
@@ -670,8 +692,8 @@ class SqliteClerkProjectionReader:
             "SELECT uncertainty_id, scope, severity, blocks_new_exposure, allows_reduction, "
             "custody_owner, strategy_instance_id, reason_code, headline, explanation, "
             "operator_impact, next_step, observed_at_ms, evidence_refs_json FROM uncertainties "
-            f"WHERE {where} ORDER BY observed_at_ms DESC LIMIT ?",
-            (*params, CURRENT_STATE_LIMIT),
+            f"WHERE {where} ORDER BY observed_at_ms DESC",
+            params,
         ).fetchall()
         return tuple(
             ProjectedUncertainty(
@@ -698,11 +720,15 @@ class SqliteClerkProjectionReader:
         self,
         strategy_instance_id: str | None,
         now_ms: int,
+        *,
+        account_wide_only: bool = False,
     ) -> ProjectedReconciliation | None:
         joins = ""
         where = ""
         params: tuple[object, ...] = ()
-        if strategy_instance_id is not None:
+        if account_wide_only:
+            where = " WHERE r.effect_operation_id IS NULL AND r.order_ref IS NULL"
+        elif strategy_instance_id is not None:
             joins = " LEFT JOIN effect_operations e ON e.effect_operation_id = r.effect_operation_id"
             where = " WHERE e.strategy_instance_id = ? OR r.effect_operation_id IS NULL"
             params = (strategy_instance_id,)

@@ -87,10 +87,10 @@ def failed_sqlite_projection(
         control_revision=0,
         now_ms=now_ms,
         runs=(),
-        operations=(),
+        current_orders=(),
         positions=(),
         uncertainties=(),
-        latest_reconciliation=None,
+        latest_account_reconciliation=None,
     )
     return ClerkProjection(
         account_id=account_id,

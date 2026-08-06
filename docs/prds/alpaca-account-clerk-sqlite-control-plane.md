@@ -601,6 +601,10 @@ facts_json
   revision, reconciliation identity, expiry, and version token. It never
   submits an order; any future reduction mutation must re-evaluate policy and
   reject that token after any action-relevant custody fact changes.
+- Preparation requires a complete current-state order read with no working
+  order, no relevant unresolved uncertainty, and a fresh successful
+  account-wide reconciliation at or after every included position-evidence
+  clock. Bounded operation-history pages are never safety evidence.
 - Every presented recovery action carries backend-authored availability, reason,
   scope, evidence freshness, and next step.
 

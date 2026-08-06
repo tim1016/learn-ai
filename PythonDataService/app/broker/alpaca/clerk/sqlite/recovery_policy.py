@@ -12,12 +12,11 @@ import hmac
 import json
 import math
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Literal, TypeGuard
 
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     AuthorityHealth,
     ClerkScope,
-    ProjectedOperation,
     ProjectedOrder,
     ProjectedPosition,
     ProjectedReconciliation,
@@ -87,10 +86,10 @@ class RecoveryPolicyContext:
     control_revision: int
     now_ms: int
     runs: tuple[ProjectedRun, ...]
-    operations: tuple[ProjectedOperation, ...]
+    current_orders: tuple[ProjectedOrder, ...]
     positions: tuple[ProjectedPosition, ...]
     uncertainties: tuple[ProjectedUncertainty, ...]
-    latest_reconciliation: ProjectedReconciliation | None
+    latest_account_reconciliation: ProjectedReconciliation | None
     recovery_proof: AuthorityRecoveryProof = AuthorityRecoveryProof()
 
 
@@ -302,15 +301,25 @@ def _non_finite_positions(ctx: RecoveryPolicyContext) -> tuple[ProjectedPosition
 
 
 def _working_orders(ctx: RecoveryPolicyContext) -> tuple[ProjectedOrder, ...]:
-    orders = (
+    working = (
         order
-        for operation in ctx.operations
-        for order in operation.orders
+        for order in ctx.current_orders
         if order.broker_order_id is not None
         and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
     )
-    unique = {order.order_ref: order for order in orders}
+    unique = {order.order_ref: order for order in working}
     return tuple(sorted(unique.values(), key=lambda order: order.order_ref))
+
+
+def _is_successful_account_reconciliation(
+    reconciliation: ProjectedReconciliation | None,
+) -> TypeGuard[ProjectedReconciliation]:
+    return (
+        reconciliation is not None
+        and reconciliation.effect_operation_id is None
+        and reconciliation.order_ref is None
+        and reconciliation.outcome == "RESOLVED_SUCCESS"
+    )
 
 
 def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decision:
@@ -412,7 +421,7 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     positions = _relevant_positions(ctx)
     non_finite_positions = _non_finite_positions(ctx)
     working_orders = _working_orders(ctx)
-    reconciliation = ctx.latest_reconciliation
+    reconciliation = ctx.latest_account_reconciliation
     reconciliation_evidence = _evidence(
         ctx,
         reference=(
@@ -420,14 +429,15 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
             if reconciliation is not None
             else "reconciliation:missing"
         ),
-        label="Latest reconciliation",
+        label="Latest account reconciliation",
         observed_at_ms=(reconciliation.attempted_at_ms if reconciliation is not None else None),
         required_fresh=True,
     )
     relevant_uncertainties = tuple(
         uncertainty
         for uncertainty in ctx.uncertainties
-        if uncertainty.scope == "ACCOUNT_CLERK"
+        if ctx.strategy_instance_id is None
+        or uncertainty.scope == "ACCOUNT_CLERK"
         or uncertainty.strategy_instance_id == ctx.strategy_instance_id
     )
     reason_code: str | None = None
@@ -446,9 +456,17 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     elif relevant_uncertainties:
         reason_code = "EXPOSURE_NOT_PROVEN"
         reason = "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
-    elif reconciliation is None or reconciliation.outcome != "RESOLVED_SUCCESS":
+    elif not _is_successful_account_reconciliation(reconciliation):
         reason_code = "CLEAN_RECONCILIATION_REQUIRED"
-        reason = "A successful reconciliation is required before preparing reduction."
+        reason = "A successful account reconciliation is required before preparing reduction."
+    elif any(
+        position.updated_at_ms > reconciliation.attempted_at_ms
+        for position in positions
+    ):
+        reason_code = "POSITION_EVIDENCE_NOT_RECONCILED"
+        reason = (
+            "Attributed position evidence changed after the account reconciliation."
+        )
     elif reconciliation_evidence.freshness != "fresh":
         reason_code = "RECONCILIATION_EVIDENCE_STALE"
         reason = "The successful reconciliation is too old for a reduction decision."
@@ -523,11 +541,15 @@ def _build_safe_flatten_plan(
       docs/references/alpaca-sqlite-clerk-recovery-language.md.
     Canonical implementation: this file.
     Validated against:
-      tests/broker/alpaca/clerk/sqlite/test_recovery_policy.py::test_safe_flatten_prepares_versioned_exact_close_plan
+      tests/broker/alpaca/clerk/sqlite/test_recovery_policy.py::
+      test_safe_flatten_prepares_versioned_exact_close_plan and the adjacent
+      account-reconciliation, position-clock, uncertainty, and order gates.
     """
-    reconciliation = ctx.latest_reconciliation
-    if reconciliation is None:
-        raise AssertionError("available safe-flatten plan requires reconciliation")
+    reconciliation = ctx.latest_account_reconciliation
+    if not _is_successful_account_reconciliation(reconciliation):
+        raise AssertionError(
+            "available safe-flatten plan requires successful account reconciliation"
+        )
     return SafeFlattenPlan(
         version_token=version_token,
         account_id=ctx.account_id,
