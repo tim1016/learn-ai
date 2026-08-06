@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.sweep import ReconciliationSweep as LegacyReconciliationSweep
 from app.broker.alpaca.clerk.trade_evidence import (
     LegacyLifecycleRecorder,
@@ -122,6 +123,7 @@ async def select_active_clerk_runtime(
     activation_store: ActivationResolver | None = None,
     repository_opener: Callable[[str, Path], ClerkSqliteRepository] = _open_repository,
     startup_recovery_timeout_s: float = DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
+    stream_health_gate: StreamHealthGate | None = None,
 ) -> ActiveClerkRuntime:
     """Resolve the account, validate activation, and construct one authority."""
     try:
@@ -196,6 +198,7 @@ async def select_active_clerk_runtime(
             repo=repository,
             read=read,
             trade=trade,
+            stream_health=stream_health_gate,
         )
         await asyncio.wait_for(
             facade.recover(),

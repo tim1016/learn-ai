@@ -342,6 +342,62 @@ async def test_presented_stop_rechecks_policy_and_replays_durable_lost_response(
 
 
 @pytest.mark.asyncio
+async def test_presented_stop_quiesces_a_running_bot_task(api: FastAPI) -> None:
+    """#1396 P1: `stop_bot_decisions` must not only record the durable
+    SQLite STOP command — it must also quiesce a live `BotTaskRegistry`
+    task for the same bot, or the process keeps evaluating signals after
+    the operator is told it stopped."""
+    from app.services.bot_runner import get_bot_task_registry, set_bot_task_registry
+
+    class _FakeRegistry:
+        def __init__(self) -> None:
+            self.stop_calls: list[tuple[str, str]] = []
+
+        async def stop(
+            self,
+            broker: str,
+            strategy_instance_id: str,
+            *,
+            updated_by: str = "operator",
+            reason: str | None = None,
+        ) -> None:
+            self.stop_calls.append((broker, strategy_instance_id))
+
+    fake_registry = _FakeRegistry()
+    assert get_bot_task_registry() is None
+    set_bot_task_registry(fake_registry)  # type: ignore[arg-type]
+    try:
+        async with _client(api) as client:
+            await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+                json={"lifecycle_run_id": "run-1"},
+            )
+            snapshot = await client.get(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/snapshot"
+            )
+            action = next(
+                item
+                for item in snapshot.json()["recovery_actions"]
+                if item["action_id"] == "stop_bot_decisions"
+            )
+            response = await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+                json={
+                    "action_id": action["action_id"],
+                    "concurrency_token": action["concurrency_token"],
+                    "execution_ref": action["execution_ref"],
+                    "reason": "Operator stopped decisions from the custody projection.",
+                },
+            )
+    finally:
+        set_bot_task_registry(None)
+
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
+    assert fake_registry.stop_calls == [("alpaca", SID)]
+
+
+@pytest.mark.asyncio
 async def test_presented_reconciliation_returns_its_durable_receipt_clock(
     api: FastAPI,
 ) -> None:

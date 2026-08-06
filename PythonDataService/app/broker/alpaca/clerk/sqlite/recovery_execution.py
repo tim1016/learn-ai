@@ -118,6 +118,7 @@ async def execute_recovery_action(
             run_id=capability.execution_ref,
             reason=request.reason,
         )
+        await _quiesce_bot_process(strategy_instance_id, reason=request.reason)
         return RecoveryExecutionResult(
             action_id=request.action_id,
             applied=submission.created,
@@ -159,6 +160,38 @@ async def execute_recovery_action(
         f"{request.action_id} is navigation, preparation, or offline authority recovery; "
         "it has no direct broker mutation"
     )
+
+
+async def _quiesce_bot_process(strategy_instance_id: str, *, reason: str | None) -> None:
+    """Stop the in-process bot task after its durable SQLite STOP commits.
+
+    `stop_bot_decisions` durably records the Clerk-side STOP first (above),
+    but that alone leaves a running `BotTaskRegistry` task free to keep
+    consuming bars and calling `execute_for_instance` — the process only
+    reacts to `DesiredState`, which this command never touched. Route
+    through the registry's own serialized stop boundary so the durable
+    intent and process termination land together, matching the Button
+    Rule's cancel + reap contract (`BotTaskRegistry.stop`).
+
+    A bot with no live task in this process (already stopped, running in a
+    different process, or never started here) is not an error: the durable
+    SQLite STOP above is already the authority evidence in that case.
+    """
+    from app.services.bot_runner import get_bot_task_registry
+    from app.services.bot_runner_errors import UnknownBotError
+
+    registry = get_bot_task_registry()
+    if registry is None:
+        return
+    try:
+        await registry.stop(
+            "alpaca",
+            strategy_instance_id,
+            updated_by="operator_recovery",
+            reason=reason or "sqlite_recovery_stop_bot_decisions",
+        )
+    except UnknownBotError:
+        return
 
 
 def _require_strategy_instance(context: RecoveryPolicyContext) -> str:

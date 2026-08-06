@@ -39,6 +39,7 @@ _MIRROR_READ_PATH = "/api/broker/session-mirror"
 _BROKERS_READ_PATH = "/api/brokers/alpaca/account"
 _LIVE_INSTANCES_READ_PATH = "/api/live-instances/bot-a/operator-surface/stream"
 _ACCOUNT_TRANSACTIONS_READ_PATH = "/api/accounts/DU1234567/transactions"
+_ALPACA_CLERK_SQLITE_READ_PATH = "/api/alpaca-clerk-sqlite/accounts/PA-TEST/snapshot"
 
 
 def _path_is_manifest_control_surface(path: str) -> bool:
@@ -295,6 +296,40 @@ async def test_broker_v2_read_accepts_valid_secret(monkeypatch: pytest.MonkeyPat
         )
 
     assert response.status_code != 403
+
+
+def test_alpaca_clerk_sqlite_routes_declare_always_on_guard_and_shared_manifest() -> None:
+    """#1396 P1: the SQLite Clerk's projection-read GETs (positions, holds,
+    operation/order identities, recovery tokens, timeline proof refs) must
+    require the secret unconditionally, like clerk_transactions.router's
+    comparable reads — not just skip-on-GET mutation guarding."""
+    routes = [
+        (route.path, sorted(route.methods or set()), _has_always_control_guard(route))
+        for route in _api_routes()
+        if route.path == "/api/alpaca-clerk-sqlite"
+        or route.path.startswith("/api/alpaca-clerk-sqlite/")
+    ]
+
+    assert "/api/alpaca-clerk-sqlite" in _PROTECTED_READ_PREFIXES
+    assert routes
+    assert all(has_guard for _path, _methods, has_guard in routes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("supplied", [None, "wrong"])
+async def test_alpaca_clerk_sqlite_read_rejects_missing_or_wrong_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    supplied: str | None,
+) -> None:
+    monkeypatch.setattr(settings, "DATA_PLANE_CONTROL_SECRET", "test-control-secret")
+    monkeypatch.setattr(settings, "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL", False)
+    headers = {} if supplied is None else {CONTROL_SECRET_HEADER: supplied}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(_ALPACA_CLERK_SQLITE_READ_PATH, headers=headers)
+
+    assert response.status_code == 403
+    assert CONTROL_SECRET_HEADER in response.json()["detail"]
 
 
 def test_live_instance_routes_declare_always_on_guard() -> None:

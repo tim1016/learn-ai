@@ -172,13 +172,17 @@ async def lifespan(app: FastAPI):
             return registry.desired_state(strategy_instance_id)
 
         alpaca_broker = AlpacaBroker()
+        # S4 (#1262): the dual-health submission gate — market-data feed AND
+        # trade_updates execution channel must both be healthy. Shared by
+        # both authorities so the cutover never silently drops this
+        # fail-closed check.
+        alpaca_stream_health_gate = build_default_stream_health_gate()
+
         def _legacy_clerk() -> AlpacaClerk:
-            # S4 (#1262): the dual-health submission gate — market-data feed
-            # AND trade_updates execution channel must both be healthy.
             return AlpacaClerk(
                 read=alpaca_broker,
                 trade=alpaca_broker,
-                stream_health=build_default_stream_health_gate(),
+                stream_health=alpaca_stream_health_gate,
                 bot_running_probe=_alpaca_bot_running,
                 desired_state_probe=_alpaca_desired_state,
             )
@@ -191,6 +195,7 @@ async def lifespan(app: FastAPI):
             trade=alpaca_broker,
             artifacts_root=get_clerk_settings().dir,
             legacy_factory=_legacy_clerk,
+            stream_health_gate=alpaca_stream_health_gate,
         )
         set_active_clerk_runtime(alpaca_clerk_runtime)
         if alpaca_clerk_runtime.clerk is not None:
@@ -718,7 +723,12 @@ app.include_router(
 app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Activation-selected SQLite Alpaca Clerk command and projection surface.
 # The active-authority selector fails closed instead of falling back to JSONL.
-app.include_router(alpaca_clerk_sqlite.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+# PROTECTED_DATA_PLANE_READ_DEPENDENCIES (not the mutating-only DEPENDENCIES
+# above): every route on this router is either a mutation or a sensitive read
+# (positions, holds, operation/order identities, recovery tokens, DB
+# identity, timeline proof refs) — the GET routes need the secret checked
+# unconditionally, like clerk_transactions.router's comparable reads.
+app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # ADR 0014 — broker-activity reconciliation surface (SSE + REST backfill).
 # The router carries its own ``/api/live-instances`` prefix internally
 # (so the path is sibling to the live-instances router), keeping the

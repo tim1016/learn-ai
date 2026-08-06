@@ -34,8 +34,10 @@ from app.broker.alpaca.clerk.sqlite.commands import (
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import submit_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owned_entry
+from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts, AccountHoldResolvedFacts
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
-from app.broker.alpaca.clerk.sqlite.models import OrderResource
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.models import OrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
 )
@@ -43,6 +45,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
     reconcile_account as reconcile_sqlite_account,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.stream_health import StreamHealthGate, stream_health_refusal
 from app.broker.contract.models import BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.schemas.action_plan import ActionPlan, StockEntryLeg
@@ -65,6 +68,10 @@ _WORKING_ORDER_STATES = frozenset(
     }
 )
 _ENCODED_DECISION_PREFIX = "encoded-"
+# Same wire value as the legacy Clerk's STREAM_HEALTH_HOLD_CODE (S4, #1262)
+# so evidence surfaces that key off the reason code read identically across
+# both authorities.
+STREAM_HEALTH_REASON_CODE = "STREAM_HEALTH_HOLD"
 logger = logging.getLogger(__name__)
 
 
@@ -118,10 +125,12 @@ class SqliteAlpacaClerkFacade:
         repo: ClerkSqliteRepository,
         read: BrokerReadPort,
         trade: BrokerTradePort,
+        stream_health: StreamHealthGate | None = None,
     ) -> None:
         self._repo = repo
         self._read = read
         self._trade = trade
+        self._stream_health = stream_health
         self._intake = ReentrantAsyncLock()
         self._effect_tasks: dict[tuple[str, str], asyncio.Task[EffectOperationReceipt]] = {}
 
@@ -272,6 +281,21 @@ class SqliteAlpacaClerkFacade:
                 quantity=float(quantity * entry.qty_ratio),
             )
             if purpose is EffectPurpose.ENTER:
+                if _sync_stream_health_hold(self._repo, gate=self._stream_health) is not None:
+                    # S4 parity (#1262): either channel unhealthy -> durable
+                    # ACCOUNT_CLERK hold + rejected receipt, no broker
+                    # contact. EXIT/cancel remain unaffected: exit.py never
+                    # consults `active_holds_for_admission`.
+                    return _effect_receipt(
+                        strategy_instance_id=strategy_instance_id,
+                        run_id=run_id,
+                        decision_id=decision_id,
+                        purpose=purpose,
+                        action_plan=action_plan,
+                        quantity=quantity,
+                        state="rejected",
+                        order_refs=(),
+                    )
                 submitted = await submit_enter(
                     self._repo,
                     account_id=self.account_id,
@@ -383,7 +407,7 @@ class SqliteAlpacaClerkFacade:
             proof = self._proof(strategy_instance_id, result)
             meta = self._repo.control_meta_snapshot()
             exposure = {symbol: qty for symbol, qty in proof.exposure.items() if abs(qty) >= POSITION_QTY_EPSILON}
-            working = self._working_order_refs(strategy_instance_id)
+            working = self._working_order_refs_for_proof(strategy_instance_id)
             unresolved = self._unresolved_order_refs(strategy_instance_id)
             trusted = proof.reconciliation_verdict == "clean"
             return ClerkCustodySnapshot(
@@ -471,7 +495,7 @@ class SqliteAlpacaClerkFacade:
         result: AccountReconciliationResult,
     ) -> InstanceCustodyProof:
         verdict = _legacy_verdict(result.verdict)
-        working = self._working_order_refs(strategy_instance_id)
+        working = self._working_order_refs_for_proof(strategy_instance_id)
         unresolved = self._unresolved_order_refs(strategy_instance_id)
         freeze = _freeze_state(result, observed_at_ms=self._repo.clock())
         return InstanceCustodyProof(
@@ -486,9 +510,29 @@ class SqliteAlpacaClerkFacade:
         )
 
     def _working_order_refs(self, strategy_instance_id: str) -> tuple[str, ...]:
+        """ENTRY-only: the exact cancel-target set for STOP (#1396 P1 —
+        `cancel_verified_working_orders` rejects anything but an owned
+        ENTRY). Custody-proof callers must use
+        :meth:`_working_order_refs_for_proof` instead, which also counts a
+        live EXIT's still-working REDUCING child.
+        """
         return tuple(
             order.order_ref
             for order in self._repo.entry_orders_for_strategy(strategy_instance_id)
+            if _is_working_order(order)
+        )
+
+    def _working_order_refs_for_proof(self, strategy_instance_id: str) -> tuple[str, ...]:
+        """Every still-working order (ENTRY or REDUCING) for custody proof.
+
+        A STOP proof must not report `clean` with an empty working set while
+        a live EXIT's reducing order is still `new`/`partially_filled` —
+        that order is not "uncertain" (its effect operation is progressing
+        normally), so `_unresolved_order_refs` alone cannot catch it either.
+        """
+        return tuple(
+            order.order_ref
+            for order in self._repo.orders_for_strategy(strategy_instance_id)
             if _is_working_order(order)
         )
 
@@ -501,6 +545,59 @@ class SqliteAlpacaClerkFacade:
                 and effect.strategy_instance_id == strategy_instance_id
             )
         )
+
+
+def _sync_stream_health_hold(
+    repo: ClerkSqliteRepository,
+    *,
+    gate: StreamHealthGate | None,
+) -> tuple[str, str] | None:
+    """Raise/refresh or resolve the durable stream-health hold; return the
+    refusal (reason, detail) when either channel is unhealthy, else None.
+
+    Mirrors `reconcile.py`'s `_sync_unexplained_order_hold` evidence-driven
+    shape: no gate installed ("gate is None" — production wiring always
+    installs one) refuses nothing.
+    """
+    refusal = stream_health_refusal(gate)
+    if refusal is None:
+        facts = AccountHoldResolvedFacts(reason_code=STREAM_HEALTH_REASON_CODE, evidence_refs=[])
+        repo.resolve_account_hold_if_active(
+            reason_code=STREAM_HEALTH_REASON_CODE,
+            build_transition=lambda: TransitionInput(
+                transition_kind="ACCOUNT_HOLD_RESOLVED",
+                custody_owner="ACCOUNT_CLERK",
+                execution_authority="ACCOUNT_CLERK",
+                operation_state="succeeded",
+                clerk_observed_at_ms=repo.clock(),
+                summary_code="ACCOUNT_HOLD_RESOLVED_BY_STREAM_RECOVERY",
+                facts_json=facts.to_facts_json(),
+            ),
+        )
+        return None
+
+    _reason, detail = refusal
+    evidence_refs = [detail]
+    facts = AccountHoldRaisedFacts(reason_code=STREAM_HEALTH_REASON_CODE, evidence_refs=evidence_refs)
+
+    def transition(kind: str) -> TransitionInput:
+        return TransitionInput(
+            transition_kind=kind,
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="succeeded",
+            clerk_observed_at_ms=repo.clock(),
+            summary_code=kind,
+            facts_json=facts.to_facts_json(),
+        )
+
+    repo.observe_account_hold(
+        reason_code=STREAM_HEALTH_REASON_CODE,
+        evidence_refs_json=canonicalize(evidence_refs),
+        build_raise=lambda: transition("ACCOUNT_HOLD_RAISED"),
+        build_refresh=lambda: transition("ACCOUNT_HOLD_REFRESHED"),
+    )
+    return refusal
 
 
 def _entry_leg(action_plan: ActionPlan) -> StockEntryLeg:

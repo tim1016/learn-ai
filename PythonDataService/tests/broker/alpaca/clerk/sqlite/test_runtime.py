@@ -10,10 +10,11 @@ from typing import Any
 import pytest
 
 from app.broker.alpaca.clerk.active_authority import ActiveClerkRuntime
-from app.broker.alpaca.clerk.models import EffectPurpose
+from app.broker.alpaca.clerk.models import ChannelHealth, EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite import runtime as runtime_module
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -266,6 +267,162 @@ async def test_start_admission_fence_blocks_new_effect_intake(tmp_path: Path) ->
     await broker.submit_started.wait()
     broker.release_submit.set()
     await effect
+    repo.close()
+
+
+def _gate(*, market_data_healthy: bool, execution_healthy: bool) -> StreamHealthGate:
+    return StreamHealthGate(
+        market_data=lambda: ChannelHealth(
+            stream="market_data",
+            healthy=market_data_healthy,
+            reason="" if market_data_healthy else "market_data broke for the test",
+            observed_at_ms=1,
+        ),
+        execution=lambda: ChannelHealth(
+            stream="execution",
+            healthy=execution_healthy,
+            reason="" if execution_healthy else "execution broke for the test",
+            observed_at_ms=1,
+        ),
+    )
+
+
+async def test_execute_for_instance_enter_fails_closed_when_execution_stream_unhealthy(
+    tmp_path: Path,
+) -> None:
+    """#1396 P1: SQLite ENTER must consult the dual stream-health gate the
+    legacy Clerk installs (S4, #1262). Losing `trade_updates` while market
+    data keeps flowing must refuse ENTER and record a durable hold instead
+    of silently submitting."""
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path,
+    )
+    broker = _Broker()
+    broker.release_submit.set()
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=broker,
+        trade=broker,
+        stream_health=_gate(market_data_healthy=True, execution_healthy=False),
+    )
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+
+    receipt = await facade.execute_for_instance(
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        decision_id="decision-unhealthy",
+        purpose=EffectPurpose.ENTER,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+    )
+
+    assert receipt.state == EffectOperationState.REJECTED
+    assert receipt.child_order_refs == ()
+    assert broker.submissions == []
+    hold = repo.active_hold(scope="ACCOUNT_CLERK", reason_code=runtime_module.STREAM_HEALTH_REASON_CODE)
+    assert hold is not None
+    assert "execution" in hold["evidence_refs_json"]
+    repo.close()
+
+
+async def test_execute_for_instance_enter_resumes_and_resolves_hold_once_streams_recover(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path,
+    )
+    broker = _Broker()
+    broker.release_submit.set()
+    unhealthy_facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=broker,
+        trade=broker,
+        stream_health=_gate(market_data_healthy=False, execution_healthy=True),
+    )
+    binding = _binding()
+    await unhealthy_facade.register_strategy_run(binding)
+    await unhealthy_facade.execute_for_instance(
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        decision_id="decision-still-down",
+        purpose=EffectPurpose.ENTER,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+    )
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code=runtime_module.STREAM_HEALTH_REASON_CODE) is not None
+
+    recovered_facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=broker,
+        trade=broker,
+        stream_health=_gate(market_data_healthy=True, execution_healthy=True),
+    )
+    receipt = await recovered_facade.execute_for_instance(
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        decision_id="decision-recovered",
+        purpose=EffectPurpose.ENTER,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+    )
+
+    assert receipt.state != EffectOperationState.REJECTED
+    assert broker.submissions == [receipt.child_order_refs[0]]
+    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code=runtime_module.STREAM_HEALTH_REASON_CODE) is None
+    repo.close()
+
+
+async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
+    tmp_path: Path,
+) -> None:
+    """#1396 P1: custody proof must count a live EXIT's still-working
+    REDUCING child, not just ENTRY orders. `_working_order_refs` (ENTRY-only,
+    the exact STOP cancel-target set) must NOT see it, but the proof-facing
+    `_working_order_refs_for_proof` must — otherwise a STOP proof can return
+    `clean` with an empty working set while a reducing order is still live.
+    """
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+    from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
+    from tests.broker.alpaca.clerk.sqlite.test_exit import (
+        ACCOUNT_ID,
+        RUN_ID,
+        SID,
+        _broker_order,
+        _FakeTrade,
+        _make_entry,
+    )
+
+    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
+    repo.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+
+    entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
+    accepted = accept_exit(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="exit-1",
+        lifecycle_run_id=RUN_ID,
+        entry_order_ref=entry_ref,
+    )
+    assert accepted.effect_operation_id is not None
+    # The reducing order reaches the broker and is acked, but is still
+    # working (not yet filled) — exactly the state the review comment flags.
+    trade = _FakeTrade(submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0, side="sell"))
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade)
+    assert result.reducing_order_ref is not None
+    reducing_order = repo.order(result.reducing_order_ref)
+    assert reducing_order is not None and reducing_order.role == "REDUCING"
+    assert reducing_order.broker_state == "accepted"
+
+    broker = _Broker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+
+    assert result.reducing_order_ref not in facade._working_order_refs(SID)
+    assert result.reducing_order_ref in facade._working_order_refs_for_proof(SID)
     repo.close()
 
 

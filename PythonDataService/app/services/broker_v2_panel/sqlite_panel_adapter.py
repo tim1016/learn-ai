@@ -32,9 +32,11 @@ from app.schemas.operator_blocker import (
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
 )
-_TERMINAL_OPERATION_STATES = frozenset(
-    {"succeeded", "failed", "canceled", "cancelled", "flat", "unprovable"}
-)
+# Matches the established station-derivation semantic (`station_derivation.py`
+# `_fill_station`): FILL is satisfied only by actual fill evidence, never by
+# any terminal outcome — a canceled/expired/rejected order definitively
+# received zero fill and must not render as satisfied.
+_FILLED_BROKER_STATES = frozenset({"filled", "partially_filled"})
 
 
 def adapt_sqlite_panel(
@@ -248,18 +250,16 @@ def _transaction_rail(
             stations=[_station(station_id, "not_applicable", "No custody operation selected.") for station_id in _station_ids()],
         )
     has_broker_ack = any(order.broker_order_id is not None for order in operation.orders)
-    broker_terminal = any(
-        (order.broker_state or "").lower()
-        in {"filled", "canceled", "cancelled", "expired", "rejected"}
-        for order in operation.orders
+    has_fill_evidence = any(
+        (order.broker_state or "").lower() in _FILLED_BROKER_STATES for order in operation.orders
     )
-    operation_terminal = operation.state.lower() in _TERMINAL_OPERATION_STATES
     reconciled = (
         operation.terminal_receipt_id is not None
         or (
             projection.latest_reconciliation is not None
             and projection.latest_reconciliation.effect_operation_id
             == operation.effect_operation_id
+            and projection.latest_reconciliation.outcome == "RESOLVED_SUCCESS"
         )
     )
     stations = [
@@ -273,8 +273,8 @@ def _transaction_rail(
         ),
         _station(
             "FILL",
-            "satisfied" if broker_terminal or operation_terminal else "waiting",
-            "The operation reached a durable terminal state." if broker_terminal or operation_terminal else "The operation has not reached a terminal broker state.",
+            "satisfied" if has_fill_evidence else ("unknown_stale" if operation.state == "unknown" else "waiting"),
+            "A broker fill or partial fill is durably recorded." if has_fill_evidence else "No fill has been recorded for this order.",
         ),
         _station(
             "RECONCILED",

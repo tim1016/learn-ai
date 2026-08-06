@@ -719,6 +719,10 @@ class ClerkSqliteRepository:
         with self._write_lock:
             return reads.entry_orders_for_strategy(self._conn, strategy_instance_id)
 
+    def orders_for_strategy(self, strategy_instance_id: str) -> list[OrderResource]:
+        with self._write_lock:
+            return reads.orders_for_strategy(self._conn, strategy_instance_id)
+
     def active_exit_for_order(self, order_ref: str) -> EffectOperationResource | None:
         with self._write_lock:
             return reads.active_exit_for_order(self._conn, order_ref)
