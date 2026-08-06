@@ -180,7 +180,7 @@ async function renderWorkflow(service = mockService()) {
     ],
     componentInputs: { accountId: 'PA9' },
   });
-  await screen.findByText(DEPLOY_VIEW.eligibility.headline);
+  await screen.findByRole('heading', { name: 'Bot binding' });
   return rendered;
 }
 
@@ -190,23 +190,73 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     expect(screen.getAllByText('Deployment Validation').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('✓ Validated')).toBeTruthy();
-    expect(screen.getByText('Live Alpaca execution is planned.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Bot binding' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Trading setup' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'One share' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Custom shares' })).toBeTruthy();
+    expect(screen.queryByText('Safe canary · 1 share')).toBeNull();
+    expect(screen.queryByText('Bounded custom shares')).toBeNull();
+    expect(screen.queryByText('Alpaca · broker deploy')).toBeNull();
     expect(screen.queryByText('Strategy provenance')).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Every deployment gate' })).toBeNull();
-    expect(screen.getAllByText('One long stock ENTER and one matching close-leg EXIT.').length)
-      .toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('One long stock ENTER and one matching close-leg EXIT.')).toBeNull();
+    expect(screen.queryByText('Live Alpaca execution is planned.')).toBeNull();
+    expect(screen.getByRole('button', {
+      name: 'About the trading symbol: One long stock ENTER and one matching close-leg EXIT.',
+    })).toBeTruthy();
+    expect(screen.getByRole('button', {
+      name: 'About Live: Live Alpaca execution is planned.',
+    })).toBeTruthy();
   });
 
-  it('reveals every admission gate in the operator lens', async () => {
+  it('keeps ready gates collapsed until the operator opens one', async () => {
     const { fixture } = await renderWorkflow();
     const router = fixture.debugElement.injector.get(Router);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
 
-    expect(screen.getByText('Every deployment gate')).toBeTruthy();
-    expect(screen.getByText('Current accepted evidence is present.')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Admission authority' })).toBeTruthy();
+    expect(screen.queryByText('Every deployment gate')).toBeNull();
+    const readyHeader = screen.getByRole('button', { name: /Strategy validation/ });
+    expect(readyHeader.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(readyHeader);
+
+    expect(readyHeader.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('Accepted at the current manifest revision.')).toBeTruthy();
     await vi.waitFor(() => expect(router.url).toContain('lens=operator'));
+  });
+
+  it('opens the failed admission gate and folds the blocker into the account banner', async () => {
+    const blockedView: DeployBotView = {
+      ...DEPLOY_VIEW,
+      eligibility: {
+        ...DEPLOY_VIEW.eligibility,
+        eligible: false,
+        headline: 'Deployment is blocked until Clerk channels are healthy.',
+        explanation: 'Market Data is unhealthy, Execution is healthy.',
+      },
+      readiness_checks: DEPLOY_VIEW.readiness_checks.map((check) =>
+        check.gate_id === 'broker.channel'
+          ? {
+              ...check,
+              ready: false,
+              recovery: 'Restore the market-data channel and refresh deployment readiness.',
+            }
+          : check,
+      ),
+      allowed_actions: [],
+    };
+    await renderWorkflow(mockService(RECEIPT, blockedView));
+
+    expect(screen.getByLabelText('Deployment blocked')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Review blocker' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
+
+    const readyHeader = screen.getByRole('button', { name: /Strategy validation/ });
+    const blockedHeader = screen.getByRole('button', { name: /Broker channel/ });
+    expect(readyHeader.getAttribute('aria-expanded')).toBe('false');
+    expect(blockedHeader.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('moves lens focus with the tablist keyboard controls', async () => {
@@ -233,7 +283,10 @@ describe('AlpacaDeployWorkflowComponent', () => {
     });
 
     expect(screen.getAllByText('EMA Crossover Signal').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(EMA_STRATEGY.explanation)).toBeTruthy();
+    expect(screen.queryByText(EMA_STRATEGY.explanation)).toBeNull();
+    expect(screen.getByRole('button', {
+      name: `About EMA Crossover Signal: ${EMA_STRATEGY.explanation}`,
+    })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'View validation' }).getAttribute('href'))
       .toBe('/strategy-validation?strategy=ema_crossover_signal');
 

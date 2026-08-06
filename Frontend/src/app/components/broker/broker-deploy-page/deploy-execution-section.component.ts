@@ -1,4 +1,6 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { InputTextModule } from 'primeng/inputtext';
+import { TooltipModule } from 'primeng/tooltip';
 
 import type {
   DeployExecutionMode,
@@ -7,9 +9,19 @@ import type {
 
 export type DeploySizingPreset = DeploySizingOption['preset'];
 
+const DEPLOY_SIZING_LABELS: Record<DeploySizingPreset, string> = {
+  safe_canary: 'One share',
+  custom: 'Custom shares',
+};
+
+export function deploySizingLabel(preset: DeploySizingPreset): string {
+  return DEPLOY_SIZING_LABELS[preset];
+}
+
 @Component({
   selector: 'app-deploy-execution-section',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [InputTextModule, TooltipModule],
   templateUrl: './deploy-execution-section.component.html',
   styleUrl: './deploy-execution-section.component.scss',
 })
@@ -42,6 +54,10 @@ export class DeployExecutionSectionComponent {
 
   protected isPlanned(mode: DeployExecutionMode): boolean {
     return mode.availability === 'planned';
+  }
+
+  protected sizingOptionLabel(preset: DeploySizingPreset): string {
+    return deploySizingLabel(preset);
   }
 
   protected changeSymbol(event: Event): void {

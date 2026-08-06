@@ -1,7 +1,6 @@
 <main class="alpaca-deploy" aria-labelledby="alpaca-deploy-title">
   <header class="deploy-head">
     <div>
-      <span>Alpaca · broker deploy</span>
       <h1 id="alpaca-deploy-title">Deploy a bot</h1>
       <p>Bind a validated strategy to a broker account and put it on duty.</p>
     </div>
@@ -18,16 +17,54 @@
     </section>
   } @else if (deployView.error()) {
     <section class="deploy-unavailable" role="alert">
-      <span>Deploy contract unavailable</span>
       <h2>Current admission truth could not be loaded.</h2>
       <p>No deployment action is available until the data plane can author a fresh contract.</p>
       <button type="button" (click)="reload()">Try again</button>
     </section>
   } @else if (deployView.value(); as view) {
-    <section class="deploy-context" [class.deploy-context--blocked]="!view.eligibility.eligible">
-      <div><span>{{ view.eligibility.eligible ? 'Ready' : 'Blocked' }}</span><strong>{{ view.account_label }}</strong></div>
-      <div><span>Execution</span><strong>{{ executionLabel() }}</strong></div>
-      <div><span>Checked</span><strong><app-timestamp-display [value]="view.evaluated_at_ms" mode="local" /></strong></div>
+    <section
+      class="deploy-context flex flex-wrap items-center gap-4 rounded-[var(--radius)] border border-l-4 p-4"
+      [class.deploy-context--blocked]="!view.eligibility.eligible"
+      [attr.aria-label]="view.eligibility.eligible ? 'Deployment ready' : 'Deployment blocked'"
+    >
+      <div class="flex min-w-0 flex-1 flex-wrap items-start gap-3">
+        <p-tag
+          [value]="view.eligibility.eligible ? 'Ready' : 'Blocked'"
+          [severity]="view.eligibility.eligible ? 'success' : 'danger'"
+        />
+        <div class="grid min-w-0 gap-1">
+          <strong class="text-[length:var(--fs-md)] leading-tight">{{ view.eligibility.headline }}</strong>
+          <p class="m-0 text-[length:var(--fs-sm)] leading-snug text-[var(--text-secondary)]">{{ view.eligibility.explanation }}</p>
+        </div>
+        @if (!view.eligibility.eligible && activeLens() === 'trader') {
+          <button
+            pButton
+            type="button"
+            size="small"
+            severity="danger"
+            [outlined]="true"
+            (click)="selectLens('operator')"
+          >Review blocker</button>
+        }
+      </div>
+      <dl class="m-0 flex flex-wrap gap-5">
+        <div class="grid min-w-0 gap-1">
+          <dt class="text-[length:var(--fs-xs)] uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Account</dt>
+          <dd
+            class="m-0 max-w-60 overflow-hidden text-ellipsis whitespace-nowrap font-semibold"
+            [pTooltip]="view.account_label"
+            tooltipPosition="bottom"
+          >{{ view.account_label }}</dd>
+        </div>
+        <div class="grid min-w-0 gap-1">
+          <dt class="text-[length:var(--fs-xs)] uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Execution</dt>
+          <dd class="m-0 font-semibold">{{ executionLabel() }}</dd>
+        </div>
+        <div class="grid min-w-0 gap-1">
+          <dt class="text-[length:var(--fs-xs)] uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Checked</dt>
+          <dd class="m-0 font-semibold"><app-timestamp-display [value]="view.evaluated_at_ms" mode="local" /></dd>
+        </div>
+      </dl>
     </section>
 
     @if (receipt(); as deployReceipt) {
@@ -65,8 +102,6 @@
           [strategies]="view.strategies"
           [instanceId]="ticket().instanceId"
           [strategyKey]="ticket().strategyKey"
-          [accountLabel]="view.account_label"
-          [executionLabel]="executionLabel()"
           [instanceIdError]="instanceIdError()"
           (instanceIdChange)="setInstanceId($event)"
           (instanceIdBlur)="touchInstanceId()"
@@ -98,21 +133,7 @@
               (carryoverAllowedChange)="setCarryover($event)"
             />
 
-            <section
-              id="deploy-trader-panel"
-              role="tabpanel"
-              aria-labelledby="deploy-trader-tab"
-              [hidden]="activeLens() !== 'trader'"
-            >
-              <app-deploy-trader-summary
-                [view]="view"
-                [strategy]="selectedStrategy()"
-                [symbol]="ticket().symbol"
-                [quantity]="effectiveQuantity()"
-                [carryoverAllowed]="ticket().allowCarryover"
-                (operatorRequested)="selectLens('operator')"
-              />
-            </section>
+            <section id="deploy-trader-panel" role="tabpanel" aria-labelledby="deploy-trader-tab" [hidden]="activeLens() !== 'trader'"></section>
             <section
               id="deploy-operator-panel"
               role="tabpanel"
@@ -124,19 +145,6 @@
           </div>
 
           <aside class="deploy-layout__review">
-            @if (activeLens() === 'operator') {
-              <app-deploy-review-section
-                [view]="view"
-                [strategy]="selectedStrategy()"
-                [instanceId]="ticket().instanceId"
-                [symbol]="ticket().symbol"
-                [sizingLabel]="sizingLabel()"
-                [quantity]="effectiveQuantity()"
-                [carryoverAllowed]="ticket().allowCarryover"
-                [executionLabel]="executionLabel()"
-              />
-            }
-
             @if (submitError(); as error) {
               <section class="deploy-error" [class.deploy-error--unknown]="error.outcome === 'unknown'" role="alert">
                 <span>{{ error.title }}</span>
@@ -158,7 +166,7 @@
               <dl>
                 <div><dt>Bot</dt><dd>{{ ticket().instanceId || 'Name required' }}</dd></div>
                 <div><dt>Strategy</dt><dd>{{ selectedStrategy()?.label ?? 'Unavailable' }}</dd></div>
-                <div><dt>Trade</dt><dd>{{ ticket().symbol || 'Symbol required' }} · {{ effectiveQuantity() }} share(s)</dd></div>
+                <div><dt>Trade</dt><dd>{{ ticket().symbol || 'Symbol required' }} · {{ quantityLabel() }}</dd></div>
                 <div><dt>Mode</dt><dd>{{ executionLabel() }}</dd></div>
               </dl>
               <button type="submit" [disabled]="!canSubmit()" [attr.aria-busy]="submitting()">

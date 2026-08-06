@@ -20,6 +20,9 @@ import {
   validate,
 } from '@angular/forms/signals';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ButtonModule } from 'primeng/button';
+import { TagModule } from 'primeng/tag';
+import { TooltipModule } from 'primeng/tooltip';
 
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import {
@@ -37,9 +40,7 @@ import {
 } from './deploy-execution-section.component';
 import { DeployLaunchReceiptComponent } from './deploy-launch-receipt.component';
 import { DeployReadinessSectionComponent } from './deploy-readiness-section.component';
-import { DeployReviewSectionComponent } from './deploy-review-section.component';
 import { DeployStartAdmissionComponent } from './deploy-start-admission.component';
-import { DeployTraderSummaryComponent } from './deploy-trader-summary.component';
 
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9.-]{0,11}$/;
@@ -71,14 +72,15 @@ type DeployLens = 'trader' | 'operator';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterLink,
+    ButtonModule,
+    TagModule,
+    TooltipModule,
     TimestampDisplayComponent,
     DeployBindingStripComponent,
     DeployExecutionSectionComponent,
     DeployLaunchReceiptComponent,
     DeployReadinessSectionComponent,
-    DeployReviewSectionComponent,
     DeployStartAdmissionComponent,
-    DeployTraderSummaryComponent,
   ],
   templateUrl: './alpaca-deploy-workflow.component.html',
   styleUrl: './alpaca-deploy-workflow.component.scss',
@@ -157,20 +159,14 @@ export class AlpacaDeployWorkflowComponent {
     this.selectedExecutionMode()?.label ?? 'Broker-authored',
   );
 
-  protected readonly selectedSizing = computed(() => {
-    const preset = this.ticket().sizingPreset;
-    return this.currentView()?.sizing_options.find(
-      (option) => option.preset === preset,
-    ) ?? null;
-  });
-
   protected readonly effectiveQuantity = computed(() =>
     this.ticket().sizingPreset === 'safe_canary' ? 1 : this.ticket().quantity,
   );
 
-  protected readonly sizingLabel = computed(() =>
-    this.selectedSizing()?.label ?? 'Choose sizing',
-  );
+  protected readonly quantityLabel = computed(() => {
+    const quantity = this.effectiveQuantity();
+    return `${quantity} ${quantity === 1 ? 'share' : 'shares'}`;
+  });
 
   protected readonly canSubmit = computed(() => {
     const view = this.currentView();
