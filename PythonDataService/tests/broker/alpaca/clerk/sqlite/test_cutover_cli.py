@@ -20,14 +20,14 @@ from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
     write_stopped_runner_bot,
 )
 
-ACCOUNT_ID = "PA-CUTOVER"
+ACCOUNT_ID = "PACUTOVER"
 
 
 def test_main_plan_and_apply_require_the_exact_confirmation_token(tmp_path: Path) -> None:
-    account_id = "PA-CLI-CUTOVER"
+    account_id = "PACLICUTOVER"
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
-    write_stopped_runner_bot(runner_root)
+    write_stopped_runner_bot(runner_root, account_id=account_id)
     account_dir = clerk_root / "accounts" / "alpaca" / account_id
     account_dir.mkdir(parents=True)
     (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")

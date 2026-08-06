@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import pytest
@@ -19,7 +21,10 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
     initialize_cutover_authority,
     plan_cutover,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    MIRROR_FILENAME,
+    ClerkSqliteRepository,
+)
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.engine.live.desired_state import DesiredState, DesiredStateRecord
 from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
@@ -32,7 +37,7 @@ from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
     write_stopped_runner_bot as _write_stopped_runner_bot,
 )
 
-ACCOUNT_ID = "PA-CUTOVER"
+ACCOUNT_ID = "PACUTOVER"
 
 
 class _StartupBroker:
@@ -168,6 +173,9 @@ def test_initialize_refuses_running_roster_without_creating_authority(
         desired_state=DesiredState.RUNNING,
         legacy_binding=True,
     )
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
     evidence = BrokerCutoverEvidence(
         account_id=ACCOUNT_ID,
         account_mode="paper",
@@ -211,7 +219,7 @@ def test_initialize_refuses_empty_runner_roster_without_creating_authority(
         open_order_ids=(),
     )
 
-    with pytest.raises(CutoverRefused, match="no governed Alpaca bots"):
+    with pytest.raises(CutoverRefused, match="no Alpaca bots governed"):
         initialize_cutover_authority(
             account_id=ACCOUNT_ID,
             artifacts_root=clerk_root,
@@ -291,6 +299,142 @@ def test_initialize_ignores_a_valid_non_alpaca_binding_in_the_shared_runner_root
     )
 
     assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == ("spy",)
+
+
+def test_initialize_scopes_runner_roster_to_the_cutover_account(
+    tmp_path: Path,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    _write_stopped_runner_bot(runner_root, strategy_instance_id="spy")
+    _write_stopped_runner_bot(
+        runner_root,
+        strategy_instance_id="other-account-running",
+        account_id="PAOTHER",
+        desired_state=DesiredState.RUNNING,
+    )
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
+
+    receipt = initialize_cutover_authority(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=BrokerCutoverEvidence(
+            account_id=ACCOUNT_ID,
+            account_mode="paper",
+            observed_at_ms=PLAN_MS,
+            proof_reference="fake-alpaca-account-snapshot",
+            positions={},
+            open_order_ids=(),
+        ),
+        max_broker_evidence_age_ms=1_000,
+        clock=_Clock(PLAN_MS),
+    )
+
+    assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == ("spy",)
+
+
+def test_initialize_uses_account_scoped_legacy_roster_for_pre_registry_bot(
+    tmp_path: Path,
+) -> None:
+    account_id = "PA-LEGACY"
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    _write_stopped_runner_bot(
+        runner_root,
+        account_id=account_id,
+        record_account_binding=False,
+    )
+    legacy_bot_dir = clerk_root / "accounts" / account_id / "bots" / "spy"
+    legacy_bot_dir.mkdir(parents=True)
+    (legacy_bot_dir / "decision_journal.jsonl").write_text(
+        "{}\n",
+        encoding="utf-8",
+    )
+
+    receipt = initialize_cutover_authority(
+        account_id=account_id,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=BrokerCutoverEvidence(
+            account_id=account_id,
+            account_mode="paper",
+            observed_at_ms=PLAN_MS,
+            proof_reference="fake-alpaca-account-snapshot",
+            positions={},
+            open_order_ids=(),
+        ),
+        max_broker_evidence_age_ms=1_000,
+        clock=_Clock(PLAN_MS),
+    )
+
+    assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == ("spy",)
+
+
+def test_initialize_refuses_when_only_another_account_has_a_runner_bot(
+    tmp_path: Path,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    _write_stopped_runner_bot(
+        runner_root,
+        account_id="PAOTHER",
+    )
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(CutoverRefused, match="no Alpaca bots governed"):
+        initialize_cutover_authority(
+            account_id=ACCOUNT_ID,
+            artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root,
+            broker_evidence=BrokerCutoverEvidence(
+                account_id=ACCOUNT_ID,
+                account_mode="paper",
+                observed_at_ms=PLAN_MS,
+                proof_reference="fake-alpaca-account-snapshot",
+                positions={},
+                open_order_ids=(),
+            ),
+            max_broker_evidence_age_ms=1_000,
+            clock=_Clock(PLAN_MS),
+        )
+
+    assert not (account_dir / "clerk.db").exists()
+
+
+def test_initialize_refuses_registered_bot_with_missing_binding_evidence(
+    tmp_path: Path,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    instance_dir = _write_stopped_runner_bot(runner_root)
+    (instance_dir / "strategy_instance.json").unlink()
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(CutoverRefused, match="no runner binding evidence"):
+        initialize_cutover_authority(
+            account_id=ACCOUNT_ID,
+            artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root,
+            broker_evidence=BrokerCutoverEvidence(
+                account_id=ACCOUNT_ID,
+                account_mode="paper",
+                observed_at_ms=PLAN_MS,
+                proof_reference="fake-alpaca-account-snapshot",
+                positions={},
+                open_order_ids=(),
+            ),
+            max_broker_evidence_age_ms=1_000,
+            clock=_Clock(PLAN_MS),
+        )
+
+    assert not (account_dir / "clerk.db").exists()
 
 
 def test_initialize_refuses_broken_binding_symlink(tmp_path: Path) -> None:
@@ -407,6 +551,83 @@ def test_initialize_refuses_dangling_legacy_artifact_symlink(tmp_path: Path) -> 
     assert not (account_dir / "clerk.db").exists()
 
 
+def test_initialize_refuses_unscoped_bot_directory_symlink_before_resolving(
+    tmp_path: Path,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    _write_stopped_runner_bot(runner_root)
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
+    unrelated = clerk_root / "live_state"
+    unrelated.mkdir(parents=True)
+    (unrelated / "must-remain.txt").write_text("unrelated\n", encoding="utf-8")
+    unscoped_account_dir = clerk_root / "accounts" / ACCOUNT_ID
+    unscoped_account_dir.mkdir(parents=True)
+    (unscoped_account_dir / "bots").symlink_to(
+        unrelated,
+        target_is_directory=True,
+    )
+
+    with pytest.raises(CutoverRefused, match=r"component 'bots'.*symbolic link"):
+        initialize_cutover_authority(
+            account_id=ACCOUNT_ID,
+            artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root,
+            broker_evidence=BrokerCutoverEvidence(
+                account_id=ACCOUNT_ID,
+                account_mode="paper",
+                observed_at_ms=PLAN_MS,
+                proof_reference="fake-alpaca-account-snapshot",
+                positions={},
+                open_order_ids=(),
+            ),
+            max_broker_evidence_age_ms=1_000,
+            clock=_Clock(PLAN_MS),
+        )
+
+    assert (unrelated / "must-remain.txt").is_file()
+    assert not (account_dir / "clerk.db").exists()
+
+
+def test_initialize_refuses_symlinked_cutover_evidence_directory(
+    tmp_path: Path,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    _write_stopped_runner_bot(runner_root)
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
+    unrelated = clerk_root / "unrelated-evidence"
+    unrelated.mkdir()
+    (account_dir / "cutover-evidence").symlink_to(
+        unrelated,
+        target_is_directory=True,
+    )
+
+    with pytest.raises(CutoverRefused, match=r"cutover-evidence.*symbolic link"):
+        initialize_cutover_authority(
+            account_id=ACCOUNT_ID,
+            artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root,
+            broker_evidence=BrokerCutoverEvidence(
+                account_id=ACCOUNT_ID,
+                account_mode="paper",
+                observed_at_ms=PLAN_MS,
+                proof_reference="fake-alpaca-account-snapshot",
+                positions={},
+                open_order_ids=(),
+            ),
+            max_broker_evidence_age_ms=1_000,
+            clock=_Clock(PLAN_MS),
+        )
+
+    assert not tuple(unrelated.iterdir())
+    assert not (account_dir / "clerk.db").exists()
+
+
 def test_initialize_resumes_verified_inactive_generation_after_receipt_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -489,6 +710,69 @@ def test_initialize_resumes_verified_inactive_generation_after_receipt_failure(
     assert receipt.receipt_reference.endswith(
         f"initialization-g1-{receipt.database.db_identity_token}.json"
     )
+
+
+def test_initialize_serializes_concurrent_attempts_for_one_account(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    _write_stopped_runner_bot(runner_root)
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
+    evidence = BrokerCutoverEvidence(
+        account_id=ACCOUNT_ID,
+        account_mode="paper",
+        observed_at_ms=PLAN_MS,
+        proof_reference="fake-alpaca-account-snapshot",
+        positions={},
+        open_order_ids=(),
+    )
+    first_entered = Event()
+    second_entered = Event()
+    release_first = Event()
+    initialize_calls = 0
+    real_initialize = ClerkSqliteRepository.initialize
+
+    def _blocked_initialize(**kwargs: Any) -> ClerkSqliteRepository:
+        nonlocal initialize_calls
+        initialize_calls += 1
+        if initialize_calls == 1:
+            first_entered.set()
+            if not release_first.wait(timeout=5):
+                raise TimeoutError("test did not release first initialization")
+        else:
+            second_entered.set()
+        return real_initialize(**kwargs)
+
+    monkeypatch.setattr(
+        cutover_module.ClerkSqliteRepository,
+        "initialize",
+        staticmethod(_blocked_initialize),
+    )
+    arguments = {
+        "account_id": ACCOUNT_ID,
+        "artifacts_root": clerk_root,
+        "runner_artifacts_root": runner_root,
+        "broker_evidence": evidence,
+        "max_broker_evidence_age_ms": 1_000,
+        "clock": _Clock(PLAN_MS),
+    }
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(initialize_cutover_authority, **arguments)
+        assert first_entered.wait(timeout=5)
+        second = executor.submit(initialize_cutover_authority, **arguments)
+        second_entered_before_release = second_entered.wait(timeout=0.2)
+        release_first.set()
+        first_receipt = first.result(timeout=5)
+        second_receipt = second.result(timeout=5)
+
+    assert not second_entered_before_release
+    assert initialize_calls == 1
+    assert second_receipt == first_receipt
 
 
 def test_initialize_refuses_unrelated_empty_generation_without_cutover_intent(
@@ -649,6 +933,54 @@ def test_plan_is_read_only_and_content_addresses_exact_prerequisites(tmp_path: P
     )
     assert tuple(item.strategy_instance_id for item in plan.runner_roster) == ("spy",)
     assert (account_dir / "order_journal.jsonl").is_file()
+
+
+def test_plan_refuses_a_missing_generation_one_mirror(tmp_path: Path) -> None:
+    clerk_root, account_dir, runner_root, evidence, clock = _setup(tmp_path)
+    (account_dir / MIRROR_FILENAME).unlink()
+
+    with pytest.raises(CutoverRefused, match="generation-one mirror"):
+        plan_cutover(
+            account_id=ACCOUNT_ID,
+            artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root,
+            broker_evidence=evidence,
+            max_broker_evidence_age_ms=1_000,
+            clock=clock,
+        )
+
+    assert (account_dir / "order_journal.jsonl").is_file()
+    assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(ACCOUNT_ID) is None
+
+
+def test_apply_rejects_changed_generation_one_mirror_before_activation(
+    tmp_path: Path,
+) -> None:
+    clerk_root, account_dir, runner_root, evidence, clock = _setup(tmp_path)
+    plan = plan_cutover(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=clock,
+    )
+    mirror_path = account_dir / MIRROR_FILENAME
+    mirror_path.write_bytes(mirror_path.read_bytes() + b"\n")
+
+    with pytest.raises(CutoverRefused, match="initialization evidence changed"):
+        apply_cutover(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root,
+            broker_evidence=evidence,
+            max_broker_evidence_age_ms=1_000,
+            clock=clock,
+        )
+
+    assert (account_dir / "order_journal.jsonl").is_file()
+    assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(ACCOUNT_ID) is None
 
 
 def test_apply_rejects_changed_durable_roster_before_activation(tmp_path: Path) -> None:

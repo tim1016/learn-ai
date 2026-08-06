@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
+    bot_order_namespace_for_instance,
+    write_account_instance_binding,
+)
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
@@ -31,9 +36,11 @@ def write_stopped_runner_bot(
     runner_root: Path,
     *,
     strategy_instance_id: str = "spy",
+    account_id: str = "PACUTOVER",
     broker: str = "alpaca",
     desired_state: DesiredState = DesiredState.STOPPED,
     legacy_binding: bool = False,
+    record_account_binding: bool = True,
 ) -> Path:
     instance_dir = runner_root / "live_state" / strategy_instance_id
     instance_dir.mkdir(parents=True, exist_ok=True)
@@ -81,4 +88,19 @@ def write_stopped_runner_bot(
         ).model_dump_json(),
         encoding="utf-8",
     )
+    if record_account_binding:
+        write_account_instance_binding(
+            runner_root,
+            AccountInstanceBinding(
+                account_id=account_id,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                bot_order_namespace=bot_order_namespace_for_instance(
+                    strategy_instance_id
+                ),
+                lifecycle_state="ACTIVE",
+                recorded_at_ms=PLAN_MS - 3_000,
+                source="cutover.test",
+            ),
+        )
     return instance_dir

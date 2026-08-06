@@ -24,7 +24,11 @@ from app.broker.alpaca.clerk.sqlite.database_verification import (
     DatabaseVerification,
     verify_database,
 )
-from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, MirrorIdentity
+from app.broker.alpaca.clerk.sqlite.mirror import (
+    MirrorChainBroken,
+    MirrorFile,
+    MirrorIdentity,
+)
 from app.broker.alpaca.clerk.sqlite.operational_files import (
     atomic_write_json,
     canonical_json_bytes,
@@ -49,6 +53,8 @@ from app.engine.live.cutover_roster import (
     CutoverRosterEvidenceError,
     read_quiescent_alpaca_roster,
 )
+from app.engine.live.identity import validate_strategy_instance_id
+from app.utils.advisory_lock import advisory_file_lock
 from app.utils.timestamps import Clock, now_ms_utc
 
 DEFAULT_CONFIRMATION_TTL_MS = 120_000
@@ -106,6 +112,7 @@ class CutoverInitializationEvidence:
 
     initialization_intent_id: str
     receipt_sha256: str
+    mirror_sha256: str
 
 
 @dataclass(frozen=True)
@@ -162,9 +169,33 @@ def initialize_cutover_authority(
     the verified unused generation after the proof ages out. No activation
     record is written, so legacy remains selected until apply.
     """
-    now = clock()
-    normalized_broker = _normalize_broker_evidence(broker_evidence)
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
+    with advisory_file_lock(account_dir / "cutover-initialize"):
+        return _initialize_cutover_authority_locked(
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            runner_artifacts_root=runner_artifacts_root,
+            normalized_broker=_normalize_broker_evidence(broker_evidence),
+            max_broker_evidence_age_ms=max_broker_evidence_age_ms,
+            accounts_root=accounts_root,
+            account_dir=account_dir,
+            clock=clock,
+        )
+
+
+def _initialize_cutover_authority_locked(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    runner_artifacts_root: Path,
+    normalized_broker: BrokerCutoverEvidence,
+    max_broker_evidence_age_ms: int,
+    accounts_root: Path,
+    account_dir: Path,
+    clock: Clock,
+) -> CutoverInitializationReceipt:
+    """Initialize or resume while holding the account's cutover lock."""
+    now = clock()
     registry = EstablishedAccountsRegistry(accounts_root)
     established = registry.latest(account_id)
     _validate_cutover_broker_state(
@@ -177,10 +208,17 @@ def initialize_cutover_authority(
             now_ms=now,
             max_broker_evidence_age_ms=max_broker_evidence_age_ms,
         )
-    runner_roster = _runner_roster_evidence(runner_artifacts_root)
     if ActivationStore(accounts_root).latest(account_id) is not None:
         raise CutoverRefused("account already has an activation fence")
     legacy = _legacy_artifact_evidence(artifacts_root, account_id)
+    runner_roster = _runner_roster_evidence(
+        runner_artifacts_root,
+        account_id,
+        legacy_strategy_instance_ids=_legacy_strategy_instance_ids(
+            artifacts_root,
+            account_id,
+        ),
+    )
     intent_payload, initialization_intent_id = _initialization_intent_payload(
         account_id=account_id,
         broker_evidence=normalized_broker,
@@ -220,8 +258,7 @@ def initialize_cutover_authority(
         "legacy_artifacts": [asdict(item) for item in legacy],
     }
     receipt_path = (
-        account_dir
-        / "cutover-evidence"
+        _cutover_evidence_directory(account_dir, create=False)
         / f"initialization-g1-{established.db_identity_token}.json"
     )
     encoded_receipt = canonical_json_bytes(receipt_payload)
@@ -273,7 +310,10 @@ def _require_or_publish_initialization_intent(
     allow_create: bool,
 ) -> None:
     """Create the pre-init marker once, or require an exact retry match."""
-    intent_path = account_dir / "cutover-evidence" / "initialization-intent.json"
+    intent_path = (
+        _cutover_evidence_directory(account_dir, create=allow_create)
+        / "initialization-intent.json"
+    )
     encoded = canonical_json_bytes(payload)
     if intent_path.is_symlink() or (
         intent_path.exists() and not intent_path.is_file()
@@ -290,6 +330,32 @@ def _require_or_publish_initialization_intent(
             "established SQLite authority has no durable cutover initialization intent"
         )
     atomic_write_json(intent_path, payload)
+
+
+def _cutover_evidence_directory(account_dir: Path, *, create: bool) -> Path:
+    """Return the confined evidence directory without following a link."""
+    evidence_dir = account_dir / "cutover-evidence"
+    if evidence_dir.is_symlink():
+        raise CutoverRefused(
+            "cutover-evidence directory must not be a symbolic link"
+        )
+    if evidence_dir.exists():
+        if not evidence_dir.is_dir():
+            raise CutoverRefused(
+                "cutover-evidence path must be a regular directory"
+            )
+    elif create:
+        evidence_dir.mkdir()
+        fsync_directory(account_dir)
+    else:
+        raise CutoverRefused(
+            "established SQLite authority has no durable cutover initialization "
+            "intent; cutover-evidence directory is missing"
+        )
+    resolved = resolve_contained_path(account_dir, "cutover-evidence")
+    if resolved != evidence_dir:
+        raise CutoverRefused("cutover-evidence directory is not confined")
+    return evidence_dir
 
 
 def _verify_inactive_generation_one(
@@ -316,19 +382,45 @@ def _verify_inactive_generation_one(
         raise CutoverRefused(
             "cutover initialization can resume only an unused SQLite authority"
         )
-    mirror_rows = MirrorFile(
-        account_dir / MIRROR_FILENAME,
-        expected_identity=MirrorIdentity(
-            account_id=account_id,
-            authority_generation=authority_generation,
-            db_identity_token=db_identity_token,
-        ),
-    ).rebuild()
+    _verify_empty_generation_one_mirror(
+        account_id=account_id,
+        account_dir=account_dir,
+        authority_generation=authority_generation,
+        db_identity_token=db_identity_token,
+    )
+    return database
+
+
+def _verify_empty_generation_one_mirror(
+    *,
+    account_id: str,
+    account_dir: Path,
+    authority_generation: int,
+    db_identity_token: str,
+) -> str:
+    """Verify and hash the exact unused mirror bound to generation one."""
+    mirror_path = account_dir / MIRROR_FILENAME
+    if mirror_path.is_symlink() or not mirror_path.is_file():
+        raise CutoverRefused(
+            "cutover requires a regular non-symbolic-link generation-one mirror"
+        )
+    try:
+        mirror_rows = MirrorFile(
+            mirror_path,
+            expected_identity=MirrorIdentity(
+                account_id=account_id,
+                authority_generation=authority_generation,
+                db_identity_token=db_identity_token,
+            ),
+        ).rebuild()
+        encoded = mirror_path.read_bytes()
+    except (MirrorChainBroken, OSError, ValueError) as exc:
+        raise CutoverRefused(f"generation-one mirror does not verify: {exc}") from exc
     if mirror_rows:
         raise CutoverRefused(
-            "cutover initialization can resume only an empty generation-one mirror"
+            "cutover requires an empty generation-one mirror"
         )
-    return database
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _require_completed_cutover_initialization(
@@ -338,8 +430,9 @@ def _require_completed_cutover_initialization(
     database: DatabaseVerification,
 ) -> CutoverInitializationEvidence:
     """Require a valid pre-init intent and its database-bound completion receipt."""
+    evidence_dir = _cutover_evidence_directory(account_dir, create=False)
     intent = _read_initialization_record(
-        account_dir / "cutover-evidence" / "initialization-intent.json",
+        evidence_dir / "initialization-intent.json",
         label="cutover initialization intent",
     )
     intent_id = intent.get("initialization_intent_id")
@@ -359,11 +452,7 @@ def _require_completed_cutover_initialization(
     ):
         raise CutoverRefused("cutover initialization intent does not verify")
 
-    receipt_path = (
-        account_dir
-        / "cutover-evidence"
-        / f"initialization-g1-{database.db_identity_token}.json"
-    )
+    receipt_path = evidence_dir / f"initialization-g1-{database.db_identity_token}.json"
     receipt = _read_initialization_record(
         receipt_path,
         label="cutover initialization receipt",
@@ -381,9 +470,16 @@ def _require_completed_cutover_initialization(
         raise CutoverRefused(
             "cutover initialization receipt does not match its intent and database"
         )
+    mirror_sha256 = _verify_empty_generation_one_mirror(
+        account_id=account_id,
+        account_dir=account_dir,
+        authority_generation=database.authority_generation,
+        db_identity_token=database.db_identity_token,
+    )
     return CutoverInitializationEvidence(
         initialization_intent_id=expected_intent_id,
         receipt_sha256=hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+        mirror_sha256=mirror_sha256,
     )
 
 
@@ -439,8 +535,15 @@ def plan_cutover(
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
-    runner_roster = _runner_roster_evidence(runner_artifacts_root)
     legacy = _legacy_artifact_evidence(artifacts_root, account_id)
+    runner_roster = _runner_roster_evidence(
+        runner_artifacts_root,
+        account_id,
+        legacy_strategy_instance_ids=_legacy_strategy_instance_ids(
+            artifacts_root,
+            account_id,
+        ),
+    )
     payload = {
         "schema_version": 3,
         "account_id": account_id,
@@ -509,8 +612,15 @@ def apply_cutover(
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
-    current_roster = _runner_roster_evidence(runner_artifacts_root)
     current_legacy = _legacy_artifact_evidence(artifacts_root, plan.account_id)
+    current_roster = _runner_roster_evidence(
+        runner_artifacts_root,
+        plan.account_id,
+        legacy_strategy_instance_ids=_legacy_strategy_instance_ids(
+            artifacts_root,
+            plan.account_id,
+        ),
+    )
     if current_database != plan.database:
         raise CutoverRefused("SQLite database changed after cutover planning")
     if current_initialization != plan.initialization:
@@ -526,7 +636,9 @@ def apply_cutover(
 
     cutover_id = f"g{plan.database.authority_generation}-{now}-{plan.plan_id[:12]}"
     quarantine_dir = account_dir / "legacy-quarantine" / cutover_id
-    evidence_dir = account_dir / "cutover-evidence" / cutover_id
+    evidence_dir = (
+        _cutover_evidence_directory(account_dir, create=False) / cutover_id
+    )
     moved: list[tuple[Path, Path]] = []
     activation_attempted = False
     try:
@@ -699,10 +811,17 @@ def _validate_cutover_evidence_freshness(
 
 def _runner_roster_evidence(
     runner_artifacts_root: Path,
+    account_id: str,
+    *,
+    legacy_strategy_instance_ids: frozenset[str],
 ) -> tuple[RunnerBotEvidence, ...]:
     """Bind the runner-owned semantic snapshot to complete artifact hashes."""
     try:
-        roster = read_quiescent_alpaca_roster(runner_artifacts_root)
+        roster = read_quiescent_alpaca_roster(
+            runner_artifacts_root,
+            account_id,
+            legacy_strategy_instance_ids=legacy_strategy_instance_ids,
+        )
     except CutoverRosterEvidenceError as exc:
         raise CutoverRefused(str(exc)) from exc
     evidence: list[RunnerBotEvidence] = []
@@ -737,11 +856,12 @@ def _legacy_artifact_evidence(
     _accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
     evidence: list[LegacyArtifactEvidence] = []
     candidates = [account_dir / name for name in LEGACY_ARTIFACT_NAMES]
+    safe_account_id = safe_path_component(account_id, "account_id")
     candidates.append(
-        resolve_contained_path(
+        _resolve_legacy_candidate_without_links(
             artifacts_root,
             "accounts",
-            safe_path_component(account_id, "account_id"),
+            safe_account_id,
             LEGACY_UNSCOPED_BOT_DIRECTORY,
         )
     )
@@ -769,6 +889,57 @@ def _legacy_artifact_evidence(
             "no legacy authority artifacts were found; verify the Clerk artifacts root"
         )
     return tuple(sorted(evidence, key=lambda item: item.relative_path))
+
+
+def _resolve_legacy_candidate_without_links(root: Path, *parts: str) -> Path:
+    """Confine a legacy path only after rejecting each unresolved component."""
+    candidate = root
+    for part in parts:
+        candidate /= part
+        if candidate.is_symlink():
+            raise CutoverRefused(
+                f"legacy artifact path component {part!r} is a symbolic link"
+            )
+    return resolve_contained_path(root, *parts)
+
+
+def _legacy_strategy_instance_ids(
+    artifacts_root: Path,
+    account_id: str,
+) -> frozenset[str]:
+    """Read account-scoped bot identities from both historical layouts."""
+    _accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
+    roots = (
+        account_dir / LEGACY_UNSCOPED_BOT_DIRECTORY,
+        _resolve_legacy_candidate_without_links(
+            artifacts_root,
+            "accounts",
+            safe_path_component(account_id, "account_id"),
+            LEGACY_UNSCOPED_BOT_DIRECTORY,
+        ),
+    )
+    strategy_instance_ids: set[str] = set()
+    for bots_root in roots:
+        if bots_root.is_symlink():
+            raise CutoverRefused("legacy bot roster must not be a symbolic link")
+        if not bots_root.exists():
+            continue
+        if not bots_root.is_dir():
+            raise CutoverRefused("legacy bot roster must be a regular directory")
+        for instance_dir in sorted(bots_root.iterdir(), key=lambda path: path.name):
+            if instance_dir.is_symlink() or not instance_dir.is_dir():
+                raise CutoverRefused(
+                    f"legacy bot roster entry {instance_dir.name!r} is unsafe"
+                )
+            try:
+                strategy_instance_ids.add(
+                    validate_strategy_instance_id(instance_dir.name)
+                )
+            except ValueError as exc:
+                raise CutoverRefused(
+                    f"legacy bot roster entry {instance_dir.name!r} is invalid: {exc}"
+                ) from exc
+    return frozenset(strategy_instance_ids)
 
 
 def _require_checkpointed_database(account_dir: Path) -> None:

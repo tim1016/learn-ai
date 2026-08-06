@@ -23,11 +23,14 @@ mirror rebuild, reset, or cutover:
 3. verify no second service process can reopen the account; and
 4. preserve the operator's process-stop evidence with the incident/cutover record.
 
-The tools reject a readable live lease. Cutover initialization, plan, and apply also
-derive every durable Alpaca binding from the runner's `live_state/` tree and require
-`STOPPED` desired state, `OFF_DUTY`/`RETIRED` lifecycle state, no active run, and a
-typed durable terminal outcome. They content-hash each complete bot artifact directory and
-apply rechecks the exact roster. Freeze **all** writers to the runner `live_state/` tree
+The tools reject a readable live lease. Cutover initialization, plan, and apply derive
+the account-scoped roster from the runner account registry plus both legacy account bot
+layouts; the latter is the read-only source for pre-registry deployments. A bot governed
+by another account cannot satisfy or block this account's roster. Every governed Alpaca
+binding must have complete canonical runner evidence, `STOPPED` desired state,
+`OFF_DUTY`/`RETIRED` lifecycle state, no active run, and a typed durable terminal outcome.
+The tools content-hash each complete bot artifact directory and apply rechecks the exact
+roster. Freeze **all** writers to the runner `live_state/` tree
 from plan through apply, including lifecycle, indicator-state, log, and editor processes.
 Any write changes the planned evidence, so apply is expected to refuse and the operator
 must capture fresh broker evidence and create a new plan. There is no caller-authored
@@ -148,10 +151,12 @@ real paper account. The SQLite process must be cleanly stopped and checkpointed.
 
 A never-established legacy account first needs one evidence-gated, inactive SQLite
 generation. `cutover-initialize` requires fresh broker proof and independently verifies
-the durable runner roster. Before it creates `clerk.db`, the mirror identity, and the
-established-generation registry, it durably records a content-addressed intent binding
-the exact broker, Alpaca-roster, and legacy-inventory evidence. It writes **no activation
-fence**, starts no SQLite sweep, and leaves the legacy authority selected. An empty
+the account-scoped durable runner roster. Concurrent initialization attempts for the same
+account are serialized by one account lock. Before the command creates `clerk.db`, the
+mirror identity, and the established-generation registry, it durably records a
+content-addressed intent binding the exact broker, Alpaca-roster, and legacy-inventory
+evidence. It writes **no activation fence**, starts no SQLite sweep, and leaves the legacy
+authority selected. An empty
 Alpaca roster or empty legacy inventory refuses initialization, which also catches a
 mistakenly supplied artifact root.
 
@@ -183,7 +188,8 @@ remove the intent, database, mirror, registry entry, or any related file by hand
 
 Capture fresh broker evidence again after the backup. Any WAL/SHM sidecar refuses
 planning. `cutover-plan` is read-only: it verifies the exact DB, fresh broker proof,
-flat/order-free account, the database-bound initialization intent/receipt, the
+flat/order-free account, the database-bound initialization intent/receipt, the exact
+empty generation-one mirror and its content hash, the
 independently derived stopped roster, and content hashes of every actual legacy
 authority artifact. It inventories both the broker-scoped
 `accounts/alpaca/<account_id>/` files and the historical

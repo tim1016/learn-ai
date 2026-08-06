@@ -11,6 +11,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from pydantic import ValidationError
+
+from app.engine.live.account_artifacts import (
+    AccountArtifactError,
+    safe_account_artifact_id,
+)
+from app.engine.live.account_registry import (
+    ACTIVE_INSTANCE_BINDING_STATES,
+    index_account_instance_bindings,
+    read_account_instance_registry,
+)
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
@@ -53,8 +64,11 @@ class QuiescentAlpacaBot:
 
 def read_quiescent_alpaca_roster(
     artifacts_root: Path,
+    account_id: str,
+    *,
+    legacy_strategy_instance_ids: frozenset[str],
 ) -> tuple[QuiescentAlpacaBot, ...]:
-    """Read every configured binding with canonical repositories and fail closed."""
+    """Read the account's registry/legacy roster with canonical repositories."""
     live_state_root = artifacts_root / "live_state"
     if (
         artifacts_root.is_symlink()
@@ -74,21 +88,63 @@ def read_quiescent_alpaca_roster(
             strategy_instance_id,
         ),
     )
+    try:
+        safe_account_artifact_id(account_id)
+    except AccountArtifactError as exc:
+        if not legacy_strategy_instance_ids:
+            raise CutoverRosterEvidenceError(
+                f"account runner registry for {account_id!r} is invalid: {exc}"
+            ) from exc
+        account_bindings = index_account_instance_bindings(())
+    else:
+        try:
+            account_bindings = index_account_instance_bindings(
+                read_account_instance_registry(artifacts_root, account_id),
+                account_id=account_id,
+            )
+        except (AccountArtifactError, OSError, ValidationError, ValueError) as exc:
+            raise CutoverRosterEvidenceError(
+                f"account runner registry for {account_id!r} is invalid: {exc}"
+            ) from exc
+    active_account_bindings = {
+        strategy_instance_id: binding
+        for strategy_instance_id, binding in account_bindings.latest_by_instance.items()
+        if binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES
+    }
+    governed_ids = frozenset(active_account_bindings) | legacy_strategy_instance_ids
+    if not governed_ids:
+        raise CutoverRosterEvidenceError(
+            f"runner evidence contains no Alpaca bots governed by account {account_id!r}"
+        )
     roster: list[QuiescentAlpacaBot] = []
-    for instance_dir in sorted(live_state_root.iterdir(), key=lambda path: path.name):
+    for strategy_instance_id in sorted(governed_ids):
+        account_binding = active_account_bindings.get(strategy_instance_id)
+        instance_dir = strategy_instance_artifact_dir(
+            artifacts_root,
+            "live_state",
+            strategy_instance_id,
+        )
         if instance_dir.is_symlink():
             raise CutoverRosterEvidenceError(
                 f"runner artifact {instance_dir.name!r} must not be a symbolic link"
             )
         if not instance_dir.is_dir():
-            continue
+            raise CutoverRosterEvidenceError(
+                f"runner evidence for {strategy_instance_id!r} has no artifact directory"
+            )
         try:
-            strategy_instance_id = validate_strategy_instance_id(instance_dir.name)
+            strategy_instance_id = validate_strategy_instance_id(strategy_instance_id)
             if not _has_binding_candidate(instance_dir):
-                continue
+                raise ValueError(
+                    "account registry binding has no runner binding evidence"
+                )
             binding = binding_repository.read(strategy_instance_id)
             if binding is None:
                 raise ValueError("binding has incomplete normalized run evidence")
+            if account_binding is not None and binding.run_id != account_binding.run_id:
+                raise ValueError(
+                    "runner binding does not match the account registry run"
+                )
             if binding.broker != "alpaca":
                 continue
             desired_path = stable_desired_state_path(
@@ -138,7 +194,7 @@ def read_quiescent_alpaca_roster(
         )
     if not roster:
         raise CutoverRosterEvidenceError(
-            "runner evidence contains no governed Alpaca bots; verify the runner artifacts root"
+            f"runner evidence contains no Alpaca bots governed by account {account_id!r}"
         )
     return tuple(roster)
 
