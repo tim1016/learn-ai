@@ -155,26 +155,32 @@ def initialize_cutover_authority(
 ) -> CutoverInitializationReceipt:
     """Create an inactive generation-one authority behind the legacy fence.
 
-    This is the only supported production path to ``initialize()``. It proves
-    current broker flatness and the independently read durable runner roster
-    first, then closes the repository before publishing its evidence receipt.
-    No activation record is written, so legacy remains selected until apply.
+    This is the only supported production path to ``initialize()``. A fresh
+    initialization proves current broker flatness and the independently read
+    durable runner roster first, then closes the repository before publishing
+    its evidence receipt. An exact retry may finish receipt publication for
+    the verified unused generation after the proof ages out. No activation
+    record is written, so legacy remains selected until apply.
     """
     now = clock()
     normalized_broker = _normalize_broker_evidence(broker_evidence)
-    _validate_cutover_safety(
+    accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
+    registry = EstablishedAccountsRegistry(accounts_root)
+    established = registry.latest(account_id)
+    _validate_cutover_broker_state(
         account_id=account_id,
         broker_evidence=normalized_broker,
-        now_ms=now,
-        max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
+    if established is None:
+        _validate_cutover_evidence_freshness(
+            broker_evidence=normalized_broker,
+            now_ms=now,
+            max_broker_evidence_age_ms=max_broker_evidence_age_ms,
+        )
     runner_roster = _runner_roster_evidence(runner_artifacts_root)
-    accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
     if ActivationStore(accounts_root).latest(account_id) is not None:
         raise CutoverRefused("account already has an activation fence")
     legacy = _legacy_artifact_evidence(artifacts_root, account_id)
-    registry = EstablishedAccountsRegistry(accounts_root)
-    established = registry.latest(account_id)
     intent_payload, initialization_intent_id = _initialization_intent_payload(
         account_id=account_id,
         broker_evidence=normalized_broker,
@@ -642,18 +648,27 @@ def _validate_cutover_safety(
     now_ms: int,
     max_broker_evidence_age_ms: int,
 ) -> None:
+    _validate_cutover_broker_state(
+        account_id=account_id,
+        broker_evidence=broker_evidence,
+    )
+    _validate_cutover_evidence_freshness(
+        broker_evidence=broker_evidence,
+        now_ms=now_ms,
+        max_broker_evidence_age_ms=max_broker_evidence_age_ms,
+    )
+
+
+def _validate_cutover_broker_state(
+    *,
+    account_id: str,
+    broker_evidence: BrokerCutoverEvidence,
+) -> None:
+    """Require matching, finite, flat, and order-free broker state."""
     if broker_evidence.account_id != account_id:
         raise CutoverRefused("broker account identity does not match cutover account")
     if not broker_evidence.proof_reference:
         raise CutoverRefused("broker proof reference is required")
-    if (
-        type(max_broker_evidence_age_ms) is not int
-        or max_broker_evidence_age_ms < 1
-        or broker_evidence.observed_at_ms > now_ms
-    ):
-        raise CutoverRefused("broker evidence timestamp or freshness policy is invalid")
-    if now_ms - broker_evidence.observed_at_ms > max_broker_evidence_age_ms:
-        raise CutoverRefused("broker evidence is stale")
     from app.broker.alpaca.clerk.sqlite.reconcile import POSITION_QTY_EPSILON
 
     quantities = tuple(float(quantity) for quantity in broker_evidence.positions.values())
@@ -663,6 +678,23 @@ def _validate_cutover_safety(
         raise CutoverRefused("cutover requires a broker-flat account")
     if broker_evidence.open_order_ids:
         raise CutoverRefused("cutover requires no open broker orders")
+
+
+def _validate_cutover_evidence_freshness(
+    *,
+    broker_evidence: BrokerCutoverEvidence,
+    now_ms: int,
+    max_broker_evidence_age_ms: int,
+) -> None:
+    """Require broker evidence inside the operator's freshness window."""
+    if (
+        type(max_broker_evidence_age_ms) is not int
+        or max_broker_evidence_age_ms < 1
+        or broker_evidence.observed_at_ms > now_ms
+    ):
+        raise CutoverRefused("broker evidence timestamp or freshness policy is invalid")
+    if now_ms - broker_evidence.observed_at_ms > max_broker_evidence_age_ms:
+        raise CutoverRefused("broker evidence is stale")
 
 
 def _runner_roster_evidence(
@@ -714,12 +746,12 @@ def _legacy_artifact_evidence(
         )
     )
     for path in candidates:
-        if not path.exists():
-            continue
         if path.is_symlink():
             raise CutoverRefused(
                 f"legacy artifact {path.name!r} is a symbolic link"
             )
+        if not path.exists():
+            continue
         kind = "file" if path.is_file() else "directory" if path.is_dir() else "unsupported"
         if kind == "unsupported":
             raise CutoverRefused(

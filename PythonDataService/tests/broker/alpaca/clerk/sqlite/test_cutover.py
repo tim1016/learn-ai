@@ -148,7 +148,9 @@ def test_initialize_creates_inactive_generation_from_fresh_proven_stopped_state(
     )
 
     assert receipt.database.authority_generation == 1
-    assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == ("spy",)
+    assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == (
+        "spy",
+    )
     assert (clerk_root / receipt.receipt_reference).is_file()
     assert (account_dir / "clerk.db").is_file()
     assert (account_dir / "order_journal.jsonl").is_file()
@@ -185,7 +187,9 @@ def test_initialize_refuses_running_roster_without_creating_authority(
             clock=_Clock(PLAN_MS),
         )
 
-    assert not (clerk_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
+    assert not (
+        clerk_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
+    ).exists()
     assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(ACCOUNT_ID) is None
 
 
@@ -286,9 +290,7 @@ def test_initialize_ignores_a_valid_non_alpaca_binding_in_the_shared_runner_root
         clock=_Clock(PLAN_MS),
     )
 
-    assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == (
-        "spy",
-    )
+    assert tuple(item.strategy_instance_id for item in receipt.runner_roster) == ("spy",)
 
 
 def test_initialize_refuses_broken_binding_symlink(tmp_path: Path) -> None:
@@ -346,15 +348,16 @@ def test_initialize_refuses_wrong_clerk_root_without_creating_authority(
             clock=_Clock(PLAN_MS),
         )
 
-    assert not (
-        clerk_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
-    ).exists()
+    assert not (clerk_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
 
 
 def test_initialize_refuses_non_paper_broker_evidence(tmp_path: Path) -> None:
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
     _write_stopped_runner_bot(runner_root)
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    (account_dir / "order_journal.jsonl").write_text("{}\n", encoding="utf-8")
 
     with pytest.raises(CutoverRefused, match="paper account"):
         initialize_cutover_authority(
@@ -374,6 +377,34 @@ def test_initialize_refuses_non_paper_broker_evidence(tmp_path: Path) -> None:
         )
 
     assert not (clerk_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
+
+
+def test_initialize_refuses_dangling_legacy_artifact_symlink(tmp_path: Path) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    _write_stopped_runner_bot(runner_root)
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    (account_dir / "order_journal.jsonl").symlink_to(account_dir / "missing-journal")
+
+    with pytest.raises(CutoverRefused, match=r"legacy artifact.*symbolic link"):
+        initialize_cutover_authority(
+            account_id=ACCOUNT_ID,
+            artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root,
+            broker_evidence=BrokerCutoverEvidence(
+                account_id=ACCOUNT_ID,
+                account_mode="paper",
+                observed_at_ms=PLAN_MS,
+                proof_reference="fake-alpaca-account-snapshot",
+                positions={},
+                open_order_ids=(),
+            ),
+            max_broker_evidence_age_ms=1_000,
+            clock=_Clock(PLAN_MS),
+        )
+
+    assert not (account_dir / "clerk.db").exists()
 
 
 def test_initialize_resumes_verified_inactive_generation_after_receipt_failure(
@@ -429,7 +460,7 @@ def test_initialize_resumes_verified_inactive_generation_after_receipt_failure(
                 open_order_ids=(),
             ),
             max_broker_evidence_age_ms=1_000,
-            clock=_Clock(PLAN_MS),
+            clock=_Clock(PLAN_MS + 2_000),
         )
 
     monkeypatch.setattr(
@@ -443,7 +474,7 @@ def test_initialize_resumes_verified_inactive_generation_after_receipt_failure(
         runner_artifacts_root=runner_root,
         broker_evidence=evidence,
         max_broker_evidence_age_ms=1_000,
-        clock=_Clock(PLAN_MS),
+        clock=_Clock(PLAN_MS + 2_000),
     )
     repeated = initialize_cutover_authority(
         account_id=ACCOUNT_ID,
@@ -810,6 +841,55 @@ def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts(tmp_path:
         / "spy"
         / "decision_journal.jsonl"
     ).is_file()
+
+
+def test_apply_rolls_back_every_legacy_artifact_after_mid_quarantine_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk_root, account_dir, runner_root, evidence, clock = _setup(tmp_path)
+    plan = plan_cutover(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=clock,
+    )
+    real_replace = cutover_module.os.replace
+    replace_calls = 0
+
+    def _fail_second_replace(source: Path, destination: Path) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 2:
+            raise OSError("injected mid-quarantine failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(cutover_module.os, "replace", _fail_second_replace)
+
+    with pytest.raises(OSError, match="injected mid-quarantine failure"):
+        apply_cutover(
+            plan=plan,
+            confirmation_token=plan.confirmation_token,
+            artifacts_root=clerk_root,
+            runner_artifacts_root=runner_root,
+            broker_evidence=evidence,
+            max_broker_evidence_age_ms=1_000,
+            clock=clock,
+        )
+
+    assert (account_dir / "order_inbox.jsonl").is_file()
+    assert (account_dir / "order_journal.jsonl").is_file()
+    assert (
+        clerk_root
+        / "accounts"
+        / ACCOUNT_ID
+        / "bots"
+        / "spy"
+        / "decision_journal.jsonl"
+    ).is_file()
+    assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(ACCOUNT_ID) is None
 
 
 async def test_successful_fixture_cutover_restarts_with_only_sqlite_authority(

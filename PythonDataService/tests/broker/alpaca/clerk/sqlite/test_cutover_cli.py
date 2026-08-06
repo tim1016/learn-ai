@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
+from app.broker.alpaca.clerk.sqlite.cutover import CutoverRefused
 from scripts.manage_alpaca_sqlite_clerk import (
     _read_cutover_evidence,
     _read_reset_evidence,
@@ -22,7 +23,7 @@ from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
 ACCOUNT_ID = "PA-CUTOVER"
 
 
-def test_cli_plan_and_apply_require_the_exact_confirmation_token(tmp_path: Path) -> None:
+def test_main_plan_and_apply_require_the_exact_confirmation_token(tmp_path: Path) -> None:
     account_id = "PA-CLI-CUTOVER"
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
@@ -65,6 +66,21 @@ def test_cli_plan_and_apply_require_the_exact_confirmation_token(tmp_path: Path)
         [*common, "cutover-plan", *evidence_args, "--output", str(plan_path)]
     ) == 0
     token = json.loads(plan_path.read_text(encoding="utf-8"))["confirmation_token"]
+    with pytest.raises(CutoverRefused, match="confirmation token"):
+        recovery_cli(
+            [
+                *common,
+                "cutover-apply",
+                *evidence_args,
+                "--plan",
+                str(plan_path),
+                "--confirmation-token",
+                "wrong-token",
+            ]
+        )
+    assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(account_id) is None
+    assert (account_dir / "order_journal.jsonl").is_file()
+
     assert recovery_cli(
         [
             *common,
@@ -80,7 +96,7 @@ def test_cli_plan_and_apply_require_the_exact_confirmation_token(tmp_path: Path)
     assert not (account_dir / "order_journal.jsonl").exists()
 
 
-def test_cli_uses_distinct_reset_and_paper_cutover_evidence_models(
+def test_read_reset_and_cutover_evidence_use_distinct_models(
     tmp_path: Path,
 ) -> None:
     payload = {

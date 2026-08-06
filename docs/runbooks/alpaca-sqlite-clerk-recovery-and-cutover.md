@@ -27,7 +27,11 @@ The tools reject a readable live lease. Cutover initialization, plan, and apply 
 derive every durable Alpaca binding from the runner's `live_state/` tree and require
 `STOPPED` desired state, `OFF_DUTY`/`RETIRED` lifecycle state, no active run, and a
 typed durable terminal outcome. They content-hash each complete bot artifact directory and
-apply rechecks the exact roster. There is no caller-authored empty-list bypass.
+apply rechecks the exact roster. Freeze **all** writers to the runner `live_state/` tree
+from plan through apply, including lifecycle, indicator-state, log, and editor processes.
+Any write changes the planned evidence, so apply is expected to refuse and the operator
+must capture fresh broker evidence and create a new plan. There is no caller-authored
+empty-list bypass.
 
 A corrupt database may make its lease row
 unreadable, so a database error is **not** proof that the process stopped. In that case,
@@ -163,12 +167,17 @@ mistakenly supplied artifact root.
 
 Review and retain the initialization receipt, then publish the verified online backup
 described above. If receipt publication fails after the registry fence is durable,
-rerun the same command with the same still-fresh evidence. It resumes only when the
+rerun the same command with the exact same evidence. A retry that matches the durable
+intent remains supported after that evidence's freshness window expires because it can
+only complete receipt publication for the already-created, still-unused authority; it
+cannot create or activate an authority. The retry resumes only when the
 inactive generation-one registry, database, mirror, account, and identity all verify
 exactly and the new evidence matches the durable pre-init intent byte for byte; its
 receipt path is deterministic and binds the intent hash to the database identity. A
 missing intent, changed evidence, or missing, used, substituted, or corrupt component
-refuses the retry and requires explicit recovery. Never remove files by hand.
+refuses the retry and requires a separately reviewed recovery change; the existing reset
+command is not an escape hatch for an incomplete first cutover initialization. Never
+remove the intent, database, mirror, registry entry, or any related file by hand.
 
 ### Produce the read-only plan
 

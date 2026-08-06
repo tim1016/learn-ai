@@ -58,6 +58,7 @@ SMOKE_ADVERSARIAL_TESTS: tuple[str, ...] = (
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_initialize_refuses_empty_runner_roster_without_creating_authority",
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_initialize_refuses_tampered_normalized_runner_binding",
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_initialize_refuses_broken_binding_symlink",
+    "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_initialize_refuses_dangling_legacy_artifact_symlink",
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_initialize_refuses_wrong_clerk_root_without_creating_authority",
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_initialize_resumes_verified_inactive_generation_after_receipt_failure",
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_initialize_refuses_unrelated_empty_generation_without_cutover_intent",
@@ -66,6 +67,7 @@ SMOKE_ADVERSARIAL_TESTS: tuple[str, ...] = (
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_apply_rejects_changed_durable_roster_before_activation",
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_apply_rejects_changed_initialization_receipt_before_activation",
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts",
+    "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_apply_rolls_back_every_legacy_artifact_after_mid_quarantine_failure",
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_apply_rejects_changed_evidence_without_quarantining_or_activating",
     "tests/broker/alpaca/clerk/sqlite/test_cutover.py::test_successful_fixture_cutover_restarts_with_only_sqlite_authority",
 )
