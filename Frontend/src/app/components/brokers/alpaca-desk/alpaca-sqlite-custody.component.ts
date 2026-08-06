@@ -49,6 +49,9 @@ export class AlpacaSqliteCustodyComponent {
   protected readonly timeline = signal<readonly SqliteTimelineEntry[]>([]);
   protected readonly timelineOpen = signal(false);
   protected readonly timelineLoading = signal(false);
+  protected readonly timelineLoadingMore = signal(false);
+  protected readonly timelineNextCursor = signal<string | null>(null);
+  protected readonly timelineTotalEntries = signal(0);
   protected readonly busyActionId = signal<string | null>(null);
   protected readonly actionNotice = signal<string | null>(null);
   protected readonly confirmationAction = signal<SqliteRecoveryAction | null>(null);
@@ -131,6 +134,23 @@ export class AlpacaSqliteCustodyComponent {
     }
   }
 
+  protected async loadMoreTimeline(): Promise<void> {
+    const cursor = this.timelineNextCursor();
+    if (cursor === null || this.timelineLoadingMore()) return;
+    this.timelineLoadingMore.set(true);
+    try {
+      const page = await this.brokers.getSqliteClerkTimeline(this.accountId(), cursor);
+      this.timeline.update((current) => [...current, ...page.entries]);
+      this.timelineNextCursor.set(page.next_cursor);
+      this.timelineTotalEntries.set(page.total_entries);
+      this.actionNotice.set(null);
+    } catch {
+      this.actionNotice.set('The custody timeline is temporarily unavailable.');
+    } finally {
+      this.timelineLoadingMore.set(false);
+    }
+  }
+
   private async openTimeline(): Promise<void> {
     this.timelineOpen.set(true);
     if (this.timelineLoading()) return;
@@ -138,6 +158,8 @@ export class AlpacaSqliteCustodyComponent {
     try {
       const page = await this.brokers.getSqliteClerkTimeline(this.accountId());
       this.timeline.set(page.entries);
+      this.timelineNextCursor.set(page.next_cursor);
+      this.timelineTotalEntries.set(page.total_entries);
       this.actionNotice.set(null);
     } catch {
       this.actionNotice.set('The custody timeline is temporarily unavailable.');

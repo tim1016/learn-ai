@@ -151,4 +151,23 @@ describe('TransactionEvidenceTimelineComponent', () => {
     expect(screen.getByText('Account clerk')).toBeTruthy();
     expect(screen.getAllByText(/2023/)).toHaveLength(3);
   });
+
+  it('renders a code-like custody_owner through receiptLabel, not raw', async () => {
+    const sqliteEntry: EvidenceEntry = {
+      ...entry(8, 'Order accepted.'),
+      custody_owner: 'ACCOUNT_CLERK',
+    };
+    await render(TransactionEvidenceTimelineComponent, {
+      inputs: inputs(),
+      providers: [
+        {
+          provide: BrokerV2PanelService,
+          useValue: { getEvidence: vi.fn().mockResolvedValue(page('tx-1', [sqliteEntry])) },
+        },
+      ],
+    });
+
+    expect(await screen.findByText('Account service')).toBeTruthy();
+    expect(screen.queryByText('ACCOUNT_CLERK')).toBeNull();
+  });
 });

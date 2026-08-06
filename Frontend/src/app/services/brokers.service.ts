@@ -189,10 +189,11 @@ export class BrokersService {
     );
   }
 
-  getSqliteClerkTimeline(accountId: string): Promise<SqliteTimelinePage> {
+  getSqliteClerkTimeline(accountId: string, cursor?: string | null): Promise<SqliteTimelinePage> {
+    const params = cursor != null ? `?cursor=${encodeURIComponent(cursor)}` : '';
     return firstValueFrom(
       this.http.get<SqliteTimelinePage>(
-        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/timeline`,
+        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/timeline${params}`,
       ),
     );
   }

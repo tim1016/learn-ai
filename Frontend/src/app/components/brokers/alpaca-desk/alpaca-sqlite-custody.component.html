@@ -80,6 +80,7 @@
         @if (timelineLoading()) {
           <p role="status">Loading timeline…</p>
         } @else {
+          <p aria-live="polite">{{ timeline().length }} of {{ timelineTotalEntries() }}</p>
           <ol>
             @for (entry of timeline(); track trackTimeline($index, entry)) {
               <li>
@@ -96,6 +97,13 @@
               </li>
             }
           </ol>
+          @if (timelineNextCursor() !== null) {
+            <button
+              type="button"
+              [disabled]="timelineLoadingMore()"
+              (click)="loadMoreTimeline()"
+            >{{ timelineLoadingMore() ? 'Loading…' : 'Load more events' }}</button>
+          }
         }
       </section>
     }

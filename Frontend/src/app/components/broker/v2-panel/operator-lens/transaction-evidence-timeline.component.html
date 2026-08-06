@@ -37,7 +37,7 @@
                 <div><dt>Order</dt><dd><code>{{ entry.order_ref }}</code></dd></div>
               }
               @if (entry.custody_owner) {
-                <div><dt>Custody</dt><dd>{{ entry.custody_owner }}</dd></div>
+                <div><dt>Custody</dt><dd>{{ entry.custody_owner | receiptLabel }}</dd></div>
               }
               @if (entry.operation_state) {
                 <div><dt>Operation state</dt><dd>{{ entry.operation_state | receiptLabel }}</dd></div>
