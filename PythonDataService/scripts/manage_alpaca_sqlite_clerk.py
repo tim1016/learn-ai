@@ -11,9 +11,12 @@ from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.cutover import (
     BrokerCutoverEvidence,
+    CutoverInitializationEvidence,
     CutoverPlan,
     LegacyArtifactEvidence,
+    RunnerBotEvidence,
     apply_cutover,
+    initialize_cutover_authority,
     plan_cutover,
 )
 from app.broker.alpaca.clerk.sqlite.database_verification import DatabaseVerification
@@ -41,25 +44,37 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers.add_parser("rebuild")
 
     reset = subparsers.add_parser("reset")
-    _add_evidence_arguments(reset)
+    _add_reset_evidence_arguments(reset)
+
+    initialize = subparsers.add_parser("cutover-initialize")
+    _add_cutover_evidence_arguments(initialize)
 
     plan = subparsers.add_parser("cutover-plan")
-    _add_evidence_arguments(plan)
+    _add_cutover_evidence_arguments(plan)
     plan.add_argument("--output", type=Path, required=True)
     plan.add_argument("--confirmation-ttl-ms", type=int, default=120_000)
 
     apply = subparsers.add_parser("cutover-apply")
-    _add_evidence_arguments(apply)
+    _add_cutover_evidence_arguments(apply)
     apply.add_argument("--plan", type=Path, required=True)
     apply.add_argument("--confirmation-token", required=True)
     return parser.parse_args(argv)
 
 
-def _add_evidence_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_broker_evidence_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--broker-evidence", type=Path, required=True)
+    parser.add_argument("--max-evidence-age-ms", type=int, required=True)
+
+
+def _add_reset_evidence_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_broker_evidence_arguments(parser)
     parser.add_argument("--expected-bot", action="append", default=[])
     parser.add_argument("--stopped-bot", action="append", default=[])
-    parser.add_argument("--max-evidence-age-ms", type=int, required=True)
+
+
+def _add_cutover_evidence_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_broker_evidence_arguments(parser)
+    parser.add_argument("--runner-artifacts-root", type=Path, required=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -72,20 +87,31 @@ def main(argv: list[str] | None = None) -> int:
     elif args.operation == "rebuild":
         result = preserve_and_rebuild_from_mirror(**common)
     elif args.operation == "reset":
-        evidence = _read_evidence(args.broker_evidence, args.account_id)
         result = reset_authority(
             **common,
-            broker_proof=ResetBrokerProof(**asdict(evidence)),
+            broker_proof=_read_reset_evidence(
+                args.broker_evidence, args.account_id
+            ),
             expected_strategy_instance_ids=args.expected_bot,
             stopped_strategy_instance_ids=args.stopped_bot,
             max_proof_age_ms=args.max_evidence_age_ms,
         )
+    elif args.operation == "cutover-initialize":
+        result = initialize_cutover_authority(
+            **common,
+            runner_artifacts_root=args.runner_artifacts_root,
+            broker_evidence=_read_cutover_evidence(
+                args.broker_evidence, args.account_id
+            ),
+            max_broker_evidence_age_ms=args.max_evidence_age_ms,
+        )
     elif args.operation == "cutover-plan":
         result = plan_cutover(
             **common,
-            broker_evidence=_read_evidence(args.broker_evidence, args.account_id),
-            expected_strategy_instance_ids=args.expected_bot,
-            stopped_strategy_instance_ids=args.stopped_bot,
+            runner_artifacts_root=args.runner_artifacts_root,
+            broker_evidence=_read_cutover_evidence(
+                args.broker_evidence, args.account_id
+            ),
             max_broker_evidence_age_ms=args.max_evidence_age_ms,
             confirmation_ttl_ms=args.confirmation_ttl_ms,
         )
@@ -95,16 +121,41 @@ def main(argv: list[str] | None = None) -> int:
             plan=_read_plan(args.plan),
             confirmation_token=args.confirmation_token,
             artifacts_root=args.artifacts_root,
-            broker_evidence=_read_evidence(args.broker_evidence, args.account_id),
-            expected_strategy_instance_ids=args.expected_bot,
-            stopped_strategy_instance_ids=args.stopped_bot,
+            runner_artifacts_root=args.runner_artifacts_root,
+            broker_evidence=_read_cutover_evidence(
+                args.broker_evidence, args.account_id
+            ),
             max_broker_evidence_age_ms=args.max_evidence_age_ms,
         )
     sys.stdout.write(json.dumps(_jsonable(result), sort_keys=True) + "\n")
     return 0
 
 
-def _read_evidence(path: Path, account_id: str) -> BrokerCutoverEvidence:
+def _read_cutover_evidence(path: Path, account_id: str) -> BrokerCutoverEvidence:
+    payload = _read_json_object(path)
+    required = {
+        "account_id",
+        "account_mode",
+        "observed_at_ms",
+        "proof_reference",
+        "positions",
+        "open_order_ids",
+    }
+    if set(payload) != required:
+        raise ValueError("cutover broker evidence fields do not match schema version 1")
+    if payload.get("account_id") != account_id:
+        raise ValueError("broker evidence account_id does not match CLI account")
+    return BrokerCutoverEvidence(
+        account_id=payload["account_id"],
+        account_mode=payload["account_mode"],
+        observed_at_ms=payload["observed_at_ms"],
+        proof_reference=payload["proof_reference"],
+        positions=payload.get("positions", {}),
+        open_order_ids=tuple(payload.get("open_order_ids", ())),
+    )
+
+
+def _read_reset_evidence(path: Path, account_id: str) -> ResetBrokerProof:
     payload = _read_json_object(path)
     required = {
         "account_id",
@@ -114,10 +165,10 @@ def _read_evidence(path: Path, account_id: str) -> BrokerCutoverEvidence:
         "open_order_ids",
     }
     if set(payload) != required:
-        raise ValueError("broker evidence fields do not match schema version 1")
+        raise ValueError("reset broker evidence fields do not match schema version 1")
     if payload.get("account_id") != account_id:
         raise ValueError("broker evidence account_id does not match CLI account")
-    return BrokerCutoverEvidence(
+    return ResetBrokerProof(
         account_id=payload["account_id"],
         observed_at_ms=payload["observed_at_ms"],
         proof_reference=payload["proof_reference"],
@@ -135,14 +186,14 @@ def _read_plan(path: Path) -> CutoverPlan:
         "account_id",
         "created_at_ms",
         "expires_at_ms",
+        "initialization",
         "database",
         "broker_evidence",
-        "expected_strategy_instance_ids",
-        "stopped_strategy_instance_ids",
+        "runner_roster",
         "legacy_artifacts",
     }
-    if set(payload) != required:
-        raise ValueError("cutover plan fields do not match schema version 1")
+    if set(payload) != required or payload.get("schema_version") != 3:
+        raise ValueError("cutover plan fields do not match schema version 3")
     return CutoverPlan(
         schema_version=payload["schema_version"],
         plan_id=payload["plan_id"],
@@ -150,6 +201,7 @@ def _read_plan(path: Path) -> CutoverPlan:
         account_id=payload["account_id"],
         created_at_ms=payload["created_at_ms"],
         expires_at_ms=payload["expires_at_ms"],
+        initialization=CutoverInitializationEvidence(**payload["initialization"]),
         database=DatabaseVerification(**payload["database"]),
         broker_evidence=BrokerCutoverEvidence(
             **{
@@ -157,8 +209,9 @@ def _read_plan(path: Path) -> CutoverPlan:
                 "open_order_ids": tuple(payload["broker_evidence"]["open_order_ids"]),
             }
         ),
-        expected_strategy_instance_ids=tuple(payload["expected_strategy_instance_ids"]),
-        stopped_strategy_instance_ids=tuple(payload["stopped_strategy_instance_ids"]),
+        runner_roster=tuple(
+            RunnerBotEvidence(**item) for item in payload["runner_roster"]
+        ),
         legacy_artifacts=tuple(
             LegacyArtifactEvidence(**item) for item in payload["legacy_artifacts"]
         ),
