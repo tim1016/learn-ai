@@ -334,6 +334,141 @@ def test_operation_page_does_not_drop_an_operation_whose_updated_at_ms_advances_
     }
 
 
+def test_recovery_policy_reads_working_orders_outside_the_operation_page(
+    tmp_path: Path,
+) -> None:
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    submit_start_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+        clock=clock,
+    )
+    leg = BrokerOrderLeg(symbol="SPY", side="buy", quantity=1)
+    older = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="decision-older",
+        lifecycle_run_id="run-1",
+        leg=leg,
+    )
+    newer = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="decision-newer",
+        lifecycle_run_id="run-1",
+        leg=leg,
+    )
+    observed_at_ms = clock()
+    repo._conn.execute(
+        "UPDATE orders SET broker_order_id = ?, broker_state = 'accepted', "
+        "submitted_at_ms = ?, updated_at_ms = ? WHERE order_ref = ?",
+        ("alpaca-order-older", observed_at_ms, observed_at_ms, older.order_ref),
+    )
+    repo._conn.execute(
+        "INSERT INTO positions "
+        "(strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES (?, 'SPY', 1.0, ?)",
+        (SID, observed_at_ms),
+    )
+    repo._conn.commit()
+
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        snapshot = reader.bot_snapshot(SID, operation_limit=1)
+    finally:
+        reader.close()
+        repo.close()
+
+    assert snapshot is not None
+    assert [operation.effect_operation_id for operation in snapshot.operations] == [
+        newer.effect_operation_id
+    ]
+    actions = {action.action_id: action for action in snapshot.recovery_actions}
+    assert actions["cancel_verified_working_orders"].available is True
+    assert [item.reference for item in actions["cancel_verified_working_orders"].evidence] == [
+        f"order:{older.order_ref}"
+    ]
+    assert actions["prepare_safe_flatten"].unavailable_reason_code == (
+        "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
+    )
+
+
+def test_safe_flatten_uses_account_reconciliation_not_newer_effect_attempt(
+    tmp_path: Path,
+) -> None:
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    submit_start_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+        clock=clock,
+    )
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="decision-1",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    position_at_ms = clock()
+    account_reconciliation_at_ms = clock()
+    effect_reconciliation_at_ms = clock()
+    repo._conn.execute(
+        "INSERT INTO positions "
+        "(strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES (?, 'SPY', 1.0, ?)",
+        (SID, position_at_ms),
+    )
+    repo._conn.execute(
+        "INSERT INTO reconciliations "
+        "(reconciliation_id, effect_operation_id, order_ref, trigger, "
+        "attempted_at_ms, outcome, evidence_refs_json) "
+        "VALUES ('reconciliation:account', NULL, NULL, 'OPERATOR_RECONCILE_NOW', "
+        "?, 'RESOLVED_SUCCESS', NULL)",
+        (account_reconciliation_at_ms,),
+    )
+    repo._conn.execute(
+        "INSERT INTO reconciliations "
+        "(reconciliation_id, effect_operation_id, order_ref, trigger, "
+        "attempted_at_ms, outcome, evidence_refs_json) "
+        "VALUES ('reconciliation:effect', ?, ?, 'AUTOMATIC', "
+        "?, 'RESOLVED_SUCCESS', NULL)",
+        (
+            accepted.effect_operation_id,
+            accepted.order_ref,
+            effect_reconciliation_at_ms,
+        ),
+    )
+    repo._conn.commit()
+
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        snapshot = reader.bot_snapshot(SID)
+    finally:
+        reader.close()
+        repo.close()
+
+    assert snapshot is not None
+    assert snapshot.latest_reconciliation is not None
+    assert snapshot.latest_reconciliation.reconciliation_id == "reconciliation:effect"
+    capability = next(
+        action
+        for action in snapshot.recovery_actions
+        if action.action_id == "prepare_safe_flatten"
+    )
+    assert capability.available is True
+    assert capability.reduction_plan is not None
+    assert capability.reduction_plan.reconciliation_id == "reconciliation:account"
+
+
 def test_hot_projection_queries_use_covering_fold_indexes(tmp_path: Path) -> None:
     clock = _Clock()
     repo = _repository(tmp_path, clock)

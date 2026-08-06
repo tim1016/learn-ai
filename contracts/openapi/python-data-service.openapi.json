@@ -37835,6 +37835,16 @@
             "title": "Primary",
             "type": "boolean"
           },
+          "reduction_plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SafeFlattenPlanResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "scope": {
             "enum": [
               "BOT",
@@ -37876,6 +37886,7 @@
           "scope",
           "freshness",
           "evidence",
+          "reduction_plan",
           "confirmation",
           "next_step",
           "concurrency_token",
@@ -40235,6 +40246,120 @@
           "note"
         ],
         "title": "RunVerdictSubScore",
+        "type": "object"
+      },
+      "SafeFlattenPlanLegResponse": {
+        "properties": {
+          "position_updated_at_ms": {
+            "title": "Position Updated At Ms",
+            "type": "integer"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "symbol",
+          "side",
+          "quantity",
+          "position_updated_at_ms"
+        ],
+        "title": "SafeFlattenPlanLegResponse",
+        "type": "object"
+      },
+      "SafeFlattenPlanResponse": {
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "authority_generation": {
+            "title": "Authority Generation",
+            "type": "integer"
+          },
+          "control_revision": {
+            "title": "Control Revision",
+            "type": "integer"
+          },
+          "db_identity_token": {
+            "title": "Db Identity Token",
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "title": "Expires At Ms",
+            "type": "integer"
+          },
+          "legs": {
+            "items": {
+              "$ref": "#/components/schemas/SafeFlattenPlanLegResponse"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "prepared_at_ms": {
+            "title": "Prepared At Ms",
+            "type": "integer"
+          },
+          "reconciliation_id": {
+            "title": "Reconciliation Id",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "BOT",
+              "ACCOUNT_CLERK"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          },
+          "version_token": {
+            "title": "Version Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version_token",
+          "account_id",
+          "authority_generation",
+          "db_identity_token",
+          "control_revision",
+          "scope",
+          "strategy_instance_id",
+          "reconciliation_id",
+          "prepared_at_ms",
+          "expires_at_ms",
+          "legs"
+        ],
+        "title": "SafeFlattenPlanResponse",
         "type": "object"
       },
       "SanitizationSummary": {

@@ -22618,6 +22618,7 @@ export interface components {
             next_step: string;
             /** Primary */
             primary: boolean;
+            reduction_plan: components["schemas"]["SafeFlattenPlanResponse"] | null;
             /**
              * Scope
              * @enum {string}
@@ -23740,6 +23741,50 @@ export interface components {
             raw_value?: number | null;
             /** Score */
             score: number | null;
+        };
+        /** SafeFlattenPlanLegResponse */
+        SafeFlattenPlanLegResponse: {
+            /** Position Updated At Ms */
+            position_updated_at_ms: number;
+            /** Quantity */
+            quantity: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Symbol */
+            symbol: string;
+        };
+        /** SafeFlattenPlanResponse */
+        SafeFlattenPlanResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Authority Generation */
+            authority_generation: number;
+            /** Control Revision */
+            control_revision: number;
+            /** Db Identity Token */
+            db_identity_token: string;
+            /** Expires At Ms */
+            expires_at_ms: number;
+            /** Legs */
+            legs: components["schemas"]["SafeFlattenPlanLegResponse"][];
+            /** Prepared At Ms */
+            prepared_at_ms: number;
+            /** Reconciliation Id */
+            reconciliation_id: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "BOT" | "ACCOUNT_CLERK";
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+            /** Version Token */
+            version_token: string;
         };
         /**
          * SanitizationSummary

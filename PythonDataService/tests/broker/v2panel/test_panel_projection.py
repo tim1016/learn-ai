@@ -250,6 +250,7 @@ def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
         scope="BOT",
         freshness="not_required",
         evidence=(),
+        reduction_plan=None,
         confirmation=None,
         next_step="Run the comparison.",
         concurrency_token="sqlite-token",
