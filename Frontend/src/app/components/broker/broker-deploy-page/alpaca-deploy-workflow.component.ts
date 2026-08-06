@@ -20,6 +20,9 @@ import {
   validate,
 } from '@angular/forms/signals';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ButtonModule } from 'primeng/button';
+import { TagModule } from 'primeng/tag';
+import { TooltipModule } from 'primeng/tooltip';
 
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import {
@@ -69,6 +72,9 @@ type DeployLens = 'trader' | 'operator';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     RouterLink,
+    ButtonModule,
+    TagModule,
+    TooltipModule,
     TimestampDisplayComponent,
     DeployBindingStripComponent,
     DeployExecutionSectionComponent,

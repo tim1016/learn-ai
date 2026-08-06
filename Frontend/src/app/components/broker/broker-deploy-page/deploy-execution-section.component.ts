@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { InputTextModule } from 'primeng/inputtext';
 import { TooltipModule } from 'primeng/tooltip';
 
 import type {
@@ -20,7 +21,7 @@ export function deploySizingLabel(preset: DeploySizingPreset): string {
 @Component({
   selector: 'app-deploy-execution-section',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [TooltipModule],
+  imports: [InputTextModule, TooltipModule],
   templateUrl: './deploy-execution-section.component.html',
   styleUrl: './deploy-execution-section.component.scss',
 })

@@ -217,15 +217,12 @@ describe('AlpacaDeployWorkflowComponent', () => {
 
     expect(screen.getByRole('heading', { name: 'Admission authority' })).toBeTruthy();
     expect(screen.queryByText('Every deployment gate')).toBeNull();
-    const readyGate = screen.getByText('Current accepted evidence is present.').closest('details');
-    expect(readyGate?.open).toBe(false);
+    const readyHeader = screen.getByRole('button', { name: /Strategy validation/ });
+    expect(readyHeader.getAttribute('aria-expanded')).toBe('false');
 
-    const summary = readyGate?.querySelector('summary');
-    expect(summary).not.toBeNull();
-    if (!(summary instanceof HTMLElement)) throw new Error('Expected the ready gate summary.');
-    fireEvent.click(summary);
+    fireEvent.click(readyHeader);
 
-    expect(readyGate?.open).toBe(true);
+    expect(readyHeader.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('Accepted at the current manifest revision.')).toBeTruthy();
     await vi.waitFor(() => expect(router.url).toContain('lens=operator'));
   });
@@ -256,10 +253,10 @@ describe('AlpacaDeployWorkflowComponent', () => {
     expect(screen.getByRole('button', { name: 'Review blocker' })).toBeTruthy();
     fireEvent.click(screen.getByRole('tab', { name: 'Operator' }));
 
-    const readyGate = screen.getByText('Current accepted evidence is present.').closest('details');
-    const blockedGate = screen.getByText('Trading and account channels are healthy.').closest('details');
-    expect(readyGate?.open).toBe(false);
-    expect(blockedGate?.open).toBe(true);
+    const readyHeader = screen.getByRole('button', { name: /Strategy validation/ });
+    const blockedHeader = screen.getByRole('button', { name: /Broker channel/ });
+    expect(readyHeader.getAttribute('aria-expanded')).toBe('false');
+    expect(blockedHeader.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('moves lens focus with the tablist keyboard controls', async () => {

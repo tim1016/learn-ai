@@ -3,40 +3,39 @@
     <h2 id="deploy-readiness-title">Admission authority</h2>
     <p>These checks come from the same server path that admits or rejects launch.</p>
   </header>
-  <div class="readiness__gates">
+
+  <p-accordion class="readiness-gates" [multiple]="true" [value]="defaultOpenGateIds()">
     @for (check of checks(); track check.gate_id) {
-      <details
-        class="readiness__gate"
-        [class.readiness__gate--blocked]="!check.ready"
-        [attr.open]="check.ready ? null : ''"
-      >
-        <summary>
-          <span>{{ check.ready ? 'Ready' : 'Blocked' }}</span>
-          <strong>{{ check.label }}</strong>
-          <code>{{ check.gate_id | receiptLabel }}</code>
-        </summary>
-        <div class="readiness__body">
-          <h3>{{ check.headline }}</h3>
-          <p>{{ check.explanation }}</p>
-          <dl class="readiness__authority">
-            <div><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
-            <div><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
-            <div><dt>Evidence</dt><dd>{{ check.evidence_summary }}</dd></div>
+      <p-accordion-panel [value]="check.gate_id" [class.readiness-gate--blocked]="!check.ready">
+        <p-accordion-header>
+          <span class="flex w-full min-w-0 flex-wrap items-center gap-3 text-left">
+            <span class="readiness-gate__state">{{ check.ready ? 'Ready' : 'Blocked' }}</span>
+            <strong class="min-w-28">{{ check.label }}</strong>
+            <code class="min-w-0 basis-full [overflow-wrap:anywhere] text-[length:var(--fs-xs)] text-[var(--text-muted)]">{{ check.gate_id | receiptLabel }}</code>
+          </span>
+        </p-accordion-header>
+        <p-accordion-content>
+          <h3 class="m-0 text-[length:var(--fs-md)] text-[var(--text-primary)]">{{ check.headline }}</h3>
+          <p class="m-0 mt-2 text-[var(--text-secondary)] leading-normal">{{ check.explanation }}</p>
+          <dl class="readiness-gate__authority m-0 mt-3 grid gap-2">
+            <div class="flex min-w-0 justify-between gap-3"><dt>Scope</dt><dd>{{ check.scope | receiptLabel }}</dd></div>
+            <div class="flex min-w-0 justify-between gap-3"><dt>Authority</dt><dd>{{ check.authority }}</dd></div>
+            <div class="flex min-w-0 justify-between gap-3"><dt>Evidence</dt><dd>{{ check.evidence_summary }}</dd></div>
           </dl>
           @if (check.recovery) {
-            <p class="readiness__recovery"><strong>Next:</strong> {{ check.recovery }}</p>
+            <p class="readiness-gate__recovery m-0 mt-3 font-medium"><strong>Next:</strong> {{ check.recovery }}</p>
           }
           @let entries = evidenceEntries(check);
           @if (entries.length !== 0) {
-            <h4>Structured evidence</h4>
-            <dl class="readiness__evidence">
+            <h4 class="m-0 mt-3 text-[length:var(--fs-sm)] text-[var(--text-secondary)]">Structured evidence</h4>
+            <dl class="readiness-gate__evidence m-0 mt-2 grid gap-2 rounded-[var(--radius-sm)] bg-[var(--bg-sunken)] p-3">
               @for (entry of entries; track entry[0]) {
-                <div><dt>{{ entry[0] | receiptLabel }}</dt><dd>{{ entry[1] }}</dd></div>
+                <div class="flex min-w-0 justify-between gap-3"><dt>{{ entry[0] | receiptLabel }}</dt><dd>{{ entry[1] }}</dd></div>
               }
             </dl>
           }
-        </div>
-      </details>
+        </p-accordion-content>
+      </p-accordion-panel>
     }
-  </div>
+  </p-accordion>
 </section>

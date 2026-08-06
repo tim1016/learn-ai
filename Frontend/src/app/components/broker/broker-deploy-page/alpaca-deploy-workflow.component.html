@@ -23,24 +23,47 @@
     </section>
   } @else if (deployView.value(); as view) {
     <section
-      class="deploy-context"
+      class="deploy-context flex flex-wrap items-center gap-4 rounded-[var(--radius)] border border-l-4 p-4"
       [class.deploy-context--blocked]="!view.eligibility.eligible"
       [attr.aria-label]="view.eligibility.eligible ? 'Deployment ready' : 'Deployment blocked'"
     >
-      <div class="deploy-context__message">
-        <span>{{ view.eligibility.eligible ? 'Ready' : 'Blocked' }}</span>
-        <div>
-          <strong>{{ view.eligibility.headline }}</strong>
-          <p>{{ view.eligibility.explanation }}</p>
+      <div class="flex min-w-0 flex-1 flex-wrap items-start gap-3">
+        <p-tag
+          [value]="view.eligibility.eligible ? 'Ready' : 'Blocked'"
+          [severity]="view.eligibility.eligible ? 'success' : 'danger'"
+        />
+        <div class="grid min-w-0 gap-1">
+          <strong class="text-[length:var(--fs-md)] leading-tight">{{ view.eligibility.headline }}</strong>
+          <p class="m-0 text-[length:var(--fs-sm)] leading-snug text-[var(--text-secondary)]">{{ view.eligibility.explanation }}</p>
         </div>
         @if (!view.eligibility.eligible && activeLens() === 'trader') {
-          <button type="button" (click)="selectLens('operator')">Review blocker</button>
+          <button
+            pButton
+            type="button"
+            size="small"
+            severity="danger"
+            [outlined]="true"
+            (click)="selectLens('operator')"
+          >Review blocker</button>
         }
       </div>
-      <dl>
-        <div><dt>Account</dt><dd>{{ view.account_label }}</dd></div>
-        <div><dt>Execution</dt><dd>{{ executionLabel() }}</dd></div>
-        <div><dt>Checked</dt><dd><app-timestamp-display [value]="view.evaluated_at_ms" mode="local" /></dd></div>
+      <dl class="m-0 flex flex-wrap gap-5">
+        <div class="grid min-w-0 gap-1">
+          <dt class="text-[length:var(--fs-xs)] uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Account</dt>
+          <dd
+            class="m-0 max-w-60 overflow-hidden text-ellipsis whitespace-nowrap font-semibold"
+            [pTooltip]="view.account_label"
+            tooltipPosition="bottom"
+          >{{ view.account_label }}</dd>
+        </div>
+        <div class="grid min-w-0 gap-1">
+          <dt class="text-[length:var(--fs-xs)] uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Execution</dt>
+          <dd class="m-0 font-semibold">{{ executionLabel() }}</dd>
+        </div>
+        <div class="grid min-w-0 gap-1">
+          <dt class="text-[length:var(--fs-xs)] uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Checked</dt>
+          <dd class="m-0 font-semibold"><app-timestamp-display [value]="view.evaluated_at_ms" mode="local" /></dd>
+        </div>
       </dl>
     </section>
 

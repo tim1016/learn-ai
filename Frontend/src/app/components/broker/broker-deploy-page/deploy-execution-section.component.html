@@ -1,16 +1,16 @@
 <section class="execution-card" aria-labelledby="deploy-execution-title">
   <h2 id="deploy-execution-title">Trading setup</h2>
 
-  <fieldset class="mode-options">
-    <legend>Execution mode</legend>
-    <div class="mode-options__grid">
+  <fieldset class="mode-options min-w-0 border-0 p-0">
+    <legend class="mb-2 text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Execution mode</legend>
+    <div class="grid grid-cols-3 gap-2 max-[720px]:grid-cols-1">
       @for (mode of executionModes(); track mode.mode) {
         <div
-          class="mode-option"
+          class="mode-option relative flex min-w-0 items-center justify-between gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--bg-elevated)] p-3"
           [class.mode-option--selected]="mode.mode === selectedMode()"
           [class.mode-option--planned]="isPlanned(mode)"
         >
-          <label>
+          <label class="flex min-w-0 cursor-pointer items-center gap-2">
             <input
               type="radio"
               name="alpaca-execution-mode"
@@ -20,7 +20,7 @@
               (change)="changeExecutionMode($event)"
             />
             <strong>{{ mode.label }}</strong>
-            <span>{{ capabilityStatus(mode) }}</span>
+            <span class="text-[length:var(--fs-xs)] font-bold uppercase text-[var(--text-subtle)]">{{ capabilityStatus(mode) }}</span>
           </label>
           <button
             type="button"
@@ -34,10 +34,10 @@
     </div>
   </fieldset>
 
-  <div class="execution-fields">
-    <div class="field">
-      <div class="field__label">
-        <label for="deploy-symbol">Trading symbol</label>
+  <div class="grid grid-cols-[minmax(10rem,0.7fr)_minmax(18rem,1.3fr)] items-start gap-3 max-[720px]:grid-cols-1">
+    <div class="grid max-w-96 min-w-0 content-start gap-2">
+      <div class="flex items-center gap-2">
+        <label for="deploy-symbol" class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Trading symbol</label>
         <button
           type="button"
           class="info-tip"
@@ -47,25 +47,30 @@
         >i</button>
       </div>
       <input
+        pInputText
         id="deploy-symbol"
         type="text"
         [value]="symbol()"
         placeholder="SPY"
         autocomplete="off"
         spellcheck="false"
+        class="w-full"
         [attr.aria-invalid]="symbolError() !== null"
         (input)="changeSymbol($event)"
         (blur)="symbolBlur.emit()"
       />
-      @if (symbolError(); as error) { <em role="alert">{{ error }}</em> }
+      @if (symbolError(); as error) { <em role="alert" class="text-[length:var(--fs-xs)] not-italic text-[var(--bear)]">{{ error }}</em> }
     </div>
 
-    <fieldset class="sizing-options">
-      <legend>Position size</legend>
-      <div class="sizing-options__grid">
+    <fieldset class="sizing-options min-w-0 border-0 p-0">
+      <legend class="mb-2 text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Position size</legend>
+      <div class="grid grid-cols-2 gap-2 max-[480px]:grid-cols-1">
         @for (option of sizingOptions(); track option.preset) {
-          <div class="sizing-option" [class.sizing-option--selected]="sizingPreset() === option.preset">
-            <label>
+          <div
+            class="sizing-option relative flex min-w-0 items-center justify-between gap-2 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--bg-elevated)] p-3"
+            [class.sizing-option--selected]="sizingPreset() === option.preset"
+          >
+            <label class="flex min-w-0 cursor-pointer items-center gap-2">
               <input
                 type="radio"
                 name="alpaca-sizing"
@@ -89,30 +94,32 @@
   </div>
 
   @if (sizingPreset() === 'custom') {
-    <label class="field field--quantity">
-      <span>Whole shares per entry</span>
+    <label class="grid max-w-64 content-start gap-2">
+      <span class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Whole shares per entry</span>
       <input
+        pInputText
         type="number"
         inputmode="numeric"
         step="1"
         [value]="quantity()"
+        class="w-full"
         [attr.aria-invalid]="quantityError() !== null"
         (input)="changeQuantity($event)"
         (blur)="quantityBlur.emit()"
       />
-      @if (quantityError(); as error) { <em role="alert">{{ error }}</em> }
+      @if (quantityError(); as error) { <em role="alert" class="text-[length:var(--fs-xs)] not-italic text-[var(--bear)]">{{ error }}</em> }
     </label>
   }
 
   @if (selectedMode() === 'dry_run') {
-    <p class="carryover-policy"><strong>Stop behavior:</strong> No broker exposure</p>
+    <p class="m-0 flex items-center gap-2 text-[length:var(--fs-sm)] text-[var(--text-secondary)]"><strong>Stop behavior:</strong> No broker exposure</p>
   } @else if (carryoverAvailable()) {
-    <label class="carryover">
+    <label class="carryover flex cursor-pointer items-start gap-3 rounded-[var(--radius)] border border-[var(--border)] bg-[var(--bg-elevated)] p-3">
       <input type="checkbox" [checked]="carryoverAllowed()" (change)="changeCarryover($event)" />
-      <span><strong>{{ carryoverLabel() }}</strong><small>{{ carryoverExplanation() }}</small></span>
+      <span class="grid gap-1"><strong>{{ carryoverLabel() }}</strong><small class="leading-snug text-[var(--text-secondary)]">{{ carryoverExplanation() }}</small></span>
     </label>
   } @else {
-    <p class="carryover-policy">
+    <p class="m-0 flex items-center gap-2 text-[length:var(--fs-sm)] text-[var(--text-secondary)]">
       <strong>Stop behavior:</strong> No carried positions
       <button
         type="button"

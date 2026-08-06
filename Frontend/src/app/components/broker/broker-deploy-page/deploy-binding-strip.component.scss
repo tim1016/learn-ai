@@ -9,31 +9,12 @@
   border-radius: var(--radius-md);
 }
 
-.binding-field > span,
-.binding-field > label {
-  color: var(--text-subtle);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semi);
-  letter-spacing: var(--ls-caps);
-  text-transform: uppercase;
-}
-
 h2 { margin: 0; font-size: var(--fs-lg); }
 
-.binding-strip__fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.binding-field {
-  display: grid;
-  align-content: start;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-input,
+/* The strategy picker stays a native <select> (see component docstring); PrimeNG's
+   Select widget requires ngModel/formControl for value binding, which this signal-only
+   family of components does not use elsewhere, and the component spec drives it as a
+   native element. It still needs its own visual chrome — pInputText only themes <input>. */
 select {
   width: 100%;
   min-height: 2.75rem;
@@ -45,31 +26,21 @@ select {
   border-radius: var(--radius);
 }
 
-input:focus,
 select:focus {
   border-color: var(--accent);
   outline: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
   outline-offset: 1px;
 }
 
-input[aria-invalid='true'] { border-color: var(--bear); }
 em { color: var(--bear); font-size: var(--fs-xs); font-style: normal; }
-.binding-field__trust {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  min-height: 1.5rem;
-}
-
-.binding-field__trust > span { color: var(--bull); font-size: var(--fs-xs); font-weight: var(--fw-bold); }
-.binding-field__actions { display: flex; align-items: center; gap: var(--space-2); }
-.binding-field__actions a { color: var(--accent-text); font-size: var(--fs-xs); }
 
 .info-tip { display: grid; place-items: center; width: 1.2rem; height: 1.2rem; padding: 0; color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--fs-xs); cursor: help; background: transparent; border: 1px solid var(--border-strong); border-radius: 50%; }
 .info-tip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* Component-relative breakpoint (this strip narrows independently of the viewport
+   inside the deploy layout's main column), so it needs a container query. Tailwind's
+   utility classes here are viewport-driven and have no established container-query
+   convention in this codebase yet, so the query stays hand-written. */
 @container (max-width: 650px) {
   .binding-strip__fields { grid-template-columns: 1fr; }
 }
