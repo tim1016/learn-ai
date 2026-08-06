@@ -26,7 +26,7 @@ const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
   strategy_instance_id: null,
   reconciliation_id: 'reconciliation-17',
   prepared_at_ms: NOW,
-  expires_at_ms: NOW + 30_000,
+  expires_at_ms: 4_102_444_800_000,
   legs: [{
     strategy_instance_id: 'spy-bot',
     symbol: 'SPY',
@@ -299,7 +299,7 @@ describe('AlpacaSqliteCustodyComponent', () => {
     expect(await screen.findByRole('region', {
       name: 'Prepared safe-flatten reduction plan',
     })).toBeTruthy();
-    expect(screen.getByText('SPY')).toBeTruthy();
+    expect(screen.getByText('Spy')).toBeTruthy();
     expect(screen.getByText('1.25')).toBeTruthy();
     expect(checkSqliteRecoveryAction).toHaveBeenCalledWith('PA1', prepare);
     expect(executeSqliteRecoveryAction).not.toHaveBeenCalled();

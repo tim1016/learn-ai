@@ -135,7 +135,7 @@ const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
   strategy_instance_id: 'sid-001',
   reconciliation_id: 'reconciliation-17',
   prepared_at_ms: 1_753_800_000_000,
-  expires_at_ms: 1_753_800_030_000,
+  expires_at_ms: 4_102_444_800_000,
   legs: [{
     strategy_instance_id: 'sid-001',
     symbol: 'QQQ',
@@ -397,7 +397,7 @@ describe('BotPanelShellComponent', () => {
     const planRegion = await screen.findByRole('region', {
       name: 'Prepared safe-flatten reduction plan',
     });
-    expect(within(planRegion).getByText('QQQ')).toBeTruthy();
+    expect(within(planRegion).getByText('Qqq')).toBeTruthy();
     expect(within(planRegion).getByText('2.5')).toBeTruthy();
     expect(mockService.checkSqliteSafeFlattenPlan).toHaveBeenCalledWith(
       'DUM284968',

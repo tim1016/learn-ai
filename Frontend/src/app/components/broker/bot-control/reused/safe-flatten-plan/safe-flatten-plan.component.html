@@ -1,74 +1,94 @@
-<section class="safe-flatten-plan" aria-label="Prepared safe-flatten reduction plan">
-  <header class="safe-flatten-plan__header">
-    <div>
-      <span class="safe-flatten-plan__eyebrow">Read-only preparation</span>
-      <h3>Safe-flatten reduction plan</h3>
-    </div>
-    <span class="safe-flatten-plan__scope">{{ plan().scope | receiptLabel }}</span>
-  </header>
+<section class="my-3" aria-label="Prepared safe-flatten reduction plan">
+  <p-card>
+    <div class="grid gap-4">
+      <header class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p class="m-0 text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+            Read-only preparation
+          </p>
+          <h3 class="mb-0 mt-1 text-base">Safe-flatten reduction plan</h3>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <p-tag severity="info" value="Read-only" />
+          <p-tag severity="secondary" [value]="plan().scope | receiptLabel" />
+          @if (expired()) {
+            <p-tag severity="warn" value="Expired" />
+          }
+        </div>
+      </header>
 
-  <p class="safe-flatten-plan__notice">
-    No order has been submitted. The Account Clerk must recheck this plan before any later
-    reduction action.
-  </p>
+      @if (expired()) {
+        <p-message severity="warn" class="w-full">
+          This plan has expired. Prepare safe flatten again to refresh custody evidence.
+          No order has been submitted.
+        </p-message>
+      } @else {
+        <p-message severity="info" class="w-full">
+          No order has been submitted. The Account Clerk must recheck this plan before any later
+          reduction action.
+        </p-message>
+      }
 
-  <dl class="safe-flatten-plan__facts">
-    <div>
-      <dt>Prepared</dt>
-      <dd><app-timestamp-display [value]="plan().prepared_at_ms" mode="local" /></dd>
-    </div>
-    <div>
-      <dt>Expires</dt>
-      <dd><app-timestamp-display [value]="plan().expires_at_ms" mode="local" /></dd>
-    </div>
-    <div>
-      <dt>Authority</dt>
-      <dd>Generation {{ plan().authority_generation }}</dd>
-    </div>
-    <div>
-      <dt>Control revision</dt>
-      <dd>{{ plan().control_revision }}</dd>
-    </div>
-    <div>
-      <dt>Database identity</dt>
-      <dd><code>{{ plan().db_identity_token }}</code></dd>
-    </div>
-    <div>
-      <dt>Reconciliation</dt>
-      <dd><code>{{ plan().reconciliation_id }}</code></dd>
-    </div>
-  </dl>
+      <dl class="m-0 grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3">
+        <div class="min-w-0">
+          <dt class="text-xs text-[var(--text-secondary)]">Prepared</dt>
+          <dd class="m-0 mt-1"><app-timestamp-display [value]="plan().prepared_at_ms" mode="local" /></dd>
+        </div>
+        <div class="min-w-0">
+          <dt class="text-xs text-[var(--text-secondary)]">Expires</dt>
+          <dd class="m-0 mt-1"><app-timestamp-display [value]="plan().expires_at_ms" mode="local" /></dd>
+        </div>
+        <div class="min-w-0">
+          <dt class="text-xs text-[var(--text-secondary)]">Authority</dt>
+          <dd class="m-0 mt-1">Generation {{ plan().authority_generation }}</dd>
+        </div>
+        <div class="min-w-0">
+          <dt class="text-xs text-[var(--text-secondary)]">Control revision</dt>
+          <dd class="m-0 mt-1">{{ plan().control_revision }}</dd>
+        </div>
+        <div class="min-w-0">
+          <dt class="text-xs text-[var(--text-secondary)]">Database identity</dt>
+          <dd class="m-0 mt-1 break-words"><code>{{ plan().db_identity_token }}</code></dd>
+        </div>
+        <div class="min-w-0">
+          <dt class="text-xs text-[var(--text-secondary)]">Reconciliation</dt>
+          <dd class="m-0 mt-1 break-words"><code>{{ plan().reconciliation_id }}</code></dd>
+        </div>
+      </dl>
 
-  <div class="safe-flatten-plan__table-wrap">
-    <table>
-      <caption>Exact attributed quantities proposed for risk reduction</caption>
-      <thead>
-        <tr>
-          <th scope="col">Bot</th>
-          <th scope="col">Symbol</th>
-          <th scope="col">Closing side</th>
-          <th scope="col">Quantity</th>
-          <th scope="col">Position evidence</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (leg of plan().legs; track trackLeg($index, leg)) {
+      <p-table
+        [value]="plan().legs"
+        [stripedRows]="true"
+        [rowTrackBy]="trackLeg"
+        aria-label="Exact attributed quantities proposed for risk reduction"
+      >
+        <ng-template #caption>Exact attributed quantities proposed for risk reduction</ng-template>
+        <ng-template #header>
+          <tr>
+            <th scope="col">Bot</th>
+            <th scope="col">Symbol</th>
+            <th scope="col">Closing side</th>
+            <th scope="col" class="text-right">Quantity</th>
+            <th scope="col">Position evidence</th>
+          </tr>
+        </ng-template>
+        <ng-template #body let-leg>
           <tr>
             <td><code>{{ leg.strategy_instance_id }}</code></td>
-            <td>{{ leg.symbol }}</td>
+            <td>{{ leg.symbol | receiptLabel }}</td>
             <td>{{ leg.side | receiptLabel }}</td>
-            <td>{{ leg.quantity }}</td>
-            <td>
-              <app-timestamp-display [value]="leg.position_updated_at_ms" mode="local" />
-            </td>
+            <td class="text-right tabular-nums">{{ leg.quantity }}</td>
+            <td><app-timestamp-display [value]="leg.position_updated_at_ms" mode="local" /></td>
           </tr>
-        }
-      </tbody>
-    </table>
-  </div>
+        </ng-template>
+      </p-table>
 
-  <div class="safe-flatten-plan__version">
-    <span>Plan version</span>
-    <code>{{ plan().version_token }}</code>
-  </div>
+      <div class="grid gap-1">
+        <span class="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">
+          Plan version
+        </span>
+        <code class="break-words text-[var(--text-secondary)]">{{ plan().version_token }}</code>
+      </div>
+    </div>
+  </p-card>
 </section>
