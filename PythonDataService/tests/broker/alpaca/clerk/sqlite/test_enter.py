@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -26,36 +27,28 @@ from app.broker.alpaca.clerk.sqlite.enter import (
     resolve_enter_submission,
     submit_enter,
 )
+from app.broker.alpaca.clerk.sqlite.facts import OrderFillObservedFacts
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
     InvalidIdentityError,
     NoActiveRunError,
     UnknownStrategyInstanceError,
 )
+from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
+from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError, raise_uncertainty
 from app.broker.contract.errors import BrokerError, BrokerRequestInvalid, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from conftest import _clock_at
 
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
 
 
-def _clock_at(start_ms: int):
-    box = {"t": start_ms}
-
-    def clock() -> int:
-        return box["t"]
-
-    def advance(delta_ms: int) -> None:
-        box["t"] += delta_ms
-
-    clock.advance = advance  # type: ignore[attr-defined]
-    return clock
-
-
 @pytest.fixture
-def repo(tmp_path: Path):
+def repo(tmp_path: Path) -> Iterator[ClerkSqliteRepository]:
     clock = _clock_at(1_700_000_000_000)
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r.register_strategy_instance(strategy_instance_id=SID, symbol="SPY", config_hash="h1")
@@ -160,9 +153,7 @@ class _FakeTrade:
             # deliberately carry a client_order_id that does not match the
             # requested one, to exercise the mismatch guard.
             return self._lookup_result
-        return _broker_order(client_order_id).model_copy(
-            update={"order_id": f"bo-{client_order_id}"}
-        )
+        return _broker_order(client_order_id).model_copy(update={"order_id": f"bo-{client_order_id}"})
 
 
 # ── Capture-before-contact, concurrency, and the definitive outcomes ────────
@@ -316,6 +307,48 @@ async def test_definitive_broker_rejection_folds_failed_not_unknown(
     assert command is not None and command.state == "failed"
 
 
+async def test_cancelled_submit_retains_unknown_custody_before_claim_release(
+    repo: ClerkSqliteRepository,
+) -> None:
+    class BlockingTrade(_FakeTrade):
+        def __init__(self) -> None:
+            super().__init__()
+            self.submit_started = asyncio.Event()
+
+        async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+            self.submit_calls.append((leg, client_order_id))
+            self.submit_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    trade = BlockingTrade()
+    task = asyncio.create_task(
+        submit_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="cancelled-submit",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+            trade=trade,
+        )
+    )
+    await trade.submit_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    effect = repo.effect_operation("effect:spy-bot:cancelled-submit")
+    assert effect is not None and effect.state == "unknown"
+    uncertainty = repo.active_uncertainty(
+        scope="BOT",
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        strategy_instance_id=SID,
+    )
+    assert uncertainty is not None
+
+
 async def test_submit_ack_with_a_mismatched_client_order_id_folds_uncertain_not_a_raw_exception(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -418,13 +451,7 @@ async def test_absence_past_the_grace_window_resolves_failed(tmp_path: Path) -> 
 async def test_same_owner_concurrent_resolves_fold_the_terminal_outcome_once(
     tmp_path: Path,
 ) -> None:
-    """``claim_effect_operation`` treats a same-owner claim as a renewal
-    (always succeeds), so two overlapping ``resolve_enter_submission`` calls
-    *within the same process* both pass the claim and both pass the grace
-    check. Only the last one to (re-)claim may still hold a live token by
-    the time it reaches the terminal fold — the other must detect its own
-    token went stale and no-op, never raise a duplicate-receipt
-    ``IntegrityError`` or write a second terminal transition."""
+    """An overlapping same-process resolver is fenced before broker contact."""
     clock = _clock_at(1_700_000_000_000)
     r = ClerkSqliteRepository.initialize(
         account_id="PA-RACE", artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
@@ -460,7 +487,8 @@ async def test_same_owner_concurrent_resolves_fold_the_terminal_outcome_once(
                 # sweep is mid-flight — the same-process analogue of two
                 # overlapping periodic recovery invocations.
                 inner_trade = _FakeTrade(lookup_absent=True)
-                await resolve_enter_submission(r, order_ref=accepted.order_ref, trade=inner_trade)
+                with pytest.raises(OperationClaimError):
+                    await resolve_enter_submission(r, order_ref=accepted.order_ref, trade=inner_trade)
             return None
 
     outer_trade = _RacingTrade()
@@ -498,7 +526,9 @@ async def test_kill_before_broker_contact_recovery_finds_one_accepted_operation_
     assert effect is not None and effect.state == "in_progress"  # found -> acked
 
 
-async def test_resolving_an_already_terminal_order_is_a_noop(repo: ClerkSqliteRepository) -> None:
+async def test_resolving_an_acknowledged_nonterminal_order_refreshes_evidence(
+    repo: ClerkSqliteRepository,
+) -> None:
     trade = _FakeTrade()
     submission = await submit_enter(
         repo,
@@ -510,7 +540,7 @@ async def test_resolving_an_already_terminal_order_is_a_noop(repo: ClerkSqliteRe
         trade=trade,
     )
     resolved = await resolve_enter_submission(repo, order_ref=submission.order_ref, trade=trade)
-    assert len(trade.lookup_calls) == 0  # already acked -> no broker call at all
+    assert len(trade.lookup_calls) == 1
     assert resolved.effect_operation_id == submission.effect_operation_id
 
 
@@ -568,9 +598,7 @@ async def test_fills_fold_into_namespace_attributed_exposure_not_account_netting
     other_sid = "qqq-bot"
     repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="SPY", config_hash="h2")
 
-    trade_a = _FakeTrade(
-        submit_result=_broker_order("will-be-replaced", filled_quantity=3, filled_avg_price=500.0)
-    )
+    trade_a = _FakeTrade(submit_result=_broker_order("will-be-replaced", filled_quantity=3, filled_avg_price=500.0))
     submission_a = await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -581,12 +609,8 @@ async def test_fills_fold_into_namespace_attributed_exposure_not_account_netting
         trade=trade_a,
     )
 
-    submit_start_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=RUN_ID
-    )
-    trade_b = _FakeTrade(
-        submit_result=_broker_order("will-be-replaced", filled_quantity=5, filled_avg_price=501.0)
-    )
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id=RUN_ID)
+    trade_b = _FakeTrade(submit_result=_broker_order("will-be-replaced", filled_quantity=5, filled_avg_price=501.0))
     await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -601,6 +625,51 @@ async def test_fills_fold_into_namespace_attributed_exposure_not_account_netting
     assert repo.position(other_sid, "SPY") == 5.0
     fills = repo.fills_for_order(submission_a.order_ref)
     assert len(fills) == 1
+
+
+async def test_position_symbols_are_normalized_at_write_and_read_boundaries(
+    repo: ClerkSqliteRepository,
+) -> None:
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="lowercase-symbol",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(quantity=2),
+    )
+    assert accepted.effect_operation_id is not None
+    assert accepted.order_ref is not None
+    effect = repo.effect_operation(accepted.effect_operation_id)
+    assert effect is not None
+    facts = OrderFillObservedFacts(
+        symbol="spy",
+        side="BUY",
+        cumulative_filled_quantity=2.0,
+        avg_price=100.0,
+        is_correction=False,
+    )
+    repo.append_transition(
+        TransitionInput(
+            strategy_instance_id=effect.strategy_instance_id,
+            run_id=effect.run_id,
+            command_id=effect.command_id,
+            effect_operation_id=effect.effect_operation_id,
+            order_ref=accepted.order_ref,
+            transition_kind="ORDER_FILL_OBSERVED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state="in_progress",
+            source_event_at_ms=1_700_000_000_100,
+            clerk_observed_at_ms=repo.clock(),
+            summary_code="ORDER_FILL_OBSERVED",
+            facts_json=facts.to_facts_json(),
+        )
+    )
+
+    assert repo.position(SID, "spy") == pytest.approx(2.0)
+    assert repo.position(SID, "SPY") == pytest.approx(2.0)
+    assert repo.attributed_positions_by_symbol() == {"SPY": pytest.approx(2.0)}
 
 
 async def test_duplicate_fill_observation_does_not_double_count(
@@ -631,9 +700,7 @@ async def test_out_of_order_broker_state_event_does_not_regress_orders_broker_st
 ) -> None:
     """§3c: an event whose source timestamp is older than the value already
     recorded must not regress ``orders.broker_state``."""
-    trade = _FakeTrade(
-        submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_001_000)
-    )
+    trade = _FakeTrade(submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_001_000))
     submission = await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -670,9 +737,7 @@ def test_fill_quantity_with_no_avg_price_withholds_ack_and_folds_uncertain(
         leg=_leg(quantity=3),
     )
     assert accepted.order_ref is not None and accepted.effect_operation_id is not None
-    anomalous = _broker_order(
-        accepted.order_ref, status="partially_filled", filled_quantity=3, filled_avg_price=None
-    )
+    anomalous = _broker_order(accepted.order_ref, status="partially_filled", filled_quantity=3, filled_avg_price=None)
     fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=anomalous)
 
     effect = repo.effect_operation(accepted.effect_operation_id)
@@ -701,13 +766,9 @@ def test_partial_fill_delta_price_is_the_weighted_average_not_the_cumulative_one
     )
     assert accepted.order_ref is not None and accepted.effect_operation_id is not None
 
-    first = _broker_order(
-        accepted.order_ref, status="partially_filled", filled_quantity=2, filled_avg_price=10.0
-    )
+    first = _broker_order(accepted.order_ref, status="partially_filled", filled_quantity=2, filled_avg_price=10.0)
     fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=first)
-    second = _broker_order(
-        accepted.order_ref, status="filled", filled_quantity=5, filled_avg_price=20.0
-    )
+    second = _broker_order(accepted.order_ref, status="filled", filled_quantity=5, filled_avg_price=20.0)
     fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=second)
 
     fills = repo.fills_for_order(accepted.order_ref)
@@ -735,9 +796,7 @@ def test_fractional_residual_reobservation_does_not_create_a_spurious_fill(
     )
     assert accepted.order_ref is not None and accepted.effect_operation_id is not None
 
-    first = _broker_order(
-        accepted.order_ref, status="filled", filled_quantity=2.5, filled_avg_price=500.0
-    )
+    first = _broker_order(accepted.order_ref, status="filled", filled_quantity=2.5, filled_avg_price=500.0)
     fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=first)
     residual = _broker_order(
         accepted.order_ref,
@@ -757,9 +816,8 @@ def test_fill_is_durable_before_ack_so_a_crash_between_them_recovers_cleanly(
     """``fold_order_evidence`` appends two independent transitions when a
     fill is reported. If the process dies between them, the *fill* must
     already be durable and the order must still look un-acked
-    (``broker_order_id is None``) — the reverse order loses the fill
-    permanently, since ``resolve_enter_submission`` never re-polls an
-    already-acked order."""
+    (``broker_order_id is None``). Recovery re-polls every nonterminal effect
+    and safely reconstructs the missing acknowledgement."""
     accepted = accept_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -769,9 +827,7 @@ def test_fill_is_durable_before_ack_so_a_crash_between_them_recovers_cleanly(
         leg=_leg(quantity=4),
     )
     assert accepted.order_ref is not None and accepted.effect_operation_id is not None
-    filled_order = _broker_order(
-        accepted.order_ref, status="filled", filled_quantity=4, filled_avg_price=500.0
-    )
+    filled_order = _broker_order(accepted.order_ref, status="filled", filled_quantity=4, filled_avg_price=500.0)
 
     real_append = repo.append_transition
     calls = {"n": 0}
@@ -805,9 +861,7 @@ async def test_ack_with_no_source_timestamp_does_not_crash_or_regress_broker_sta
     """``BrokerOrder.updated_at_ms`` is optional (Alpaca can omit it); a
     ``None`` source timestamp must never crash the §3c idempotency guard,
     and must never be treated as newer than an already-recorded real one."""
-    trade = _FakeTrade(
-        submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_000_900)
-    )
+    trade = _FakeTrade(submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_000_900))
     submission = await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -936,16 +990,6 @@ async def test_uncertain_and_failed_transitions_also_carry_the_run_id(
     active = repo.active_run(SID)
     assert active is not None
 
-    lost = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"), lookup_absent=True)
-    uncertain_submission = await submit_enter(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="dec-uncertain",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(),
-        trade=lost,
-    )
     rejected = _FakeTrade(submit_error=BrokerRequestInvalid("bad request", broker="alpaca"))
     failed_submission = await submit_enter(
         repo,
@@ -956,16 +1000,24 @@ async def test_uncertain_and_failed_transitions_also_carry_the_run_id(
         leg=_leg(),
         trade=rejected,
     )
+    lost = _FakeTrade(submit_error=BrokerUnavailable("timeout", broker="alpaca"), lookup_absent=True)
+    uncertain_submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-uncertain",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        trade=lost,
+    )
 
     uncertain_transitions = repo.transitions_for_order(uncertain_submission.order_ref)
     assert any(
-        t["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN" and t["run_id"] == active.run_id
-        for t in uncertain_transitions
+        t["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN" and t["run_id"] == active.run_id for t in uncertain_transitions
     )
     failed_transitions = repo.transitions_for_order(failed_submission.order_ref)
     assert any(
-        t["transition_kind"] == "ORDER_SUBMIT_FAILED" and t["run_id"] == active.run_id
-        for t in failed_transitions
+        t["transition_kind"] == "ORDER_SUBMIT_FAILED" and t["run_id"] == active.run_id for t in failed_transitions
     )
 
 
@@ -1005,16 +1057,199 @@ async def test_submit_enter_never_calls_broker_when_no_active_run_matches(
     assert len(trade.submit_calls) == 0
 
 
+# ── R6 admission gating (#1380) ─────────────────────────────────────────────
+
+
+async def test_accept_enter_rejects_when_an_account_clerk_uncertainty_blocks_new_exposure(
+    repo: ClerkSqliteRepository,
+) -> None:
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=None,
+        reason_code="ACCOUNT_WIDE_ISSUE",
+        headline="h",
+        explanation="e",
+        operator_impact="oi",
+        next_step="ns",
+    )
+    before = len(repo.custody_transitions())
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-1",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+        )
+    assert exc_info.value.decision.reason_code == "ACCOUNT_WIDE_ISSUE"
+    assert len(repo.custody_transitions()) == before  # no ENTER_ACCEPTED written
+
+
+async def test_accept_enter_unaffected_by_a_different_bots_uncertainty(
+    repo: ClerkSqliteRepository,
+) -> None:
+    other_sid = "qqq-bot"
+    repo.register_strategy_instance(strategy_instance_id=other_sid, symbol="QQQ", config_hash="h2")
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=other_sid, lifecycle_run_id="run-q")
+    raise_uncertainty(
+        repo,
+        strategy_instance_id=other_sid,
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        headline="h",
+        explanation="e",
+        operator_impact="oi",
+        next_step="ns",
+    )
+
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-1",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    )
+    assert accepted.created
+
+
+async def test_lost_submit_atomically_blocks_more_exposure_until_exact_recovery(
+    repo: ClerkSqliteRepository,
+) -> None:
+    lost = _FakeTrade(
+        submit_error=BrokerUnavailable("timeout", broker="alpaca"),
+        lookup_absent=True,
+    )
+    submission = await submit_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-unknown",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+        trade=lost,
+    )
+    uncertainty = repo.active_uncertainty(
+        scope="BOT",
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        strategy_instance_id=SID,
+    )
+    assert uncertainty is not None
+
+    with pytest.raises(AdmissionBlockedError) as exc_info:
+        accept_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-must-not-pass",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+        )
+    assert exc_info.value.decision.reason_code == "ORDER_OUTCOME_UNKNOWN"
+
+    await resolve_enter_submission(
+        repo,
+        order_ref=submission.order_ref,
+        trade=_FakeTrade(lookup_result=_broker_order(submission.order_ref)),
+    )
+    assert (
+        repo.active_uncertainty(
+            scope="BOT",
+            reason_code="ORDER_OUTCOME_UNKNOWN",
+            strategy_instance_id=SID,
+        )
+        is None
+    )
+    assert accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-after-recovery",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    ).created
+
+
+def test_exact_recovery_advances_each_effect_while_a_sibling_unknown_remains(
+    repo: ClerkSqliteRepository,
+) -> None:
+    """Two pre-accepted operations share one episode without stranding the first."""
+    first = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-preaccepted-a",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    )
+    second = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="dec-preaccepted-b",
+        lifecycle_run_id=RUN_ID,
+        leg=_leg(),
+    )
+    assert first.effect_operation_id and first.order_ref
+    assert second.effect_operation_id and second.order_ref
+    fold_uncertain(
+        repo,
+        effect_operation_id=first.effect_operation_id,
+        order_ref=first.order_ref,
+        why="lost A",
+    )
+    fold_uncertain(
+        repo,
+        effect_operation_id=second.effect_operation_id,
+        order_ref=second.order_ref,
+        why="lost B",
+    )
+
+    fold_order_evidence(
+        repo,
+        effect_operation_id=first.effect_operation_id,
+        order=_broker_order(first.order_ref, order_id="bo-a"),
+    )
+    first_after = repo.effect_operation(first.effect_operation_id)
+    second_after = repo.effect_operation(second.effect_operation_id)
+    assert first_after is not None and first_after.state == "in_progress"
+    assert second_after is not None and second_after.state == "unknown"
+    assert repo.active_uncertainty(
+        scope="BOT",
+        reason_code="ORDER_OUTCOME_UNKNOWN",
+        strategy_instance_id=SID,
+    )
+
+    fold_order_evidence(
+        repo,
+        effect_operation_id=second.effect_operation_id,
+        order=_broker_order(second.order_ref, order_id="bo-b"),
+    )
+    assert repo.effect_operation(first.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
+    assert repo.effect_operation(second.effect_operation_id).state == "in_progress"  # type: ignore[union-attr]
+    assert (
+        repo.active_uncertainty(
+            scope="BOT",
+            reason_code="ORDER_OUTCOME_UNKNOWN",
+            strategy_instance_id=SID,
+        )
+        is None
+    )
+
+
 # ── Operation claim fences broker contact (pinned contract §2) ──────────────
 
 
 async def test_submit_enter_claims_the_operation_before_broker_contact(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """submit_enter must hold a live claim on its own operation once it has
-    contacted the broker — proven negatively: a competing owner cannot grab
-    it while the claim is still live (pinned contract §2)."""
-    trade = _FakeTrade()
+    """The attempt claim is live during contact and released afterward."""
+
+    def assert_claimed(_leg: BrokerOrderLeg, _client_order_id: str) -> None:
+        with pytest.raises(OperationClaimError):
+            repo.claim_effect_operation(effect_operation_id=f"effect:{SID}:dec-1", owner="other-process")
+
+    trade = _FakeTrade(on_submit=assert_claimed)
     submission = await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
@@ -1024,10 +1259,40 @@ async def test_submit_enter_claims_the_operation_before_broker_contact(
         leg=_leg(),
         trade=trade,
     )
-    with pytest.raises(OperationClaimError):
-        repo.claim_effect_operation(
-            effect_operation_id=submission.effect_operation_id, owner="other-process"
+    after = repo.claim_effect_operation(effect_operation_id=submission.effect_operation_id, owner="other-process")
+    assert repo.release_operation_claim(effect_operation_id=submission.effect_operation_id, token=after.token)
+
+
+async def test_expired_submit_attempt_cannot_fold_its_late_broker_response(
+    repo: ClerkSqliteRepository,
+) -> None:
+    def expire_claim(_leg: BrokerOrderLeg, _client_order_id: str) -> None:
+        repo._conn.execute(
+            "UPDATE effect_operations SET claim_expires_at_ms = claimed_at_ms + 1 WHERE effect_operation_id = ?",
+            (f"effect:{SID}:dec-1",),
         )
+        repo._conn.commit()
+        repo.clock.advance(2)  # type: ignore[attr-defined]
+
+    trade = _FakeTrade(on_submit=expire_claim)
+    with pytest.raises(OperationClaimError):
+        await submit_enter(
+            repo,
+            account_id=ACCOUNT_ID,
+            strategy_instance_id=SID,
+            decision_id="dec-1",
+            lifecycle_run_id=RUN_ID,
+            leg=_leg(),
+            trade=trade,
+        )
+
+    effect_id = f"effect:{SID}:dec-1"
+    order = repo.order_for_effect_operation(effect_id)
+    assert order is not None and order.broker_order_id is None
+
+    recovered = await resolve_enter_submission(repo, order_ref=order.order_ref, trade=_FakeTrade())
+    assert recovered.effect_operation_id == effect_id
+    assert repo.order(order.order_ref).broker_order_id is not None  # type: ignore[union-attr]
 
 
 async def test_resolve_enter_submission_fails_closed_when_operation_claimed_elsewhere(

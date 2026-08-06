@@ -31,14 +31,19 @@ from app.broker.alpaca.clerk.sqlite.commands import (
     submit_stop_run,
 )
 from app.broker.alpaca.clerk.sqlite.process_repositories import get_or_open_repository
+from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteError,
     ClerkSqliteRepository,
     ExecutionLeaseLost,
     RepositoryPoisoned,
 )
+from app.broker.contract.errors import BrokerError, UnknownBrokerError
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.broker.contract.registry import get_broker_registry
 from app.schemas.alpaca_clerk_sqlite import (
     CommandResponse,
+    ReconciliationResponse,
     StartRunRequest,
     StopRunRequest,
 )
@@ -187,3 +192,54 @@ async def get_command(account_id: str, command_id: str) -> CommandResponse:
     if resource is None:
         raise HTTPException(status_code=404, detail={"reason": "command_not_found"})
     return CommandResponse.from_resource(resource)
+
+
+@router.post(
+    "/accounts/{account_id}/reconcile",
+    response_model=ReconciliationResponse,
+)
+async def reconcile_now(account_id: str) -> ReconciliationResponse:
+    """Run the same fail-closed account pass used by the automatic sweep."""
+    repo = await _repo(account_id)
+    try:
+        port = get_broker_registry().resolve("alpaca")
+    except UnknownBrokerError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "alpaca_broker_unavailable", "message": str(exc)},
+        ) from exc
+    if not isinstance(port, BrokerReadPort) or not isinstance(port, BrokerTradePort):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "reason": "alpaca_trade_port_unavailable",
+                "message": "The registered Alpaca adapter cannot reconcile order identity.",
+            },
+        )
+    try:
+        broker_account = await port.get_account()
+        if broker_account.account_id != account_id:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "broker_account_mismatch",
+                    "message": (
+                        f"Requested SQLite authority {account_id!r}, but the configured "
+                        f"Alpaca adapter is bound to {broker_account.account_id!r}."
+                    ),
+                },
+            )
+        result = await reconcile_account(
+            repo,
+            read=port,
+            trade=port,
+            trigger="OPERATOR_RECONCILE_NOW",
+        )
+    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
+        raise _unavailable_response(exc) from exc
+    except BrokerError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "broker_unavailable", "message": str(exc)},
+        ) from exc
+    return ReconciliationResponse.from_result(result)

@@ -28,7 +28,7 @@ outer ``custody_transitions`` column, so its ``facts_json`` is legitimately
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -149,6 +149,163 @@ class OrderSubmitFailedFacts:
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> OrderSubmitFailedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ExitAcceptedFacts:
+    """``EXIT_ACCEPTED`` (#1379): command idempotency key/hash/kind/action,
+    the decision id, the effect idempotency key, the primary
+    ``entry_order_ref``, and every captured sibling reference — everything
+    ``_fold_exit_accepted`` needs to rebuild the command, operation, and
+    immutable-provenance custody links from a finalized mirror line. Unlike
+    ``EnterAcceptedFacts``, no ``leg`` is captured here: the reducing
+    order's side/quantity aren't known at acceptance time (they depend on
+    how the entry's cancellation resolves), so there is nothing immutable
+    about them to snapshot yet — the eventual reducing order's shape is
+    captured by ``ExitReducingOrderCreatedFacts`` once it's actually
+    computed."""
+
+    idempotency_key: str
+    payload_hash: str
+    kind: str
+    action: str
+    intended_end_state: str | None
+    effect_idempotency_key: str
+    effect_kind: str
+    decision_id: str
+    entry_order_ref: str
+    entry_order_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExitAcceptedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ExitReducingOrderCreatedFacts:
+    """``EXIT_REDUCING_ORDER_CREATED`` (#1379): the immutable inputs
+    ``_fold_exit_reducing_order_created`` needs to create the ``orders`` row
+    for the reducing/close order — symbol and side are needed to place the
+    order; ``quantity`` is the Clerk-proven remaining attributed quantity at
+    the moment cancellation resolved (the acceptance criterion this fact
+    exists to prove — see ``docs/references/clerk-exit-reducing-quantity.md``)."""
+
+    symbol: str
+    side: str
+    quantity: float
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExitReducingOrderCreatedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class ReconciliationAttemptedFacts:
+    """A reconciliation pass's own attempt to resolve one uncertain order
+    (#1378) — beyond the outer transition row (``effect_operation_id``,
+    ``order_ref``), the durable audit needs what drove the attempt and what
+    it concluded; ``why`` carries the human-readable reasoning the paired
+    ``reconciliations`` row's ``outcome`` column doesn't have room for."""
+
+    trigger: str  # 'AUTOMATIC' | 'OPERATOR_RECONCILE_NOW'
+    outcome: str  # 'STILL_UNKNOWN' | 'RESOLVED_SUCCESS' | 'RESOLVED_FAILURE'
+    why: str
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ReconciliationAttemptedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class AccountHoldRaisedFacts:
+    """An ``ACCOUNT_CLERK``-scoped hold raised by reconciliation (#1378) —
+    currently only the unexplained/foreign-order reason. ``evidence_refs`` is
+    the broker-assigned ``order_id`` of every foreign order observed, not the
+    (possibly absent) ``client_order_id`` — a genuinely foreign order may
+    have no ``client_order_id`` at all."""
+
+    reason_code: str
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> AccountHoldRaisedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class AccountHoldResolvedFacts:
+    """Evidence-backed closure of one Account Clerk hold episode."""
+
+    reason_code: str
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> AccountHoldResolvedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class UncertaintyRaisedFacts:
+    """``UNCERTAINTY_RAISED`` (#1380): the R5 envelope, minus what's already
+    an outer ``custody_transitions``/``uncertainties`` column —
+    ``strategy_instance_id`` is already an outer transition column, and
+    ``uncertainties.scope`` is derived from it being non-null (``BOT``) or
+    null (``ACCOUNT_CLERK``), the same truthful scope/identity coupling
+    ``holds`` already uses. Every other envelope field (severity, the two
+    independent admission axes, and the four backend-authored operator-
+    facing strings) has nowhere else to live, so it's typed here."""
+
+    severity: str
+    blocks_new_exposure: bool
+    allows_reduction: bool
+    reason_code: str
+    headline: str
+    explanation: str
+    operator_impact: str
+    next_step: str
+    evidence_refs: list[str]
+    cause_facts: dict[str, Any] = field(default_factory=dict)
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> UncertaintyRaisedFacts:
+        return cls(**json.loads(facts_json))
+
+
+@dataclass(frozen=True)
+class UncertaintyResolvedFacts:
+    """``UNCERTAINTY_RESOLVED`` (#1380): which uncertainty resolved, and why —
+    ``uncertainty_id`` is not an outer transition column (unlike
+    ``order_ref``/``effect_operation_id``), so it must round-trip through
+    facts for the fold to know which ``uncertainties`` row to close."""
+
+    uncertainty_id: str
+    resolution_kind: str
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> UncertaintyResolvedFacts:
         return cls(**json.loads(facts_json))
 
 

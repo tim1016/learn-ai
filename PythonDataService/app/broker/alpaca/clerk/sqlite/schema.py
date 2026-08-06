@@ -17,7 +17,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA journal_mode = WAL",
@@ -167,6 +167,21 @@ CREATE UNIQUE INDEX ux_orders_client_order_id ON orders(client_order_id);
 CREATE UNIQUE INDEX ux_orders_broker_order_id ON orders(broker_order_id)
     WHERE broker_order_id IS NOT NULL;
 
+-- Immutable order provenance lives on orders.effect_operation_id. Later
+-- operations acquire resolution custody through replayable links instead of
+-- re-parenting the order and destroying its origin.
+CREATE TABLE operation_order_links (
+    effect_operation_id      TEXT NOT NULL REFERENCES effect_operations(effect_operation_id),
+    order_ref                TEXT NOT NULL REFERENCES orders(order_ref),
+    role                     TEXT NOT NULL CHECK (role IN ('ENTRY','REDUCING')),
+    linked_at_ms             INTEGER NOT NULL,
+    PRIMARY KEY (effect_operation_id, order_ref)
+);
+CREATE UNIQUE INDEX ux_operation_order_links_one_reducing
+    ON operation_order_links(effect_operation_id) WHERE role = 'REDUCING';
+CREATE INDEX ix_operation_order_links_order_ref
+    ON operation_order_links(order_ref);
+
 -- ============================================================
 -- fills — permanent executions and corrections (append/idempotent insert)
 -- ============================================================
@@ -211,6 +226,9 @@ CREATE TABLE holds (
     CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
         OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
 );
+CREATE UNIQUE INDEX ux_holds_one_active_cause
+    ON holds(scope, reason_code, COALESCE(strategy_instance_id, ''))
+    WHERE state = 'ACTIVE';
 
 -- ============================================================
 -- uncertainties — active nonterminal unknowns; fold of the log. Columns are
@@ -238,6 +256,9 @@ CREATE TABLE uncertainties (
     CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
         OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
 );
+CREATE UNIQUE INDEX ux_uncertainties_one_active_cause
+    ON uncertainties(scope, reason_code, COALESCE(strategy_instance_id, ''))
+    WHERE resolved_at_ms IS NULL;
 
 -- ============================================================
 -- reconciliations — reconciliation attempts and terminal receipts

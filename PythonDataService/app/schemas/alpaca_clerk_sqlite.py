@@ -7,9 +7,21 @@ as given.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.sqlite.repository import CommandResource
+
+if TYPE_CHECKING:
+    from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
+
+ReconciliationVerdict = Literal[
+    "clean",
+    "unexplained_order",
+    "position_drift",
+    "stale",
+]
 
 
 class CommandResponse(BaseModel):
@@ -86,3 +98,23 @@ class DurableConflictResponse(BaseModel):
 
     reason: str
     existing_command: CommandResponse
+
+
+class ReconciliationResponse(BaseModel):
+    """Backend-authored result of an operator reconciliation pass."""
+
+    model_config = ConfigDict(frozen=True)
+
+    verdict: ReconciliationVerdict
+    resolved_count: int
+    foreign_order_count: int
+    drifted_symbols: tuple[str, ...]
+
+    @classmethod
+    def from_result(cls, result: AccountReconciliationResult) -> ReconciliationResponse:
+        return cls(
+            verdict=result.verdict,
+            resolved_count=result.resolved_count,
+            foreign_order_count=result.foreign_order_count,
+            drifted_symbols=result.drifted_symbols,
+        )

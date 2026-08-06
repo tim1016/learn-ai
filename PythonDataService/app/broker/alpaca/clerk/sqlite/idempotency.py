@@ -1,16 +1,17 @@
 """Shared content-addressed-identity errors for command domain modules.
 
-``commands.py`` (local Start/Stop, #1376) and ``enter.py`` (#1377) both
-submit through :meth:`ClerkSqliteRepository.commit_first_transition` and
-need the same three outcomes translated to the same exceptions — kept here
-once rather than each domain module defining its own.
+``commands.py`` (local Start/Stop, #1376), ``enter.py`` (#1377), and
+``exit.py`` (#1379) all submit through
+:meth:`ClerkSqliteRepository.commit_first_transition` and need the same
+three outcomes translated to the same exceptions — kept here once rather
+than each domain module defining its own.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.broker.alpaca.clerk.sqlite.models import CommandResource, RunResource
+from app.broker.alpaca.clerk.sqlite.models import CommandResource, OrderResource, RunResource
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -86,3 +87,44 @@ def require_active_run(
     if active is None or active.lifecycle_run_id != lifecycle_run_id:
         raise NoActiveRunError(strategy_instance_id)
     return active
+
+
+class UnknownEntryOrderError(Exception):
+    """EXIT's targeted ``entry_order_ref`` does not exist, does not belong
+    to this bot, is not an ``ENTRY``-role order, or is already under an
+    active (non-terminal) EXIT — a typed domain not-found/conflict, never a
+    raw SQLite foreign-key failure. #1379's analog of
+    :class:`UnknownStrategyInstanceError`."""
+
+    def __init__(self, entry_order_ref: str) -> None:
+        self.entry_order_ref = entry_order_ref
+        super().__init__(f"unknown, foreign, or already-exiting entry order {entry_order_ref!r}")
+
+
+def require_owned_entry_order(
+    repo: ClerkSqliteRepository, *, strategy_instance_id: str, entry_order_ref: str
+) -> OrderResource:
+    """Called from inside a ``build_transition`` closure, same rule as
+    :func:`require_strategy_instance` — must run under the write lock so a
+    concurrent EXIT accept can never link the same order between this check
+    and the accept it gates.
+
+    Rejects: the order doesn't exist, belongs to a different bot, isn't
+    ``ENTRY``-role (targeting a REDUCING order, or a foreign role, makes no
+    sense for a fresh EXIT), or is already owned by a different, still-live
+    EXIT (a second EXIT decision racing the first would otherwise create
+    conflicting live custody) — this last case is intentionally
+    conservative rather than a full conflicting-concurrent-operation policy,
+    which is R6/#1380 territory.
+    """
+    order = repo.order(entry_order_ref)
+    if order is None:
+        raise UnknownEntryOrderError(entry_order_ref)
+    effect = repo.effect_operation(order.effect_operation_id)
+    if effect is None or effect.strategy_instance_id != strategy_instance_id:
+        raise UnknownEntryOrderError(entry_order_ref)
+    if order.role != "ENTRY":
+        raise UnknownEntryOrderError(entry_order_ref)
+    if repo.active_exit_for_order(entry_order_ref) is not None:
+        raise UnknownEntryOrderError(entry_order_ref)
+    return order

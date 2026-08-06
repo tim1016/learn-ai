@@ -16,6 +16,10 @@
   2 → 3. There is no live database to migrate yet (pre-cutover, #1382); the
   bump exists so `open()`'s version check rejects a stale on-disk DDL
   shape with a clear error instead of silently running without the index.
+- The consolidated Account Clerk control-plane PR keeps order provenance
+  immutable and records later resolution custody in `operation_order_links`.
+  The new table and once-only reducing-order index bump `SCHEMA_VERSION` 3 → 4.
+  There is still no live database to migrate (pre-cutover, #1382).
 - **Source of truth ranking:** ADR 0035 (decision rationale) →
   `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` §9–§11 (functional
   contract) → this document (concrete, implementable pin). Where this document
@@ -91,7 +95,12 @@ PRAGMA busy_timeout = 5000;   -- ms; Slice 2 may tune, must stay bounded and doc
   below) and a transactionally claimed **operation work item** (a row-level
   claim on the owning `effect_operations` row) are acquired before any broker
   contact. `BEGIN IMMEDIATE` proves single-writer-at-the-database; it does not
-  prove single-process. The lease + work claim close that gap.
+  prove single-process. The lease + work claim close that gap. Claims are
+  exclusive even for the same process owner: each attempt gets a new token,
+  renews that exact still-live token before and after broker I/O, revalidates
+  it before folding evidence, and CAS-releases only its own token. An expired
+  attempt cannot resurrect itself or mutate projections after a successor
+  takes over.
 - A startup topology fence rejects a second local scheduler, stream-consumer,
   or reconciler registration for the same account within one process, and
   rejects a second process from acquiring the lease while it is held and
@@ -243,6 +252,21 @@ CREATE UNIQUE INDEX ux_orders_client_order_id ON orders(client_order_id);
 CREATE UNIQUE INDEX ux_orders_broker_order_id ON orders(broker_order_id)
     WHERE broker_order_id IS NOT NULL;
 
+-- Immutable order provenance lives on orders.effect_operation_id. Later
+-- operations acquire resolution custody through replayable links instead of
+-- re-parenting the order and destroying its origin.
+CREATE TABLE operation_order_links (
+    effect_operation_id      TEXT NOT NULL REFERENCES effect_operations(effect_operation_id),
+    order_ref                TEXT NOT NULL REFERENCES orders(order_ref),
+    role                     TEXT NOT NULL CHECK (role IN ('ENTRY','REDUCING')),
+    linked_at_ms             INTEGER NOT NULL,
+    PRIMARY KEY (effect_operation_id, order_ref)
+);
+CREATE UNIQUE INDEX ux_operation_order_links_one_reducing
+    ON operation_order_links(effect_operation_id) WHERE role = 'REDUCING';
+CREATE INDEX ix_operation_order_links_order_ref
+    ON operation_order_links(order_ref);
+
 -- ============================================================
 -- fills — permanent executions and corrections (append/idempotent insert)
 -- ============================================================
@@ -287,6 +311,9 @@ CREATE TABLE holds (
     CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
         OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
 );
+CREATE UNIQUE INDEX ux_holds_one_active_cause
+    ON holds(scope, reason_code, COALESCE(strategy_instance_id, ''))
+    WHERE state = 'ACTIVE';
 
 -- ============================================================
 -- uncertainties — active nonterminal unknowns; fold of the log. Columns are
@@ -314,6 +341,9 @@ CREATE TABLE uncertainties (
     CHECK ((scope = 'BOT' AND strategy_instance_id IS NOT NULL)
         OR (scope = 'ACCOUNT_CLERK' AND strategy_instance_id IS NULL))
 );
+CREATE UNIQUE INDEX ux_uncertainties_one_active_cause
+    ON uncertainties(scope, reason_code, COALESCE(strategy_instance_id, ''))
+    WHERE resolved_at_ms IS NULL;
 
 -- ============================================================
 -- reconciliations — reconciliation attempts and terminal receipts
@@ -537,6 +567,100 @@ dataclass and fold are not implemented in the corrective slice — no command
 flow appends that transition kind yet — but its facts shape is pinned here so
 issue #1377's rebuild has a fixed target rather than inventing one ad hoc.
 
+### 3e. Reconciliation and hold transition facts (#1378)
+
+Two transition kinds added by issue #1378 fall outside §3d's table above
+because neither creates or mutates a `commands` row — they populate the
+auxiliary `reconciliations`/`holds` tables (§3) only, so there is no
+command-rebuild fidelity concern to pin facts against. Documented here for
+discoverability, not because §3d's rule applies to them:
+
+| Transition | Facts | Fold effect |
+| --- | --- | --- |
+| `RECONCILIATION_ATTEMPTED` | `trigger` (`AUTOMATIC` \| `OPERATOR_RECONCILE_NOW`), `outcome` (`STILL_UNKNOWN` \| `RESOLVED_SUCCESS` \| `RESOLVED_FAILURE`), `why` | Inserts one `reconciliations` row. Never touches `orders`/`effect_operations`/`positions` — those are already correct by the time this is appended (see `reconcile.reconcile_uncertain_order`). |
+| `ACCOUNT_HOLD_RAISED` | `reason_code`, `evidence_refs` (foreign orders' broker-assigned `order_id`s) | Inserts one `ACTIVE`, `ACCOUNT_CLERK`-scoped episode. A partial unique index enforces one active cause. Changed evidence uses `ACCOUNT_HOLD_REFRESHED`; a fresh clean snapshot uses `ACCOUNT_HOLD_RESOLVED`; unchanged evidence appends nothing. |
+
+Both mint their own primary key (`reconciliation_id`/`hold_id`) from the
+just-inserted transition's own `custody_transitions.sequence` (read back
+inside the fold, safe because the transition row is inserted before the fold
+runs, under the same write lock and `BEGIN IMMEDIATE`) rather than a random
+source — keeps the fold pure/replay-deterministic for mirror rebuild.
+
+An account reconciliation pass is serialized from the first broker snapshot
+read through evidence recovery and the final hold/uncertainty verdict. The
+automatic sweep and operator `Reconcile now` route share this coordinator, so
+an older clean snapshot cannot finish after and erase a newer foreign-order or
+drift verdict. The account execution lease remains the cross-process fence;
+the pass coordinator orders callers inside that one live authority process.
+
+### 3f. EXIT transition facts (#1379)
+
+`EXIT_ACCEPTED` follows §3d's rule exactly (it creates/mutates `commands` and
+`effect_operations`, so its facts must be sufficient to rebuild them from a
+finalized mirror line alone) — added to that table's shape here rather than
+duplicating the whole table:
+
+| Transition | Required facts beyond the outer transition row |
+| --- | --- |
+| `EXIT_ACCEPTED` | command idempotency key/hash/kind/action; decision id; effect idempotency key/kind; `entry_order_ref` (the targeted entry) and `entry_order_refs` (every same-strategy/symbol sibling entry captured before broker contact). There is no `leg`, unlike `ENTER_ACCEPTED`: the reducing order's side/quantity are not knowable until every entry is terminal and refreshed. |
+
+`EXIT_REDUCING_ORDER_CREATED` falls outside §3d's table the same way §3e's two
+kinds do — it creates an `orders` row, but that row has no symbol/side/quantity
+columns to rebuild from facts, so there is no command/effect/order-identity
+fidelity concern:
+
+| Transition | Facts | Fold effect |
+| --- | --- | --- |
+| `EXIT_REDUCING_ORDER_CREATED` | `symbol`, `side`, `quantity` (the Clerk-proven final attributed quantity after every entry is terminal and immediately refreshed — the durable audit proof of the "final attributed-quantity calculation" pinned-contract step) | Inserts one immutable-origin `role='REDUCING'` `orders` row and one EXIT custody link. A partial unique index permits at most one reducing identity per EXIT. The facts reconstruct the order instruction during recovery. |
+| `ORDER_CANCEL_UNCERTAIN` | `why` | Same fold body as `ORDER_SUBMIT_UNCERTAIN` (registered under both transition_kind names) — a lost cancel-poll response is the identical "effect/command → `unknown`, no receipt" outcome, under a distinct name for audit-trail honesty about which broker call was actually attempted. |
+| `EXIT_ATTRIBUTED_FLAT` | none (`{}`) | Same fold body as the generic terminal-success tail (`_fold_effect_terminal(..., terminal_state="succeeded")`) — EXIT is the first caller to ever reach `succeeded` through it; ENTER never does within its own module (#1377's own docstring defers that to EXIT/reconciliation). |
+
+### 3g. Uncertainty transition facts (#1380, Part A)
+
+These kinds fall outside §3d's table the same way §3e's kinds do — none
+creates or mutates a `commands` row, only the `uncertainties` table (§3):
+
+| Transition | Facts | Fold effect |
+| --- | --- | --- |
+| `UNCERTAINTY_RAISED` | `severity`, `blocks_new_exposure`, `allows_reduction`, `reason_code`, `headline`, `explanation`, `operator_impact`, `next_step`, `evidence_refs`, and versioned `cause_facts` | Inserts one uncertainty episode and persists both `facts_schema_version` and the complete `facts_json`. Scope comes from the registered reason policy; an unknown reason is forced account-wide and reduction-blocking. A partial unique index enforces one active cause. |
+| `UNCERTAINTY_REFRESHED` | Same stable envelope and typed cause facts as the raise | Updates the active episode only when its evidence/facts changed; unchanged observations append nothing. |
+| `UNCERTAINTY_RESOLVED` | `uncertainty_id`, closed `resolution_kind`, and `evidence_refs` | `UPDATE`s `resolved_at_ms` on the named active episode. Only a reason-specific recovery function with its required fresh evidence may build this transition; there is no generic clear. |
+
+All are raised/refreshed/resolved through
+`app/broker/alpaca/clerk/sqlite/uncertainty.py`; the repository performs each
+observe-or-resolve decision under the same write coordinator as its append.
+`ORDER_SUBMIT_UNCERTAIN` and `ORDER_CANCEL_UNCERTAIN` are the deliberate
+exception to a separately named uncertainty transition: their replay fold
+atomically moves the effect to `unknown` **and** opens/refreshes the typed
+bot-scoped `ORDER_OUTCOME_UNKNOWN` episode in that same transaction. Exact
+ACK or terminal evidence removes only its exact `(effect_operation_id,
+order_ref)` pair and closes the episode only after no recorded pair remains.
+Evidence for another order linked to the same EXIT cannot clear a lost reducing
+submit. Thus there is no committed UNKNOWN effect that can briefly admit
+another ENTER.
+
+**R6 capability policy** (`uncertainty.decide_capability`/
+`require_capability`) folds both uncertainties and holds for `NEW_EXPOSURE`,
+`CANCEL`, `REDUCE`, and `RECONCILE`. ENTER and EXIT call the same policy used by
+preview/status reads immediately before their side effects. Cancel and
+reconcile remain available. A reduction is allowed only for a strict current
+`POSITION_DRIFT` cause whose facts have the exact registered shape and version,
+are at most 30 seconds old, name the action's symbol, still match the Clerk's
+current attributed account quantity, and prove that the requested signed delta
+moves both broker and attributed quantities toward zero without crossing it.
+`ORDER_OUTCOME_UNKNOWN`, stale snapshots, unknown/future cause shapes, and
+unregistered reasons do not authorize reduction. A live EXIT also fences new
+exposure for its strategy: if ENTER commits first, EXIT captures it as a
+sibling; if EXIT commits first, the same serialized admission policy rejects
+the ENTER.
+
+**Deferred to a follow-up slice**: the 6 named, backend-authored recovery
+actions (Reconcile now, Cancel verified working orders, Prepare safe
+flatten, Stop bot decisions, Open custody timeline, Rebuild from mirror /
+Reset authority) with their own availability/reason/scope/freshness/
+next-step metadata — this slice ships the envelope and the admission policy
+those actions will eventually consult, not the action catalog itself.
+
 ## 4. Transaction matrix — which facts commit atomically together
 
 **Corrected in the corrective foundation slice** (open-pr-review-2026-08-05.md,
@@ -624,12 +748,20 @@ EXIT operation
     └── terminal EXIT receipt
 ```
 
-An `effect_operations` row of kind `EXIT` owns one or more `orders` rows via
-`orders.effect_operation_id`; `orders.role` distinguishes the cancelled entry
-from the reducing/close order. The UI may open an individual order, but the
-primary timeline and terminal outcome belong to the effect operation (Slice 8
-reads `custody_transitions` filtered by `effect_operation_id`, ordered by
-`sequence`, to render this).
+`orders.effect_operation_id` is immutable creation provenance. An EXIT acquires
+resolution custody through `operation_order_links`: `EXIT_ACCEPTED` links every
+same-strategy/symbol entry before broker contact, while
+`EXIT_REDUCING_ORDER_CREATED` links the single reducing order. This preserves
+the ENTER origin, supports sibling entries, and makes a retry reproduce the
+same operation graph instead of re-parenting shared rows.
+
+The primary timeline and terminal outcome belong to the EXIT effect. Every
+cancel, refresh, reducing-order, and terminal transition carries the EXIT's
+`effect_operation_id`; a scan by `order_ref` still shows the immutable ENTER
+history. EXIT uses one exclusive operation claim across cancel → exact terminal
+proof → immediate entry refresh → reduction admission → deterministic reducing
+identity → submit/poll → attributed-flat verification. A terminal projection
+never regresses when late or duplicate broker evidence arrives.
 
 ## 7. Hash-chain row format (PRD §11 rule 2, pinned)
 

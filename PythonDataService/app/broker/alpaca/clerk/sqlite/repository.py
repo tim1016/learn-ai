@@ -5,8 +5,9 @@ Implements the pinned contract in
 ``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md``: the
 account-scoped ``clerk.db``, the R9 two-phase mirror fence, the fail-closed
 startup checks, and a durable, renewed per-account execution lease. SQL stays
-private to this module and ``reads.py`` (PRD §9.2) — callers never see a
-cursor; they call :meth:`ClerkSqliteRepository.commit_first_transition` (or
+private to this storage package (principally ``reads.py``, ``writes.py``, and
+``repository_lifecycle.py``; PRD §9.2) — callers never see a cursor; they call
+:meth:`ClerkSqliteRepository.commit_first_transition` (or
 :meth:`append_transition` for kinds with no idempotent-admission concept, e.g.
 bot registration) and read back typed snapshots.
 
@@ -31,14 +32,13 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from app.broker.alpaca.clerk.sqlite import reads, schema, writes
+from app.broker.alpaca.clerk.sqlite import reads, writes
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY, FoldRegistry
 from app.broker.alpaca.clerk.sqlite.hashchain import (
     GENESIS,
     canonical_payload,
     canonicalize,
     compute_row_hash,
-    verify_chain,
 )
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, PendingTransition
 from app.broker.alpaca.clerk.sqlite.models import (
@@ -54,11 +54,6 @@ from app.broker.alpaca.clerk.sqlite.models import (
     RunResource,
     TransitionInput,
 )
-from app.broker.alpaca.clerk.sqlite.registry import (
-    EstablishedAccountsRegistry,
-    EstablishedGeneration,
-)
-from app.broker.alpaca.paths import fsync_directory_chain
 from app.utils.timestamps import Clock, now_ms_utc
 
 DB_FILENAME = "clerk.db"
@@ -151,6 +146,7 @@ class ClerkSqliteRepository:
         self._lease_owner = lease_owner
         self._lease_ttl_ms = lease_ttl_ms
         self._poisoned = False
+        self._reconciliation_in_progress = False
         # Pinned contracts doc §2: "one application-owned write coordinator
         # ... belt-and-suspenders, not a substitute for BEGIN IMMEDIATE."
         # BEGIN IMMEDIATE's lock only protects from the point it's acquired;
@@ -219,90 +215,20 @@ class ClerkSqliteRepository:
         "removed after authority was established" case, which needs the
         explicit recovery/reset workflow (Slice 9), not a silent fresh init.
         """
-        accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
-        registry = EstablishedAccountsRegistry(accounts_root)
-        db_path = writes.confined_account_file(artifacts_root, account_id, DB_FILENAME)
-        mirror_path = writes.confined_account_file(artifacts_root, account_id, MIRROR_FILENAME)
-
-        if db_path.is_file():
-            raise AlreadyInitialized(f"{db_path} already exists; use open()")
-        if registry.is_established(account_id):
-            raise DatabaseMissingAfterEstablishment(
-                f"account {account_id!r} was previously established but {db_path} is "
-                "missing — this requires the explicit recovery/reset workflow, not a "
-                "fresh initialize()"
-            )
-
-        account_dir.mkdir(parents=True, exist_ok=True)
-        fsync_directory_chain(account_dir, artifacts_root)
-
-        # check_same_thread=False: an async FastAPI handler dispatches this
-        # synchronous repository via asyncio.to_thread, so different calls
-        # legitimately arrive on different worker threads. _write_lock (not
-        # SQLite's thread affinity) is what serializes them safely.
-        conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        schema.configure_connection(conn)
-        schema.apply_schema(conn)
-
-        now = clock()
-        db_identity_token = secrets.token_hex(16)
-        owner = lease_owner or writes.default_lease_owner()
-
-        # Registry write happens *before* the DB commit, not after: the
-        # registry is what lets a future open() tell "removed after
-        # establishment" apart from "never established" (§1a). If this
-        # ordering were reversed and the process died between the DB commit
-        # and the registry write, a fully-usable clerk.db would exist with
-        # no registry record of it — exactly the silent-recreate failure the
-        # registry exists to prevent, just deferred one step. Writing the
-        # registry first means any interruption in this window instead fails
-        # toward "registry says established, DB incomplete/missing", which
-        # every startup check in §9 already treats as fail-closed.
-        registry.record(
-            EstablishedGeneration(
-                account_id=account_id,
-                authority_generation=1,
-                db_identity_token=db_identity_token,
-                established_at_ms=now,
-            )
+        from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
+            initialize_repository,
         )
 
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute(
-                "INSERT INTO control_meta "
-                "(id, schema_version, broker, account_id, db_identity_token, "
-                "authority_generation, control_revision, created_at_ms, last_open_at_ms, "
-                "reset_provenance_json, execution_lease_owner, execution_lease_expires_at_ms) "
-                "VALUES (1, ?, 'alpaca', ?, ?, 1, 0, ?, ?, NULL, ?, ?)",
-                (
-                    schema.SCHEMA_VERSION,
-                    account_id,
-                    db_identity_token,
-                    now,
-                    now,
-                    owner,
-                    now + lease_ttl_ms,
-                ),
-            )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            conn.close()
-            raise
-
-        return cls(
+        return initialize_repository(
+            repository_type=cls,
             account_id=account_id,
-            account_dir=account_dir,
-            db_path=db_path,
-            mirror_path=mirror_path,
-            conn=conn,
-            mirror=MirrorFile(mirror_path),
+            artifacts_root=artifacts_root,
             clock=clock,
-            fold_registry=fold_registry,
-            lease_owner=owner,
+            lease_owner=lease_owner,
             lease_ttl_ms=lease_ttl_ms,
+            fold_registry=fold_registry,
+            db_filename=DB_FILENAME,
+            mirror_filename=MIRROR_FILENAME,
         )
 
     @classmethod
@@ -317,142 +243,18 @@ class ClerkSqliteRepository:
         fold_registry: FoldRegistry = DEFAULT_FOLD_REGISTRY,
     ) -> ClerkSqliteRepository:
         """Open an existing authority, running all fail-closed checks (§9)."""
-        # Check 1: path confinement.
-        accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
-        db_path = writes.confined_account_file(artifacts_root, account_id, DB_FILENAME)
-        mirror_path = writes.confined_account_file(artifacts_root, account_id, MIRROR_FILENAME)
+        from app.broker.alpaca.clerk.sqlite.repository_lifecycle import open_repository
 
-        # Check 2: missing-database vs. established-accounts registry.
-        registry = EstablishedAccountsRegistry(accounts_root)
-        if not db_path.is_file():
-            if registry.is_established(account_id):
-                raise DatabaseMissingAfterEstablishment(
-                    f"account {account_id!r} has an established authority but "
-                    f"{db_path} is missing; run the recovery/reset workflow"
-                )
-            raise FileNotFoundError(f"{db_path} does not exist; use initialize()")
-
-        conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        try:
-            # Corruption severe enough to break basic statement execution
-            # (not just an explicit integrity_check) surfaces here as a raw
-            # sqlite3.DatabaseError from *any* statement below, including the
-            # PRAGMAs. Translate all of it to the same typed, fail-closed
-            # exception check 7 raises for the milder case — the caller
-            # should not have to catch a driver-internal exception type to
-            # get the "this database is corrupt" outcome.
-            schema.configure_connection(conn)
-            control_row = conn.execute(
-                "SELECT schema_version, account_id, db_identity_token, authority_generation "
-                "FROM control_meta WHERE id = 1"
-            ).fetchone()
-        except sqlite3.DatabaseError as exc:
-            conn.close()
-            raise IntegrityCheckFailed(f"{db_path} is corrupt: {exc}") from exc
-
-        if control_row is None:
-            conn.close()
-            raise ClerkSqliteError(f"{db_path} has no control_meta row — not a valid clerk.db")
-
-        # Check 3: database identity token AND authority generation both
-        # match the registry's newest record — checking the token alone
-        # cannot reject a restored older-generation database (§9a).
-        latest = registry.latest(account_id)
-        if latest is not None and (
-            latest.db_identity_token != control_row["db_identity_token"]
-            or latest.authority_generation != control_row["authority_generation"]
-        ):
-            conn.close()
-            raise DatabaseIdentityMismatch(
-                f"{db_path} identity/generation disagrees with the established-accounts "
-                f"registry for {account_id!r} — possible file substitution or generation rollback"
-            )
-
-        # Check 4: account identity embedded in the database matches the request.
-        if control_row["account_id"] != account_id:
-            conn.close()
-            raise DatabaseIdentityMismatch(
-                f"{db_path} embeds account_id {control_row['account_id']!r}, "
-                f"requested {account_id!r}"
-            )
-
-        # Check 5: schema version.
-        if control_row["schema_version"] != schema.SCHEMA_VERSION:
-            conn.close()
-            raise SchemaVersionMismatch(
-                f"{db_path} schema_version={control_row['schema_version']}, "
-                f"expected {schema.SCHEMA_VERSION}"
-            )
-
-        # Check 6: authority generation is read (above) and carried for this session —
-        # already cross-checked against the registry in check 3.
-
-        try:
-            # Check 7: PRAGMA integrity_check.
-            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-            if integrity != "ok":
-                raise IntegrityCheckFailed(f"{db_path} integrity_check returned {integrity!r}")
-
-            # Check 8: hash-chain verification.
-            transition_rows = conn.execute(
-                f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions ORDER BY sequence ASC"
-            ).fetchall()
-        except sqlite3.DatabaseError as exc:
-            conn.close()
-            raise IntegrityCheckFailed(f"{db_path} is corrupt: {exc}") from exc
-        except IntegrityCheckFailed:
-            conn.close()
-            raise
-        chain_payloads = [writes.row_to_payload(row) for row in transition_rows]
-        bad_sequence = verify_chain(chain_payloads)
-        if bad_sequence is not None:
-            conn.close()
-            raise HashChainBroken(f"{db_path} hash-chain mismatch at sequence {bad_sequence}")
-
-        # Check 9: mirror reconciliation, every committed sequence — not only
-        # the tail (open-pr-review-2026-08-05.md P2 "Only the mirror tail is
-        # checked"). A missing FINALIZE is completed now from the committed
-        # row itself; a conflicting FINALIZE is genuine corruption.
-        mirror = MirrorFile(mirror_path)
-        try:
-            mirror.reconcile(chain_payloads, clock=clock)
-        except Exception:
-            # Not narrowed to MirrorChainBroken: reconcile() also does file
-            # I/O and JSON parsing, so an OSError or JSONDecodeError must
-            # close the connection too, not just the expected fail-closed
-            # exception (open-pr-review-2026-08-05.md, connection-leak
-            # finding on this block).
-            conn.close()
-            raise
-
-        owner = lease_owner or writes.default_lease_owner()
-        now = clock()
-        cursor = conn.execute(
-            "UPDATE control_meta SET last_open_at_ms = ?, execution_lease_owner = ?, "
-            "execution_lease_expires_at_ms = ? WHERE id = 1 AND "
-            "(execution_lease_owner IS NULL OR execution_lease_owner = ? "
-            "OR execution_lease_expires_at_ms < ?)",
-            (now, owner, now + lease_ttl_ms, owner, now),
-        )
-        if cursor.rowcount == 0:
-            conn.close()
-            raise ExecutionLeaseHeld(
-                f"account {account_id!r} execution lease is held by another live process"
-            )
-        conn.commit()
-
-        return cls(
+        return open_repository(
+            repository_type=cls,
             account_id=account_id,
-            account_dir=account_dir,
-            db_path=db_path,
-            mirror_path=mirror_path,
-            conn=conn,
-            mirror=mirror,
+            artifacts_root=artifacts_root,
             clock=clock,
-            fold_registry=fold_registry,
-            lease_owner=owner,
+            lease_owner=lease_owner,
             lease_ttl_ms=lease_ttl_ms,
+            fold_registry=fold_registry,
+            db_filename=DB_FILENAME,
+            mirror_filename=MIRROR_FILENAME,
         )
 
     # ------------------------------------------------------------------
@@ -697,6 +499,24 @@ class ClerkSqliteRepository:
             ).fetchone()
             return RunResource(**dict(row)) if row is not None else None
 
+    def begin_reconciliation(self) -> None:
+        """Install the process-local account gate before reading broker truth."""
+        with self._write_lock:
+            if self._reconciliation_in_progress:
+                raise ClerkSqliteError(
+                    f"account {self._account_id!r} reconciliation is already in progress"
+                )
+            self._reconciliation_in_progress = True
+
+    def end_reconciliation(self) -> None:
+        """Release the account gate only after the final safety verdict is durable."""
+        with self._write_lock:
+            self._reconciliation_in_progress = False
+
+    def reconciliation_in_progress(self) -> bool:
+        with self._write_lock:
+            return self._reconciliation_in_progress
+
     # ------------------------------------------------------------------
     # Operation claims — CAS fencing before broker contact (Scope D). The
     # claim primitive is implemented and tested here; no broker call is
@@ -706,13 +526,11 @@ class ClerkSqliteRepository:
     def claim_effect_operation(
         self, *, effect_operation_id: str, owner: str, ttl_ms: int = DEFAULT_CLAIM_TTL_MS
     ) -> OperationClaim:
-        """Claim (or renew this owner's own claim on) an ``effect_operations``
-        row with a unique fencing token, guarded by a compare-and-swap
-        UPDATE: succeeds when unclaimed, expired, or already held by this
-        same ``owner`` (a renewal). A same-owner renewal mints a fresh
-        token — callers that must keep working under the old token across a
-        renewal should call :meth:`verify_operation_claim` with the new one
-        instead of assuming the old token still verifies.
+        """Acquire an exclusive attempt-scoped claim before broker contact.
+
+        Owner identity is diagnostic, not re-entrancy: a second coroutine in
+        the same process must not renew through a live claim and duplicate an
+        economic side effect.
         """
         with self._write_lock:
             self._assert_not_poisoned()
@@ -723,8 +541,8 @@ class ClerkSqliteRepository:
             cursor = self._conn.execute(
                 "UPDATE effect_operations SET claim_owner = ?, claim_token = ?, "
                 "claimed_at_ms = ?, claim_expires_at_ms = ? WHERE effect_operation_id = ? "
-                "AND (claim_owner IS NULL OR claim_owner = ? OR claim_expires_at_ms < ?)",
-                (owner, token, now, expires_at_ms, effect_operation_id, owner, now),
+                "AND (claim_owner IS NULL OR claim_expires_at_ms < ?)",
+                (owner, token, now, expires_at_ms, effect_operation_id, now),
             )
             self._conn.commit()
             if cursor.rowcount == 0:
@@ -742,6 +560,57 @@ class ClerkSqliteRepository:
                 claimed_at_ms=now,
                 expires_at_ms=expires_at_ms,
             )
+
+    def claim_before_broker_contact(self, effect_operation_id: str) -> OperationClaim:
+        """Claim under this process's own lease identity — pinned contract §2:
+        "a transactionally claimed operation work item ... acquired before any
+        broker contact." A live ``BEGIN IMMEDIATE`` transaction proves
+        single-writer-at-the-database; it does not prove single-*process*, so
+        an event-loop stall or a slow network call between accepting an
+        operation and its next broker call could otherwise let a stale owner
+        contact the broker after another process has taken over. Fails
+        closed: :class:`OperationClaimError` propagates and no broker call
+        happens if the claim cannot be acquired — this fences a
+        *different*-owner recovery sweep or successor process out entirely.
+
+        Claims are attempt-scoped and must be released with
+        :meth:`release_operation_claim` in a ``finally`` block. A live claim
+        blocks every overlapping attempt, including one with the same owner.
+        """
+        return self.claim_effect_operation(effect_operation_id=effect_operation_id, owner=self._lease_owner)
+
+    def release_operation_claim(self, *, effect_operation_id: str, token: str) -> bool:
+        """Release exactly the attempt identified by ``token`` (CAS fenced)."""
+        with self._write_lock:
+            cursor = self._conn.execute(
+                "UPDATE effect_operations SET claim_owner = NULL, claim_token = NULL, "
+                "claimed_at_ms = NULL, claim_expires_at_ms = NULL "
+                "WHERE effect_operation_id = ? AND claim_token = ?",
+                (effect_operation_id, token),
+            )
+            self._conn.commit()
+            return cursor.rowcount == 1
+
+    def renew_operation_claim(
+        self,
+        *,
+        effect_operation_id: str,
+        token: str,
+        ttl_ms: int = DEFAULT_CLAIM_TTL_MS,
+    ) -> bool:
+        """Extend only the same still-live attempt token (CAS fenced)."""
+        with self._write_lock:
+            self._assert_not_poisoned()
+            self._renew_execution_lease()
+            now = self._clock()
+            cursor = self._conn.execute(
+                "UPDATE effect_operations SET claimed_at_ms = ?, claim_expires_at_ms = ? "
+                "WHERE effect_operation_id = ? AND claim_token = ? "
+                "AND claim_expires_at_ms >= ?",
+                (now, now + ttl_ms, effect_operation_id, token, now),
+            )
+            self._conn.commit()
+            return cursor.rowcount == 1
 
     def verify_operation_claim(self, *, effect_operation_id: str, token: str) -> bool:
         """True iff ``token`` is the live (unexpired) claim on this operation —
@@ -809,6 +678,15 @@ class ClerkSqliteRepository:
             ).fetchall()
             return [writes.row_to_payload(row) for row in rows]
 
+    def has_order_transition(self, *, order_ref: str, transition_kind: str) -> bool:
+        with self._write_lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM custody_transitions WHERE order_ref = ? "
+                "AND transition_kind = ? LIMIT 1",
+                (order_ref, transition_kind),
+            ).fetchone()
+            return row is not None
+
     def strategy_instances(self) -> list[dict]:
         with self._write_lock:
             return reads.strategy_instances(self._conn)
@@ -829,6 +707,32 @@ class ClerkSqliteRepository:
         with self._write_lock:
             return reads.order_for_effect_operation(self._conn, effect_operation_id)
 
+    def orders_for_effect_operation(self, effect_operation_id: str) -> list[OrderResource]:
+        with self._write_lock:
+            return reads.orders_for_effect_operation(self._conn, effect_operation_id)
+
+    def all_order_refs(self) -> frozenset[str]:
+        with self._write_lock:
+            return reads.all_order_refs(self._conn)
+
+    def entry_orders_for_strategy(self, strategy_instance_id: str) -> list[OrderResource]:
+        with self._write_lock:
+            return reads.entry_orders_for_strategy(self._conn, strategy_instance_id)
+
+    def active_exit_for_order(self, order_ref: str) -> EffectOperationResource | None:
+        with self._write_lock:
+            return reads.active_exit_for_order(self._conn, order_ref)
+
+    def active_exit_for_strategy(
+        self, strategy_instance_id: str
+    ) -> EffectOperationResource | None:
+        with self._write_lock:
+            return reads.active_exit_for_strategy(self._conn, strategy_instance_id)
+
+    def reconcilable_effect_operations(self) -> list[EffectOperationResource]:
+        with self._write_lock:
+            return reads.reconcilable_effect_operations(self._conn)
+
     def position(self, strategy_instance_id: str, symbol: str) -> float:
         with self._write_lock:
             return reads.position(self._conn, strategy_instance_id, symbol)
@@ -836,6 +740,192 @@ class ClerkSqliteRepository:
     def fills_for_order(self, order_ref: str) -> list[dict]:
         with self._write_lock:
             return reads.fills_for_order(self._conn, order_ref)
+
+    def uncertain_orders(self) -> list[OrderResource]:
+        with self._write_lock:
+            return reads.uncertain_orders(self._conn)
+
+    def attributed_positions_by_symbol(self) -> dict[str, float]:
+        with self._write_lock:
+            return reads.attributed_positions_by_symbol(self._conn)
+
+    def attributed_positions_for_strategy(
+        self, strategy_instance_id: str
+    ) -> dict[str, float]:
+        with self._write_lock:
+            return reads.attributed_positions_for_strategy(
+                self._conn, strategy_instance_id
+            )
+
+    def active_hold(self, *, scope: str, reason_code: str) -> dict | None:
+        """No ``strategy_instance_id`` filter — safe today because every
+        current caller hardcodes ``scope='ACCOUNT_CLERK'``
+        (``reconcile._raise_account_hold``); a future ``BOT``-scoped hold
+        raiser must add that filter first (see #1380's
+        ``active_uncertainty``, which needs and has it), or two different
+        bots sharing a ``reason_code`` would silently read each other's
+        hold."""
+        with self._write_lock:
+            return reads.active_hold(self._conn, scope=scope, reason_code=reason_code)
+
+    def raise_hold_if_none_active(
+        self, *, scope: str, reason_code: str, build_transition: Callable[[], TransitionInput]
+    ) -> bool:
+        """Atomic check-then-raise for a hold (#1378): the ``active_hold``
+        check and the ``ACCOUNT_HOLD_RAISED`` append happen under one
+        continuous hold of the write lock, so two genuinely concurrent
+        callers (an automatic sweep pass and an operator's "Reconcile now"
+        landing at the same instant) can never both observe "no active
+        hold" and both append one — the same class of TOCTOU gap
+        :meth:`commit_first_transition` closes for commands, applied here
+        for holds. Returns ``True`` if a new hold was appended, ``False`` if
+        one was already ``ACTIVE`` (idempotent no-op, matching the bounded
+        growth policy the pre-SQLite Alpaca clerk's ``reconcile.py`` used).
+        """
+        with self._write_lock:
+            if reads.active_hold(self._conn, scope=scope, reason_code=reason_code) is not None:
+                return False
+            self.append_transition(build_transition())
+            return True
+
+    def observe_account_hold(
+        self,
+        *,
+        reason_code: str,
+        evidence_refs_json: str,
+        build_raise: Callable[[], TransitionInput],
+        build_refresh: Callable[[], TransitionInput],
+    ) -> str:
+        """Atomically raise, refresh, or leave one account-hold episode."""
+        with self._write_lock:
+            active = reads.active_hold(
+                self._conn, scope="ACCOUNT_CLERK", reason_code=reason_code
+            )
+            if active is None:
+                self.append_transition(build_raise())
+                return "raised"
+            if active["evidence_refs_json"] == evidence_refs_json:
+                return "unchanged"
+            self.append_transition(build_refresh())
+            return "refreshed"
+
+    def resolve_account_hold_if_active(
+        self, *, reason_code: str, build_transition: Callable[[], TransitionInput]
+    ) -> bool:
+        """Append a typed resolution only while the hold episode is active."""
+        with self._write_lock:
+            if (
+                reads.active_hold(
+                    self._conn, scope="ACCOUNT_CLERK", reason_code=reason_code
+                )
+                is None
+            ):
+                return False
+            self.append_transition(build_transition())
+            return True
+
+    def active_uncertainty(
+        self, *, scope: str, reason_code: str, strategy_instance_id: str | None
+    ) -> dict | None:
+        with self._write_lock:
+            return reads.active_uncertainty(
+                self._conn,
+                scope=scope,
+                reason_code=reason_code,
+                strategy_instance_id=strategy_instance_id,
+            )
+
+    def active_uncertainties_for_admission(self, *, strategy_instance_id: str) -> list[dict]:
+        with self._write_lock:
+            return reads.active_uncertainties_for_admission(
+                self._conn, strategy_instance_id=strategy_instance_id
+            )
+
+    def active_holds_for_admission(self, *, strategy_instance_id: str) -> list[dict]:
+        with self._write_lock:
+            return reads.active_holds_for_admission(
+                self._conn, strategy_instance_id=strategy_instance_id
+            )
+
+    def raise_uncertainty_if_none_active(
+        self,
+        *,
+        scope: str,
+        reason_code: str,
+        strategy_instance_id: str | None,
+        build_transition: Callable[[], TransitionInput],
+    ) -> bool:
+        """Atomic check-then-raise for an uncertainty (#1380) — the same
+        check-then-append-under-one-lock shape
+        :meth:`raise_hold_if_none_active` already uses for holds, applied
+        here so two genuinely concurrent callers can never both observe "no
+        active uncertainty" for the same ``(scope, reason_code,
+        strategy_instance_id)`` and both append one. Returns ``True`` if a
+        new uncertainty was appended, ``False`` if one was already
+        ``ACTIVE`` (idempotent no-op — bounded growth, matching
+        :meth:`raise_hold_if_none_active`'s policy).
+        """
+        with self._write_lock:
+            if (
+                reads.active_uncertainty(
+                    self._conn,
+                    scope=scope,
+                    reason_code=reason_code,
+                    strategy_instance_id=strategy_instance_id,
+                )
+                is not None
+            ):
+                return False
+            self.append_transition(build_transition())
+            return True
+
+    def observe_uncertainty(
+        self,
+        *,
+        scope: str,
+        reason_code: str,
+        strategy_instance_id: str | None,
+        facts_json: str,
+        build_raise: Callable[[], TransitionInput],
+        build_refresh: Callable[[], TransitionInput],
+        refresh_unchanged: bool = False,
+    ) -> str:
+        """Atomically raise, refresh, or leave one uncertainty episode."""
+        with self._write_lock:
+            active = reads.active_uncertainty(
+                self._conn,
+                scope=scope,
+                reason_code=reason_code,
+                strategy_instance_id=strategy_instance_id,
+            )
+            if active is None:
+                self.append_transition(build_raise())
+                return "raised"
+            if active["facts_json"] == facts_json and not refresh_unchanged:
+                return "unchanged"
+            self.append_transition(build_refresh())
+            return "refreshed"
+
+    def resolve_uncertainty_if_active(
+        self,
+        *,
+        scope: str,
+        reason_code: str,
+        strategy_instance_id: str | None,
+        build_transition: Callable[[str], TransitionInput],
+    ) -> bool:
+        """Resolve by typed cause only; callers cannot issue a generic clear."""
+        with self._write_lock:
+            active = reads.active_uncertainty(
+                self._conn,
+                scope=scope,
+                reason_code=reason_code,
+                strategy_instance_id=strategy_instance_id,
+            )
+            if active is None:
+                return False
+            self.append_transition(build_transition(active["uncertainty_id"]))
+            return True
 
     # ------------------------------------------------------------------
     # Disaster recovery
@@ -859,82 +949,17 @@ class ClerkSqliteRepository:
         "the DB is preserved for diagnosis, never overwritten"). Callers own
         that move; this method assumes ``db_path`` does not exist yet.
         """
-        accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
-        db_path = writes.confined_account_file(artifacts_root, account_id, DB_FILENAME)
-        mirror_path = writes.confined_account_file(artifacts_root, account_id, MIRROR_FILENAME)
-        if db_path.is_file():
-            raise AlreadyInitialized(
-                f"{db_path} exists — move it aside before rebuild_from_mirror()"
-            )
+        from app.broker.alpaca.clerk.sqlite.rebuild import (
+            rebuild_repository_from_mirror,
+        )
 
-        mirror = MirrorFile(mirror_path)
-        rebuilt_rows = mirror.rebuild()  # raises MirrorChainBroken fail-closed
-
-        registry = EstablishedAccountsRegistry(accounts_root)
-        established = registry.latest(account_id)
-        if established is None:
-            raise DatabaseMissingAfterEstablishment(
-                f"no established-accounts registry entry for {account_id!r}; "
-                "cannot rebuild an authority that was never established"
-            )
-
-        account_dir.mkdir(parents=True, exist_ok=True)
-        fsync_directory_chain(account_dir, artifacts_root)
-        conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
-        schema.configure_connection(conn)
-        schema.apply_schema(conn)
-        conn.row_factory = sqlite3.Row
-
-        now = clock()
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute(
-                "INSERT INTO control_meta "
-                "(id, schema_version, broker, account_id, db_identity_token, "
-                "authority_generation, control_revision, created_at_ms, last_open_at_ms, "
-                "reset_provenance_json, execution_lease_owner, execution_lease_expires_at_ms) "
-                "VALUES (1, ?, 'alpaca', ?, ?, ?, 0, ?, ?, "
-                "'{\"rebuilt_from_mirror\": true}', NULL, NULL)",
-                (
-                    schema.SCHEMA_VERSION,
-                    account_id,
-                    established.db_identity_token,
-                    established.authority_generation,
-                    now,
-                    now,
-                ),
-            )
-            # Same order as _commit_transition_row: transition insert -> fold
-            # -> revision advance -> mirror_fence insert (pinned §4).
-            for row in rebuilt_rows:
-                payload = dict(row.payload)
-                writes.insert_custody_transition_row(
-                    conn,
-                    sequence=row.sequence,
-                    prev_hash=row.prev_hash,
-                    row_hash=row.row_hash,
-                    payload=payload,
-                )
-                fold_registry.apply(conn, payload)
-                writes.advance_control_revision(conn)
-                writes.insert_mirror_fence_prepare_row(
-                    conn,
-                    sequence=row.sequence,
-                    row_hash=row.row_hash,
-                    authority_generation=row.authority_generation,
-                    recorded_at_ms=row.recorded_at_ms,
-                )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            conn.close()
-            db_path.unlink(missing_ok=True)
-            raise
-
-        return cls.open(
+        return rebuild_repository_from_mirror(
+            repository_type=cls,
             account_id=account_id,
             artifacts_root=artifacts_root,
             clock=clock,
             lease_owner=lease_owner,
             fold_registry=fold_registry,
+            db_filename=DB_FILENAME,
+            mirror_filename=MIRROR_FILENAME,
         )

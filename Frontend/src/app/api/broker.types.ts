@@ -775,6 +775,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Now
+         * @description Run the same fail-closed account pass used by the automatic sweep.
+         */
+        post: operations["reconcile_now_api_alpaca_clerk_sqlite_accounts__account_id__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/broker/account": {
         parameters: {
             query?: never;
@@ -22027,6 +22047,23 @@ export interface components {
             latest_receipt_url?: string | null;
         };
         /**
+         * ReconciliationResponse
+         * @description Backend-authored result of an operator reconciliation pass.
+         */
+        ReconciliationResponse: {
+            /** Drifted Symbols */
+            drifted_symbols: string[];
+            /** Foreign Order Count */
+            foreign_order_count: number;
+            /** Resolved Count */
+            resolved_count: number;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "clean" | "unexplained_order" | "position_drift" | "stale";
+        };
+        /**
          * ReconciliationSummary
          * @description The latest reconciliation-sweep result (S6), or ``None`` if never run.
          */
@@ -27975,6 +28012,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CommandResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_now_api_alpaca_clerk_sqlite_accounts__account_id__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationResponse"];
                 };
             };
             /** @description Validation Error */

@@ -25,13 +25,11 @@ a position. Two phases, deliberately separable:
   reached the broker (accepted, then the process died before the try block
   ran at all — indistinguishable from the caller's side, and resolved
   identically: by asking the broker whether ``order_ref`` landed).
-  :func:`resolve_enter_submission` claims the operation too, so a
-  *different*-owner recovery sweep can never reach the broker while another
-  process already holds the claim; two *same*-process overlapping resolves
-  both pass that claim (a same-owner claim is a renewal), so the one about
-  to fold a terminal outcome re-verifies its own token is still current
-  immediately beforehand and no-ops if a concurrent sibling already won the
-  race. A submit response whose ``client_order_id`` doesn't match
+  :func:`resolve_enter_submission` claims the operation too. Claims are
+  exclusive even within one process, attempt-token scoped, renewed before
+  and after broker I/O, and revalidated before any fold. An expired or
+  superseded attempt cannot contact the broker again or mutate projections.
+  A submit response whose ``client_order_id`` doesn't match
   ``order_ref`` (R7) is treated exactly like a lost response too — folded
   ``unknown`` and handed to :func:`resolve_enter_submission` rather than
   folded as this order's evidence. A snapshot reporting fill progress with
@@ -48,8 +46,18 @@ two must share a time source or the comparison is meaningless.
 Deliberately deferred to later slices: the effect operation never reaches a
 terminal ``succeeded`` state in this module (that requires knowing an ENTER
 is "done" — fully filled vs. still working — which is EXIT/reconciliation
-territory, #1378/#1379); admission gating against open holds/uncertainties
-is R6 (#1380), not this slice.
+territory, #1378/#1379).
+
+``fold_order_evidence``/``fold_uncertain``/``fold_failed`` moved to
+``order_evidence.py`` for #1379: EXIT's cancel-the-entry and
+submit-the-reducing-order steps need the identical evidence-folding gate,
+not a second copy. Re-exported here (``__all__``) for existing callers.
+
+R6 admission gating against open holds/uncertainties (#1380) is implemented
+in :func:`accept_enter` via :func:`~.uncertainty.require_admission` — see
+that function's own docstring for the policy (an ``ACCOUNT_CLERK``-scoped
+block applies to every bot; a ``BOT``-scoped block applies only to the
+matching bot).
 """
 
 from __future__ import annotations
@@ -58,12 +66,8 @@ import hashlib
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.recovery import UNCERTAIN_SUBMIT_GRACE_MS
-from app.broker.alpaca.clerk.sqlite.facts import (
-    EnterAcceptedFacts,
-    OrderFillObservedFacts,
-    OrderSubmitFailedFacts,
-    OrderSubmitUncertainFacts,
-)
+from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
+from app.broker.alpaca.clerk.sqlite.facts import EnterAcceptedFacts
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import (
     DurableConflictError,
@@ -76,12 +80,17 @@ from app.broker.alpaca.clerk.sqlite.models import (
     CommandExistingConflict,
     CommandExistingSame,
     CommandResource,
-    OperationClaim,
     TransitionInput,
 )
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_failed,
+    fold_order_evidence,
+    fold_uncertain,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import require_admission
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.broker.contract.models import BrokerOrderLeg
 from app.broker.contract.ports import BrokerTradePort
 from app.engine.live.order_identity import (
     build_bot_order_namespace,
@@ -144,11 +153,15 @@ def accept_enter(
     ``lifecycle_run_id`` must match the bot's currently ``ACTIVE`` run — the
     same active-run fence Start/Stop enforce (commands.py), so a stopped or
     stale caller can never make a bot order-capable again just by calling
-    this function. A fresh reservation commits the effect operation and
-    order row (mirror finalize included) before returning — that commit is
-    what "one accepted operation" means for recovery: nothing about a broker
-    call is durable yet, so there is nothing for recovery to duplicate, only
-    to resolve.
+    this function. R6 admission (#1380) is checked here too: a currently
+    ``ACTIVE`` uncertainty or hold that blocks new exposure — for this bot
+    specifically, or account-wide — raises
+    :class:`~.uncertainty.AdmissionBlockedError` before any transition is
+    built. A fresh reservation commits the effect operation and order row
+    (mirror finalize included) before returning — that commit is what "one
+    accepted operation" means for recovery: nothing about a broker call is
+    durable yet, so there is nothing for recovery to duplicate, only to
+    resolve.
     """
     reject_colon("strategy_instance_id", strategy_instance_id)
     reject_colon("decision_id", decision_id)
@@ -166,6 +179,7 @@ def accept_enter(
         # under commit_first_transition's lock, rather than before it.
         require_strategy_instance(repo, strategy_instance_id)
         active = require_active_run(repo, strategy_instance_id, lifecycle_run_id)
+        require_admission(repo, strategy_instance_id=strategy_instance_id)
         effect_operation_id = f"effect:{idempotency_key}"
         namespace = build_bot_order_namespace(strategy_instance_id)
         order_ref = build_order_ref(namespace, mint_intent_id())
@@ -266,52 +280,68 @@ async def submit_enter(
         return accepted
 
     assert accepted.effect_operation_id is not None and accepted.order_ref is not None
-    _claim_before_broker_contact(repo, accepted.effect_operation_id)
+    claim = repo.claim_before_broker_contact(accepted.effect_operation_id)
+    broker = ClaimedBrokerIO(
+        repo=repo,
+        effect_operation_id=accepted.effect_operation_id,
+        claim_token=claim.token,
+        trade=trade,
+    )
+    resolve_why: str | None = None
     try:
-        order = await trade.submit(leg, client_order_id=accepted.order_ref)
-    except BrokerUnavailable as exc:
-        return await _fold_uncertain_and_resolve(
-            repo,
-            effect_operation_id=accepted.effect_operation_id,
-            order_ref=accepted.order_ref,
-            why=str(exc),
-            trade=trade,
-        )
-    except BrokerError as exc:
-        _fold_failed(
-            repo,
-            effect_operation_id=accepted.effect_operation_id,
-            order_ref=accepted.order_ref,
-            summary_code="ORDER_SUBMIT_FAILED",
-            reason="The order did not reach the broker.",
-            why=str(exc),
-        )
-        return _snapshot(
-            repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref
-        )
-
-    if order.client_order_id != accepted.order_ref:
-        # Same epistemic situation as a lost response (R4): the broker
-        # answered, but not with evidence for *this* order, so folding it
-        # here would either violate custody_transitions.order_ref's foreign
-        # key (order.client_order_id names no orders row we created) or
-        # associate someone else's evidence with our effect operation. Ask
-        # the broker again, this time by our own order_ref (R7).
-        return await _fold_uncertain_and_resolve(
-            repo,
-            effect_operation_id=accepted.effect_operation_id,
-            order_ref=accepted.order_ref,
-            why=(
+        try:
+            order = await broker.submit(leg, client_order_id=accepted.order_ref)
+        except BrokerUnavailable as exc:
+            resolve_why = str(exc)
+            fold_uncertain(
+                repo,
+                effect_operation_id=accepted.effect_operation_id,
+                order_ref=accepted.order_ref,
+                why=resolve_why,
+            )
+        except BrokerError as exc:
+            fold_failed(
+                repo,
+                effect_operation_id=accepted.effect_operation_id,
+                order_ref=accepted.order_ref,
+                summary_code="ORDER_SUBMIT_FAILED",
+                reason="The order did not reach the broker.",
+                why=str(exc),
+            )
+            return _snapshot(
+                repo,
+                effect_operation_id=accepted.effect_operation_id,
+                order_ref=accepted.order_ref,
+            )
+        else:
+            if order.client_order_id == accepted.order_ref:
+                fold_order_evidence(
+                    repo,
+                    effect_operation_id=accepted.effect_operation_id,
+                    order=order,
+                )
+                return _snapshot(
+                    repo,
+                    effect_operation_id=accepted.effect_operation_id,
+                    order_ref=accepted.order_ref,
+                )
+            resolve_why = (
                 f"broker returned client_order_id={order.client_order_id!r}, "
                 f"expected {accepted.order_ref!r}"
-            ),
-            trade=trade,
+            )
+            fold_uncertain(
+                repo,
+                effect_operation_id=accepted.effect_operation_id,
+                order_ref=accepted.order_ref,
+                why=resolve_why,
+            )
+    finally:
+        repo.release_operation_claim(
+            effect_operation_id=accepted.effect_operation_id, token=claim.token
         )
 
-    fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=order)
-    return _snapshot(
-        repo, effect_operation_id=accepted.effect_operation_id, order_ref=accepted.order_ref
-    )
+    assert resolve_why is not None
+    return await resolve_enter_submission(repo, order_ref=accepted.order_ref, trade=trade)
 
 
 async def resolve_enter_submission(
@@ -322,9 +352,9 @@ async def resolve_enter_submission(
 ) -> EnterSubmission:
     """Resolve one order by exact client order identity (R4/R7).
 
-    Idempotent, last-write-wins: an already-terminal or already-acked order
-    short-circuits with no broker call. Otherwise asks the vendor whether
-    ``order_ref`` landed:
+    Idempotent and monotone: an already-terminal effect short-circuits; every
+    nonterminal order, including an acknowledged working order, is polled by
+    exact identity so later fills/terminal states keep advancing:
 
     - found -> fold the evidence (ack, and any fill it already reports),
     - absent, grace not yet elapsed since the effect was first accepted or
@@ -339,167 +369,57 @@ async def resolve_enter_submission(
     effect = repo.effect_operation(order_row.effect_operation_id)
     assert effect is not None
 
-    if effect.state in ("succeeded", "failed") or order_row.broker_order_id is not None:
+    if effect.state in ("succeeded", "failed", "rejected"):
         return _snapshot(repo, effect_operation_id=effect.effect_operation_id, order_ref=order_ref)
 
-    claim = _claim_before_broker_contact(repo, effect.effect_operation_id)
+    claim = repo.claim_before_broker_contact(effect.effect_operation_id)
+    broker = ClaimedBrokerIO(
+        repo=repo,
+        effect_operation_id=effect.effect_operation_id,
+        claim_token=claim.token,
+        trade=trade,
+    )
     uncertain_since_ms = _uncertain_since_ms(repo, order_ref)
 
     try:
-        order = await trade.get_order_by_client_order_id(order_ref)
-    except BrokerError:
-        return _snapshot(repo, effect_operation_id=effect.effect_operation_id, order_ref=order_ref)
-
-    if order is not None and order.client_order_id != order_ref:
-        return _snapshot(repo, effect_operation_id=effect.effect_operation_id, order_ref=order_ref)
-
-    if order is None:
-        grace_active = (repo.clock() - uncertain_since_ms) < UNCERTAIN_SUBMIT_GRACE_MS
-        if grace_active:
+        try:
+            order = await broker.lookup(order_ref)
+        except BrokerError:
             return _snapshot(
                 repo, effect_operation_id=effect.effect_operation_id, order_ref=order_ref
             )
-        if not repo.verify_operation_claim(
+
+        if order is not None and order.client_order_id != order_ref:
+            return _snapshot(
+                repo, effect_operation_id=effect.effect_operation_id, order_ref=order_ref
+            )
+
+        if order is None:
+            if order_row.broker_order_id is not None:
+                return _snapshot(
+                    repo, effect_operation_id=effect.effect_operation_id, order_ref=order_ref
+                )
+            grace_active = (repo.clock() - uncertain_since_ms) < UNCERTAIN_SUBMIT_GRACE_MS
+            if grace_active:
+                return _snapshot(
+                    repo, effect_operation_id=effect.effect_operation_id, order_ref=order_ref
+                )
+            fold_failed(
+                repo,
+                effect_operation_id=effect.effect_operation_id,
+                order_ref=order_ref,
+                summary_code="ORDER_SUBMIT_FAILED_ABSENT",
+                reason="The order did not reach the broker.",
+                why="Alpaca has no order for this client_order_id (definitively absent).",
+            )
+        else:
+            fold_order_evidence(repo, effect_operation_id=effect.effect_operation_id, order=order)
+    finally:
+        repo.release_operation_claim(
             effect_operation_id=effect.effect_operation_id, token=claim.token
-        ):
-            # A same-owner claim is a renewal (Scope D), so two overlapping
-            # resolves in this process can both pass the claim above — only
-            # the one whose token is still current at this instant may fold
-            # the terminal outcome. The loser's own token was overwritten by
-            # the winner's renewal; the winner already recorded (or is
-            # recording) the same result, so there is nothing left to do.
-            return _snapshot(
-                repo, effect_operation_id=effect.effect_operation_id, order_ref=order_ref
-            )
-        _fold_failed(
-            repo,
-            effect_operation_id=effect.effect_operation_id,
-            order_ref=order_ref,
-            summary_code="ORDER_SUBMIT_FAILED_ABSENT",
-            reason="The order did not reach the broker.",
-            why="Alpaca has no order for this client_order_id (definitively absent).",
         )
-    else:
-        fold_order_evidence(repo, effect_operation_id=effect.effect_operation_id, order=order)
 
     return _snapshot(repo, effect_operation_id=effect.effect_operation_id, order_ref=order_ref)
-
-
-def fold_order_evidence(
-    repo: ClerkSqliteRepository,
-    *,
-    effect_operation_id: str,
-    order: BrokerOrder,
-) -> None:
-    """The one gate for "what does an observed ``BrokerOrder`` mean" — the
-    happy-path submit ack and :func:`resolve_enter_submission`'s found-order
-    case both route through this, not two copies. Folds the fill (if the
-    snapshot reports progress; idempotent and namespace-attributed via
-    ``_fold_order_fill_observed``) *before* the acknowledgement (idempotent
-    on ``orders.broker_state`` via §3c's no-regression rule) — deliberately
-    in that order, not the reverse. These are two independent
-    ``append_transition`` calls, not one atomic commit; if the process dies
-    between them, whichever hasn't been appended yet is what a later
-    recovery sweep must still be able to see is missing.
-    ``resolve_enter_submission`` short-circuits on ``orders.broker_order_id``
-    being set (i.e. already acked) — appending the ack *last* means a crash
-    mid-fold always leaves the order looking un-acked, so recovery re-polls
-    and re-folds; the fill's ``fill_id`` dedup makes that re-fold a no-op.
-    Acking first would let a lost fill be silently and permanently dropped,
-    since a fully-acked order is never revisited.
-
-    A snapshot reporting ``filled_quantity > 0`` with ``filled_avg_price is
-    None`` is an anomalous broker response, not a normal transient state —
-    there is no way to record a fill without a price (``fills.price`` is
-    ``NOT NULL``). Folding the ack anyway would still close the door on ever
-    re-observing that fill (an acked order is never revisited), so this
-    withholds *both* the fill and the ack and folds ``unknown`` instead,
-    with the anomaly recorded in ``why`` — a later resolution will retry
-    with (hopefully) complete evidence.
-    """
-    effect = repo.effect_operation(effect_operation_id)
-    assert effect is not None
-    order_ref = order.client_order_id
-    assert order_ref is not None
-
-    if order.filled_quantity > 0 and order.filled_avg_price is None:
-        _fold_uncertain(
-            repo,
-            effect_operation_id=effect_operation_id,
-            order_ref=order_ref,
-            why=(
-                f"broker reported filled_quantity={order.filled_quantity} with no "
-                "filled_avg_price; withholding the ack to avoid losing the fill"
-            ),
-        )
-        return
-
-    if order.filled_quantity > 0:
-        fill_facts = OrderFillObservedFacts(
-            symbol=order.symbol,
-            side=order.side.upper(),
-            cumulative_filled_quantity=order.filled_quantity,
-            avg_price=order.filled_avg_price,
-            is_correction=False,
-        )
-        repo.append_transition(
-            TransitionInput(
-                strategy_instance_id=effect.strategy_instance_id,
-                run_id=effect.run_id,
-                command_id=effect.command_id,
-                effect_operation_id=effect_operation_id,
-                order_ref=order_ref,
-                transition_kind="ORDER_FILL_OBSERVED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="in_progress",
-                source_event_at_ms=order.updated_at_ms,
-                clerk_observed_at_ms=repo.clock(),
-                summary_code="ORDER_FILL_OBSERVED",
-                facts_json=fill_facts.to_facts_json(),
-            )
-        )
-
-    repo.append_transition(
-        TransitionInput(
-            strategy_instance_id=effect.strategy_instance_id,
-            run_id=effect.run_id,
-            command_id=effect.command_id,
-            effect_operation_id=effect_operation_id,
-            order_ref=order_ref,
-            broker_order_id=order.order_id,
-            broker_state=order.status,
-            transition_kind="ORDER_SUBMIT_ACKED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="in_progress",
-            source_event_at_ms=order.updated_at_ms,
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="ORDER_SUBMIT_ACKED",
-            facts_json=canonicalize({}),
-        )
-    )
-
-
-def _claim_before_broker_contact(repo: ClerkSqliteRepository, effect_operation_id: str) -> OperationClaim:
-    """Pinned contract §2: "a transactionally claimed operation work item
-    ... acquired before any broker contact." A live `BEGIN IMMEDIATE`
-    transaction proves single-writer-at-the-database; it does not prove
-    single-process, so an event-loop stall or a slow network call between
-    :func:`accept_enter` returning and the broker call below could otherwise
-    let a stale owner contact the broker after another process has taken
-    over. Fails closed: :class:`~.repository.OperationClaimError` propagates
-    and no broker call happens if the claim cannot be acquired — this fences
-    a *different*-owner recovery sweep out entirely.
-
-    A *same*-owner claim is a renewal (Scope D), so it always succeeds —
-    this does not by itself stop two overlapping same-process resolves from
-    both getting past the claim. Returns the claim so a caller about to fold
-    a terminal outcome can verify its own token is still the live one
-    immediately beforehand (see :func:`resolve_enter_submission`); a caller
-    that only needs the claim acquired, not verified later, may discard it.
-    """
-    return repo.claim_effect_operation(effect_operation_id=effect_operation_id, owner=repo.lease_owner)
 
 
 def _uncertain_since_ms(repo: ClerkSqliteRepository, order_ref: str) -> int:
@@ -515,79 +435,6 @@ def _uncertain_since_ms(repo: ClerkSqliteRepository, order_ref: str) -> int:
         if transition["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN":
             return transition["recorded_at_ms"]
     return transitions[0]["recorded_at_ms"]
-
-
-async def _fold_uncertain_and_resolve(
-    repo: ClerkSqliteRepository,
-    *,
-    effect_operation_id: str,
-    order_ref: str,
-    why: str,
-    trade: BrokerTradePort,
-) -> EnterSubmission:
-    """Shared tail for every ``submit_enter`` outcome that means "we don't
-    know what the broker did with this order" — a lost response
-    (``BrokerUnavailable``) and a mismatched-identity response are the same
-    epistemic situation despite arising from different code paths (an
-    exception vs. a normal-flow identity check), so both fold ``unknown``
-    and delegate to the same by-identity resolution rather than each
-    inlining the two-step."""
-    _fold_uncertain(repo, effect_operation_id=effect_operation_id, order_ref=order_ref, why=why)
-    return await resolve_enter_submission(repo, order_ref=order_ref, trade=trade)
-
-
-def _fold_uncertain(
-    repo: ClerkSqliteRepository, *, effect_operation_id: str, order_ref: str, why: str
-) -> None:
-    effect = repo.effect_operation(effect_operation_id)
-    assert effect is not None
-    facts = OrderSubmitUncertainFacts(why=why)
-    repo.append_transition(
-        TransitionInput(
-            strategy_instance_id=effect.strategy_instance_id,
-            run_id=effect.run_id,
-            command_id=effect.command_id,
-            effect_operation_id=effect_operation_id,
-            order_ref=order_ref,
-            transition_kind="ORDER_SUBMIT_UNCERTAIN",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="unknown",
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="ORDER_SUBMIT_UNCERTAIN",
-            facts_json=facts.to_facts_json(),
-        )
-    )
-
-
-def _fold_failed(
-    repo: ClerkSqliteRepository,
-    *,
-    effect_operation_id: str,
-    order_ref: str,
-    summary_code: str,
-    reason: str,
-    why: str,
-) -> None:
-    effect = repo.effect_operation(effect_operation_id)
-    assert effect is not None
-    facts = OrderSubmitFailedFacts(reason=reason, why=why)
-    repo.append_transition(
-        TransitionInput(
-            strategy_instance_id=effect.strategy_instance_id,
-            run_id=effect.run_id,
-            command_id=effect.command_id,
-            effect_operation_id=effect_operation_id,
-            order_ref=order_ref,
-            transition_kind="ORDER_SUBMIT_FAILED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="failed",
-            clerk_observed_at_ms=repo.clock(),
-            summary_code=summary_code,
-            facts_json=facts.to_facts_json(),
-        )
-    )
 
 
 def _snapshot(

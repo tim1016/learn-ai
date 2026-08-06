@@ -36471,6 +36471,44 @@
         "title": "ReconcileSummary",
         "type": "object"
       },
+      "ReconciliationResponse": {
+        "description": "Backend-authored result of an operator reconciliation pass.",
+        "properties": {
+          "drifted_symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Drifted Symbols",
+            "type": "array"
+          },
+          "foreign_order_count": {
+            "title": "Foreign Order Count",
+            "type": "integer"
+          },
+          "resolved_count": {
+            "title": "Resolved Count",
+            "type": "integer"
+          },
+          "verdict": {
+            "enum": [
+              "clean",
+              "unexplained_order",
+              "position_drift",
+              "stale"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "resolved_count",
+          "foreign_order_count",
+          "drifted_symbols"
+        ],
+        "title": "ReconciliationResponse",
+        "type": "object"
+      },
       "ReconciliationSummary": {
         "additionalProperties": false,
         "description": "The latest reconciliation-sweep result (S6), or ``None`` if never run.",
@@ -48926,6 +48964,65 @@
           }
         },
         "summary": "Get Command",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/reconcile": {
+      "post": {
+        "description": "Run the same fail-closed account pass used by the automatic sweep.",
+        "operationId": "reconcile_now_api_alpaca_clerk_sqlite_accounts__account_id__reconcile_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile Now",
         "tags": [
           "alpaca-clerk-sqlite"
         ]

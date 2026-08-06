@@ -20,11 +20,31 @@ from collections.abc import Callable
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.facts import (
+    AccountHoldRaisedFacts,
+    AccountHoldResolvedFacts,
     CommandRejectedFacts,
     EnterAcceptedFacts,
+    ExitAcceptedFacts,
     OrderFillObservedFacts,
+    ReconciliationAttemptedFacts,
     RunStartedFacts,
     RunStoppedFacts,
+)
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    fold_uncertainty_raised as _fold_uncertainty_raised,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    fold_uncertainty_refreshed as _fold_uncertainty_refreshed,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    fold_uncertainty_resolved as _fold_uncertainty_resolved,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    open_or_refresh_unknown_outcome as _open_or_refresh_unknown_outcome,
+)
+from app.broker.alpaca.clerk.sqlite.uncertainty_folds import (
+    resolve_unknown_outcome_if_proven as _resolve_unknown_outcome_if_proven,
 )
 
 FoldFn = Callable[[sqlite3.Connection, dict[str, Any]], None]
@@ -203,9 +223,7 @@ def _fold_run_started(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         state="succeeded",
         recorded_at_ms=payload["recorded_at_ms"],
     )
-    _attach_command_receipt(
-        conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload
-    )
+    _attach_command_receipt(conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload)
 
 
 def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -228,9 +246,7 @@ def _fold_run_stopped(conn: sqlite3.Connection, payload: dict[str, Any]) -> None
         state="succeeded",
         recorded_at_ms=payload["recorded_at_ms"],
     )
-    _attach_command_receipt(
-        conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload
-    )
+    _attach_command_receipt(conn, command_id=payload["command_id"], terminal_state="succeeded", payload=payload)
 
 
 def _fold_command_rejected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -249,9 +265,7 @@ def _fold_command_rejected(conn: sqlite3.Connection, payload: dict[str, Any]) ->
         state="rejected",
         recorded_at_ms=payload["recorded_at_ms"],
     )
-    _attach_command_receipt(
-        conn, command_id=payload["command_id"], terminal_state="rejected", payload=payload
-    )
+    _attach_command_receipt(conn, command_id=payload["command_id"], terminal_state="rejected", payload=payload)
 
 
 def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -316,34 +330,153 @@ def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> N
         ),
     )
     conn.execute(
+        "INSERT INTO operation_order_links (effect_operation_id, order_ref, role, linked_at_ms) "
+        "VALUES (?, ?, 'ENTRY', ?)",
+        (
+            payload["effect_operation_id"],
+            payload["order_ref"],
+            payload["recorded_at_ms"],
+        ),
+    )
+    conn.execute(
         "UPDATE commands SET effect_operation_id = ? WHERE command_id = ?",
         (payload["effect_operation_id"], payload["command_id"]),
     )
 
 
-def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """§3c: idempotent by construction. The current row is already committed
-    to ``custody_transitions`` before this fold runs, so ``MAX(source_event_at_ms)``
-    over every ``ORDER_SUBMIT_ACKED`` row for this order (including this one)
-    tells whether this observation is the newest seen — an older, out-of-order
-    delivery is still logged for audit but does not regress ``orders.broker_state``.
+def _fold_exit_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Create the EXIT and link its captured sibling entries atomically.
 
-    ``source_event_at_ms`` is nullable (``BrokerOrder.updated_at_ms`` is
-    optional — Alpaca can omit it): a ``None`` observation can never prove
-    itself the newest, so it is always treated as not-newer once a real
-    timestamp has already been recorded, rather than raising on the ``None
-    >= int`` comparison.
+    Entry ``orders.effect_operation_id`` values remain immutable ENTER
+    provenance. Replayable ``operation_order_links`` carry later EXIT custody,
+    so retries rebuild the same operation graph without re-parenting rows.
+    """
+    facts = ExitAcceptedFacts.from_facts_json(payload["facts_json"])
+    _insert_command_row(
+        conn,
+        command_id=payload["command_id"],
+        authority_generation=payload["authority_generation"],
+        idempotency_key=facts.idempotency_key,
+        payload_hash=facts.payload_hash,
+        kind=facts.kind,
+        strategy_instance_id=payload["strategy_instance_id"],
+        run_id=payload["run_id"],
+        action=facts.action,
+        intended_end_state=facts.intended_end_state,
+        state="accepted",
+        recorded_at_ms=payload["recorded_at_ms"],
+    )
+    conn.execute(
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, "
+        "idempotency_key, command_id, strategy_instance_id, run_id, kind, state, "
+        "custody_owner, created_at_ms, updated_at_ms, terminal_receipt_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', 'ACCOUNT_CLERK', ?, ?, NULL)",
+        (
+            payload["effect_operation_id"],
+            payload["authority_generation"],
+            facts.effect_idempotency_key,
+            payload["command_id"],
+            payload["strategy_instance_id"],
+            payload["run_id"],
+            facts.effect_kind,
+            payload["recorded_at_ms"],
+            payload["recorded_at_ms"],
+        ),
+    )
+    conn.executemany(
+        "INSERT INTO operation_order_links (effect_operation_id, order_ref, role, linked_at_ms) "
+        "VALUES (?, ?, 'ENTRY', ?)",
+        (
+            (payload["effect_operation_id"], order_ref, payload["recorded_at_ms"])
+            for order_ref in facts.entry_order_refs
+        ),
+    )
+    conn.execute(
+        "UPDATE commands SET effect_operation_id = ? WHERE command_id = ?",
+        (payload["effect_operation_id"], payload["command_id"]),
+    )
+
+
+def _fold_exit_reducing_order_created(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Create and link the database-unique reducing identity for one EXIT.
+
+    The instruction remains in typed transition facts; the order row stores
+    identity and broker projection while the partial unique link index makes
+    a second reducing intent for the same EXIT impossible.
+    """
+    conn.execute(
+        "INSERT INTO orders (order_ref, effect_operation_id, client_order_id, broker_order_id, "
+        "role, broker_state, submitted_at_ms, updated_at_ms) "
+        "VALUES (?, ?, ?, NULL, 'REDUCING', NULL, NULL, ?)",
+        (
+            payload["order_ref"],
+            payload["effect_operation_id"],
+            payload["order_ref"],
+            payload["recorded_at_ms"],
+        ),
+    )
+    conn.execute(
+        "INSERT INTO operation_order_links (effect_operation_id, order_ref, role, linked_at_ms) "
+        "VALUES (?, ?, 'REDUCING', ?)",
+        (
+            payload["effect_operation_id"],
+            payload["order_ref"],
+            payload["recorded_at_ms"],
+        ),
+    )
+
+
+_TERMINAL_ORDER_STATES = frozenset({"filled", "canceled", "expired", "rejected", "replaced"})
+_ORDER_STATE_PRECEDENCE = {
+    "new": 10,
+    "accepted": 10,
+    "pending_new": 10,
+    "pending_cancel": 20,
+    "partially_filled": 30,
+    "filled": 100,
+    "canceled": 100,
+    "expired": 100,
+    "rejected": 100,
+    "replaced": 100,
+}
+
+
+def _ack_advances_order(conn: sqlite3.Connection, payload: dict[str, Any]) -> bool:
+    """Whether this observation may advance the materialized order snapshot."""
+    row = conn.execute("SELECT broker_state FROM orders WHERE order_ref = ?", (payload["order_ref"],)).fetchone()
+    current_state = (row["broker_state"] or "").lower()
+    incoming_state = (payload["broker_state"] or "").lower()
+    if current_state in _TERMINAL_ORDER_STATES:
+        return False
+
+    current_sequence = _this_transition_sequence(conn)
+    prior_source_time = conn.execute(
+        "SELECT MAX(source_event_at_ms) AS latest FROM custody_transitions "
+        "WHERE order_ref = ? AND transition_kind = 'ORDER_SUBMIT_ACKED' AND sequence < ?",
+        (payload["order_ref"], current_sequence),
+    ).fetchone()["latest"]
+    incoming_source_time = payload["source_event_at_ms"]
+    if incoming_source_time is None:
+        return incoming_state in _TERMINAL_ORDER_STATES or not current_state
+    if prior_source_time is None or incoming_source_time > prior_source_time:
+        return True
+    if incoming_source_time < prior_source_time:
+        return False
+    return _ORDER_STATE_PRECEDENCE.get(incoming_state, 0) >= _ORDER_STATE_PRECEDENCE.get(current_state, 0)
+
+
+def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Audit every snapshot while advancing only the monotone projection.
+
+    Source time wins first, equal timestamps use explicit state precedence,
+    and an undated terminal state may advance a nonterminal order. Terminal
+    order/effect/command projections never regress on late or duplicate rows.
     """
     order_ref = payload["order_ref"]
-    latest = conn.execute(
-        "SELECT MAX(source_event_at_ms) AS latest FROM custody_transitions "
-        "WHERE order_ref = ? AND transition_kind = 'ORDER_SUBMIT_ACKED'",
-        (order_ref,),
-    ).fetchone()["latest"]
-    source_event_at_ms = payload["source_event_at_ms"]
-    if latest is None or (source_event_at_ms is not None and source_event_at_ms >= latest):
+    if _ack_advances_order(conn, payload):
         conn.execute(
-            "UPDATE orders SET broker_order_id = ?, broker_state = ?, submitted_at_ms = ?, "
+            "UPDATE orders SET broker_order_id = COALESCE(broker_order_id, ?), "
+            "broker_state = ?, submitted_at_ms = COALESCE(submitted_at_ms, ?), "
             "updated_at_ms = ? WHERE order_ref = ?",
             (
                 payload["broker_order_id"],
@@ -353,20 +486,21 @@ def _fold_order_submit_acked(conn: sqlite3.Connection, payload: dict[str, Any]) 
                 order_ref,
             ),
         )
-    conn.execute(
-        "UPDATE effect_operations SET state = 'in_progress', updated_at_ms = ? "
-        "WHERE effect_operation_id = ?",
-        (payload["recorded_at_ms"], payload["effect_operation_id"]),
-    )
-    conn.execute(
-        "UPDATE commands SET state = 'in_progress', updated_at_ms = ? WHERE command_id = ?",
-        (payload["recorded_at_ms"], payload["command_id"]),
-    )
+    unknown_evidence = _resolve_unknown_outcome_if_proven(conn, payload)
+    if not unknown_evidence.effect_still_unknown:
+        conn.execute(
+            "UPDATE effect_operations SET state = 'in_progress', updated_at_ms = ? "
+            "WHERE effect_operation_id = ? AND state NOT IN ('succeeded','failed','rejected')",
+            (payload["recorded_at_ms"], payload["effect_operation_id"]),
+        )
+        conn.execute(
+            "UPDATE commands SET state = 'in_progress', updated_at_ms = ? WHERE command_id = ? "
+            "AND state NOT IN ('succeeded','failed','rejected')",
+            (payload["recorded_at_ms"], payload["command_id"]),
+        )
 
 
-def _fold_effect_terminal(
-    conn: sqlite3.Connection, payload: dict[str, Any], *, terminal_state: str
-) -> None:
+def _fold_effect_terminal(conn: sqlite3.Connection, payload: dict[str, Any], *, terminal_state: str) -> None:
     """Shared tail for an effect operation reaching a terminal outcome
     (#1377+): a receipt linking both the effect and its command, and both
     rows' state moved off whatever nonterminal state they were in. Distinct
@@ -377,6 +511,13 @@ def _fold_effect_terminal(
     """
     effect_operation_id = payload["effect_operation_id"]
     command_id = payload["command_id"]
+    current = conn.execute(
+        "SELECT state FROM effect_operations WHERE effect_operation_id = ?",
+        (effect_operation_id,),
+    ).fetchone()
+    if current is not None and current["state"] in ("succeeded", "failed", "rejected"):
+        _resolve_unknown_outcome_if_proven(conn, payload)
+        return
     receipt_id = f"receipt:{effect_operation_id}"
     _insert_receipt_row(
         conn,
@@ -395,6 +536,7 @@ def _fold_effect_terminal(
         "UPDATE commands SET state = ?, receipt_id = ?, updated_at_ms = ? WHERE command_id = ?",
         (terminal_state, receipt_id, payload["recorded_at_ms"], command_id),
     )
+    _resolve_unknown_outcome_if_proven(conn, payload)
 
 
 def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -404,25 +546,52 @@ def _fold_order_submit_failed(conn: sqlite3.Connection, payload: dict[str, Any])
     _fold_effect_terminal(conn, payload, terminal_state="failed")
 
 
+def _fold_exit_attributed_flat(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """EXIT's precise terminal-success proof (#1379, pinned contract §6's
+    "terminal EXIT receipt"): the attributed exposure for this operation's
+    symbol has been independently verified flat (see
+    ``exit.resolve_exit``'s verification step) — reuses
+    ``_fold_effect_terminal`` unchanged (ENTER never reaches ``succeeded``
+    in its own module; this is that shared tail's first ``succeeded``
+    caller)."""
+    _fold_effect_terminal(conn, payload, terminal_state="succeeded")
+
+
 def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """A lost/timed-out broker response — never a terminal outcome (R4):
     retains Account Clerk custody at ``unknown`` until resolution proves
     otherwise. No receipt: ``unknown`` is not a proof of any outcome."""
     conn.execute(
         "UPDATE effect_operations SET state = 'unknown', updated_at_ms = ? "
-        "WHERE effect_operation_id = ?",
+        "WHERE effect_operation_id = ? AND state NOT IN ('succeeded','failed','rejected')",
         (payload["recorded_at_ms"], payload["effect_operation_id"]),
     )
     conn.execute(
-        "UPDATE commands SET state = 'unknown', updated_at_ms = ? WHERE command_id = ?",
+        "UPDATE commands SET state = 'unknown', updated_at_ms = ? WHERE command_id = ? "
+        "AND state NOT IN ('succeeded','failed','rejected')",
         (payload["recorded_at_ms"], payload["command_id"]),
     )
+    effect = conn.execute(
+        "SELECT state FROM effect_operations WHERE effect_operation_id = ?",
+        (payload["effect_operation_id"],),
+    ).fetchone()
+    if effect is not None and effect["state"] == "unknown":
+        _open_or_refresh_unknown_outcome(conn, payload)
 
 
 #: Numerical-rigor tolerance for the fill-quantity delta gate below — see
 #: ``docs/references/clerk-fill-quantity-tolerance.md`` for the citation and
 #: reasoning (`.claude/rules/numerical-rigor.md`).
 FILL_QTY_EPSILON = 1e-9
+
+#: Numerical-rigor tolerance for "is this position flat/drifted" — same
+#: absolute-tolerance rationale as ``FILL_QTY_EPSILON`` above (see
+#: ``docs/references/clerk-position-drift-tolerance.md``). Lives here, not in
+#: ``reconcile.py`` (its original logical home), so both ``reconcile.py`` and
+#: ``exit.py`` can import it without either depending on the other —
+#: ``reconcile_uncertain_order`` needs to call ``exit.resolve_exit`` for an
+#: EXIT-owned order (#1379), which would otherwise be a circular import.
+POSITION_QTY_EPSILON = 1e-9
 
 
 def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
@@ -474,8 +643,7 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     if already_recorded is not None:
         return
     prior = conn.execute(
-        "SELECT COALESCE(SUM(qty), 0) AS qty, COALESCE(SUM(qty * price), 0) AS cost "
-        "FROM fills WHERE order_ref = ?",
+        "SELECT COALESCE(SUM(qty), 0) AS qty, COALESCE(SUM(qty * price), 0) AS cost FROM fills WHERE order_ref = ?",
         (order_ref,),
     ).fetchone()
     delta_qty = facts.cumulative_filled_quantity - prior["qty"]
@@ -506,19 +674,113 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
         "ON CONFLICT(strategy_instance_id, symbol) DO UPDATE SET "
         "attributed_qty = attributed_qty + excluded.attributed_qty, "
         "updated_at_ms = excluded.updated_at_ms",
-        (payload["strategy_instance_id"], facts.symbol, signed_delta, payload["recorded_at_ms"]),
+        (
+            payload["strategy_instance_id"],
+            facts.symbol.upper(),
+            signed_delta,
+            payload["recorded_at_ms"],
+        ),
+    )
+
+
+def _this_transition_sequence(conn: sqlite3.Connection) -> int:
+    """The ``custody_transitions.sequence`` of the row this fold is running
+    for. Safe to read mid-fold: ``_commit_transition_row`` inserts the
+    transition row *before* invoking the fold (§4), and the whole commit runs
+    under the repository's write lock plus a live ``BEGIN IMMEDIATE``, so no
+    other writer can have advanced ``sequence`` in between. Used to mint a
+    globally-unique, replay-deterministic id for a fold's own auxiliary rows
+    without a random source (a fold must stay pure for mirror rebuild)."""
+    return conn.execute("SELECT MAX(sequence) AS seq FROM custody_transitions").fetchone()["seq"]
+
+
+def _fold_reconciliation_attempted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """#1378: durable audit of one reconciliation pass's attempt to resolve a
+    single uncertain order — distinct from (and appended alongside, never
+    instead of) the ``ORDER_SUBMIT_ACKED``/``ORDER_SUBMIT_FAILED`` transition
+    the resolution itself already produced when it found new evidence. This
+    fold only ever inserts into ``reconciliations``; it never touches
+    ``orders``/``effect_operations``/``positions`` — those projections are
+    already correct by the time this transition is appended (see
+    ``reconcile.reconcile_uncertain_order``)."""
+    facts = ReconciliationAttemptedFacts.from_facts_json(payload["facts_json"])
+    reconciliation_id = f"reconciliation:{_this_transition_sequence(conn)}"
+    conn.execute(
+        "INSERT INTO reconciliations (reconciliation_id, effect_operation_id, order_ref, "
+        "trigger, attempted_at_ms, outcome, evidence_refs_json) VALUES (?, ?, ?, ?, ?, ?, NULL)",
+        (
+            reconciliation_id,
+            payload["effect_operation_id"],
+            payload["order_ref"],
+            facts.trigger,
+            payload["recorded_at_ms"],
+            facts.outcome,
+        ),
+    )
+
+
+def _fold_account_hold_raised(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Open one database-unique account hold episode for a typed cause."""
+    facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    hold_id = f"hold:{_this_transition_sequence(conn)}"
+    conn.execute(
+        "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
+        "opened_at_ms, resolved_at_ms, evidence_refs_json) "
+        "VALUES (?, 'ACCOUNT_CLERK', NULL, ?, 'ACTIVE', ?, NULL, ?)",
+        (
+            hold_id,
+            facts.reason_code,
+            payload["recorded_at_ms"],
+            canonicalize(facts.evidence_refs),
+        ),
+    )
+
+
+def _fold_account_hold_refreshed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
+    conn.execute(
+        "UPDATE holds SET evidence_refs_json = ? WHERE scope = 'ACCOUNT_CLERK' "
+        "AND reason_code = ? AND state = 'ACTIVE'",
+        (canonicalize(facts.evidence_refs), facts.reason_code),
+    )
+
+
+def _fold_account_hold_resolved(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    facts = AccountHoldResolvedFacts.from_facts_json(payload["facts_json"])
+    conn.execute(
+        "UPDATE holds SET state = 'RESOLVED', resolved_at_ms = ?, evidence_refs_json = ? "
+        "WHERE scope = 'ACCOUNT_CLERK' AND reason_code = ? AND state = 'ACTIVE'",
+        (payload["recorded_at_ms"], canonicalize(facts.evidence_refs), facts.reason_code),
     )
 
 
 DEFAULT_FOLD_REGISTRY = FoldRegistry()
-DEFAULT_FOLD_REGISTRY.register(
-    "STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered
-)
+DEFAULT_FOLD_REGISTRY.register("STRATEGY_INSTANCE_REGISTERED", _fold_strategy_instance_registered)
 DEFAULT_FOLD_REGISTRY.register("RUN_STARTED", _fold_run_started)
 DEFAULT_FOLD_REGISTRY.register("RUN_STOPPED", _fold_run_stopped)
 DEFAULT_FOLD_REGISTRY.register("COMMAND_REJECTED", _fold_command_rejected)
 DEFAULT_FOLD_REGISTRY.register("ENTER_ACCEPTED", _fold_enter_accepted)
+DEFAULT_FOLD_REGISTRY.register("EXIT_ACCEPTED", _fold_exit_accepted)
+DEFAULT_FOLD_REGISTRY.register("EXIT_REDUCING_ORDER_CREATED", _fold_exit_reducing_order_created)
+DEFAULT_FOLD_REGISTRY.register("EXIT_ATTRIBUTED_FLAT", _fold_exit_attributed_flat)
+DEFAULT_FOLD_REGISTRY.register("EXIT_NOT_FLAT", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_ACKED", _fold_order_submit_acked)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_FAILED", _fold_order_submit_failed)
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_UNCERTAIN", _fold_order_submit_uncertain)
+# EXIT's cancel-analog (#1379): same generic "effect/command -> unknown, no
+# receipt" fold body — no separate function, see _fold_order_submit_uncertain
+# and order_evidence.fold_uncertain's docstrings.
+DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_UNCERTAIN", _fold_order_submit_uncertain)
 DEFAULT_FOLD_REGISTRY.register("ORDER_FILL_OBSERVED", _fold_order_fill_observed)
+DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
+DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)
+DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_REFRESHED", _fold_account_hold_refreshed)
+DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RESOLVED", _fold_account_hold_resolved)
+DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RAISED", _fold_uncertainty_raised)
+DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_REFRESHED", _fold_uncertainty_refreshed)
+DEFAULT_FOLD_REGISTRY.register("UNCERTAINTY_RESOLVED", _fold_uncertainty_resolved)
+# Audit-only EXIT phase markers. Their facts remain in the canonical transition
+# stream; materialized order/effect state is advanced by the evidence folds.
+DEFAULT_FOLD_REGISTRY.register("ORDER_CANCEL_REQUESTED", lambda _conn, _payload: None)
+DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payload: None)
+DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)
