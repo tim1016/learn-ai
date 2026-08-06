@@ -271,6 +271,8 @@ jobs:
     defaults:
       run:
         working-directory: PythonDataService
+    env:
+      POLYGON_API_KEY: test-key-for-testing
     steps:
       - uses: actions/checkout@v4
         with:
