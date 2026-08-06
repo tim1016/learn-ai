@@ -8,7 +8,10 @@ does not replace that manual.
 
 The tool is broker-free: it verifies operator-captured JSON evidence but never calls
 Alpaca. There is no force flag. Run commands from `PythonDataService/` and replace the
-examples with the exact account and artifact paths under review.
+examples with the exact account, Clerk-artifact, and runner-artifact paths under
+review. In the default compose layout those two roots are
+`artifacts/alpaca_clerk/` and `artifacts/`; do not silently substitute one for the
+other.
 
 ## Stop boundary
 
@@ -20,20 +23,34 @@ mirror rebuild, reset, or cutover:
 3. verify no second service process can reopen the account; and
 4. preserve the operator's process-stop evidence with the incident/cutover record.
 
-The tools reject a readable live lease. A corrupt database may make its lease row
+The tools reject a readable live lease. Cutover initialization, plan, and apply derive
+the account-scoped roster from the runner account registry plus both legacy account bot
+layouts; the latter is the read-only source for pre-registry deployments. A bot governed
+by another account cannot satisfy or block this account's roster. Every governed Alpaca
+binding must have complete canonical runner evidence, `STOPPED` desired state,
+`OFF_DUTY`/`RETIRED` lifecycle state, no active run, and a typed durable terminal outcome.
+The tools content-hash each complete bot artifact directory and apply rechecks the exact
+roster. Freeze **all** writers to the runner `live_state/` tree
+from plan through apply, including lifecycle, indicator-state, log, and editor processes.
+Any write changes the planned evidence, so apply is expected to refuse and the operator
+must capture fresh broker evidence and create a new plan. There is no caller-authored
+empty-list bypass.
+
+A corrupt database may make its lease row
 unreadable, so a database error is **not** proof that the process stopped. In that case,
 the independent process-stop check above is a mandatory precondition. Never remove a
 WAL, SHM, database, mirror, activation record, or quarantine file by hand.
 
-## Broker evidence file
+## Broker evidence files
 
-Reset and cutover consume a freshly captured evidence file. Timestamps are Unix epoch
-milliseconds UTC. `proof_reference` identifies the separately retained Alpaca response
-or operator evidence; it is not an API key.
+Cutover consumes a freshly captured paper-account evidence file. Timestamps are Unix
+epoch milliseconds UTC. `proof_reference` identifies the separately retained Alpaca
+response or operator evidence; it is not an API key.
 
 ```json
 {
   "account_id": "PA-EXAMPLE",
+  "account_mode": "paper",
   "observed_at_ms": 1800000000000,
   "proof_reference": "incident/2026-08-06/alpaca-account-and-open-orders.json",
   "positions": {"SPY": 0.0},
@@ -41,15 +58,20 @@ or operator evidence; it is not an API key.
 }
 ```
 
-The account must match, every position must be finite and flat within the canonical
-`POSITION_QTY_EPSILON`, and the open-order list must be empty. Pass the complete bot
-roster with one `--expected-bot` and matching `--stopped-bot` argument per bot.
+The cutover account must match, `account_mode` must be exactly `paper`, every position
+must be finite and flat within the canonical `POSITION_QTY_EPSILON`, and the open-order
+list must be empty. Cutover derives and hashes the runner roster itself.
+
+Reset uses a distinct recovery proof with the same fields except `account_mode`, which
+is omitted because reset preserves the authority's existing deployment scope rather
+than authorizing a paper/live scope change. Reset still requires one `--expected-bot`
+and matching `--stopped-bot` argument per bot.
 
 ## Verified online backup
 
 ```bash
 .venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
-  --artifacts-root /absolute/artifacts \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
   --account-id PA-EXAMPLE \
   backup
 ```
@@ -70,10 +92,10 @@ mirror head; restore is not a historical rollback mechanism.
 
 ```bash
 .venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
-  --artifacts-root /absolute/artifacts \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
   --account-id PA-EXAMPLE \
   restore \
-  --bundle /absolute/artifacts/accounts/alpaca/PA-EXAMPLE/verified-backups/backup-g1-...
+  --bundle /absolute/artifacts/alpaca_clerk/accounts/alpaca/PA-EXAMPLE/verified-backups/backup-g1-...
 ```
 
 The old DB/WAL/SHM are moved beneath `recovery-preserved/`, never overwritten. The
@@ -90,7 +112,7 @@ fence before moving the old DB files.
 
 ```bash
 .venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
-  --artifacts-root /absolute/artifacts \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
   --account-id PA-EXAMPLE \
   rebuild
 ```
@@ -109,7 +131,7 @@ record; reset never falls back to legacy JSONL.
 
 ```bash
 .venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
-  --artifacts-root /absolute/artifacts \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
   --account-id PA-EXAMPLE \
   reset \
   --broker-evidence /absolute/evidence.json \
@@ -120,22 +142,68 @@ record; reset never falls back to legacy JSONL.
 Exposure, open orders, a stale/future proof, roster mismatch, live lease, non-regular
 authority file, or symlink refuses reset before any authority file is moved.
 
-## Human cutover: plan then apply
+## Human cutover: initialize, plan, then apply
 
 This section is tooling documentation for #1383, not permission to run it against a
-real paper account. The SQLite process must be cleanly stopped and checkpointed; any
-WAL/SHM sidecar refuses planning. `cutover-plan` is read-only: it verifies the exact DB,
-fresh broker proof, flat/order-free account, stopped roster, and content hashes of the
-legacy artifacts, then creates a short-lived content-addressed confirmation token.
+real paper account. The SQLite process must be cleanly stopped and checkpointed.
+
+### Establish the inactive generation
+
+A never-established legacy account first needs one evidence-gated, inactive SQLite
+generation. `cutover-initialize` requires fresh broker proof and independently verifies
+the account-scoped durable runner roster. Concurrent initialization attempts for the same
+account are serialized by one account lock. Before the command creates `clerk.db`, the
+mirror identity, and the established-generation registry, it durably records a
+content-addressed intent binding the exact broker, Alpaca-roster, and legacy-inventory
+evidence. It writes **no activation fence**, starts no SQLite sweep, and leaves the legacy
+authority selected. An empty
+Alpaca roster or empty legacy inventory refuses initialization, which also catches a
+mistakenly supplied artifact root.
 
 ```bash
 .venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
-  --artifacts-root /absolute/artifacts \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
+  --account-id PA-EXAMPLE \
+  cutover-initialize \
+  --runner-artifacts-root /absolute/artifacts \
+  --broker-evidence /absolute/evidence.json \
+  --max-evidence-age-ms 30000
+```
+
+Review and retain the initialization receipt, then publish the verified online backup
+described above. If receipt publication fails after the registry fence is durable,
+rerun the same command with the exact same evidence. A retry that matches the durable
+intent remains supported after that evidence's freshness window expires because it can
+only complete receipt publication for the already-created, still-unused authority; it
+cannot create or activate an authority. The retry resumes only when the
+inactive generation-one registry, database, mirror, account, and identity all verify
+exactly and the new evidence matches the durable pre-init intent byte for byte; its
+receipt path is deterministic and binds the intent hash to the database identity. A
+missing intent, changed evidence, or missing, used, substituted, or corrupt component
+refuses the retry and requires a separately reviewed recovery change; the existing reset
+command is not an escape hatch for an incomplete first cutover initialization. Never
+remove the intent, database, mirror, registry entry, or any related file by hand.
+
+### Produce the read-only plan
+
+Capture fresh broker evidence again after the backup. Any WAL/SHM sidecar refuses
+planning. `cutover-plan` is read-only: it verifies the exact DB, fresh broker proof,
+flat/order-free account, the database-bound initialization intent/receipt, the exact
+empty generation-one mirror and its content hash, the
+independently derived stopped roster, and content hashes of every actual legacy
+authority artifact. It inventories both the broker-scoped
+`accounts/alpaca/<account_id>/` files and the historical
+`accounts/<account_id>/bots/` layout, then creates a short-lived content-addressed
+confirmation token.
+
+```bash
+.venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
   --account-id PA-EXAMPLE \
   cutover-plan \
+  --runner-artifacts-root /absolute/artifacts \
   --broker-evidence /absolute/evidence.json \
   --max-evidence-age-ms 30000 \
-  --expected-bot bot-a --stopped-bot bot-a \
   --output /absolute/cutover-plan.json
 ```
 
@@ -145,12 +213,12 @@ normalized evidence.
 
 ```bash
 .venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
-  --artifacts-root /absolute/artifacts \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
   --account-id PA-EXAMPLE \
   cutover-apply \
+  --runner-artifacts-root /absolute/artifacts \
   --broker-evidence /absolute/evidence.json \
   --max-evidence-age-ms 30000 \
-  --expected-bot bot-a --stopped-bot bot-a \
   --plan /absolute/cutover-plan.json \
   --confirmation-token EXACT_TOKEN_FROM_PLAN
 ```
