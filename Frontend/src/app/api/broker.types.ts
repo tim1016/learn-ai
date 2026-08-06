@@ -715,6 +715,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check Bot Recovery Action */
+        post: operations["check_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execute Bot Recovery Action */
+        post: operations["execute_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_execute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/start": {
         parameters: {
             query?: never;
@@ -758,6 +792,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Bot Snapshot
+         * @description Return one bot's fold projection plus account-wide fail-closed facts.
+         */
+        get: operations["get_bot_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Bot Timeline */
+        get: operations["get_bot_timeline_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/commands/{command_id}": {
         parameters: {
             query?: never;
@@ -789,6 +860,77 @@ export interface paths {
          * @description Run the same fail-closed account pass used by the automatic sweep.
          */
         post: operations["reconcile_now_api_alpaca_clerk_sqlite_accounts__account_id__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/recovery-actions/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check Account Recovery Action */
+        post: operations["check_account_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__recovery_actions_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/recovery-actions/execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execute Account Recovery Action */
+        post: operations["execute_account_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__recovery_actions_execute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Account Snapshot
+         * @description Return the account-wide fold projection; never replay transition history.
+         */
+        get: operations["get_account_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Account Timeline */
+        get: operations["get_account_timeline_api_alpaca_clerk_sqlite_accounts__account_id__timeline_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9329,7 +9471,7 @@ export interface components {
                 [key: string]: number;
             };
             /** Fills Today */
-            fills_today: number;
+            fills_today: number | null;
             /** Last Activity At Ms */
             last_activity_at_ms: number | null;
             /**
@@ -9347,7 +9489,7 @@ export interface components {
              */
             phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
             /** Realized Pnl Today */
-            realized_pnl_today: number;
+            realized_pnl_today: number | null;
             row_action?: components["schemas"]["PanelAction"] | null;
             /** Running */
             running: boolean;
@@ -9808,7 +9950,7 @@ export interface components {
                 [key: string]: number;
             };
             /** Fills Today */
-            fills_today: number;
+            fills_today: number | null;
             health: components["schemas"]["BotHealthCard"];
             /** Journal Tail Ref */
             journal_tail_ref: string;
@@ -9831,7 +9973,7 @@ export interface components {
             /** Readiness Ready Count */
             readiness_ready_count: number;
             /** Realized Pnl Today */
-            realized_pnl_today: number;
+            realized_pnl_today: number | null;
             /** Recent Decisions */
             recent_decisions: components["schemas"]["RecentDecisionView"][];
             /** Recent Fills */
@@ -11696,6 +11838,51 @@ export interface components {
             time_in_force?: string | null;
         };
         /**
+         * ClerkProjectionResponse
+         * @description One backend-authored Trader/Operator snapshot over materialized folds.
+         */
+        ClerkProjectionResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Authority Generation */
+            authority_generation: number;
+            /**
+             * Authority Health
+             * @enum {string}
+             */
+            authority_health: "healthy" | "degraded_to_mirror" | "failed";
+            /** Authority Health Reason */
+            authority_health_reason: string | null;
+            /** Commands */
+            commands: components["schemas"]["ProjectedCommandResponse"][];
+            /** Control Revision */
+            control_revision: number;
+            /** Custody Owner */
+            custody_owner: string;
+            /** Db Identity Token */
+            db_identity_token: string;
+            /** Generated At Ms */
+            generated_at_ms: number;
+            guidance: components["schemas"]["ProjectionGuidanceResponse"];
+            /** Holds */
+            holds: components["schemas"]["ProjectedHoldResponse"][];
+            latest_reconciliation: components["schemas"]["ProjectedReconciliationResponse"] | null;
+            /** Operations */
+            operations: components["schemas"]["ProjectedOperationResponse"][];
+            /** Positions */
+            positions: components["schemas"]["ProjectedPositionResponse"][];
+            /** Recovery Actions */
+            recovery_actions: components["schemas"]["RecoveryCapabilityResponse"][];
+            /** Runs */
+            runs: components["schemas"]["ProjectedRunResponse"][];
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+            /** Terminal Receipts */
+            terminal_receipts: components["schemas"]["ProjectedReceiptResponse"][];
+            /** Uncertainties */
+            uncertainties: components["schemas"]["ProjectedUncertaintyResponse"][];
+        };
+        /**
          * ClerkStatus
          * @description The clerk's observable state for the operator status surface (S6).
          *
@@ -11706,11 +11893,24 @@ export interface components {
         ClerkStatus: {
             /** Account Id */
             account_id: string;
+            /**
+             * Authority Kind
+             * @default legacy
+             * @enum {string}
+             */
+            authority_kind?: "legacy" | "sqlite";
             /** Broker */
             broker: string;
             /** Channel Healths */
             channel_healths?: components["schemas"]["ChannelHealth"][] | null;
             freeze?: components["schemas"]["AccountFreezeState"];
+            /**
+             * Generic Hold Clear Available
+             * @default true
+             */
+            generic_hold_clear_available?: boolean;
+            /** Generic Hold Clear Explanation */
+            generic_hold_clear_explanation?: string | null;
             hold: components["schemas"]["HoldState"];
             latest_reconciliation?: components["schemas"]["ReconciliationSummary"] | null;
             /** Observed At Ms */
@@ -12486,6 +12686,12 @@ export interface components {
         CustodyDiagnosis: {
             /** Account Id */
             account_id: string;
+            /**
+             * Authority Kind
+             * @default legacy
+             * @enum {string}
+             */
+            authority_kind?: "legacy" | "sqlite";
             /** Blocked Reason */
             blocked_reason?: string | null;
             /** Broker */
@@ -14014,6 +14220,12 @@ export interface components {
          * @description One redacted, size-capped journal entry exposed to the operator lens.
          */
         EvidenceEntry: {
+            /** Broker State */
+            broker_state?: string | null;
+            /** Clerk Observed At Ms */
+            clerk_observed_at_ms?: number | null;
+            /** Custody Owner */
+            custody_owner?: string | null;
             /** Has More Detail */
             has_more_detail: boolean;
             /** Intent Id */
@@ -14022,12 +14234,20 @@ export interface components {
             kind: string;
             /** Kind Label */
             kind_label: string;
+            /** Operation Ref */
+            operation_ref?: string | null;
+            /** Operation State */
+            operation_state?: string | null;
             /** Order Ref */
             order_ref: string | null;
+            /** Proof Reference */
+            proof_reference?: string | null;
             /** Recorded At Ms */
             recorded_at_ms: number;
             /** Seq */
             seq: number;
+            /** Source Event At Ms */
+            source_event_at_ms?: number | null;
             /** Summary */
             summary: string;
         };
@@ -14057,7 +14277,7 @@ export interface components {
             /** Entries */
             entries: components["schemas"]["EvidenceEntry"][];
             /** Next Cursor */
-            next_cursor: number | null;
+            next_cursor: string | number | null;
             /** Read At Ms */
             read_at_ms: number;
             /** Read By */
@@ -20982,7 +21202,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -21009,7 +21229,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -21032,7 +21252,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
+            action_id: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -21075,7 +21295,7 @@ export interface components {
             /** Stations */
             stations: components["schemas"]["StationApplicability"][];
             /** Supported Action Ids */
-            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now")[];
+            supported_action_ids: ("deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority")[];
         };
         /**
          * ParameterStabilityResponse
@@ -21583,6 +21803,210 @@ export interface components {
             /** Vega */
             vega: number;
         };
+        /** ProjectedCommandResponse */
+        ProjectedCommandResponse: {
+            /** Action */
+            action: string;
+            /** Command Id */
+            command_id: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Kind */
+            kind: string;
+            /** Receipt Id */
+            receipt_id: string | null;
+            /** Run Id */
+            run_id: string | null;
+            /** State */
+            state: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
+        /** ProjectedHoldResponse */
+        ProjectedHoldResponse: {
+            /** Evidence Refs */
+            evidence_refs: string[];
+            /** Hold Id */
+            hold_id: string;
+            /** Opened At Ms */
+            opened_at_ms: number;
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "BOT" | "ACCOUNT_CLERK";
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+        };
+        /** ProjectedOperationResponse */
+        ProjectedOperationResponse: {
+            command: components["schemas"]["ProjectedCommandResponse"];
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Custody Owner */
+            custody_owner: string;
+            /** Effect Operation Id */
+            effect_operation_id: string;
+            /** Kind */
+            kind: string;
+            /** Latest Transition Sequence */
+            latest_transition_sequence: number;
+            /** Orders */
+            orders: components["schemas"]["ProjectedOrderResponse"][];
+            /** Run Id */
+            run_id: string | null;
+            /** State */
+            state: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Terminal Receipt Id */
+            terminal_receipt_id: string | null;
+            /** Transition Count */
+            transition_count: number;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
+        /** ProjectedOrderResponse */
+        ProjectedOrderResponse: {
+            /** Broker Order Id */
+            broker_order_id: string | null;
+            /** Broker State */
+            broker_state: string | null;
+            /** Client Order Id */
+            client_order_id: string;
+            /** Order Ref */
+            order_ref: string;
+            /** Role */
+            role: string;
+            /** Submitted At Ms */
+            submitted_at_ms: number | null;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
+        /** ProjectedPositionResponse */
+        ProjectedPositionResponse: {
+            /** Attributed Qty */
+            attributed_qty: number;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+            /** Symbol */
+            symbol: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
+        /** ProjectedReceiptResponse */
+        ProjectedReceiptResponse: {
+            /** Command Id */
+            command_id: string | null;
+            /** Effect Operation Id */
+            effect_operation_id: string | null;
+            /** Proof Reference */
+            proof_reference: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Summary Code */
+            summary_code: string;
+            /** Terminal State */
+            terminal_state: string;
+        };
+        /** ProjectedReconciliationResponse */
+        ProjectedReconciliationResponse: {
+            /** Attempted At Ms */
+            attempted_at_ms: number;
+            /** Effect Operation Id */
+            effect_operation_id: string | null;
+            /** Evidence Age Ms */
+            evidence_age_ms: number;
+            /** Evidence Refs */
+            evidence_refs: string[];
+            /** Order Ref */
+            order_ref: string | null;
+            /** Outcome */
+            outcome: string;
+            /** Reconciliation Id */
+            reconciliation_id: string;
+            /** Trigger */
+            trigger: string;
+        };
+        /** ProjectedRunResponse */
+        ProjectedRunResponse: {
+            /** Lifecycle Run Id */
+            lifecycle_run_id: string;
+            /** Run Id */
+            run_id: string;
+            /** Started At Ms */
+            started_at_ms: number;
+            /** State */
+            state: string;
+            /** Stopped At Ms */
+            stopped_at_ms: number | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /** ProjectedUncertaintyResponse */
+        ProjectedUncertaintyResponse: {
+            /** Allows Reduction */
+            allows_reduction: boolean;
+            /** Blocks New Exposure */
+            blocks_new_exposure: boolean;
+            /** Custody Owner */
+            custody_owner: string;
+            /** Evidence Age Ms */
+            evidence_age_ms: number;
+            /** Evidence Refs */
+            evidence_refs: string[];
+            /** Explanation */
+            explanation: string;
+            /** Headline */
+            headline: string;
+            /** Next Step */
+            next_step: string;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Operator Impact */
+            operator_impact: string;
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "BOT" | "ACCOUNT_CLERK";
+            /** Severity */
+            severity: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+            /** Uncertainty Id */
+            uncertainty_id: string;
+        };
+        /** ProjectionGuidanceResponse */
+        ProjectionGuidanceResponse: {
+            /** Action Required */
+            action_required: boolean;
+            /** Available Safety Actions */
+            available_safety_actions: string[];
+            /** Custody Owner */
+            custody_owner: string;
+            /** Explanation */
+            explanation: string;
+            /** Headline */
+            headline: string;
+            /** Impact */
+            impact: string;
+            /** May Create Exposure */
+            may_create_exposure: boolean;
+            /** Next Step */
+            next_step: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "BOT" | "ACCOUNT_CLERK";
+        };
         /**
          * QcAuditCopyListing
          * @description Committed QC audit copies under ``references/qc-shadow`` (ADR 0006).
@@ -21777,7 +22201,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now";
+            operation: "deploy" | "resume" | "pause" | "continue" | "stop" | "flatten_stop" | "retire" | "cancel_order" | "clear_hold" | "record_inventory_baseline" | "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
             /** Ready */
             ready: boolean;
             /**
@@ -22104,6 +22528,130 @@ export interface components {
             spot: number;
             /** Ticker */
             ticker: string;
+        };
+        /**
+         * RecoveryActionCheckRequest
+         * @description Action-specific token checked against a fresh policy evaluation.
+         */
+        RecoveryActionCheckRequest: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            /** Concurrency Token */
+            concurrency_token: string;
+        };
+        /** RecoveryActionCheckResponse */
+        RecoveryActionCheckResponse: {
+            capability: components["schemas"]["RecoveryCapabilityResponse"];
+        };
+        /**
+         * RecoveryActionExecuteRequest
+         * @description Execute one capability exactly as presented by the current snapshot.
+         */
+        RecoveryActionExecuteRequest: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            /** Concurrency Token */
+            concurrency_token: string;
+            /** Execution Ref */
+            execution_ref?: string | null;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** RecoveryActionExecuteResponse */
+        RecoveryActionExecuteResponse: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            /** Applied */
+            applied: boolean;
+            command: components["schemas"]["CommandResponse"] | null;
+            /** Orders */
+            orders: components["schemas"]["ProjectedOrderResponse"][];
+            /**
+             * Outcome
+             * @default success
+             * @constant
+             */
+            outcome?: "success";
+            /** Receipt Id */
+            receipt_id: string;
+            reconciliation: components["schemas"]["ReconciliationResponse"] | null;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /** RecoveryCapabilityResponse */
+        RecoveryCapabilityResponse: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "reconcile_now" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "stop_bot_decisions" | "open_custody_timeline" | "rebuild_from_mirror" | "reset_authority";
+            /** Available */
+            available: boolean;
+            /** Concurrency Token */
+            concurrency_token: string;
+            confirmation: components["schemas"]["RecoveryConfirmationResponse"] | null;
+            /** Evidence */
+            evidence: components["schemas"]["RecoveryEvidenceResponse"][];
+            /** Execution Ref */
+            execution_ref: string | null;
+            /** Explanation */
+            explanation: string;
+            /**
+             * Freshness
+             * @enum {string}
+             */
+            freshness: "fresh" | "stale" | "not_required" | "unavailable";
+            /** Label */
+            label: string;
+            /** Mutation */
+            mutation: boolean;
+            /** Next Step */
+            next_step: string;
+            /** Primary */
+            primary: boolean;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "BOT" | "ACCOUNT_CLERK";
+            /** Unavailable Reason */
+            unavailable_reason: string | null;
+            /** Unavailable Reason Code */
+            unavailable_reason_code: string | null;
+        };
+        /** RecoveryConfirmationResponse */
+        RecoveryConfirmationResponse: {
+            /** Confirm Label */
+            confirm_label: string;
+            /** Explanation */
+            explanation: string;
+            /** Title */
+            title: string;
+        };
+        /** RecoveryEvidenceResponse */
+        RecoveryEvidenceResponse: {
+            /** Age Ms */
+            age_ms: number | null;
+            /**
+             * Freshness
+             * @enum {string}
+             */
+            freshness: "fresh" | "stale" | "not_required" | "unavailable";
+            /** Label */
+            label: string;
+            /** Observed At Ms */
+            observed_at_ms: number | null;
+            /** Reference */
+            reference: string;
         };
         /**
          * RedeployAction
@@ -25521,6 +26069,63 @@ export interface components {
              */
             tz?: string;
         };
+        /** TimelineEntryResponse */
+        TimelineEntryResponse: {
+            /** Broker Order Id */
+            broker_order_id: string | null;
+            /** Broker State */
+            broker_state: string | null;
+            /** Clerk Observed At Ms */
+            clerk_observed_at_ms: number;
+            /** Command Id */
+            command_id: string | null;
+            /** Custody Owner */
+            custody_owner: string;
+            /** Effect Operation Id */
+            effect_operation_id: string | null;
+            /** Execution Authority */
+            execution_authority: string;
+            /** Operation Ref */
+            operation_ref: string;
+            /** Operation State */
+            operation_state: string;
+            /** Order Ref */
+            order_ref: string | null;
+            /** Proof Reference */
+            proof_reference: string | null;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Sequence */
+            sequence: number;
+            /** Source Event At Ms */
+            source_event_at_ms: number | null;
+            /** Summary Code */
+            summary_code: string;
+            /** Transition Kind */
+            transition_kind: string;
+        };
+        /**
+         * TimelinePageResponse
+         * @description Stable keyset page; later appends never enter an established cursor.
+         */
+        TimelinePageResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Anchor Sequence */
+            anchor_sequence: number;
+            /** Authority Generation */
+            authority_generation: number;
+            /** Control Revision */
+            control_revision: number;
+            /** Entries */
+            entries: components["schemas"]["TimelineEntryResponse"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Strategy Instance Id */
+            strategy_instance_id: string | null;
+            /** Total Entries */
+            total_entries: number;
+        };
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -26369,7 +26974,7 @@ export interface components {
             /** Broker Order Id */
             broker_order_id: string;
             /** Filled Quantity */
-            filled_quantity: number;
+            filled_quantity: number | null;
             /** Observed At Ms */
             observed_at_ms: number;
             /** Order Ref */
@@ -27915,6 +28520,82 @@ export interface operations {
             };
         };
     };
+    check_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_check_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryActionCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryActionCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_execute_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryActionExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryActionExecuteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_run_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__runs_start_post: {
         parameters: {
             query?: never;
@@ -27991,6 +28672,77 @@ export interface operations {
             };
         };
     };
+    get_bot_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkProjectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bot_timeline_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__timeline_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                page_size?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+                strategy_instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimelinePageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_command_api_alpaca_clerk_sqlite_accounts__account_id__commands__command_id__get: {
         parameters: {
             query?: never;
@@ -28045,6 +28797,149 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReconciliationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_account_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__recovery_actions_check_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryActionCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryActionCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_account_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__recovery_actions_execute_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryActionExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryActionExecuteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_account_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClerkProjectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_account_timeline_api_alpaca_clerk_sqlite_accounts__account_id__timeline_get: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                page_size?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TimelinePageResponse"];
                 };
             };
             /** @description Validation Error */
@@ -29592,7 +30487,7 @@ export interface operations {
         parameters: {
             query?: {
                 transaction_ref?: string | null;
-                cursor?: number | null;
+                cursor?: string | null;
                 page_size?: number;
                 client_hint?: string | null;
             };
@@ -30047,7 +30942,7 @@ export interface operations {
         parameters: {
             query?: {
                 transaction_ref?: string | null;
-                cursor?: number | null;
+                cursor?: string | null;
                 page_size?: number;
                 client_hint?: string | null;
             };

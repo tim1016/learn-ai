@@ -300,7 +300,7 @@ export class BrokerV2PanelService {
     sid: string,
     options: {
       transactionRef?: string;
-      cursor?: number;
+      cursor?: string | number;
       pageSize?: number;
       clientHint?: string;
     } = {},

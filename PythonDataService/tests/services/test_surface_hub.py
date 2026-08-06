@@ -464,6 +464,37 @@ async def test_live_projection_hub_retires_after_last_client_leaves(
 
 
 @pytest.mark.asyncio
+async def test_control_action_prompt_refresh_publishes_only_changed_semantics() -> None:
+    await live_projection.stop_live_projection_hubs()
+    live_projection.reset_live_projection_hubs_for_testing()
+    source_state = "revision-1"
+
+    async def assemble() -> _Snapshot:
+        return _snapshot(
+            generated_at_ms=1_700_000_000_100,
+            source_state=source_state,
+        )
+
+    key = "alpaca:PA-1:sid-1:5s"
+    hub = live_projection._HUBS.get_or_create(key, assemble=assemble)
+    first = await hub.refresh()
+    queue = hub.subscribe()
+    assert await queue.get() == first
+
+    await live_projection.refresh_live_projection_hubs("alpaca", "PA-1", "sid-1")
+    assert hub.surface_version == 1
+    assert queue.empty()
+
+    source_state = "revision-2"
+    await live_projection.refresh_live_projection_hubs("alpaca", "PA-1", "sid-1")
+    changed = await queue.get()
+
+    assert changed.surface_version == 2
+    assert changed.source_state == "revision-2"
+    await live_projection.stop_live_projection_hubs()
+
+
+@pytest.mark.asyncio
 async def test_snapshot_watchers_are_latest_wins_queue_one() -> None:
     source_state = "one"
 

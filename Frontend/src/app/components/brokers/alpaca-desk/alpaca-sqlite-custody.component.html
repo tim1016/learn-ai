@@ -1,0 +1,126 @@
+@if (projection.isLoading()) {
+  <p class="sqlite-custody__state" role="status">Loading Account Clerk custody…</p>
+} @else if (isLegacyAuthority()) {
+  <!-- The legacy cards below remain authoritative until SQLite activation. -->
+} @else if (projection.error()) {
+  <p class="sqlite-custody__state sqlite-custody__state--error" role="alert">
+    SQLite Clerk custody is unavailable. Broker mutations remain blocked until authority recovers.
+  </p>
+} @else if (projection.value(); as custody) {
+  <section class="sqlite-custody" aria-labelledby="sqlite-custody-title">
+    <header>
+      <div>
+        <span class="sqlite-custody__eyebrow">Active custody authority</span>
+        <h2 id="sqlite-custody-title">Account Clerk</h2>
+      </div>
+      <span>
+        {{ custody.authority_health | receiptLabel }} ·
+        @if (custody.db_identity_token === 'unverified-activation') {
+          activation identity unverified
+        } @else {
+          generation {{ custody.authority_generation }}
+        }
+      </span>
+    </header>
+
+    <div class="sqlite-custody__guidance">
+      <strong>{{ custody.guidance.headline }}</strong>
+      <p>{{ custody.guidance.explanation }}</p>
+      <p>{{ custody.guidance.impact }} {{ custody.guidance.next_step }}</p>
+      <small>
+        Observed <app-timestamp-display [value]="custody.generated_at_ms" mode="local" />
+        · control revision {{ custody.control_revision }}
+      </small>
+    </div>
+
+    @if (custody.uncertainties.length > 0) {
+      <ul class="sqlite-custody__uncertainties" aria-label="Open custody uncertainties">
+        @for (uncertainty of custody.uncertainties; track uncertainty.uncertainty_id) {
+          <li>
+            <strong>{{ uncertainty.headline }}</strong>
+            <span>{{ uncertainty.explanation }}</span>
+            <span>{{ uncertainty.operator_impact }} {{ uncertainty.next_step }}</span>
+          </li>
+        }
+      </ul>
+    }
+
+    <div class="sqlite-custody__actions" aria-label="Evidence-bound recovery actions">
+      @for (action of custody.recovery_actions; track trackAction($index, action)) {
+        <div class="sqlite-action">
+          <button
+            type="button"
+            [disabled]="!action.available || busyActionId() !== null"
+            (click)="runAction(action)"
+          >{{ busyActionId() === action.action_id ? 'Working…' : action.label }}</button>
+          <span>{{ action.explanation }}</span>
+          @if (!action.available && action.unavailable_reason) {
+            <small>{{ action.unavailable_reason }}</small>
+          } @else {
+            <small>{{ action.next_step }}</small>
+          }
+        </div>
+      }
+    </div>
+
+    @if (actionNotice(); as notice) {
+      <p class="sqlite-custody__notice" role="status">{{ notice }}</p>
+    }
+
+    @if (receipt(); as actionReceipt) {
+      <app-panel-action-receipt
+        [receipt]="actionReceipt"
+        (dismissed)="dismissReceipt()"
+      />
+    }
+
+    @if (timelineOpen()) {
+      <section class="sqlite-custody__timeline" aria-labelledby="sqlite-timeline-title">
+        <h3 id="sqlite-timeline-title">Custody timeline</h3>
+        @if (timelineLoading()) {
+          <p role="status">Loading timeline…</p>
+        } @else {
+          <p aria-live="polite">{{ timeline().length }} of {{ timelineTotalEntries() }}</p>
+          <ol>
+            @for (entry of timeline(); track trackTimeline($index, entry)) {
+              <li>
+                <strong>{{ entry.transition_kind | receiptLabel }}</strong>
+                <code>{{ entry.operation_ref }}</code>
+                <span>{{ entry.operation_state | receiptLabel }}</span>
+                <dl>
+                  @if (entry.source_event_at_ms) {
+                    <div><dt>Source event</dt><dd><app-timestamp-display [value]="entry.source_event_at_ms" mode="local" /></dd></div>
+                  }
+                  <div><dt>Clerk observed</dt><dd><app-timestamp-display [value]="entry.clerk_observed_at_ms" mode="local" /></dd></div>
+                  <div><dt>Durably recorded</dt><dd><app-timestamp-display [value]="entry.recorded_at_ms" mode="local" /></dd></div>
+                </dl>
+              </li>
+            }
+          </ol>
+          @if (timelineNextCursor() !== null) {
+            <button
+              type="button"
+              [disabled]="timelineLoadingMore()"
+              (click)="loadMoreTimeline()"
+            >{{ timelineLoadingMore() ? 'Loading…' : 'Load more events' }}</button>
+          }
+        }
+      </section>
+    }
+  </section>
+}
+
+@if (confirmationAction(); as action) {
+  @if (action.confirmation; as confirmation) {
+    <app-typed-halt-confirm
+      [open]="true"
+      [heading]="confirmation.title"
+      [message]="action.explanation"
+      [consequence]="confirmation.explanation"
+      requiredToken=""
+      [confirmLabel]="confirmation.confirm_label"
+      (confirmed)="confirmAction()"
+      (cancelled)="confirmationAction.set(null)"
+    />
+  }
+}

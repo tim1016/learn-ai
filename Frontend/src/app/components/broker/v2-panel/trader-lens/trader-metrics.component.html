@@ -1,16 +1,26 @@
 <section class="trader-metrics" aria-label="Bot attributed trading summary">
   <header class="trader-metrics__heading">
     <span>Trading summary</span>
-    <small>{{ panel().fills_today }} fill{{ panel().fills_today === 1 ? '' : 's' }} today</small>
+    @if (panel().fills_today === null) {
+      <small>Fill count unavailable from active custody folds</small>
+    } @else {
+      <small>{{ panel().fills_today }} fill{{ panel().fills_today === 1 ? '' : 's' }} today</small>
+    }
   </header>
 
   <div class="pnl-grid" aria-label="Profit and loss summary">
     @let openPnl = panel().open_pnl;
+    @let realizedPnl = panel().realized_pnl_today;
     <article aria-label="Realized profit and loss today">
       <span>Realized today</span>
-      <strong [class.positive]="panel().realized_pnl_today > 0" [class.negative]="panel().realized_pnl_today < 0">
-        {{ panel().realized_pnl_today | currency:'USD':'symbol':'1.2-2' }}
-      </strong>
+      @if (realizedPnl === null) {
+        <strong class="unavailable">—</strong>
+        <small>Realized P&amp;L unavailable from custody folds</small>
+      } @else {
+        <strong [class.positive]="realizedPnl > 0" [class.negative]="realizedPnl < 0">
+          {{ realizedPnl | currency:'USD':'symbol':'1.2-2' }}
+        </strong>
+      }
     </article>
     <article aria-label="Current open profit and loss">
       <span>Open now</span>

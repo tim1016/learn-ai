@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { By } from '@angular/platform-browser';
-import { render, screen } from '@testing-library/angular';
+import { render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { CustodyDiagnosis, CustodyResolutionReceipt } from '../../../api/alpaca.types';
@@ -66,6 +66,20 @@ function svc(d: CustodyDiagnosis) {
 }
 
 describe('AlpacaCustodyResolutionComponent', () => {
+  it('renders no legacy custody controls when SQLite authority is active', async () => {
+    await render(AlpacaCustodyResolutionComponent, {
+      providers: [{
+        provide: BrokersService,
+        useValue: svc(diagnosis({ authority_kind: 'sqlite' })),
+      }],
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/clerk and broker/i)).toBeNull();
+    });
+    expect(screen.queryByRole('button', { name: /resolve/i })).toBeNull();
+  });
+
   it('shows the in-sync strip when clerk and broker agree', async () => {
     await render(AlpacaCustodyResolutionComponent, {
       providers: [{ provide: BrokersService, useValue: svc(diagnosis()) }],

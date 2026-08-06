@@ -1,4 +1,6 @@
-@if (diagnosis.isLoading()) {
+@if (sqliteAuthority()) {
+  <!-- SQLite recovery is rendered by the existing Account Desk custody adapter. -->
+} @else if (diagnosis.isLoading()) {
   <p class="m-0 p-3 text-sm text-color-secondary" role="status">Checking clerk and broker custody…</p>
 } @else if (diagnosis.error()) {
   <p class="m-0 p-3 text-sm text-red-500" role="alert">
@@ -34,7 +36,7 @@
   }
 }
 
-@if (confirmOpen() && diagnosis.value(); as d) {
+@if (!sqliteAuthority() && confirmOpen() && diagnosis.value(); as d) {
   <app-custody-resolution-confirm-dialog
     [open]="confirmOpen()"
     [diagnosis]="d"
@@ -45,6 +47,6 @@
   />
 }
 
-@if (receipt(); as r) {
+@if (!sqliteAuthority() && receipt(); as r) {
   <app-panel-action-receipt [receipt]="r" (dismissed)="dismissReceipt()" />
 }

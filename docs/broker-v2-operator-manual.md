@@ -2,6 +2,23 @@
 
 This manual covers the broker-v2 control panel — the six-station order pipeline, every operator action, and the closed vocabulary the panel uses.
 
+## Account authority selection
+
+The service resolves the Alpaca account before constructing a Clerk. An account with no
+activation fence uses the legacy JSONL authority described by the legacy actions below.
+An account with a valid account/generation/database-bound activation fence uses the
+SQLite Clerk and its backend-authored recovery catalog. Database existence alone does
+not activate SQLite. A malformed fence or failed activated startup installs no
+broker-mutation capability and never falls back to JSONL.
+
+For activated SQLite accounts, the available actions are exactly `reconcile_now`,
+`cancel_verified_working_orders`, `prepare_safe_flatten`, `stop_bot_decisions`,
+`open_custody_timeline`, and—only during typed authority failure—
+`rebuild_from_mirror` or `reset_authority`. There is no generic Clear, blind Retry, or
+unproven Flatten. See
+`docs/references/alpaca-sqlite-clerk-recovery-language.md` for the wording matrix and
+`docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` for the offline subprocedure.
+
 ---
 
 ## Six-Station Pipeline
@@ -56,7 +73,9 @@ Each station has a **station state** (what happened there) and may carry **evide
 - Hold state chip: `NO_HOLD` (submission allowed) or a hold code.
 
 **Actions available here.**
-- `clear_hold` — lift the account hold once the root condition is healthy and freshly observed.
+
+- Legacy/unactivated account: `clear_hold` may lift a legacy account hold after the root condition is healthy and freshly observed.
+- Activated SQLite account: no generic clear is presented. Use the exact backend-authored evidence-backed capability.
 
 ---
 
@@ -145,8 +164,8 @@ Desired state (`RUNNING` or `STOPPED`) is separate from duty outcome (`ON_DUTY`,
 **What it does:** Sends a cancellation request for one working order. The broker may reject if the order has already filled.
 
 ### `clear_hold` {#action-clear-hold}
-**When available:** When an exposure hold (`STREAM_HEALTH_HOLD` or `UNEXPLAINED_ORDER_HOLD`) is active and its root condition has been freshly observed as healthy.
-**What it does:** Lifts the account-wide hold and allows new order submissions to proceed.
+**When available:** Legacy/unactivated JSONL accounts only, when an exposure hold (`STREAM_HEALTH_HOLD` or `UNEXPLAINED_ORDER_HOLD`) is active and its root condition has been freshly observed as healthy.
+**What it does:** Lifts the legacy account-wide hold. Activated SQLite accounts never present this action; they resolve evidence through a typed capability from the matrix above.
 
 ### `record_inventory_baseline` {#action-record-inventory-baseline}
 **When available:** When the latest verdict is `missing_intent`, or when a stopped bot retains stale attributed exposure while the reconciled account is flat; no unresolved intents or working orders may exist.

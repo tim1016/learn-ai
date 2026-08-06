@@ -9,6 +9,7 @@ only ``alpaca``; unknown brokers resolve to ``404``.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import Awaitable, Callable
 from typing import Literal, NoReturn
@@ -31,6 +32,7 @@ from app.broker.alpaca.clerk import (
     OrderSubmitResult,
     get_alpaca_clerk,
 )
+from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.contract.errors import (
     BrokerError,
     BrokerRateLimited,
@@ -52,6 +54,12 @@ from app.config import settings
 from app.security.data_plane_control import require_data_plane_control_secret
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
 from app.services.broker_order_groups import group_orders_by_symbol
+from app.services.sqlite_clerk_compat import (
+    active_sqlite_facade,
+    sqlite_clerk_status,
+    sqlite_custody_diagnosis,
+    sqlite_projection,
+)
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 
@@ -187,6 +195,32 @@ def _require_trade_clerk(broker: str) -> AlpacaClerk:
                 "why": "Only Alpaca has a phase-2 trade port.",
             },
         )
+    runtime = get_active_clerk_runtime()
+    if runtime is not None and runtime.authority_kind == "sqlite":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "broker": broker,
+                "message": "Generic manual order mutation is unavailable under SQLite authority.",
+                "why": (
+                    "Use a policy-presented SQLite Account Clerk action so the "
+                    "order remains inside durable command/effect custody."
+                ),
+            },
+        )
+    if runtime is not None and runtime.authority_kind == "unavailable":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "broker": broker,
+                "message": "Alpaca order management is unavailable.",
+                "why": (
+                    runtime.startup_failure.recovery
+                    if runtime.startup_failure is not None
+                    else "Restore the activated Account Clerk authority."
+                ),
+            },
+        )
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise HTTPException(
@@ -195,6 +229,15 @@ def _require_trade_clerk(broker: str) -> AlpacaClerk:
                 "broker": broker,
                 "message": "Alpaca order management is not configured.",
                 "why": "Set Alpaca paper credentials in .env and restart the service.",
+            },
+        )
+    if not isinstance(clerk, AlpacaClerk):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "broker": broker,
+                "message": "Alpaca manual order management is unavailable.",
+                "why": "The selected Clerk does not expose the legacy manual-order capability.",
             },
         )
     return clerk
@@ -278,6 +321,15 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
     Transport only: resolve the account-scoped Clerk facade and delegate — the
     Clerk owns the journal-derived hold + verdict + outstanding-intent state.
     """
+    sqlite = active_sqlite_facade(broker)
+    if sqlite is not None:
+        projection = await asyncio.to_thread(
+            sqlite_projection,
+            account_id=sqlite.account_id,
+            strategy_instance_id=None,
+        )
+        assert projection is not None
+        return sqlite_clerk_status(projection)
     clerk = _require_trade_clerk(broker)
     try:
         return await clerk.status()
@@ -293,6 +345,15 @@ async def get_custody_diagnosis(broker: str) -> CustodyDiagnosis:
     reads a fresh broker snapshot and projects the structured, backend-authored
     diagnosis the Accounts page renders verbatim.
     """
+    sqlite = active_sqlite_facade(broker)
+    if sqlite is not None:
+        projection = await asyncio.to_thread(
+            sqlite_projection,
+            account_id=sqlite.account_id,
+            strategy_instance_id=None,
+        )
+        assert projection is not None
+        return sqlite_custody_diagnosis(projection)
     clerk = _require_trade_clerk(broker)
     try:
         return await clerk.custody_diagnosis()
@@ -313,6 +374,7 @@ async def clear_clerk_hold(broker: str, request: ClearHoldRequest) -> ClerkStatu
     against no active hold is a benign NO-OP) and returns the post-clear status so
     the desk re-renders in one round-trip.
     """
+    _reject_generic_sqlite_recovery(broker, action="clear_hold")
     clerk = _require_trade_clerk(broker)
     try:
         return await clerk.clear_hold(operator=request.operator, reason=request.reason)
@@ -337,6 +399,7 @@ async def resolve_custody(
     identity is injected server-side. A stale snapshot is a 409; a blocked
     prerequisite is a 409 with the blocker's what/why.
     """
+    _reject_generic_sqlite_recovery(broker, action="resolve_custody")
     if request.confirmation_token != "RESOLVE":
         raise HTTPException(
             status_code=422,
@@ -358,3 +421,18 @@ async def resolve_custody(
         raise HTTPException(status_code=409, detail={"message": str(error), "why": error.detail})
     except BrokerError as error:
         _raise_http(error)
+
+
+def _reject_generic_sqlite_recovery(broker: str, *, action: str) -> None:
+    if active_sqlite_facade(broker) is None:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "reason": "generic_recovery_action_retired",
+            "message": (
+                f"{action} is not available under SQLite Clerk authority. "
+                "Refresh the Clerk projection and use its typed recovery catalog."
+            ),
+        },
+    )

@@ -159,7 +159,9 @@ def test_append_transition_advances_sequence_hash_chain_and_revision(tmp_path: P
     repo.close()
 
 
-def test_kill_before_mirror_prepare_records_no_transition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_disk_full_before_mirror_prepare_fails_closed_without_transition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """PRD §15.1 'kill before the command commit: no command, no broker call',
     generalized to the spine: if the mirror PREPARE fsync fails, no SQLite
     transaction opens and no row is appended."""
@@ -167,10 +169,10 @@ def test_kill_before_mirror_prepare_records_no_transition(tmp_path: Path, monkey
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
     def boom(*_args, **_kwargs):
-        raise OSError("simulated disk failure before prepare fsync")
+        raise OSError(28, "No space left on device during mirror prepare fsync")
 
     monkeypatch.setattr(repo._mirror, "prepare", boom)
-    with pytest.raises(OSError):
+    with pytest.raises(OSError, match="No space left on device"):
         repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
 
     assert repo.custody_transitions() == []
@@ -348,14 +350,18 @@ def test_tampered_mirror_line_fails_closed_on_rebuild(tmp_path: Path) -> None:
     # Flip one hex character in the top-level (unescaped) row_hash field —
     # payload_canonical's own contents are double-JSON-escaped, so a naive
     # substring match on plain text inside it would silently match nothing.
+    prepare_index = next(
+        index for index, line in enumerate(lines) if '"phase":"PREPARE"' in line
+    )
     tampered = re.sub(
         r'"row_hash":"([0-9a-f])',
         lambda m: f'"row_hash":"{"0" if m.group(1) != "0" else "1"}',
-        lines[0],
+        lines[prepare_index],
         count=1,
     )
-    assert tampered != lines[0]
-    mirror_path.write_text("\n".join([tampered, *lines[1:]]) + "\n")
+    assert tampered != lines[prepare_index]
+    lines[prepare_index] = tampered
+    mirror_path.write_text("\n".join(lines) + "\n")
 
     with pytest.raises(MirrorChainBroken):
         ClerkSqliteRepository.rebuild_from_mirror(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)

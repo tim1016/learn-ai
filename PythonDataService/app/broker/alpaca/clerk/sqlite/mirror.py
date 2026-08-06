@@ -30,6 +30,15 @@ class MirrorChainBroken(Exception):
 
 
 @dataclass(frozen=True)
+class MirrorIdentity:
+    """Generation binding that makes an otherwise valid mirror non-portable."""
+
+    account_id: str
+    authority_generation: int
+    db_identity_token: str
+
+
+@dataclass(frozen=True)
 class PendingTransition:
     """Everything ``mirror.prepare`` needs before the owning SQLite commit."""
 
@@ -56,12 +65,28 @@ class RebuiltRow:
 class MirrorFile:
     """The append-only ``custody_transitions.mirror`` file for one account."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, expected_identity: MirrorIdentity | None = None) -> None:
         self._path = path
+        self._expected_identity = expected_identity
 
     @property
     def path(self) -> Path:
         return self._path
+
+    def initialize_identity(self) -> None:
+        """Write the immutable account/generation binding before any PREPARE."""
+        if self._expected_identity is None:
+            raise ValueError("expected_identity is required to initialize a mirror binding")
+        if self._path.exists():
+            raise MirrorChainBroken(f"cannot initialize identity for existing mirror {self._path}")
+        self._append_fsynced(
+            {
+                "phase": "IDENTITY",
+                "account_id": self._expected_identity.account_id,
+                "authority_generation": self._expected_identity.authority_generation,
+                "db_identity_token": self._expected_identity.db_identity_token,
+            }
+        )
 
     def prepare(self, pending: PendingTransition) -> None:
         """Fsync a PREPARE line. Must complete before the SQLite transaction opens."""
@@ -134,9 +159,31 @@ class MirrorFile:
         corruption and fails closed here, before either caller decides what
         to do with the parsed result.
         """
+        records = self._read_records()
+        identity_records = [record for record in records if record.get("phase") == "IDENTITY"]
+        if self._expected_identity is not None:
+            if len(identity_records) != 1:
+                raise MirrorChainBroken("mirror must contain exactly one identity record")
+            identity = identity_records[0]
+            observed = MirrorIdentity(
+                account_id=identity.get("account_id"),
+                authority_generation=identity.get("authority_generation"),
+                db_identity_token=identity.get("db_identity_token"),
+            )
+            if observed != self._expected_identity:
+                raise MirrorChainBroken(
+                    "mirror account, generation, or database identity does not match registry"
+                )
+        elif len(identity_records) > 1:
+            raise MirrorChainBroken("mirror contains duplicate identity records")
+
         prepares_by_sequence: dict[int, list[dict[str, Any]]] = {}
         finalize_by_sequence: dict[int, dict[str, Any]] = {}
-        for record in self._read_records():
+        for record in records:
+            if record.get("phase") == "IDENTITY":
+                continue
+            if "sequence" not in record:
+                raise MirrorChainBroken("mirror transition record has no sequence")
             sequence = record["sequence"]
             if record["phase"] == "PREPARE":
                 prepares_by_sequence.setdefault(sequence, []).append(record)

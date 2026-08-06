@@ -19,15 +19,19 @@
           <span class="text-sm text-red-600" role="status">{{ err }}</span>
         }
 
-        <div class="flex" [attr.aria-label]="'Clear the exposure hold'">
-          <p-button
-            label="Clear hold"
-            severity="warn"
-            size="small"
-            [loading]="clearing()"
-            (onClick)="clearHold()"
-          />
-        </div>
+        @if (clerk.generic_hold_clear_available !== false) {
+          <div class="flex" [attr.aria-label]="'Clear the exposure hold'">
+            <p-button
+              label="Clear hold"
+              severity="warn"
+              size="small"
+              [loading]="clearing()"
+              (onClick)="clearHold()"
+            />
+          </div>
+        } @else if (clerk.generic_hold_clear_explanation; as explanation) {
+          <span class="text-sm">{{ explanation }}</span>
+        }
       </div>
     </p-message>
   }

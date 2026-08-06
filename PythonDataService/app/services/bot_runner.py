@@ -75,6 +75,11 @@ from app.services.bot_carryover import (
     checkpoint_status,
     read_checkpoint,
 )
+from app.services.bot_clerk_lifecycle import (
+    ActiveClerkUnavailableError,
+    commit_stop_before_task_cancel,
+    register_order_capable_run,
+)
 from app.services.bot_dry_run import DryRunActivity
 from app.services.bot_registry_projection import (
     project_bot_status,
@@ -435,6 +440,13 @@ class BotTaskRegistry:
             lifecycle_repo.read(),
         )
         self._bindings.record_launch(binding, launch_reason=reason)
+        try:
+            await register_order_capable_run(binding)
+        except ActiveClerkUnavailableError as exc:
+            raise RunAdmissionRefusedError(
+                str(exc),
+                detail="Restore the account Clerk before starting a trade bot.",
+            ) from exc
         self._desired_repo(binding.strategy_instance_id).set(
             DesiredState.RUNNING, updated_by=_UPDATED_BY, now_ms=now, reason=reason
         )
@@ -645,6 +657,20 @@ class BotTaskRegistry:
             now_ms=now,
             reason=reason or "operator_stop",
         )
+        managed.run_gate.clear()
+        try:
+            await commit_stop_before_task_cancel(
+                managed.binding,
+                reason=reason or "operator_stop",
+            )
+        except ActiveClerkUnavailableError as exc:
+            raise RunAdmissionRefusedError(
+                str(exc),
+                detail=(
+                    "The durable process STOP is recorded, but broker custody "
+                    "must be restored before the task can be terminated safely."
+                ),
+            ) from exc
         # Stop strategy evaluation before any network-bound custody work. The
         # provisional terminal is replaced under this instance's operation lock
         # once the Clerk returns a fresh proof.
@@ -689,6 +715,23 @@ class BotTaskRegistry:
         stopping: list[ManagedBot] = []
         for managed in self._bots.values():
             if managed.task.done():
+                continue
+            managed.run_gate.clear()
+            try:
+                await commit_stop_before_task_cancel(
+                    managed.binding,
+                    reason="service_shutdown",
+                )
+            except Exception:
+                logger.error(
+                    "Service shutdown could not commit the Clerk run STOP",
+                    extra={
+                        "action": "service_shutdown_clerk_stop_failed",
+                        "strategy_instance_id": managed.binding.strategy_instance_id,
+                        "run_id": managed.binding.run_id,
+                    },
+                    exc_info=True,
+                )
                 continue
             managed.stop_reason_code = "SERVICE_SHUTDOWN"
             managed.task.cancel()

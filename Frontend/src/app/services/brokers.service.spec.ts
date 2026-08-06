@@ -6,6 +6,7 @@ import {
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import type { SqliteRecoveryAction } from '../api/alpaca.types';
 import { BrokersService } from './brokers.service';
 
 describe('BrokersService', () => {
@@ -203,5 +204,58 @@ describe('BrokersService', () => {
     });
 
     await expect(promise).resolves.toMatchObject({ hold: { active: false } });
+  });
+
+  it('uses the SQLite snapshot and evidence-bound recovery endpoints', async () => {
+    const snapshotPromise = service.getSqliteClerkProjection('PA / 1');
+    const snapshot = httpMock.expectOne('/api/alpaca-clerk-sqlite/accounts/PA%20%2F%201/snapshot');
+    expect(snapshot.request.method).toBe('GET');
+    snapshot.flush({ account_id: 'PA / 1', recovery_actions: [] });
+    await snapshotPromise;
+
+    const action = {
+      action_id: 'reconcile_now',
+      label: 'Reconcile now',
+      explanation: 'Compare custody with Alpaca.',
+      scope: 'ACCOUNT_CLERK',
+      mutation: true,
+      available: true,
+      unavailable_reason_code: null,
+      unavailable_reason: null,
+      freshness: 'not_required',
+      evidence: [],
+      next_step: 'Run reconciliation.',
+      concurrency_token: 'token-1',
+      execution_ref: null,
+      confirmation: null,
+      primary: true,
+    } satisfies SqliteRecoveryAction;
+    const executePromise = service.executeSqliteRecoveryAction('PA1', action);
+    const execute = httpMock.expectOne(
+      '/api/alpaca-clerk-sqlite/accounts/PA1/recovery-actions/execute',
+    );
+    expect(execute.request.method).toBe('POST');
+    expect(execute.request.body).toEqual({
+      action_id: 'reconcile_now',
+      concurrency_token: 'token-1',
+      execution_ref: null,
+    });
+    execute.flush({
+      action_id: 'reconcile_now',
+      outcome: 'success',
+      applied: true,
+      receipt_id: 'reconciliation:12',
+      recorded_at_ms: 12,
+      command: null,
+      reconciliation: {
+        verdict: 'clean',
+        resolved_count: 0,
+        foreign_order_count: 0,
+        drifted_symbols: [],
+      },
+      orders: [],
+    });
+
+    await expect(executePromise).resolves.toMatchObject({ applied: true });
   });
 });

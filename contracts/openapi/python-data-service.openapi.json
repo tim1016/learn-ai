@@ -7439,8 +7439,15 @@
             "type": "object"
           },
           "fills_today": {
-            "title": "Fills Today",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fills Today"
           },
           "last_activity_at_ms": {
             "anyOf": [
@@ -7487,8 +7494,15 @@
             "type": "string"
           },
           "realized_pnl_today": {
-            "title": "Realized Pnl Today",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Pnl Today"
           },
           "row_action": {
             "anyOf": [
@@ -8611,8 +8625,15 @@
             "type": "object"
           },
           "fills_today": {
-            "title": "Fills Today",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fills Today"
           },
           "health": {
             "$ref": "#/components/schemas/BotHealthCard"
@@ -8677,8 +8698,15 @@
             "type": "integer"
           },
           "realized_pnl_today": {
-            "title": "Realized Pnl Today",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Realized Pnl Today"
           },
           "recent_decisions": {
             "items": {
@@ -13410,12 +13438,173 @@
         "title": "ClerkOrderInstruction",
         "type": "object"
       },
+      "ClerkProjectionResponse": {
+        "description": "One backend-authored Trader/Operator snapshot over materialized folds.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "authority_generation": {
+            "title": "Authority Generation",
+            "type": "integer"
+          },
+          "authority_health": {
+            "enum": [
+              "healthy",
+              "degraded_to_mirror",
+              "failed"
+            ],
+            "title": "Authority Health",
+            "type": "string"
+          },
+          "authority_health_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authority Health Reason"
+          },
+          "commands": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedCommandResponse"
+            },
+            "title": "Commands",
+            "type": "array"
+          },
+          "control_revision": {
+            "title": "Control Revision",
+            "type": "integer"
+          },
+          "custody_owner": {
+            "title": "Custody Owner",
+            "type": "string"
+          },
+          "db_identity_token": {
+            "title": "Db Identity Token",
+            "type": "string"
+          },
+          "generated_at_ms": {
+            "title": "Generated At Ms",
+            "type": "integer"
+          },
+          "guidance": {
+            "$ref": "#/components/schemas/ProjectionGuidanceResponse"
+          },
+          "holds": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedHoldResponse"
+            },
+            "title": "Holds",
+            "type": "array"
+          },
+          "latest_reconciliation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectedReconciliationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedOperationResponse"
+            },
+            "title": "Operations",
+            "type": "array"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedPositionResponse"
+            },
+            "title": "Positions",
+            "type": "array"
+          },
+          "recovery_actions": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryCapabilityResponse"
+            },
+            "title": "Recovery Actions",
+            "type": "array"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedRunResponse"
+            },
+            "title": "Runs",
+            "type": "array"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          },
+          "terminal_receipts": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedReceiptResponse"
+            },
+            "title": "Terminal Receipts",
+            "type": "array"
+          },
+          "uncertainties": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedUncertaintyResponse"
+            },
+            "title": "Uncertainties",
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_id",
+          "strategy_instance_id",
+          "authority_generation",
+          "db_identity_token",
+          "authority_health",
+          "authority_health_reason",
+          "control_revision",
+          "custody_owner",
+          "runs",
+          "commands",
+          "operations",
+          "positions",
+          "holds",
+          "uncertainties",
+          "latest_reconciliation",
+          "terminal_receipts",
+          "guidance",
+          "recovery_actions",
+          "generated_at_ms"
+        ],
+        "title": "ClerkProjectionResponse",
+        "type": "object"
+      },
       "ClerkStatus": {
         "additionalProperties": false,
         "description": "The clerk's observable state for the operator status surface (S6).\n\nComposes the exposure hold, the latest reconciliation verdict, and the count\nof outstanding (unresolved) intents (the S5 unfinished set) \u2014 everything the\ndesk needs to render the hold banner and a health line.",
         "properties": {
           "account_id": {
             "title": "Account Id",
+            "type": "string"
+          },
+          "authority_kind": {
+            "default": "legacy",
+            "enum": [
+              "legacy",
+              "sqlite"
+            ],
+            "title": "Authority Kind",
             "type": "string"
           },
           "broker": {
@@ -13438,6 +13627,22 @@
           },
           "freeze": {
             "$ref": "#/components/schemas/AccountFreezeState"
+          },
+          "generic_hold_clear_available": {
+            "default": true,
+            "title": "Generic Hold Clear Available",
+            "type": "boolean"
+          },
+          "generic_hold_clear_explanation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generic Hold Clear Explanation"
           },
           "hold": {
             "$ref": "#/components/schemas/HoldState"
@@ -13500,7 +13705,7 @@
             "type": "string"
           },
           "event_id": {
-            "maxLength": 96,
+            "maxLength": 512,
             "minLength": 1,
             "title": "Event Id",
             "type": "string"
@@ -13842,7 +14047,7 @@
             "type": "string"
           },
           "transaction_id": {
-            "maxLength": 96,
+            "maxLength": 512,
             "minLength": 1,
             "title": "Transaction Id",
             "type": "string"
@@ -14031,7 +14236,7 @@
             "type": "string"
           },
           "transaction_id": {
-            "maxLength": 96,
+            "maxLength": 512,
             "minLength": 1,
             "title": "Transaction Id",
             "type": "string"
@@ -15236,6 +15441,15 @@
         "properties": {
           "account_id": {
             "title": "Account Id",
+            "type": "string"
+          },
+          "authority_kind": {
+            "default": "legacy",
+            "enum": [
+              "legacy",
+              "sqlite"
+            ],
+            "title": "Authority Kind",
             "type": "string"
           },
           "blocked_reason": {
@@ -18406,6 +18620,39 @@
       "EvidenceEntry": {
         "description": "One redacted, size-capped journal entry exposed to the operator lens.",
         "properties": {
+          "broker_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker State"
+          },
+          "clerk_observed_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clerk Observed At Ms"
+          },
+          "custody_owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custody Owner"
+          },
           "has_more_detail": {
             "title": "Has More Detail",
             "type": "boolean"
@@ -18429,6 +18676,28 @@
             "title": "Kind Label",
             "type": "string"
           },
+          "operation_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Ref"
+          },
+          "operation_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation State"
+          },
           "order_ref": {
             "anyOf": [
               {
@@ -18440,6 +18709,17 @@
             ],
             "title": "Order Ref"
           },
+          "proof_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proof Reference"
+          },
           "recorded_at_ms": {
             "title": "Recorded At Ms",
             "type": "integer"
@@ -18447,6 +18727,17 @@
           "seq": {
             "title": "Seq",
             "type": "integer"
+          },
+          "source_event_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Event At Ms"
           },
           "summary": {
             "title": "Summary",
@@ -18522,6 +18813,9 @@
           },
           "next_cursor": {
             "anyOf": [
+              {
+                "type": "string"
+              },
               {
                 "type": "integer"
               },
@@ -33903,7 +34197,13 @@
               "cancel_order",
               "clear_hold",
               "record_inventory_baseline",
-              "reconcile_now"
+              "reconcile_now",
+              "cancel_verified_working_orders",
+              "prepare_safe_flatten",
+              "stop_bot_decisions",
+              "open_custody_timeline",
+              "rebuild_from_mirror",
+              "reset_authority"
             ],
             "title": "Action Id",
             "type": "string"
@@ -33975,7 +34275,13 @@
               "cancel_order",
               "clear_hold",
               "record_inventory_baseline",
-              "reconcile_now"
+              "reconcile_now",
+              "cancel_verified_working_orders",
+              "prepare_safe_flatten",
+              "stop_bot_decisions",
+              "open_custody_timeline",
+              "rebuild_from_mirror",
+              "reset_authority"
             ],
             "title": "Action Id",
             "type": "string"
@@ -34034,7 +34340,13 @@
               "cancel_order",
               "clear_hold",
               "record_inventory_baseline",
-              "reconcile_now"
+              "reconcile_now",
+              "cancel_verified_working_orders",
+              "prepare_safe_flatten",
+              "stop_bot_decisions",
+              "open_custody_timeline",
+              "rebuild_from_mirror",
+              "reset_authority"
             ],
             "title": "Action Id",
             "type": "string"
@@ -34125,7 +34437,13 @@
                 "cancel_order",
                 "clear_hold",
                 "record_inventory_baseline",
-                "reconcile_now"
+                "reconcile_now",
+                "cancel_verified_working_orders",
+                "prepare_safe_flatten",
+                "stop_bot_decisions",
+                "open_custody_timeline",
+                "rebuild_from_mirror",
+                "reset_authority"
               ],
               "type": "string"
             },
@@ -35337,6 +35655,632 @@
         "title": "PricingPointResult",
         "type": "object"
       },
+      "ProjectedCommandResponse": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "command_id": {
+            "title": "Command Id",
+            "type": "string"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "command_id",
+          "kind",
+          "action",
+          "state",
+          "run_id",
+          "receipt_id",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "title": "ProjectedCommandResponse",
+        "type": "object"
+      },
+      "ProjectedHoldResponse": {
+        "properties": {
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "hold_id": {
+            "title": "Hold Id",
+            "type": "string"
+          },
+          "opened_at_ms": {
+            "title": "Opened At Ms",
+            "type": "integer"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "BOT",
+              "ACCOUNT_CLERK"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          }
+        },
+        "required": [
+          "hold_id",
+          "scope",
+          "strategy_instance_id",
+          "reason_code",
+          "opened_at_ms",
+          "evidence_refs"
+        ],
+        "title": "ProjectedHoldResponse",
+        "type": "object"
+      },
+      "ProjectedOperationResponse": {
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/ProjectedCommandResponse"
+          },
+          "created_at_ms": {
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "custody_owner": {
+            "title": "Custody Owner",
+            "type": "string"
+          },
+          "effect_operation_id": {
+            "title": "Effect Operation Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "latest_transition_sequence": {
+            "title": "Latest Transition Sequence",
+            "type": "integer"
+          },
+          "orders": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedOrderResponse"
+            },
+            "title": "Orders",
+            "type": "array"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "terminal_receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Receipt Id"
+          },
+          "transition_count": {
+            "title": "Transition Count",
+            "type": "integer"
+          },
+          "updated_at_ms": {
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "effect_operation_id",
+          "kind",
+          "state",
+          "custody_owner",
+          "strategy_instance_id",
+          "run_id",
+          "created_at_ms",
+          "updated_at_ms",
+          "latest_transition_sequence",
+          "transition_count",
+          "terminal_receipt_id",
+          "command",
+          "orders"
+        ],
+        "title": "ProjectedOperationResponse",
+        "type": "object"
+      },
+      "ProjectedOrderResponse": {
+        "properties": {
+          "broker_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Order Id"
+          },
+          "broker_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker State"
+          },
+          "client_order_id": {
+            "title": "Client Order Id",
+            "type": "string"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "submitted_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At Ms"
+          },
+          "updated_at_ms": {
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "order_ref",
+          "client_order_id",
+          "broker_order_id",
+          "role",
+          "broker_state",
+          "submitted_at_ms",
+          "updated_at_ms"
+        ],
+        "title": "ProjectedOrderResponse",
+        "type": "object"
+      },
+      "ProjectedPositionResponse": {
+        "properties": {
+          "attributed_qty": {
+            "title": "Attributed Qty",
+            "type": "number"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "symbol",
+          "attributed_qty",
+          "updated_at_ms"
+        ],
+        "title": "ProjectedPositionResponse",
+        "type": "object"
+      },
+      "ProjectedReceiptResponse": {
+        "properties": {
+          "command_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
+          "effect_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect Operation Id"
+          },
+          "proof_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proof Reference"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "summary_code": {
+            "title": "Summary Code",
+            "type": "string"
+          },
+          "terminal_state": {
+            "title": "Terminal State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "command_id",
+          "effect_operation_id",
+          "terminal_state",
+          "summary_code",
+          "proof_reference",
+          "recorded_at_ms"
+        ],
+        "title": "ProjectedReceiptResponse",
+        "type": "object"
+      },
+      "ProjectedReconciliationResponse": {
+        "properties": {
+          "attempted_at_ms": {
+            "title": "Attempted At Ms",
+            "type": "integer"
+          },
+          "effect_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect Operation Id"
+          },
+          "evidence_age_ms": {
+            "title": "Evidence Age Ms",
+            "type": "integer"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "order_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reconciliation_id": {
+            "title": "Reconciliation Id",
+            "type": "string"
+          },
+          "trigger": {
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reconciliation_id",
+          "effect_operation_id",
+          "order_ref",
+          "trigger",
+          "attempted_at_ms",
+          "outcome",
+          "evidence_age_ms",
+          "evidence_refs"
+        ],
+        "title": "ProjectedReconciliationResponse",
+        "type": "object"
+      },
+      "ProjectedRunResponse": {
+        "properties": {
+          "lifecycle_run_id": {
+            "title": "Lifecycle Run Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_at_ms": {
+            "title": "Started At Ms",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "stopped_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stopped At Ms"
+          },
+          "strategy_instance_id": {
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "strategy_instance_id",
+          "lifecycle_run_id",
+          "state",
+          "started_at_ms",
+          "stopped_at_ms"
+        ],
+        "title": "ProjectedRunResponse",
+        "type": "object"
+      },
+      "ProjectedUncertaintyResponse": {
+        "properties": {
+          "allows_reduction": {
+            "title": "Allows Reduction",
+            "type": "boolean"
+          },
+          "blocks_new_exposure": {
+            "title": "Blocks New Exposure",
+            "type": "boolean"
+          },
+          "custody_owner": {
+            "title": "Custody Owner",
+            "type": "string"
+          },
+          "evidence_age_ms": {
+            "title": "Evidence Age Ms",
+            "type": "integer"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence Refs",
+            "type": "array"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "next_step": {
+            "title": "Next Step",
+            "type": "string"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "operator_impact": {
+            "title": "Operator Impact",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "BOT",
+              "ACCOUNT_CLERK"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          },
+          "uncertainty_id": {
+            "title": "Uncertainty Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uncertainty_id",
+          "scope",
+          "severity",
+          "blocks_new_exposure",
+          "allows_reduction",
+          "custody_owner",
+          "strategy_instance_id",
+          "reason_code",
+          "headline",
+          "explanation",
+          "operator_impact",
+          "next_step",
+          "observed_at_ms",
+          "evidence_age_ms",
+          "evidence_refs"
+        ],
+        "title": "ProjectedUncertaintyResponse",
+        "type": "object"
+      },
+      "ProjectionGuidanceResponse": {
+        "properties": {
+          "action_required": {
+            "title": "Action Required",
+            "type": "boolean"
+          },
+          "available_safety_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Safety Actions",
+            "type": "array"
+          },
+          "custody_owner": {
+            "title": "Custody Owner",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "impact": {
+            "title": "Impact",
+            "type": "string"
+          },
+          "may_create_exposure": {
+            "title": "May Create Exposure",
+            "type": "boolean"
+          },
+          "next_step": {
+            "title": "Next Step",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "BOT",
+              "ACCOUNT_CLERK"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "headline",
+          "explanation",
+          "scope",
+          "impact",
+          "custody_owner",
+          "may_create_exposure",
+          "available_safety_actions",
+          "action_required",
+          "next_step"
+        ],
+        "title": "ProjectionGuidanceResponse",
+        "type": "object"
+      },
       "QcAuditCopyListing": {
         "description": "Committed QC audit copies under ``references/qc-shadow`` (ADR 0006).\n\n``entries`` are repo-relative POSIX paths suitable to pass straight back as\na deploy's ``qc_audit_copy_path``. Empty when the directory is absent or the\ndaemon is unreachable.",
         "properties": {
@@ -35762,7 +36706,13 @@
               "cancel_order",
               "clear_hold",
               "record_inventory_baseline",
-              "reconcile_now"
+              "reconcile_now",
+              "cancel_verified_working_orders",
+              "prepare_safe_flatten",
+              "stop_bot_decisions",
+              "open_custody_timeline",
+              "rebuild_from_mirror",
+              "reset_authority"
             ],
             "title": "Operation",
             "type": "string"
@@ -36632,6 +37582,384 @@
           "iv_provenance"
         ],
         "title": "RecordedSnapshotItem",
+        "type": "object"
+      },
+      "RecoveryActionCheckRequest": {
+        "additionalProperties": false,
+        "description": "Action-specific token checked against a fresh policy evaluation.",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "reconcile_now",
+              "cancel_verified_working_orders",
+              "prepare_safe_flatten",
+              "stop_bot_decisions",
+              "open_custody_timeline",
+              "rebuild_from_mirror",
+              "reset_authority"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "concurrency_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Concurrency Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "concurrency_token"
+        ],
+        "title": "RecoveryActionCheckRequest",
+        "type": "object"
+      },
+      "RecoveryActionCheckResponse": {
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/RecoveryCapabilityResponse"
+          }
+        },
+        "required": [
+          "capability"
+        ],
+        "title": "RecoveryActionCheckResponse",
+        "type": "object"
+      },
+      "RecoveryActionExecuteRequest": {
+        "additionalProperties": false,
+        "description": "Execute one capability exactly as presented by the current snapshot.",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "reconcile_now",
+              "cancel_verified_working_orders",
+              "prepare_safe_flatten",
+              "stop_bot_decisions",
+              "open_custody_timeline",
+              "rebuild_from_mirror",
+              "reset_authority"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "concurrency_token": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Concurrency Token",
+            "type": "string"
+          },
+          "execution_ref": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Ref"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "action_id",
+          "concurrency_token"
+        ],
+        "title": "RecoveryActionExecuteRequest",
+        "type": "object"
+      },
+      "RecoveryActionExecuteResponse": {
+        "properties": {
+          "action_id": {
+            "enum": [
+              "reconcile_now",
+              "cancel_verified_working_orders",
+              "prepare_safe_flatten",
+              "stop_bot_decisions",
+              "open_custody_timeline",
+              "rebuild_from_mirror",
+              "reset_authority"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "applied": {
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommandResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "orders": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectedOrderResponse"
+            },
+            "title": "Orders",
+            "type": "array"
+          },
+          "outcome": {
+            "const": "success",
+            "default": "success",
+            "title": "Outcome"
+          },
+          "receipt_id": {
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "reconciliation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReconciliationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action_id",
+          "applied",
+          "receipt_id",
+          "recorded_at_ms",
+          "command",
+          "reconciliation",
+          "orders"
+        ],
+        "title": "RecoveryActionExecuteResponse",
+        "type": "object"
+      },
+      "RecoveryCapabilityResponse": {
+        "properties": {
+          "action_id": {
+            "enum": [
+              "reconcile_now",
+              "cancel_verified_working_orders",
+              "prepare_safe_flatten",
+              "stop_bot_decisions",
+              "open_custody_timeline",
+              "rebuild_from_mirror",
+              "reset_authority"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "concurrency_token": {
+            "title": "Concurrency Token",
+            "type": "string"
+          },
+          "confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecoveryConfirmationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/RecoveryEvidenceResponse"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "execution_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Ref"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "freshness": {
+            "enum": [
+              "fresh",
+              "stale",
+              "not_required",
+              "unavailable"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "mutation": {
+            "title": "Mutation",
+            "type": "boolean"
+          },
+          "next_step": {
+            "title": "Next Step",
+            "type": "string"
+          },
+          "primary": {
+            "title": "Primary",
+            "type": "boolean"
+          },
+          "scope": {
+            "enum": [
+              "BOT",
+              "ACCOUNT_CLERK"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "unavailable_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason Code"
+          }
+        },
+        "required": [
+          "action_id",
+          "label",
+          "explanation",
+          "available",
+          "unavailable_reason_code",
+          "unavailable_reason",
+          "scope",
+          "freshness",
+          "evidence",
+          "confirmation",
+          "next_step",
+          "concurrency_token",
+          "execution_ref",
+          "mutation",
+          "primary"
+        ],
+        "title": "RecoveryCapabilityResponse",
+        "type": "object"
+      },
+      "RecoveryConfirmationResponse": {
+        "properties": {
+          "confirm_label": {
+            "title": "Confirm Label",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "explanation",
+          "confirm_label"
+        ],
+        "title": "RecoveryConfirmationResponse",
+        "type": "object"
+      },
+      "RecoveryEvidenceResponse": {
+        "properties": {
+          "age_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Ms"
+          },
+          "freshness": {
+            "enum": [
+              "fresh",
+              "stale",
+              "not_required",
+              "unavailable"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "observed_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At Ms"
+          },
+          "reference": {
+            "title": "Reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference",
+          "label",
+          "observed_at_ms",
+          "age_ms",
+          "freshness"
+        ],
+        "title": "RecoveryEvidenceResponse",
         "type": "object"
       },
       "RedeployAction": {
@@ -43894,6 +45222,209 @@
         "title": "TimeOfDay",
         "type": "object"
       },
+      "TimelineEntryResponse": {
+        "properties": {
+          "broker_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Order Id"
+          },
+          "broker_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker State"
+          },
+          "clerk_observed_at_ms": {
+            "title": "Clerk Observed At Ms",
+            "type": "integer"
+          },
+          "command_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
+          "custody_owner": {
+            "title": "Custody Owner",
+            "type": "string"
+          },
+          "effect_operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effect Operation Id"
+          },
+          "execution_authority": {
+            "title": "Execution Authority",
+            "type": "string"
+          },
+          "operation_ref": {
+            "title": "Operation Ref",
+            "type": "string"
+          },
+          "operation_state": {
+            "title": "Operation State",
+            "type": "string"
+          },
+          "order_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Ref"
+          },
+          "proof_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proof Reference"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "source_event_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Event At Ms"
+          },
+          "summary_code": {
+            "title": "Summary Code",
+            "type": "string"
+          },
+          "transition_kind": {
+            "title": "Transition Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "operation_ref",
+          "effect_operation_id",
+          "command_id",
+          "order_ref",
+          "broker_order_id",
+          "transition_kind",
+          "operation_state",
+          "broker_state",
+          "custody_owner",
+          "execution_authority",
+          "summary_code",
+          "proof_reference",
+          "source_event_at_ms",
+          "clerk_observed_at_ms",
+          "recorded_at_ms"
+        ],
+        "title": "TimelineEntryResponse",
+        "type": "object"
+      },
+      "TimelinePageResponse": {
+        "description": "Stable keyset page; later appends never enter an established cursor.",
+        "properties": {
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "anchor_sequence": {
+            "title": "Anchor Sequence",
+            "type": "integer"
+          },
+          "authority_generation": {
+            "title": "Authority Generation",
+            "type": "integer"
+          },
+          "control_revision": {
+            "title": "Control Revision",
+            "type": "integer"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineEntryResponse"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "strategy_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy Instance Id"
+          },
+          "total_entries": {
+            "title": "Total Entries",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "strategy_instance_id",
+          "authority_generation",
+          "control_revision",
+          "anchor_sequence",
+          "total_entries",
+          "entries",
+          "next_cursor"
+        ],
+        "title": "TimelinePageResponse",
+        "type": "object"
+      },
       "TimingCellResponse": {
         "properties": {
           "average_return": {
@@ -45655,8 +47186,15 @@
             "type": "string"
           },
           "filled_quantity": {
-            "title": "Filled Quantity",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filled Quantity"
           },
           "observed_at_ms": {
             "title": "Observed At Ms",
@@ -48746,6 +50284,160 @@
         ]
       }
     },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/check": {
+      "post": {
+        "operationId": "check_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryActionCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryActionCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Bot Recovery Action",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/recovery-actions/execute": {
+      "post": {
+        "operationId": "execute_bot_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__recovery_actions_execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryActionExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryActionExecuteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Bot Recovery Action",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/runs/start": {
       "post": {
         "description": "Reserve and admit a Start command. Idempotent on\n``(account_id, strategy_instance_id, lifecycle_run_id)`` \u2014 the frontend\nmints ``lifecycle_run_id`` once and resends the same value on retry.",
@@ -48902,6 +50594,170 @@
         ]
       }
     },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/snapshot": {
+      "get": {
+        "description": "Return one bot's fold projection plus account-wide fail-closed facts.",
+        "operationId": "get_bot_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkProjectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Bot Snapshot",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/timeline": {
+      "get": {
+        "operationId": "get_bot_timeline_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__timeline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "strategy_instance_id",
+            "required": true,
+            "schema": {
+              "title": "Strategy Instance Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelinePageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Bot Timeline",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
     "/api/alpaca-clerk-sqlite/accounts/{account_id}/commands/{command_id}": {
       "get": {
         "operationId": "get_command_api_alpaca_clerk_sqlite_accounts__account_id__commands__command_id__get",
@@ -49023,6 +50879,288 @@
           }
         },
         "summary": "Reconcile Now",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/recovery-actions/check": {
+      "post": {
+        "operationId": "check_account_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__recovery_actions_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryActionCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryActionCheckResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Check Account Recovery Action",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/recovery-actions/execute": {
+      "post": {
+        "operationId": "execute_account_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__recovery_actions_execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryActionExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryActionExecuteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Account Recovery Action",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/snapshot": {
+      "get": {
+        "description": "Return the account-wide fold projection; never replay transition history.",
+        "operationId": "get_account_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClerkProjectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Account Snapshot",
+        "tags": [
+          "alpaca-clerk-sqlite"
+        ]
+      }
+    },
+    "/api/alpaca-clerk-sqlite/accounts/{account_id}/timeline": {
+      "get": {
+        "operationId": "get_account_timeline_api_alpaca_clerk_sqlite_accounts__account_id__timeline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelinePageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Account Timeline",
         "tags": [
           "alpaca-clerk-sqlite"
         ]
@@ -52129,8 +54267,8 @@
             "schema": {
               "anyOf": [
                 {
-                  "minimum": 0,
-                  "type": "integer"
+                  "maxLength": 1024,
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -53177,8 +55315,8 @@
             "schema": {
               "anyOf": [
                 {
-                  "minimum": 0,
-                  "type": "integer"
+                  "maxLength": 1024,
+                  "type": "string"
                 },
                 {
                   "type": "null"

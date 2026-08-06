@@ -154,6 +154,26 @@ def entry_orders_for_strategy(
     return [OrderResource(**dict(row)) for row in rows]
 
 
+def orders_for_strategy(
+    conn: sqlite3.Connection, strategy_instance_id: str
+) -> list[OrderResource]:
+    """Every order (ENTRY and REDUCING alike) belonging to one strategy.
+
+    Unlike :func:`entry_orders_for_strategy`, this is not role-filtered — the
+    custody-proof surface needs a live EXIT's REDUCING child counted as
+    working/unresolved exposure too, not just its cancelled ENTRY siblings.
+    """
+    rows = conn.execute(
+        "SELECT o.order_ref, o.effect_operation_id, o.client_order_id, o.broker_order_id, "
+        "o.role, o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "WHERE e.strategy_instance_id = ? "
+        "ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
+        (strategy_instance_id,),
+    ).fetchall()
+    return [OrderResource(**dict(row)) for row in rows]
+
+
 def active_exit_for_order(conn: sqlite3.Connection, order_ref: str) -> EffectOperationResource | None:
     """The nonterminal EXIT currently linked to an entry, if any."""
     row = conn.execute(

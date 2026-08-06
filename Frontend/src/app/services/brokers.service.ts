@@ -14,6 +14,10 @@ import type {
   CustodyResolutionRequest,
   OrderCancelResult,
   OrderSubmitResult,
+  SqliteClerkProjection,
+  SqliteRecoveryAction,
+  SqliteRecoveryResult,
+  SqliteTimelinePage,
 } from '../api/alpaca.types';
 
 /**
@@ -174,6 +178,39 @@ export class BrokersService {
   ): Promise<CustodyResolutionReceipt> {
     return firstValueFrom(
       this.http.post<CustodyResolutionReceipt>(`${this.base}/${broker}/clerk/resolve`, body),
+    );
+  }
+
+  getSqliteClerkProjection(accountId: string): Promise<SqliteClerkProjection> {
+    return firstValueFrom(
+      this.http.get<SqliteClerkProjection>(
+        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/snapshot`,
+      ),
+    );
+  }
+
+  getSqliteClerkTimeline(accountId: string, cursor?: string | null): Promise<SqliteTimelinePage> {
+    const params = cursor != null ? `?cursor=${encodeURIComponent(cursor)}` : '';
+    return firstValueFrom(
+      this.http.get<SqliteTimelinePage>(
+        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/timeline${params}`,
+      ),
+    );
+  }
+
+  executeSqliteRecoveryAction(
+    accountId: string,
+    action: SqliteRecoveryAction,
+  ): Promise<SqliteRecoveryResult> {
+    return firstValueFrom(
+      this.http.post<SqliteRecoveryResult>(
+        `/api/alpaca-clerk-sqlite/accounts/${encodeURIComponent(accountId)}/recovery-actions/execute`,
+        {
+          action_id: action.action_id,
+          concurrency_token: action.concurrency_token,
+          execution_ref: action.execution_ref,
+        },
+      ),
     );
   }
 }

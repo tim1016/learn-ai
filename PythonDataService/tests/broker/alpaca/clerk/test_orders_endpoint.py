@@ -21,6 +21,10 @@ from requests import PreparedRequest
 
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.clerk import journal as journal_module
+from app.broker.alpaca.clerk.active_authority import (
+    ActiveClerkRuntime,
+    set_active_clerk_runtime,
+)
 from app.broker.alpaca.clerk.clerk import (
     AlpacaClerk,
     reset_alpaca_clerk_for_testing,
@@ -134,6 +138,24 @@ async def _delete(order_id: str) -> Response:
         return await client.delete(
             f"/api/brokers/alpaca/orders/{order_id}", headers=_control_headers()
         )
+
+
+async def test_activated_sqlite_refuses_legacy_manual_order_path(
+    _alpaca_clerk: None,
+) -> None:
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite"))
+    try:
+        response = await _post(
+            {
+                "operator": "inkant",
+                "legs": [{"symbol": "SPY", "side": "buy", "quantity": 1}],
+            }
+        )
+    finally:
+        set_active_clerk_runtime(None)
+
+    assert response.status_code == 409
+    assert "durable command/effect custody" in response.json()["detail"]["why"]
 
 
 @responses.activate

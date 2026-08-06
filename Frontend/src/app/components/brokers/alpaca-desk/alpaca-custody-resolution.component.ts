@@ -60,6 +60,9 @@ export class AlpacaCustodyResolutionComponent {
     const plan = this.diagnosis.value()?.resolution_plan ?? [];
     return plan.length > 0 && plan.every((step) => !step.mutates);
   });
+  protected readonly sqliteAuthority = computed(
+    () => this.diagnosis.value()?.authority_kind === 'sqlite',
+  );
 
   // A fresh resolve attempt must never carry over a prior attempt's stale
   // error or receipt — both are part of the audited flow and would otherwise

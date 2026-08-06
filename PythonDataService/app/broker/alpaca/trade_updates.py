@@ -56,8 +56,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.broker.alpaca import adapter
-from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind
+from app.broker.alpaca.clerk.trade_evidence import (
+    LegacyLifecycleRecorder,
+    LegacyTradeUpdateEvidenceSink,
+    TradeUpdateEvidenceSink,
+)
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
 from app.broker.alpaca.fault_injection import (
     frame_for_fault,
@@ -278,15 +282,22 @@ class TradeUpdatesConsumer:
     def __init__(
         self,
         *,
-        clerk: AlpacaClerk,
         read: BrokerReadPort,
         frame_source: FrameSource,
+        evidence_sink: TradeUpdateEvidenceSink | None = None,
+        clerk: LegacyLifecycleRecorder | None = None,
         journal: CaptureJournal | None = None,
         clock: Clock = _now_ms,
         backoff: Backoff = _default_backoff,
         max_reconnects: int | None = None,
     ) -> None:
-        self._clerk = clerk
+        if (evidence_sink is None) == (clerk is None):
+            raise ValueError("provide exactly one of evidence_sink or clerk")
+        self._evidence_sink = (
+            evidence_sink
+            if evidence_sink is not None
+            else LegacyTradeUpdateEvidenceSink(clerk)
+        )
         self._read = read
         self._frame_source = frame_source
         self._journal = journal or get_capture_journal()
@@ -395,10 +406,12 @@ class TradeUpdatesConsumer:
         # For the real socket, it yields the auth acknowledgement only after
         # the server accepted the ``listen`` subscription; a reconnect is live
         # before the REST snapshot closes the previous gap.
-        self._mark_connection(True)
         try:
             if reconcile_after_connect:
                 await self._gap_reconcile()
+            # Reconnect admission remains closed until the active authority has
+            # reconciled the missing window. The first connection has no gap.
+            self._mark_connection(True)
             await self._handle_frame(first_frame)
             async for frame in source:
                 await self._handle_frame(frame)
@@ -557,7 +570,7 @@ class TradeUpdatesConsumer:
                 return
 
         client_order_id = adapter.opt_str(order.get("client_order_id"))
-        kind = await self._clerk.record_lifecycle_event(
+        kind = await self._evidence_sink.record_lifecycle_event(
             client_order_id=client_order_id,
             event=event,
             event_key=key,
@@ -598,6 +611,10 @@ class TradeUpdatesConsumer:
         whose synthetic timestamp differs from the socket's. A full historical
         sweep beyond the bounded page is S6's reconciliation job.
         """
+        # SQLite performs its authoritative order/position reconciliation here;
+        # legacy implements this hook as a no-op and keeps the bounded recovery
+        # below. A failure propagates so ``connected`` and admission stay closed.
+        await self._evidence_sink.reconcile_gap()
         await self._reconcile_activity_window()
         try:
             orders = await self._read.list_orders(
@@ -630,21 +647,12 @@ class TradeUpdatesConsumer:
         """
 
         try:
-            cursor = await self._clerk.activity_recovery.cursor_ms()
-            activities = await self._read.list_activities(
-                after_ms=cursor, limit=_ACTIVITY_RECOVERY_LIMIT
+            self._counters.gap_reconciled += (
+                await self._evidence_sink.recover_activity_window(
+                    read=self._read,
+                    limit=_ACTIVITY_RECOVERY_LIMIT,
+                )
             )
-            # Alpaca returns this bounded page newest-first. Commit the oldest
-            # observable activity first so a crash cannot advance the durable
-            # high-water past an unrecorded earlier item in the same window.
-            for activity in sorted(
-                activities,
-                key=lambda item: item.occurred_at_ms if item.occurred_at_ms is not None else -1,
-            ):
-                if await self._clerk.activity_recovery.record(
-                    activity=activity, window_limit=_ACTIVITY_RECOVERY_LIMIT
-                ):
-                    self._counters.gap_reconciled += 1
         except Exception:
             logger.warning(
                 "alpaca trade_updates account-activity recovery failed",
@@ -658,8 +666,9 @@ class TradeUpdatesConsumer:
     def for_alpaca(
         cls,
         *,
-        clerk: AlpacaClerk,
         read: BrokerReadPort,
+        evidence_sink: TradeUpdateEvidenceSink | None = None,
+        clerk: LegacyLifecycleRecorder | None = None,
         settings: AlpacaSettings | None = None,
         journal: CaptureJournal | None = None,
     ) -> TradeUpdatesConsumer:
@@ -686,9 +695,10 @@ class TradeUpdatesConsumer:
         frame_source: FrameSource = _injected_source if injection_permitted() else _socket_source
 
         return cls(
-            clerk=clerk,
             read=read,
             frame_source=frame_source,
+            evidence_sink=evidence_sink,
+            clerk=clerk,
             journal=journal,
         )
 

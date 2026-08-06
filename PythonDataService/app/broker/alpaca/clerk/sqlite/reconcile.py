@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 from weakref import WeakKeyDictionary
 
@@ -388,6 +388,8 @@ class AccountReconciliationResult:
     resolved_count: int = 0
     foreign_order_count: int = 0
     drifted_symbols: tuple[str, ...] = field(default_factory=tuple)
+    receipt_id: str | None = None
+    recorded_at_ms: int | None = None
 
 
 async def _read_account_snapshot(
@@ -485,14 +487,50 @@ async def reconcile_account(
     async with _reconciliation_lock(repo):
         await asyncio.to_thread(repo.begin_reconciliation)
         try:
-            return await _reconcile_account_serialized(
+            result = await _reconcile_account_serialized(
                 repo,
                 read=read,
                 trade=trade,
                 trigger=trigger,
             )
+            if trigger != "OPERATOR_RECONCILE_NOW":
+                return result
+            receipt_id, recorded_at_ms = await asyncio.to_thread(
+                _record_operator_reconciliation_receipt,
+                repo,
+                result,
+            )
+            return replace(
+                result,
+                receipt_id=receipt_id,
+                recorded_at_ms=recorded_at_ms,
+            )
         finally:
             await asyncio.to_thread(repo.end_reconciliation)
+
+
+def _record_operator_reconciliation_receipt(
+    repo: ClerkSqliteRepository,
+    result: AccountReconciliationResult,
+) -> tuple[str, int]:
+    recorded_at_ms = repo.clock()
+    facts = ReconciliationAttemptedFacts(
+        trigger="OPERATOR_RECONCILE_NOW",
+        outcome="RESOLVED_SUCCESS" if result.verdict == "clean" else "STILL_UNKNOWN",
+        why=f"operator account reconciliation completed with verdict {result.verdict}",
+    )
+    committed = repo.append_transition(
+        TransitionInput(
+            transition_kind="RECONCILIATION_ATTEMPTED",
+            custody_owner="ACCOUNT_CLERK",
+            execution_authority="ACCOUNT_CLERK",
+            operation_state=result.verdict,
+            clerk_observed_at_ms=recorded_at_ms,
+            summary_code="OPERATOR_RECONCILIATION_COMPLETED",
+            facts_json=facts.to_facts_json(),
+        )
+    )
+    return f"reconciliation:{committed.sequence}", recorded_at_ms
 
 
 def _fold_snapshot_evidence(

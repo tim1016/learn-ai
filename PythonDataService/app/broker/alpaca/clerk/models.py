@@ -541,6 +541,9 @@ class ClerkStatus(BaseModel):
     # observation time. ``None`` = the stream-health gate is not installed
     # (distinct from "installed and healthy").
     channel_healths: list[ChannelHealth] | None = None
+    authority_kind: Literal["legacy", "sqlite"] = "legacy"
+    generic_hold_clear_available: bool = True
+    generic_hold_clear_explanation: str | None = None
 
 
 class CustodyCountFact(BaseModel):

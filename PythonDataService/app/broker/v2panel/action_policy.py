@@ -442,7 +442,12 @@ def supported_action_ids_for(broker: str) -> list[ActionId]:
     Preserves ``ACTION_IDS`` order so the profile is deterministically ordered
     and contract-test-stable.
     """
-    return [action_id for action_id in ACTION_IDS if broker in ACTION_REGISTRY[action_id].supported_brokers]
+    return [
+        action_id
+        for action_id in ACTION_IDS
+        if (policy := ACTION_REGISTRY.get(action_id)) is not None
+        and broker in policy.supported_brokers
+    ]
 
 
 def _confirmation_for_action(
@@ -532,7 +537,9 @@ def build_actions_from_registry(
     """
     actions: list[PanelAction] = []
     for action_id in ACTION_IDS:
-        policy = ACTION_REGISTRY[action_id]
+        policy = ACTION_REGISTRY.get(action_id)
+        if policy is None:
+            continue
         if broker not in policy.supported_brokers:
             continue
         if policy.list_page_only:

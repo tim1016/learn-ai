@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.schemas.clerk_transaction_projection import (
@@ -17,6 +19,10 @@ from app.services.clerk_transaction_projection import (
     transaction_history,
 )
 from app.services.clerk_transaction_projection_store import PostgresClerkTransactionProjectionStore
+from app.services.sqlite_clerk_transaction_projection import (
+    sqlite_transaction_detail,
+    sqlite_transaction_history,
+)
 
 router = APIRouter(prefix="/api/accounts", tags=["clerk-transactions"])
 
@@ -39,6 +45,18 @@ async def get_clerk_transaction_history(
     """Read one indexed keyset page without broker, Account Truth, or journal I/O."""
 
     try:
+        sqlite_page = await asyncio.to_thread(
+            sqlite_transaction_history,
+            account_id=account_id,
+            limit=limit,
+            cursor=cursor,
+            origin=origin,
+            lifecycle_state=lifecycle_state,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+        )
+        if sqlite_page is not None:
+            return sqlite_page
         return await transaction_history(
             account_id=account_id,
             limit=limit,
@@ -89,6 +107,18 @@ async def get_clerk_transaction_detail(
     """Read exactly one selected projected receipt; never rescan Clerk or IBKR."""
 
     try:
+        sqlite_active, sqlite_row = await asyncio.to_thread(
+            sqlite_transaction_detail,
+            account_id=account_id,
+            transaction_id=transaction_id,
+        )
+        if sqlite_active:
+            if sqlite_row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="SQLite Clerk operation was not found for this account.",
+                )
+            return sqlite_row
         row = await transaction_detail(
             account_id=account_id, transaction_id=transaction_id, store=store
         )

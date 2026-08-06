@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from app.broker.alpaca.clerk.clerk import AlpacaClerk
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,50 +87,25 @@ from app.utils.error_handlers import polygon_exception_handler
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-_ALPACA_RECOVERY_TIMEOUT_S = 60.0
-
-
 def _alpaca_clerk_configuration_is_valid() -> bool:
     """Clear stale runtime state, validate settings, and log only safe detail."""
     from pydantic import ValidationError
 
     from app.broker.alpaca.clerk import set_alpaca_clerk
+    from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
     from app.broker.alpaca.config import (
         alpaca_configuration_error_detail,
         get_alpaca_settings,
     )
 
     set_alpaca_clerk(None)
+    set_active_clerk_runtime(None)
     try:
         get_alpaca_settings()
     except ValidationError as exc:
         logger.warning(
             "Alpaca settings invalid; order-submission clerk not installed.",
             extra={"detail": alpaca_configuration_error_detail(exc)},
-        )
-        return False
-    return True
-
-
-async def _recover_alpaca_clerk_or_fail_closed(alpaca_clerk: AlpacaClerk) -> bool:
-    """Run S5 recovery before enabling submits; preserve a safe disabled state.
-
-    Recovery failure is not an availability-only concern: unresolved intents may
-    still represent live broker exposure. Keep the clerk out of the process
-    registry until recovery completes, so the write endpoint cannot accept a
-    new order against that unknown state.
-    """
-    try:
-        await asyncio.wait_for(
-            alpaca_clerk.recover(),
-            timeout=_ALPACA_RECOVERY_TIMEOUT_S,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Alpaca clerk startup recovery failed; order submission remains disabled. "
-            "Detail: %s",
-            exc,
-            exc_info=True,
         )
         return False
     return True
@@ -177,8 +147,13 @@ async def lifespan(app: FastAPI):
     # honestly reports "not configured".
     from app.broker.alpaca.broker import AlpacaBroker
     from app.broker.alpaca.clerk import AlpacaClerk, get_clerk_settings, set_alpaca_clerk
+    from app.broker.alpaca.clerk.active_authority import (
+        ActiveClerkRuntime,
+        select_active_clerk_runtime,
+        set_active_clerk_runtime,
+    )
 
-    sqlite_alpaca_sweep = None
+    alpaca_clerk_runtime: ActiveClerkRuntime | None = None
     if _alpaca_clerk_configuration_is_valid():
         from app.broker.alpaca.clerk.stream_health import build_default_stream_health_gate
 
@@ -197,103 +172,76 @@ async def lifespan(app: FastAPI):
             return registry.desired_state(strategy_instance_id)
 
         alpaca_broker = AlpacaBroker()
-        # S4 (#1262): the dual-health submission gate — market-data feed (S1)
-        # AND trade_updates execution channel must both be healthy for a new
-        # submit; either broken -> durable STREAM_HEALTH_HOLD, clear-only exit.
-        alpaca_clerk = AlpacaClerk(
+        # S4 (#1262): the dual-health submission gate — market-data feed AND
+        # trade_updates execution channel must both be healthy. Shared by
+        # both authorities so the cutover never silently drops this
+        # fail-closed check.
+        alpaca_stream_health_gate = build_default_stream_health_gate()
+
+        def _legacy_clerk() -> AlpacaClerk:
+            return AlpacaClerk(
+                read=alpaca_broker,
+                trade=alpaca_broker,
+                stream_health=alpaca_stream_health_gate,
+                bot_running_probe=_alpaca_bot_running,
+                desired_state_probe=_alpaca_desired_state,
+            )
+
+        # Resolve the broker account before constructing either writer. The
+        # append-only activation fence then selects exactly one authority; an
+        # invalid activated authority installs no broker-mutation capability.
+        alpaca_clerk_runtime = await select_active_clerk_runtime(
             read=alpaca_broker,
             trade=alpaca_broker,
-            stream_health=build_default_stream_health_gate(),
-            bot_running_probe=_alpaca_bot_running,
-            desired_state_probe=_alpaca_desired_state,
+            artifacts_root=get_clerk_settings().dir,
+            legacy_factory=_legacy_clerk,
+            stream_health_gate=alpaca_stream_health_gate,
         )
-
-        # Alpaca crash-safety recovery (phase 2, S5) — replay the order journal
-        # and resolve every intent left uncertain by a timeout or a restart
-        # (``intent_recorded`` / ``submit_uncertain`` with no terminal outcome)
-        # by asking Alpaca whether the order landed, BEFORE the clerk is
-        # installed for new submits. Best-effort: a broker that is unreachable at
-        # startup leaves the intents uncertain for a later replay/sweep, but must
-        # not abort boot (no clerk means no submit, which is money-safe). A fresh
-        # install with no journal resolves nothing and returns cleanly.
-        if await _recover_alpaca_clerk_or_fail_closed(alpaca_clerk):
-            set_alpaca_clerk(alpaca_clerk)
-            logger.info("Alpaca Clerk ready (order submission enabled).")
-
-            # Drain existing canonical evidence on boot; the rebuildable SQL
-            # history may not wait for an unrelated later order append.
-            from app.services.clerk_transaction_projection import project_alpaca_journal_best_effort
-
-            account_id, _journal = await alpaca_clerk._ensure_journal()
-            await project_alpaca_journal_best_effort(
-                artifacts_root=get_clerk_settings().dir,
-                account_id=account_id,
+        set_active_clerk_runtime(alpaca_clerk_runtime)
+        if alpaca_clerk_runtime.clerk is not None:
+            set_alpaca_clerk(alpaca_clerk_runtime.clerk)
+            logger.info(
+                "Alpaca Clerk ready (authority=%s).",
+                alpaca_clerk_runtime.authority_kind,
             )
 
-            # The SQLite authority is pre-cutover and may not exist yet. When
-            # it does, keep its independent broker-evidence recovery loop live;
-            # otherwise leave the canonical JSONL Clerk lifecycle unchanged.
-            from app.broker.alpaca.clerk.sqlite.process_repositories import (
-                get_or_open_repository,
-            )
-            from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
-                ReconciliationSweep as SqliteReconciliationSweep,
-            )
-            from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
+            # The rebuildable Postgres transaction view is a legacy projection.
+            # An activated SQLite account must not construct or drain it.
+            if alpaca_clerk_runtime.authority_kind == "legacy":
+                from app.services.clerk_transaction_projection import (
+                    project_alpaca_journal_best_effort,
+                )
 
-            try:
-                sqlite_repo = get_or_open_repository(
-                    account_id=account_id,
+                if not isinstance(alpaca_clerk_runtime.clerk, AlpacaClerk):
+                    raise RuntimeError("Legacy authority did not install the legacy Clerk")
+                account_id, _journal = await alpaca_clerk_runtime.clerk._ensure_journal()
+                await project_alpaca_journal_best_effort(
                     artifacts_root=get_clerk_settings().dir,
-                )
-            except FileNotFoundError:
-                logger.info(
-                    "SQLite Alpaca Clerk authority is not initialized; "
-                    "its reconciliation sweep remains disabled."
-                )
-            except ClerkSqliteError:
-                logger.warning(
-                    "SQLite Alpaca Clerk authority could not be opened; "
-                    "its reconciliation sweep remains disabled.",
-                    exc_info=True,
-                )
-            else:
-                sqlite_alpaca_sweep = SqliteReconciliationSweep(
-                    repo=sqlite_repo,
-                    read=alpaca_broker,
-                    trade=alpaca_broker,
+                    account_id=account_id,
                 )
 
-            # Alpaca live-lifecycle consumer (phase 2, S4) — the owned
-            # trade_updates websocket. Started alongside the Clerk (Alpaca is a peer
-            # vendor, independent of the IBKR gateway lifecycle). It captures each
-            # frame verbatim, attributes it against the Clerk's namespaces, and
-            # journals ORDER_EVENT / UNEXPLAINED_ORDER. No keys → no consumer.
+            # Capture/parsing stays shared, but durable lifecycle evidence is
+            # folded only into the sink selected with the active authority.
             from app.broker.alpaca.trade_updates import (
                 TradeUpdatesConsumer,
                 set_trade_updates_consumer,
             )
 
             alpaca_trade_updates = TradeUpdatesConsumer.for_alpaca(
-                clerk=alpaca_clerk, read=alpaca_broker
+                evidence_sink=alpaca_clerk_runtime.evidence_sink,
+                read=alpaca_broker,
             )
             alpaca_trade_updates.start()
             set_trade_updates_consumer(alpaca_trade_updates)
             logger.info("Alpaca trade_updates consumer started (live lifecycle enabled).")
-
-            # Alpaca reconciliation sweep (phase 2, S6) — periodically compares
-            # the journal-derived exposure against Alpaca's live orders + positions
-            # and records a named verdict. It starts only after successful recovery:
-            # a recovery-failed clerk is deliberately not submit-capable or swept.
-            from app.broker.alpaca.clerk import (
-                ReconciliationSweep,
-                set_reconciliation_sweep,
+        elif alpaca_clerk_runtime.startup_failure is not None:
+            logger.warning(
+                "Alpaca Clerk unavailable after authority selection.",
+                extra={
+                    "reason_code": alpaca_clerk_runtime.startup_failure.reason_code,
+                    "account_id": alpaca_clerk_runtime.startup_failure.account_id,
+                },
             )
-
-            alpaca_sweep = ReconciliationSweep(clerk=alpaca_clerk)
-            # NOTE: .start() is deferred to AFTER bot_task_registry.run_boot_recovery()
-            # to avoid racing the boot reconciliation pass with the periodic sweep.
-            set_reconciliation_sweep(alpaca_sweep)
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -488,13 +436,12 @@ async def lifespan(app: FastAPI):
     # interrupted evidence; the clerk resolves unresolved intents by identity
     # and runs one reconciliation pass; starts stay refused while any intent
     # remains uncertain.
-    from app.broker.alpaca.clerk import derive as alpaca_derive
     from app.broker.alpaca.clerk import get_alpaca_clerk
 
     _boot_clerk = get_alpaca_clerk()
     if _boot_clerk is not None:
         async def _unresolved_intents() -> int:
-            return len(alpaca_derive.unresolved_intents(await _boot_clerk.read_journal_entries()))
+            return await _boot_clerk.unresolved_effect_count()
 
         await bot_task_registry.run_boot_recovery(
             recover=_boot_clerk.recover,
@@ -506,15 +453,17 @@ async def lifespan(app: FastAPI):
 
     # Start the Alpaca reconciliation sweep AFTER boot recovery so the periodic
     # sweep cannot race the boot reconciliation pass (both call reconcile_once).
-    from app.broker.alpaca.clerk import get_reconciliation_sweep
-
-    _pending_sweep = get_reconciliation_sweep()
+    _pending_sweep = (
+        alpaca_clerk_runtime.sweep
+        if alpaca_clerk_runtime is not None
+        else None
+    )
     if _pending_sweep is not None:
         _pending_sweep.start()
-        logger.info("Alpaca reconciliation sweep started (S6, post-boot-recovery).")
-    if sqlite_alpaca_sweep is not None:
-        sqlite_alpaca_sweep.start()
-        logger.info("SQLite Alpaca Clerk reconciliation sweep started.")
+        logger.info(
+            "Alpaca reconciliation sweep started (authority=%s).",
+            alpaca_clerk_runtime.authority_kind,
+        )
 
     # ADR-0028 Stage 2 — each visible bot gets one producer-owned status
     # snapshot before the API begins serving normal reads. The producer owns
@@ -533,28 +482,21 @@ async def lifespan(app: FastAPI):
         # Stop the Alpaca reconciliation sweep + live-lifecycle consumer first —
         # cancel their background tasks (and the consumer's socket) cleanly,
         # independent of the IBKR teardown.
-        from app.broker.alpaca.clerk import (
-            get_reconciliation_sweep,
-            set_alpaca_clerk,
-            set_reconciliation_sweep,
-        )
+        from app.broker.alpaca.clerk import set_alpaca_clerk
+        from app.broker.alpaca.clerk.active_authority import set_active_clerk_runtime
         from app.broker.alpaca.trade_updates import (
             get_trade_updates_consumer,
             set_trade_updates_consumer,
         )
-
-        alpaca_sweep = get_reconciliation_sweep()
-        if alpaca_sweep is not None:
-            await alpaca_sweep.stop()
-            set_reconciliation_sweep(None)
-        if sqlite_alpaca_sweep is not None:
-            await sqlite_alpaca_sweep.stop()
 
         alpaca_trade_updates = get_trade_updates_consumer()
         if alpaca_trade_updates is not None:
             await alpaca_trade_updates.stop()
             set_trade_updates_consumer(None)
         set_alpaca_clerk(None)
+        set_active_clerk_runtime(None)
+        if alpaca_clerk_runtime is not None:
+            await alpaca_clerk_runtime.close()
         from app.broker.alpaca.clerk.sqlite.process_repositories import (
             close_all_repositories,
         )
@@ -779,9 +721,14 @@ app.include_router(
     dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
-# SQLite Alpaca Clerk command lifecycle (#1376) — additive, pre-cutover.
-# Purely-local operator-lifecycle commands only; no broker contact yet.
-app.include_router(alpaca_clerk_sqlite.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+# Activation-selected SQLite Alpaca Clerk command and projection surface.
+# The active-authority selector fails closed instead of falling back to JSONL.
+# PROTECTED_DATA_PLANE_READ_DEPENDENCIES (not the mutating-only DEPENDENCIES
+# above): every route on this router is either a mutation or a sensitive read
+# (positions, holds, operation/order identities, recovery tokens, DB
+# identity, timeline proof refs) — the GET routes need the secret checked
+# unconditionally, like clerk_transactions.router's comparable reads.
+app.include_router(alpaca_clerk_sqlite.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # ADR 0014 — broker-activity reconciliation surface (SSE + REST backfill).
 # The router carries its own ``/api/live-instances`` prefix internally
 # (so the path is sibling to the live-instances router), keeping the

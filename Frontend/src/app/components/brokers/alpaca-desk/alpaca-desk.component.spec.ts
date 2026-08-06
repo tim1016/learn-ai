@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import { convertToParamMap, ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
@@ -107,6 +108,9 @@ function brokerService(overrides: Partial<BrokersService> = {}) {
       observed_at_ms: 1,
     }),
     getCustodyDiagnosis: vi.fn().mockResolvedValue(inSyncDiagnosis()),
+    getSqliteClerkProjection: vi.fn().mockRejectedValue(
+      new HttpErrorResponse({ status: 409 }),
+    ),
     ...overrides,
   };
 }
@@ -119,7 +123,25 @@ describe('AlpacaDeskComponent', () => {
 
     expect(screen.getByRole('heading', { name: /Alpaca/i })).toBeTruthy();
     expect(screen.getByText('Broker desk')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Create a new Alpaca order' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Create a new Alpaca order' })).toBeTruthy();
+  });
+
+  it('fails closed without a proven legacy authority and hides manual order entry', async () => {
+    await render(AlpacaDeskComponent, {
+      providers: [{
+        provide: BrokersService,
+        useValue: brokerService({
+          getSqliteClerkProjection: vi.fn().mockRejectedValue(
+            new HttpErrorResponse({ status: 503 }),
+          ),
+        }),
+      }],
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Create a new Alpaca order' })).toBeNull();
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('opens an account-scoped order ticket with the routed symbol prefilled', async () => {
@@ -198,7 +220,7 @@ describe('AlpacaDeskComponent', () => {
     });
 
     await screen.findByText('No recent transactions.');
-    fireEvent.click(screen.getByRole('button', { name: 'Create a new Alpaca order' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create a new Alpaca order' }));
     fireEvent.input(await screen.findByLabelText('Leg 1 symbol'), { target: { value: 'SPY' } });
     const quantity = screen.getByLabelText('Leg 1 quantity');
     fireEvent.input(quantity, { target: { value: '2' } });

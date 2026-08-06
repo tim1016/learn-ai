@@ -18,7 +18,10 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderSubmitFailedFacts,
     OrderSubmitUncertainFacts,
 )
-from app.broker.alpaca.clerk.sqlite.folds import FILL_QTY_EPSILON
+from app.broker.alpaca.clerk.sqlite.folds import (
+    FILL_QTY_EPSILON,
+    order_observation_advances,
+)
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -40,6 +43,7 @@ def fold_order_evidence(
     *,
     effect_operation_id: str,
     order: BrokerOrder,
+    append_stale_ack: bool = True,
 ) -> None:
     """The one gate for "what does an observed ``BrokerOrder`` mean" — a
     happy-path submit ack, a resolution's found-order case, and an EXIT's
@@ -121,7 +125,14 @@ def fold_order_evidence(
             )
         )
 
-    if ack_changed:
+    current_order = repo.order(order_ref)
+    ack_advances = order_observation_advances(
+        current_state=(current_order.broker_state if current_order is not None else None),
+        prior_source_time=(latest_ack["source_event_at_ms"] if latest_ack else None),
+        incoming_state=order.status,
+        incoming_source_time=order.updated_at_ms,
+    )
+    if ack_changed and (append_stale_ack or ack_advances):
         repo.append_transition(
             TransitionInput(
                 strategy_instance_id=effect.strategy_instance_id,

@@ -7,6 +7,7 @@ desired_state (never PAUSED).
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Literal
 
 from app.broker.alpaca.clerk.models import (
@@ -16,8 +17,19 @@ from app.broker.alpaca.clerk.models import (
     HoldState,
     ReconciliationSummary,
 )
+from app.broker.alpaca.clerk.sqlite.projection_models import (
+    ClerkProjection,
+    ProjectedCommand,
+    ProjectedOperation,
+    ProjectedOrder,
+    ProjectedPosition,
+    ProjectedReconciliation,
+    ProjectedRun,
+    ProjectionGuidance,
+    RecoveryCapability,
+)
 from app.schemas.broker_bots import BotStatusView
-from app.schemas.broker_v2_panel import MarketPulseView
+from app.schemas.broker_v2_panel import BotPanelView, MarketPulseView
 from app.schemas.live_runs import BotDutyOutcomeView
 from app.schemas.run_admission import RunAdmissionDecision, RunAdmissionFactAges
 from app.services.bot_dry_run import DryRunActivity
@@ -25,6 +37,7 @@ from app.services.broker_v2_panel.panel_projection_service import (
     build_panel,
     compute_revision,
 )
+from app.services.broker_v2_panel.sqlite_panel_adapter import adapt_sqlite_panel
 from tests.broker.v2panel.fixtures import (
     ACCT,
     SID,
@@ -184,6 +197,284 @@ def _panel(
         dry_run_activity=dry_run_activity,
         market_pulse=_MARKET_PULSE,
     )
+
+
+def test_sqlite_adapter_replaces_legacy_custody_with_fold_projection() -> None:
+    base = _panel(
+        _status(),
+        _clerk_status(),
+        [fill_entry(sid=SID, intent="legacy", ts_ms=_NOW - 1_000)],
+    )
+    command = ProjectedCommand(
+        command_id="command:enter",
+        kind="EFFECT",
+        action="ENTER",
+        state="in_progress",
+        run_id="run:1",
+        receipt_id=None,
+        created_at_ms=_NOW - 500,
+        updated_at_ms=_NOW - 400,
+    )
+    operation = ProjectedOperation(
+        effect_operation_id="effect:enter",
+        kind="ENTER",
+        state="in_progress",
+        custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=SID,
+        run_id="run:1",
+        created_at_ms=_NOW - 500,
+        updated_at_ms=_NOW - 300,
+        latest_transition_sequence=9,
+        transition_count=3,
+        terminal_receipt_id=None,
+        command=command,
+        orders=(
+            ProjectedOrder(
+                order_ref="order:enter",
+                client_order_id="order:enter",
+                broker_order_id="broker-1",
+                role="ENTRY",
+                broker_state="accepted",
+                submitted_at_ms=_NOW - 350,
+                updated_at_ms=_NOW - 300,
+            ),
+        ),
+    )
+    action = RecoveryCapability(
+        action_id="reconcile_now",
+        label="Reconcile now",
+        explanation="Compare durable custody with Alpaca.",
+        available=True,
+        unavailable_reason_code=None,
+        unavailable_reason=None,
+        scope="BOT",
+        freshness="not_required",
+        evidence=(),
+        confirmation=None,
+        next_step="Run the comparison.",
+        concurrency_token="sqlite-token",
+        execution_ref=None,
+        mutation=True,
+        primary=True,
+    )
+    projection = ClerkProjection(
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        authority_generation=4,
+        db_identity_token="db-4",
+        authority_health="healthy",
+        authority_health_reason=None,
+        control_revision=17,
+        custody_owner="ACCOUNT_CLERK",
+        runs=(
+            ProjectedRun(
+                run_id="run:1",
+                strategy_instance_id=SID,
+                lifecycle_run_id="lifecycle-1",
+                state="ACTIVE",
+                started_at_ms=_NOW - 1_000,
+                stopped_at_ms=None,
+            ),
+        ),
+        commands=(command,),
+        operations=(operation,),
+        positions=(
+            ProjectedPosition(
+                strategy_instance_id=SID,
+                symbol="SPY",
+                attributed_qty=2.0,
+                updated_at_ms=_NOW - 200,
+            ),
+        ),
+        holds=(),
+        uncertainties=(),
+        latest_reconciliation=None,
+        terminal_receipts=(),
+        guidance=ProjectionGuidance(
+            headline="Account Clerk custody is healthy",
+            explanation="SQLite has current custody truth.",
+            scope="BOT",
+            impact="Normal Clerk-governed controls remain available.",
+            custody_owner="ACCOUNT_CLERK",
+            may_create_exposure=True,
+            available_safety_actions=("Reconcile now",),
+            action_required=False,
+            next_step="No recovery action is required.",
+        ),
+        recovery_actions=(action,),
+        generated_at_ms=_NOW,
+    )
+
+    adapted = adapt_sqlite_panel(base, projection)
+
+    assert adapted.revision == 17
+    assert adapted.exposure == {"SPY": 2.0}
+    assert adapted.journal_tail_ref.endswith(f"/{SID}/timeline")
+    assert [item.action_id for item in adapted.actions] == ["reconcile_now"]
+    assert adapted.actions[0].concurrency_token == "sqlite-token"
+    assert adapted.rail.transaction_ref == "effect:enter"
+    assert adapted.working_orders[0].order_ref == "order:enter"
+    assert adapted.working_orders[0].filled_quantity is None
+    assert adapted.recent_fills == []
+
+
+def _rail_projection(
+    *,
+    orders: tuple[ProjectedOrder, ...],
+    operation_state: str = "in_progress",
+    terminal_receipt_id: str | None = None,
+    latest_reconciliation: ProjectedReconciliation | None = None,
+) -> ClerkProjection:
+    """A minimal single-operation projection for `_transaction_rail` station tests."""
+    command = ProjectedCommand(
+        command_id="command:enter",
+        kind="EFFECT",
+        action="ENTER",
+        state=operation_state,
+        run_id="run:1",
+        receipt_id=None,
+        created_at_ms=_NOW - 500,
+        updated_at_ms=_NOW - 400,
+    )
+    operation = ProjectedOperation(
+        effect_operation_id="effect:enter",
+        kind="ENTER",
+        state=operation_state,
+        custody_owner="ACCOUNT_CLERK",
+        strategy_instance_id=SID,
+        run_id="run:1",
+        created_at_ms=_NOW - 500,
+        updated_at_ms=_NOW - 300,
+        latest_transition_sequence=9,
+        transition_count=3,
+        terminal_receipt_id=terminal_receipt_id,
+        command=command,
+        orders=orders,
+    )
+    return ClerkProjection(
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        authority_generation=4,
+        db_identity_token="db-4",
+        authority_health="healthy",
+        authority_health_reason=None,
+        control_revision=17,
+        custody_owner="ACCOUNT_CLERK",
+        runs=(
+            ProjectedRun(
+                run_id="run:1",
+                strategy_instance_id=SID,
+                lifecycle_run_id="lifecycle-1",
+                state="ACTIVE",
+                started_at_ms=_NOW - 1_000,
+                stopped_at_ms=None,
+            ),
+        ),
+        commands=(command,),
+        operations=(operation,),
+        positions=(),
+        holds=(),
+        uncertainties=(),
+        latest_reconciliation=latest_reconciliation,
+        terminal_receipts=(),
+        guidance=ProjectionGuidance(
+            headline="Account Clerk custody is healthy",
+            explanation="SQLite has current custody truth.",
+            scope="BOT",
+            impact="Normal Clerk-governed controls remain available.",
+            custody_owner="ACCOUNT_CLERK",
+            may_create_exposure=True,
+            available_safety_actions=(),
+            action_required=False,
+            next_step="No recovery action is required.",
+        ),
+        recovery_actions=(),
+        generated_at_ms=_NOW,
+    )
+
+
+def _station_states(adapted: BotPanelView) -> dict[str, str]:
+    return {station.station_id: station.state for station in adapted.rail.stations}
+
+
+def test_reconciled_station_requires_resolved_success_outcome() -> None:
+    """#1396 P1: a matching reconciliation row must not close the custody
+    chain unless its outcome is RESOLVED_SUCCESS — STILL_UNKNOWN and
+    RESOLVED_FAILURE attempts must not present as satisfied."""
+    base = _panel(_status(), _clerk_status(), [])
+    orders = (
+        ProjectedOrder(
+            order_ref="order:enter",
+            client_order_id="order:enter",
+            broker_order_id="broker-1",
+            role="ENTRY",
+            broker_state="accepted",
+            submitted_at_ms=_NOW - 350,
+            updated_at_ms=_NOW - 300,
+        ),
+    )
+    unresolved_reconciliation = ProjectedReconciliation(
+        reconciliation_id="recon-1",
+        effect_operation_id="effect:enter",
+        order_ref="order:enter",
+        trigger="AUTOMATIC",
+        attempted_at_ms=_NOW - 100,
+        outcome="STILL_UNKNOWN",
+        evidence_age_ms=100,
+        evidence_refs=(),
+    )
+    unresolved = adapt_sqlite_panel(
+        base,
+        _rail_projection(orders=orders, latest_reconciliation=unresolved_reconciliation),
+    )
+    assert _station_states(unresolved)["RECONCILED"] != "satisfied"
+
+    resolved_reconciliation = replace(unresolved_reconciliation, outcome="RESOLVED_SUCCESS")
+    resolved = adapt_sqlite_panel(
+        base,
+        _rail_projection(orders=orders, latest_reconciliation=resolved_reconciliation),
+    )
+    assert _station_states(resolved)["RECONCILED"] == "satisfied"
+
+
+def test_fill_station_requires_actual_fill_not_a_terminal_broker_state() -> None:
+    """#1396 P2: canceled/expired/rejected orders and failed operations
+    definitively received zero fill and must not satisfy FILL — only an
+    actual `filled`/`partially_filled` broker state does."""
+    base = _panel(_status(), _clerk_status(), [])
+    canceled_orders = (
+        ProjectedOrder(
+            order_ref="order:enter",
+            client_order_id="order:enter",
+            broker_order_id="broker-1",
+            role="ENTRY",
+            broker_state="canceled",
+            submitted_at_ms=_NOW - 350,
+            updated_at_ms=_NOW - 300,
+        ),
+    )
+    canceled = adapt_sqlite_panel(
+        base,
+        _rail_projection(orders=canceled_orders, operation_state="failed"),
+    )
+    assert _station_states(canceled)["FILL"] != "satisfied"
+
+    filled_orders = (
+        ProjectedOrder(
+            order_ref="order:enter",
+            client_order_id="order:enter",
+            broker_order_id="broker-1",
+            role="ENTRY",
+            broker_state="filled",
+            submitted_at_ms=_NOW - 350,
+            updated_at_ms=_NOW - 300,
+        ),
+    )
+    filled = adapt_sqlite_panel(
+        base,
+        _rail_projection(orders=filled_orders, operation_state="succeeded"),
+    )
+    assert _station_states(filled)["FILL"] == "satisfied"
 
 
 def test_panel_composes_cards_rail_and_actions() -> None:

@@ -76,6 +76,18 @@ from app.services.broker_v2_panel.paper_deploy_service import (
     build_alpaca_paper_deploy_view,
 )
 from app.services.broker_v2_panel.presented_actions import build_roster_action
+from app.services.broker_v2_panel.sqlite_panel_adapter import (
+    adapt_sqlite_catalog,
+    adapt_sqlite_panel,
+)
+from app.services.broker_v2_panel.sqlite_panel_source import (
+    SqlitePanelBotNotFound,
+    execute_sqlite_panel_action,
+    read_sqlite_bot_projection,
+    read_sqlite_catalog_projections,
+    read_sqlite_clerk_status,
+    sqlite_authority_active,
+)
 from app.services.live_chart_window import (
     ChartWindowError,
     ChartWindowResult,
@@ -184,6 +196,8 @@ async def validate_account_scope(broker: str, account_id: str, sid: str) -> None
 
 
 def _read_order_journal(broker: str, account_id: str) -> list[OrderJournalEntry]:
+    if sqlite_authority_active(broker):
+        return []
     journal = OrderJournal(account_id=account_id, root=get_clerk_settings().dir)
     owner = get_or_create_owner(account_id, broker)
     return owner.refresh_journal(journal)
@@ -244,6 +258,12 @@ def _bot_process_fact(broker: str, sid: str) -> BotProcessFact:
 
 
 async def _clerk_status() -> ClerkStatus:
+    try:
+        sqlite_status = await read_sqlite_clerk_status()
+    except (RuntimeError, ValueError) as exc:
+        raise PanelUnavailableError(str(exc)) from exc
+    if sqlite_status is not None:
+        return sqlite_status
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise PanelUnavailableError(
@@ -471,6 +491,13 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     owner = get_or_create_owner(resolved, broker)
     owner.sync(entries, sids, decisions=decisions)
     rows = owner.snapshot_catalog(statuses)
+    sqlite_projections = await read_sqlite_catalog_projections(
+        broker,
+        resolved,
+        sids,
+    )
+    if sqlite_projections is not None:
+        return adapt_sqlite_catalog(rows, sqlite_projections)
 
     now_ms = now_ms_utc()
     try:
@@ -551,14 +578,34 @@ async def _get_panel_with_entries(
         # Preview can reconcile and advance Clerk evidence. Read all projection
         # inputs afterwards so this response is one post-admission evidence cut.
         status = _bot_status(broker, sid)
+    try:
+        projection = await read_sqlite_bot_projection(broker, resolved, sid)
+    except SqlitePanelBotNotFound as exc:
+        raise UnknownBotError(str(exc)) from exc
     entries = _read_order_journal(broker, resolved)
     clerk_status = await _clerk_status()
     decisions = _recent_decisions(resolved, sid)
     decision = decisions[-1] if decisions else None
 
-    owner = get_or_create_owner(resolved, broker)
-    owner.sync(entries, [sid], decisions={sid: decision})
-    rollup = owner.get_rollup(sid)
+    if projection is None:
+        owner = get_or_create_owner(resolved, broker)
+        owner.sync(entries, [sid], decisions={sid: decision})
+        rollup = owner.get_rollup(sid)
+        exposure = dict(rollup.exposure)
+        fills_today = rollup.fills_today
+        realized_pnl_today = rollup.realized_pnl_today
+        open_pnl = rollup.open_pnl
+        last_bar_at_ms = rollup.last_activity_at_ms
+    else:
+        exposure = {
+            position.symbol: position.attributed_qty
+            for position in projection.positions
+            if abs(position.attributed_qty) > 0
+        }
+        fills_today = None
+        realized_pnl_today = None
+        open_pnl = None
+        last_bar_at_ms = None
 
     profile = panel_profile_for(broker)
     flatten_supported = profile.flatten_supported if profile is not None else False
@@ -571,12 +618,12 @@ async def _get_panel_with_entries(
         clerk_status,
         entries,
         account_id=resolved,
-        exposure=dict(rollup.exposure),
-        fills_today=rollup.fills_today,
-        realized_pnl_today=rollup.realized_pnl_today,
-        open_pnl=rollup.open_pnl,
+        exposure=exposure,
+        fills_today=fills_today,
+        realized_pnl_today=realized_pnl_today,
+        open_pnl=open_pnl,
         latest_decision=decision,
-        last_bar_at_ms=rollup.last_activity_at_ms,
+        last_bar_at_ms=last_bar_at_ms,
         journal_tail_ref=f"/api/brokers/{broker}/accounts/{resolved}/bots/{sid}/decisions",
         journal_tail_seq=(decision.seq if decision is not None else None),
         flatten_supported=flatten_supported,
@@ -592,6 +639,8 @@ async def _get_panel_with_entries(
             bot_running=status.running,
         ),
     )
+    if projection is not None:
+        panel = adapt_sqlite_panel(panel, projection)
     return panel, entries
 
 
@@ -913,6 +962,20 @@ async def run_action(
                 else "Refresh the panel and inspect the operation's readiness check."
             ),
         )
+    try:
+        sqlite_result = await execute_sqlite_panel_action(
+            broker,
+            account_id,
+            sid,
+            request=request,
+            panel=panel,
+            action=action,
+            availability_error=availability_error,
+        )
+    except SqlitePanelBotNotFound as exc:
+        raise UnknownBotError(str(exc)) from exc
+    if sqlite_result is not None:
+        return sqlite_result
     registry = get_bot_task_registry()
     if registry is None:
         raise PanelUnavailableError("The bot runner is not available.")

@@ -70,6 +70,46 @@ async def resolve_exit(
         repo.release_operation_claim(effect_operation_id=effect_operation_id, token=claim.token)
 
 
+async def cancel_and_prove_owned_entry(
+    repo: ClerkSqliteRepository,
+    *,
+    entry_order_ref: str,
+    trade: BrokerTradePort,
+) -> OrderResource:
+    """Cancel one exact owned ENTRY under its current durable custodian."""
+    entry = repo.order(entry_order_ref)
+    if entry is None or entry.role != "ENTRY":
+        raise ValueError(f"{entry_order_ref!r} is not an owned ENTRY order")
+    active_exit = repo.active_exit_for_order(entry_order_ref)
+    effect_operation_id = (
+        active_exit.effect_operation_id
+        if active_exit is not None
+        else entry.effect_operation_id
+    )
+    claim = repo.claim_before_broker_contact(effect_operation_id)
+    broker = ClaimedBrokerIO(
+        repo=repo,
+        effect_operation_id=effect_operation_id,
+        claim_token=claim.token,
+        trade=trade,
+    )
+    try:
+        await _cancel_and_prove_entry(
+            repo,
+            effect_operation_id=effect_operation_id,
+            entry=entry,
+            broker=broker,
+        )
+    finally:
+        repo.release_operation_claim(
+            effect_operation_id=effect_operation_id,
+            token=claim.token,
+        )
+    refreshed = repo.order(entry_order_ref)
+    assert refreshed is not None
+    return refreshed
+
+
 async def _resolve_claimed(
     repo: ClerkSqliteRepository,
     *,
@@ -546,4 +586,4 @@ def _snapshot(repo: ClerkSqliteRepository, effect_operation_id: str) -> ExitSubm
     )
 
 
-__all__ = ["resolve_exit"]
+__all__ = ["cancel_and_prove_owned_entry", "resolve_exit"]

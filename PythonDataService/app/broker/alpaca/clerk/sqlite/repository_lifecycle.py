@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from app.broker.alpaca.clerk.sqlite import schema, writes
 from app.broker.alpaca.clerk.sqlite.folds import FoldRegistry
 from app.broker.alpaca.clerk.sqlite.hashchain import verify_chain
-from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile
+from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, MirrorIdentity
 from app.broker.alpaca.clerk.sqlite.registry import (
     EstablishedAccountsRegistry,
     EstablishedGeneration,
@@ -97,13 +97,26 @@ def initialize_repository(
         conn.close()
         raise
 
+    mirror = MirrorFile(
+        mirror_path,
+        expected_identity=MirrorIdentity(
+            account_id=account_id,
+            authority_generation=1,
+            db_identity_token=db_identity_token,
+        ),
+    )
+    try:
+        mirror.initialize_identity()
+    except Exception:
+        conn.close()
+        raise
     return repository_type(
         account_id=account_id,
         account_dir=account_dir,
         db_path=db_path,
         mirror_path=mirror_path,
         conn=conn,
-        mirror=MirrorFile(mirror_path),
+        mirror=mirror,
         clock=clock,
         fold_registry=fold_registry,
         lease_owner=owner,
@@ -180,7 +193,16 @@ def _validate_control_identity(
             f"{db_path} embeds account_id {control_row['account_id']!r}, "
             f"requested {account_id!r}"
         )
-    if control_row["schema_version"] != schema.SCHEMA_VERSION:
+    if control_row["schema_version"] < schema.SCHEMA_VERSION:
+        try:
+            schema.migrate_schema(conn, from_version=control_row["schema_version"])
+        except ValueError as exc:
+            conn.close()
+            raise SchemaVersionMismatch(
+                f"{db_path} schema_version={control_row['schema_version']}, "
+                f"expected {schema.SCHEMA_VERSION}: {exc}"
+            ) from exc
+    elif control_row["schema_version"] > schema.SCHEMA_VERSION:
         conn.close()
         raise SchemaVersionMismatch(
             f"{db_path} schema_version={control_row['schema_version']}, "
@@ -271,7 +293,14 @@ def open_repository(
     )
     chain_payloads = _verified_chain_payloads(conn, db_path)
 
-    mirror = MirrorFile(mirror_path)
+    mirror = MirrorFile(
+        mirror_path,
+        expected_identity=MirrorIdentity(
+            account_id=account_id,
+            authority_generation=control_row["authority_generation"],
+            db_identity_token=control_row["db_identity_token"],
+        ),
+    )
     try:
         mirror.reconcile(chain_payloads, clock=clock)
     except Exception:
