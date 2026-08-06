@@ -1,33 +1,30 @@
 <section class="binding-strip" aria-labelledby="deploy-binding-title">
-  <header>
-    <span>Bot binding</span>
-    <h2 id="deploy-binding-title">Name the bot and bind its strategy</h2>
-  </header>
+  <h2 id="deploy-binding-title">Bot binding</h2>
 
-  <div class="binding-strip__rail">
-    <label class="binding-node binding-node--identity">
-      <span>Bot name</span>
+  <div class="binding-strip__fields grid grid-cols-2 gap-3">
+    <label class="grid content-start items-start gap-1 min-w-0">
+      <span class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Bot name</span>
       <input
+        pInputText
         type="text"
         [value]="instanceId()"
         placeholder="alpaca-spy-01"
         autocomplete="off"
         spellcheck="false"
+        class="w-full"
         [attr.aria-invalid]="instanceIdError() !== null"
         (input)="changeInstanceId($event)"
         (blur)="instanceIdBlur.emit()"
       />
-      @if (instanceIdError(); as error) { <em role="alert">{{ error }}</em> }
+      @if (instanceIdError(); as error) { <em role="alert" class="text-[length:var(--fs-xs)] not-italic text-[var(--bear)]">{{ error }}</em> }
     </label>
 
-    <span class="binding-arrow" aria-hidden="true">→</span>
-
-    <div class="binding-node binding-node--strategy">
+    <div class="grid content-start items-start gap-1 min-w-0">
       @if (strategies().length === 1) {
-        <span>Validated strategy</span>
+        <span class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Validated strategy</span>
         <strong>{{ selectedStrategy()?.label }}</strong>
       } @else {
-        <label for="deploy-strategy">Validated strategy</label>
+        <label for="deploy-strategy" class="text-[length:var(--fs-xs)] font-semibold uppercase tracking-[var(--ls-caps)] text-[var(--text-subtle)]">Validated strategy</label>
         <select id="deploy-strategy" (change)="changeStrategy($event)">
           @for (strategy of strategies(); track strategy.strategy_key) {
             <option
@@ -37,23 +34,23 @@
           }
         </select>
       }
-      <div class="binding-node__trust">
-        <span>✓ Validated</span>
+      <div class="flex flex-wrap items-center justify-between gap-2 min-h-6">
+        <span class="text-[length:var(--fs-xs)] font-bold text-[var(--bull)]">✓ Validated</span>
         @if (selectedStrategy(); as selected) {
-          <a routerLink="/strategy-validation" [queryParams]="{ strategy: selected.strategy_key }">
-            View validation
-          </a>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="info-tip"
+              [pTooltip]="selected.explanation"
+              tooltipPosition="top"
+              [attr.aria-label]="'About ' + selected.label + ': ' + selected.explanation"
+            >i</button>
+            <a routerLink="/strategy-validation" [queryParams]="{ strategy: selected.strategy_key }" class="text-[length:var(--fs-xs)] text-[var(--accent-text)]">
+              View validation
+            </a>
+          </div>
         }
       </div>
-      <small>{{ selectedStrategy()?.explanation ?? 'No validated strategy is available.' }}</small>
-    </div>
-
-    <span class="binding-arrow" aria-hidden="true">→</span>
-
-    <div class="binding-node binding-node--target">
-      <span>Broker target</span>
-      <strong>{{ accountLabel() }}</strong>
-      <small>{{ executionLabel() }} execution</small>
     </div>
   </div>
 </section>
