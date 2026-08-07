@@ -14,9 +14,11 @@ from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     set_active_clerk_runtime,
 )
+from app.broker.alpaca.clerk.models import ChannelHealth
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
+from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.config import settings
 from app.routers.brokers import router
 from app.security.data_plane_control import CONTROL_SECRET_HEADER
@@ -61,6 +63,20 @@ def sqlite_desk(tmp_path: Path):
         repo=repo,
         read=broker,  # type: ignore[arg-type]
         trade=broker,  # type: ignore[arg-type]
+        stream_health=StreamHealthGate(
+            market_data=lambda: ChannelHealth(
+                stream="market_data",
+                healthy=True,
+                reason="",
+                observed_at_ms=10,
+            ),
+            execution=lambda: ChannelHealth(
+                stream="execution",
+                healthy=True,
+                reason="",
+                observed_at_ms=11,
+            ),
+        ),
     )
     set_active_clerk_runtime(
         ActiveClerkRuntime(authority_kind="sqlite", clerk=facade)
@@ -87,6 +103,20 @@ async def test_existing_reads_project_active_sqlite_authority(sqlite_desk: FastA
     assert status.status_code == 200
     assert status.json()["authority_kind"] == "sqlite"
     assert status.json()["generic_hold_clear_available"] is False
+    assert status.json()["channel_healths"] == [
+        {
+            "stream": "market_data",
+            "healthy": True,
+            "reason": "",
+            "observed_at_ms": 10,
+        },
+        {
+            "stream": "execution",
+            "healthy": True,
+            "reason": "",
+            "observed_at_ms": 11,
+        },
+    ]
     assert diagnosis.status_code == 200
     assert diagnosis.json()["authority_kind"] == "sqlite"
     assert diagnosis.json()["in_sync"] is False

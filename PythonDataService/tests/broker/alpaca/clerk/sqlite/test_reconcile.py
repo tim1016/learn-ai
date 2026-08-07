@@ -1051,3 +1051,46 @@ async def test_sweep_backoff_is_capped_and_resets_after_success(
     await sweep.run()
 
     assert sleep_calls == [20.0, 25.0, 10.0]
+
+
+async def test_started_sweep_renews_the_execution_lease_while_idle(tmp_path: Path) -> None:
+    now = {"ms": 1_700_000_000_000}
+    clerk_repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=lambda: now["ms"],
+        lease_ttl_ms=90,
+    )
+    heartbeat_renewed = asyncio.Event()
+    hold_heartbeat = asyncio.Event()
+    heartbeat_sleeps = 0
+
+    async def controlled_heartbeat_sleep(_: float) -> None:
+        nonlocal heartbeat_sleeps
+        heartbeat_sleeps += 1
+        if heartbeat_sleeps == 1:
+            now["ms"] += 30
+            return
+        heartbeat_renewed.set()
+        await hold_heartbeat.wait()
+
+    class IdleSweep(ReconciliationSweep):
+        async def run(self) -> None:
+            await hold_heartbeat.wait()
+
+    sweep = IdleSweep(
+        repo=clerk_repo,
+        read=_FakeRead(),
+        trade=_FakeTrade(),
+        lease_sleep=controlled_heartbeat_sleep,
+    )
+    try:
+        sweep.start()
+        await asyncio.wait_for(heartbeat_renewed.wait(), timeout=1.0)
+        lease = clerk_repo._conn.execute(
+            "SELECT execution_lease_expires_at_ms FROM control_meta WHERE id = 1"
+        ).fetchone()
+        assert lease["execution_lease_expires_at_ms"] == now["ms"] + 90
+    finally:
+        await sweep.stop()
+        clerk_repo.close()

@@ -184,6 +184,16 @@ describe('PanelHeaderComponent', () => {
     expect(screen.getByRole('button', { name: label })).toBeTruthy();
   });
 
+  it('uses the SQLite stop-decisions action for an active SQLite run', async () => {
+    const value = panel();
+    await renderHeader(panel({
+      health: { ...value.health, running: true, desired_state: 'RUNNING' },
+      actions: [action('stop_bot_decisions', 'Stop bot decisions')],
+    }));
+
+    expect(screen.getByRole('button', { name: 'Stop bot decisions' })).toBeTruthy();
+  });
+
   it('disables the lifecycle action and exposes pending state while a command is running', async () => {
     const value = panel();
     await renderHeader(panel({

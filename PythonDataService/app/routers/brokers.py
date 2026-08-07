@@ -329,7 +329,10 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
             strategy_instance_id=None,
         )
         assert projection is not None
-        return sqlite_clerk_status(projection)
+        return sqlite_clerk_status(
+            projection,
+            channel_healths=sqlite.channel_health_snapshot(),
+        )
     clerk = _require_trade_clerk(broker)
     try:
         return await clerk.status()

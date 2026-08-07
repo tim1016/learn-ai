@@ -10,6 +10,7 @@ import {
 import { RouterLink } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import type {
+  ActionId,
   BotPanelView,
   PanelAction,
   PanelActionTrigger,
@@ -23,6 +24,11 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 import { MarketDataService } from '../../../../services/market-data.service';
 import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
+
+const RUNNING_STOP_ACTION_IDS: readonly ActionId[] = [
+  'stop',
+  'stop_bot_decisions',
+];
 
 @Component({
   selector: 'app-panel-header',
@@ -87,12 +93,19 @@ export class PanelHeaderComponent {
 
   protected readonly primaryAction = computed<PanelAction | null>(() => {
     const health = this.panel().health;
-    const actionId = !health.running
-      ? 'resume'
+    const actionIds: readonly ActionId[] = !health.running
+      ? ['resume']
       : health.desired_state === 'PAUSED'
-        ? 'continue'
-        : 'stop';
-    return this.panel().actions.find((action) => action.action_id === actionId) ?? null;
+        ? ['continue']
+        : RUNNING_STOP_ACTION_IDS;
+    return this.panel().actions.find((action) => actionIds.includes(action.action_id)) ?? null;
+  });
+
+  protected readonly primaryActionTone = computed(() => {
+    const action = this.primaryAction();
+    return action !== null && RUNNING_STOP_ACTION_IDS.includes(action.action_id)
+      ? 'danger'
+      : 'primary';
   });
 
   protected formatAge(ageMs: number | null): string {

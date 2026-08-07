@@ -1917,6 +1917,39 @@ async def test_stop_commits_clerk_stop_before_task_cancellation(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
+    tmp_path: Path,
+) -> None:
+    clerk = _OrderingClerk(_custody_proof(exposure={}))
+    feed = _StopOrderingFeed(clerk)
+    registry = _registry(
+        tmp_path,
+        feed,
+        start_custody_guard=clerk.start_admission_snapshot,
+    )
+    set_alpaca_clerk(clerk)
+    try:
+        await registry.deploy(
+            broker="alpaca",
+            strategy_instance_id=_SID,
+            symbol="SPY",
+            mode="trade",
+        )
+
+        await registry.stop_after_durable_clerk_stop(
+            "alpaca",
+            _SID,
+            updated_by="operator_recovery",
+            reason="sqlite_recovery_stop_bot_decisions",
+        )
+
+        assert clerk.stopped_runs == []
+        assert registry.status("alpaca", _SID).running is False
+    finally:
+        set_alpaca_clerk(None)
+
+
+@pytest.mark.asyncio
 async def test_failed_clerk_stop_closes_run_gate_without_cancelling_task(
     tmp_path: Path,
 ) -> None:

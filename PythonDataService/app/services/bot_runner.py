@@ -564,6 +564,31 @@ class BotTaskRegistry:
                 strategy_instance_id,
                 updated_by=updated_by,
                 reason=reason,
+                clerk_stop_already_committed=False,
+            )
+
+    async def stop_after_durable_clerk_stop(
+        self,
+        broker: str,
+        strategy_instance_id: str,
+        *,
+        updated_by: str,
+        reason: str | None = None,
+    ) -> BotStatusView:
+        """Cancel and reap after the SQLite authority already committed STOP.
+
+        Recovery actions commit the lifecycle transition before entering the
+        process registry. Reusing :meth:`stop` would author the same natural
+        command key again with registry-owned prose, turning a successful
+        durable stop into a payload conflict before task cancellation.
+        """
+        async with self._operation_lock(strategy_instance_id):
+            return await self._stop_locked(
+                broker,
+                strategy_instance_id,
+                updated_by=updated_by,
+                reason=reason,
+                clerk_stop_already_committed=True,
             )
 
     async def pause(
@@ -634,6 +659,7 @@ class BotTaskRegistry:
         *,
         updated_by: str,
         reason: str | None,
+        clerk_stop_already_committed: bool,
     ) -> BotStatusView:
         """Serialized STOP implementation with terminal Clerk custody proof."""
         self._confined_instance_dir(strategy_instance_id)
@@ -658,19 +684,20 @@ class BotTaskRegistry:
             reason=reason or "operator_stop",
         )
         managed.run_gate.clear()
-        try:
-            await commit_stop_before_task_cancel(
-                managed.binding,
-                reason=reason or "operator_stop",
-            )
-        except ActiveClerkUnavailableError as exc:
-            raise RunAdmissionRefusedError(
-                str(exc),
-                detail=(
-                    "The durable process STOP is recorded, but broker custody "
-                    "must be restored before the task can be terminated safely."
-                ),
-            ) from exc
+        if not clerk_stop_already_committed:
+            try:
+                await commit_stop_before_task_cancel(
+                    managed.binding,
+                    reason=reason or "operator_stop",
+                )
+            except ActiveClerkUnavailableError as exc:
+                raise RunAdmissionRefusedError(
+                    str(exc),
+                    detail=(
+                        "The durable process STOP is recorded, but broker custody "
+                        "must be restored before the task can be terminated safely."
+                    ),
+                ) from exc
         # Stop strategy evaluation before any network-bound custody work. The
         # provisional terminal is replaced under this instance's operation lock
         # once the Clerk returns a fresh proof.

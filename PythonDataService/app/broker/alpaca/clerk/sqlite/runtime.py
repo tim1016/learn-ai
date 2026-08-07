@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
+    ChannelHealth,
     ClerkCustodySnapshot,
     CustodyCountFact,
     CustodyExposureFact,
@@ -146,6 +147,12 @@ class SqliteAlpacaClerkFacade:
     @property
     def intake(self) -> ReentrantAsyncLock:
         return self._intake
+
+    def channel_health_snapshot(self) -> tuple[ChannelHealth, ChannelHealth] | None:
+        """Expose the exact submission-gate facts to retained status surfaces."""
+        if self._stream_health is None:
+            return None
+        return self._stream_health.snapshot()
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         """Durably register immutable strategy + run before order capability."""

@@ -1,7 +1,7 @@
 # ADR 0035: Alpaca Account Clerk — event-sourced SQLite authority (append-only log + folded state), no Postgres in scope
 
 - **Date:** 2026-08-04
-- **Status:** Proposed (implementation and qualification evidence exist; human acceptance and account activation remain in #1383)
+- **Status:** Proposed (Alpaca paper generation 1 is active; supervised multi-session qualification and human acceptance remain in #1383)
 - **Context:** Alpaca Account Clerk control-plane; the SQLite control-plane PRD
   (`docs/prds/alpaca-account-clerk-sqlite-control-plane.md`); an architecture
   grilling session on 2026-08-04.
@@ -11,11 +11,14 @@
 
 ## Context
 
-> **Implementation note — 2026-08-06:** issue #1395 completed the activation-gated
+> **Cutover note — 2026-08-06:** issue #1395 completed the activation-gated
 > runtime, operator recovery/cutover tooling, adversarial campaign, and 1M-row
-> qualification artifacts. This does not activate an account or accept this ADR.
-> The separate human cutover task #1383 owns that decision; until then, accounts
-> without a valid activation fence continue to use the legacy JSONL Clerk.
+> qualification artifacts. Alpaca paper account generation 1 was then activated
+> under #1383; the phase 1 receipt is recorded in
+> `docs/audits/alpaca-sqlite-clerk-phase-1-cutover-2026-08-06.md`. This activation
+> does not accept the ADR: supervised multi-session paper qualification remains.
+> Accounts without a valid activation fence continue to use the legacy JSONL
+> Clerk.
 
 The Alpaca Account Clerk today (`PythonDataService/app/broker/alpaca/clerk/`,
 ~6,745 lines) is an in-process async service whose durable authority is two

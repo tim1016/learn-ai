@@ -183,6 +183,11 @@ class ClerkSqliteRepository:
     def clock(self) -> Clock:
         return self._clock
 
+    @property
+    def lease_ttl_ms(self) -> int:
+        """Return the configured execution-lease lifetime for heartbeats."""
+        return self._lease_ttl_ms
+
     def close(self) -> None:
         """Release the execution lease and close the connection."""
         self._conn.execute(
@@ -276,6 +281,17 @@ class ClerkSqliteRepository:
                 f"account {self._account_id!r} execution lease was lost or expired; "
                 "this handle can no longer write"
             )
+
+    def renew_execution_lease(self) -> None:
+        """Keep an idle live writer's lease current without mutating custody.
+
+        The same write coordinator used by transitions prevents a heartbeat
+        from sharing this connection with another mutating call. Ownership
+        and expiry still use the strict compare-and-swap check above, so a
+        stale handle cannot resurrect itself after missing its deadline.
+        """
+        with self._write_lock:
+            self._renew_execution_lease()
 
     def _assert_not_poisoned(self) -> None:
         if self._poisoned:

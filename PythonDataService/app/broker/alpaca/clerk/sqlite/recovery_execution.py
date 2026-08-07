@@ -184,7 +184,7 @@ async def _quiesce_bot_process(strategy_instance_id: str, *, reason: str | None)
     if registry is None:
         return
     try:
-        await registry.stop(
+        await registry.stop_after_durable_clerk_stop(
             "alpaca",
             strategy_instance_id,
             updated_by="operator_recovery",

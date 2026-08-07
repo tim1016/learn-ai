@@ -940,10 +940,12 @@ The execution lease acquired at open (§2, `control_meta.execution_lease_owner`
 + `execution_lease_expires_at_ms`) is **not** a one-time acquisition — a lease
 taken once at open and never revisited is not a live-process fence, only a
 "who opened this last" record (open-pr-review-2026-08-05.md P1 "Lease is
-never renewed"). The repository renews and verifies the lease before every
-mutating call (every `commit_first_transition`/`append_transition`, every
-operation claim); an owner whose lease has expired or whose token no longer
-matches loses write authority immediately and cannot silently reacquire it.
+never renewed"). The active runtime targets a lease renewal every one-third
+of the TTL on an independent heartbeat, and the repository also renews and
+verifies it before every mutating call (every
+`commit_first_transition`/`append_transition`, every operation claim); an
+owner whose lease has expired or whose token no longer matches loses write
+authority immediately and cannot silently reacquire it.
 The lease owner is a per-process random token (not a bare PID, which the OS
 can recycle onto an unrelated later process), so the same PID appearing again
 is never mistaken for the same live process.

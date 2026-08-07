@@ -353,7 +353,7 @@ async def test_presented_stop_quiesces_a_running_bot_task(api: FastAPI) -> None:
         def __init__(self) -> None:
             self.stop_calls: list[tuple[str, str]] = []
 
-        async def stop(
+        async def stop_after_durable_clerk_stop(
             self,
             broker: str,
             strategy_instance_id: str,
