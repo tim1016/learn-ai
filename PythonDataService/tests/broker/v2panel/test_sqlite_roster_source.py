@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -87,6 +89,45 @@ async def test_catalog_does_not_scan_runner_bindings_after_sqlite_activation(
     result = await panel_data_source.get_catalog("alpaca", "paper-account")
 
     assert [row.strategy_instance_id for row in result] == ["active-spy", "retired-qqq"]
+
+
+@pytest.mark.asyncio
+async def test_activated_catalog_latency_is_independent_of_large_legacy_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_root = tmp_path / "live_state"
+    legacy_root.mkdir()
+    # Eight times the production cutover's disposable roster, large enough to
+    # catch an accidental directory walk without making temp-tree teardown the
+    # dominant cost of this regression.
+    for index in range(200):
+        (legacy_root / f"disposable-{index:05d}").mkdir()
+
+    def scan_large_legacy_set(_broker: str):
+        return list(legacy_root.iterdir())
+
+    monkeypatch.setattr(panel_data_source, "_validate_account", _resolved_account)
+    monkeypatch.setattr(
+        panel_data_source,
+        "read_sqlite_roster_statuses",
+        sqlite_panel_source.read_sqlite_roster_statuses,
+    )
+    monkeypatch.setattr(panel_data_source, "_bot_statuses", scan_large_legacy_set)
+    monkeypatch.setattr(panel_data_source, "read_sqlite_catalog_projections", _empty_projections)
+    monkeypatch.setattr(
+        sqlite_panel_source,
+        "active_sqlite_facade",
+        lambda _broker: SimpleNamespace(account_id="paper-account", repository=_Repository()),
+    )
+
+    started = time.perf_counter()
+    for _ in range(20):
+        result = await panel_data_source.get_catalog("alpaca", "paper-account")
+    elapsed_ms = (time.perf_counter() - started) * 1_000
+
+    assert [row.strategy_instance_id for row in result] == ["active-spy", "retired-qqq"]
+    assert elapsed_ms < 75.0
 
 
 async def _resolved_account(_broker: str, account_id: str) -> str:

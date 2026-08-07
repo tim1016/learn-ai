@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
+from app.broker.alpaca.clerk.sqlite.catalog_quarantine import CatalogQuarantineRefused
 from app.broker.alpaca.clerk.sqlite.cutover import CutoverRefused
 from scripts.manage_alpaca_sqlite_clerk import (
     _read_cutover_evidence,
@@ -94,6 +95,58 @@ def test_main_plan_and_apply_require_the_exact_confirmation_token(tmp_path: Path
     ) == 0
     assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(account_id) is not None
     assert not (account_dir / "order_journal.jsonl").exists()
+
+    disposable = write_stopped_runner_bot(
+        runner_root,
+        account_id=account_id,
+        strategy_instance_id="disposable-after-activation",
+    )
+    catalog_plan_path = tmp_path / "catalog-quarantine-plan.json"
+    assert recovery_cli(
+        [
+            *common,
+            "catalog-quarantine-plan",
+            "--runner-artifacts-root",
+            str(runner_root),
+            "--output",
+            str(catalog_plan_path),
+            "--max-candidates",
+            "2",
+            "--max-total-bytes",
+            "1000000",
+        ]
+    ) == 0
+    catalog_token = json.loads(catalog_plan_path.read_text(encoding="utf-8"))[
+        "confirmation_token"
+    ]
+    with pytest.raises(CatalogQuarantineRefused, match="confirmation token"):
+        recovery_cli(
+            [
+                *common,
+                "catalog-quarantine-apply",
+                "--runner-artifacts-root",
+                str(runner_root),
+                "--plan",
+                str(catalog_plan_path),
+                "--confirmation-token",
+                "wrong-token",
+            ]
+        )
+    assert disposable.is_dir()
+
+    assert recovery_cli(
+        [
+            *common,
+            "catalog-quarantine-apply",
+            "--runner-artifacts-root",
+            str(runner_root),
+            "--plan",
+            str(catalog_plan_path),
+            "--confirmation-token",
+            catalog_token,
+        ]
+    ) == 0
+    assert not disposable.exists()
 
 
 def test_read_reset_and_cutover_evidence_use_distinct_models(

@@ -12,6 +12,7 @@ from app.services.surface_hub import SurfaceHub, SurfaceHubRegistry
 
 _HUBS: SurfaceHubRegistry[BotPanelLiveSnapshot] = SurfaceHubRegistry()
 _HUB_RETIREMENT_TASKS: dict[str, asyncio.Task[None]] = {}
+_HUB_PROMPT_TASKS: set[asyncio.Task[None]] = set()
 _HUB_IDLE_SECONDS = 30.0
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,11 @@ async def _retire_hub_when_idle(
 
 async def stop_live_projection_hubs() -> None:
     """Drain every on-demand V2 projection producer during app shutdown."""
+    prompt_tasks = tuple(_HUB_PROMPT_TASKS)
+    for task in prompt_tasks:
+        task.cancel()
+    if prompt_tasks:
+        await asyncio.gather(*prompt_tasks, return_exceptions=True)
     retirement_tasks = tuple(_HUB_RETIREMENT_TASKS.values())
     _HUB_RETIREMENT_TASKS.clear()
     for task in retirement_tasks:
@@ -123,6 +129,37 @@ async def stop_live_projection_hubs() -> None:
     if retirement_tasks:
         await asyncio.gather(*retirement_tasks, return_exceptions=True)
     await _HUBS.stop_all()
+
+
+def schedule_live_projection_refresh(
+    broker: str,
+    account_id: str,
+    sid: str,
+) -> None:
+    """Prompt live views without extending a committed action response.
+
+    The action result is already durable before this function is called. Hub
+    refresh is presentation work with a five-second producer fallback, so it
+    is owned by a tracked background task and drained during service shutdown.
+    """
+    task = asyncio.create_task(
+        refresh_live_projection_hubs(broker, account_id, sid),
+        name=f"live-panel-hub-prompt:{broker}:{account_id}:{sid}",
+    )
+    _HUB_PROMPT_TASKS.add(task)
+    task.add_done_callback(_finish_prompt_refresh)
+
+
+def _finish_prompt_refresh(task: asyncio.Task[None]) -> None:
+    _HUB_PROMPT_TASKS.discard(task)
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.warning(
+            "live panel prompt task failed after a committed control action",
+            extra={"exception": repr(error)},
+        )
 
 
 async def refresh_live_projection_hubs(
@@ -165,3 +202,4 @@ def reset_live_projection_hubs_for_testing() -> None:
     global _HUBS
     _HUBS = SurfaceHubRegistry()
     _HUB_RETIREMENT_TASKS.clear()
+    _HUB_PROMPT_TASKS.clear()

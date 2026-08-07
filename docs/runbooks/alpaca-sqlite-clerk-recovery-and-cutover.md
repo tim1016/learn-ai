@@ -235,6 +235,50 @@ durable receipt. On restart, the account selector validates the fence and starts
 SQLite; it never constructs the legacy writer or falls back to JSONL after an activated
 startup failure.
 
+## Quarantine the disposable runner catalog after activation
+
+This separate offline ceremony removes post-activation list latency without deleting
+evidence. It applies only after SQLite is activated and the stop boundary at the top of
+this runbook is proven. The plan reads the verified activation/database identity and the
+SQLite strategy registry, then inventories only valid file-backed Alpaca bindings under
+the runner `live_state/` tree that are absent from that registry. Registered SQLite
+instances, other-broker bindings, and unbound forensic directories are left in place.
+
+The operator must declare both a maximum candidate count and a maximum total byte size.
+Planning refuses rather than widening either bound:
+
+```bash
+.venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
+  --account-id PA-EXAMPLE \
+  catalog-quarantine-plan \
+  --runner-artifacts-root /absolute/artifacts \
+  --max-candidates 64 \
+  --max-total-bytes 1073741824 \
+  --output /absolute/catalog-quarantine-plan.json
+```
+
+Review every candidate, its content hash, and the declared bounds. Apply re-verifies the
+activation, database, complete SQLite registry, candidate set, byte count, and every tree
+hash before moving anything:
+
+```bash
+.venv/bin/python -m scripts.manage_alpaca_sqlite_clerk \
+  --artifacts-root /absolute/artifacts/alpaca_clerk \
+  --account-id PA-EXAMPLE \
+  catalog-quarantine-apply \
+  --runner-artifacts-root /absolute/artifacts \
+  --plan /absolute/catalog-quarantine-plan.json \
+  --confirmation-token EXACT_TOKEN_FROM_PLAN
+```
+
+The command moves the exact directories beneath
+`legacy-catalog-quarantine/<plan-id>/`, writes a prepared/applied manifest plus a durable
+receipt, and never deletes them. An in-process failure rolls back newly moved directories;
+an interrupted apply can resume only from the matching prepared manifest and hashes. A
+changed SQLite revision/registry, changed runner artifact, symlink, wrong token, expired
+fresh plan, or out-of-bound candidate set refuses the operation.
+
 ## Qualification evidence
 
 - CI smoke: `docs/audits/alpaca-sqlite-clerk-qualification-smoke.{json,md}`

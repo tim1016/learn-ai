@@ -9,6 +9,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from app.broker.alpaca.clerk.sqlite.catalog_quarantine import (
+    CatalogArtifactEvidence,
+    CatalogQuarantinePlan,
+    apply_catalog_quarantine,
+    plan_catalog_quarantine,
+)
 from app.broker.alpaca.clerk.sqlite.cutover import (
     BrokerCutoverEvidence,
     CutoverInitializationEvidence,
@@ -58,6 +64,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     _add_cutover_evidence_arguments(apply)
     apply.add_argument("--plan", type=Path, required=True)
     apply.add_argument("--confirmation-token", required=True)
+
+    catalog_plan = subparsers.add_parser("catalog-quarantine-plan")
+    catalog_plan.add_argument("--runner-artifacts-root", type=Path, required=True)
+    catalog_plan.add_argument("--output", type=Path, required=True)
+    catalog_plan.add_argument("--max-candidates", type=int, required=True)
+    catalog_plan.add_argument("--max-total-bytes", type=int, required=True)
+    catalog_plan.add_argument("--confirmation-ttl-ms", type=int, default=120_000)
+
+    catalog_apply = subparsers.add_parser("catalog-quarantine-apply")
+    catalog_apply.add_argument("--runner-artifacts-root", type=Path, required=True)
+    catalog_apply.add_argument("--plan", type=Path, required=True)
+    catalog_apply.add_argument("--confirmation-token", required=True)
     return parser.parse_args(argv)
 
 
@@ -116,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
             confirmation_ttl_ms=args.confirmation_ttl_ms,
         )
         atomic_write_json(args.output, asdict(result))
-    else:
+    elif args.operation == "cutover-apply":
         result = apply_cutover(
             plan=_read_plan(args.plan),
             confirmation_token=args.confirmation_token,
@@ -126,6 +144,25 @@ def main(argv: list[str] | None = None) -> int:
                 args.broker_evidence, args.account_id
             ),
             max_broker_evidence_age_ms=args.max_evidence_age_ms,
+        )
+    elif args.operation == "catalog-quarantine-plan":
+        result = plan_catalog_quarantine(
+            **common,
+            runner_artifacts_root=args.runner_artifacts_root,
+            max_candidates=args.max_candidates,
+            max_total_bytes=args.max_total_bytes,
+            confirmation_ttl_ms=args.confirmation_ttl_ms,
+        )
+        atomic_write_json(args.output, asdict(result))
+    else:
+        catalog_plan = _read_catalog_quarantine_plan(args.plan)
+        if catalog_plan.account_id != args.account_id:
+            raise ValueError("catalog quarantine plan account does not match CLI account")
+        result = apply_catalog_quarantine(
+            plan=catalog_plan,
+            confirmation_token=args.confirmation_token,
+            artifacts_root=args.artifacts_root,
+            runner_artifacts_root=args.runner_artifacts_root,
         )
     sys.stdout.write(json.dumps(_jsonable(result), sort_keys=True) + "\n")
     return 0
@@ -214,6 +251,40 @@ def _read_plan(path: Path) -> CutoverPlan:
         ),
         legacy_artifacts=tuple(
             LegacyArtifactEvidence(**item) for item in payload["legacy_artifacts"]
+        ),
+    )
+
+
+def _read_catalog_quarantine_plan(path: Path) -> CatalogQuarantinePlan:
+    payload = _read_json_object(path)
+    required = {
+        "schema_version",
+        "plan_id",
+        "confirmation_token",
+        "account_id",
+        "created_at_ms",
+        "expires_at_ms",
+        "max_candidates",
+        "max_total_bytes",
+        "database",
+        "registered_strategy_instance_ids",
+        "candidates",
+    }
+    if set(payload) != required or payload.get("schema_version") != 1:
+        raise ValueError("catalog quarantine plan fields do not match schema version 1")
+    return CatalogQuarantinePlan(
+        schema_version=payload["schema_version"],
+        plan_id=payload["plan_id"],
+        confirmation_token=payload["confirmation_token"],
+        account_id=payload["account_id"],
+        created_at_ms=payload["created_at_ms"],
+        expires_at_ms=payload["expires_at_ms"],
+        max_candidates=payload["max_candidates"],
+        max_total_bytes=payload["max_total_bytes"],
+        database=DatabaseVerification(**payload["database"]),
+        registered_strategy_instance_ids=tuple(payload["registered_strategy_instance_ids"]),
+        candidates=tuple(
+            CatalogArtifactEvidence(**item) for item in payload["candidates"]
         ),
     )
 

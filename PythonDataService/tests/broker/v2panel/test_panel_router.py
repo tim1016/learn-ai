@@ -410,6 +410,74 @@ async def test_action_reconcile_now_applies(api) -> None:
     assert clerk.reconciled is True
 
 
+async def test_action_returns_durable_receipt_without_waiting_for_panel_refresh(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _clerk, registry = api
+    await _deploy_bot(registry)
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+    scheduled: list[tuple[str, str, str]] = []
+
+    async def blocked_refresh(broker: str, account_id: str, sid: str) -> None:
+        refresh_started.set()
+        await release_refresh.wait()
+
+    def schedule_refresh(broker: str, account_id: str, sid: str) -> None:
+        scheduled.append((broker, account_id, sid))
+
+    monkeypatch.setattr(
+        broker_v2_panel,
+        "refresh_live_projection_hubs",
+        blocked_refresh,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        broker_v2_panel,
+        "schedule_live_projection_refresh",
+        schedule_refresh,
+        raising=False,
+    )
+
+    async with _client(app) as client:
+        panel = await client.get(
+            f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/panel"
+        )
+        action = next(item for item in panel.json()["actions"] if item["action_id"] == "reconcile_now")
+        request = asyncio.create_task(
+            client.post(
+                f"/api/brokers/alpaca/accounts/{_ACCOUNT_ID}/bots/{SID}/actions",
+                json={
+                    "action_id": "reconcile_now",
+                    "revision": panel.json()["revision"],
+                    "concurrency_token": action["concurrency_token"],
+                    "idempotency_key": "refresh-independent-receipt",
+                },
+            )
+        )
+        refresh_signal = asyncio.create_task(refresh_started.wait())
+        try:
+            completed, _pending = await asyncio.wait(
+                {request, refresh_signal},
+                timeout=2.0,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            returned_before_refresh = request in completed
+        finally:
+            release_refresh.set()
+            response = await request
+            refresh_signal.cancel()
+            await asyncio.gather(refresh_signal, return_exceptions=True)
+
+    assert returned_before_refresh
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
+    assert scheduled == [("alpaca", _ACCOUNT_ID, SID)]
+    assert not refresh_started.is_set()
+    await registry.stop("alpaca", SID)
+
+
 async def test_action_stale_revision_is_409(api) -> None:
     app, _clerk, registry = api
     await _deploy_bot(registry)

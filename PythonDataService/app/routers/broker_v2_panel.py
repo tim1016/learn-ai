@@ -64,9 +64,9 @@ from app.services.broker_v2_panel.evidence_service import (
 )
 from app.services.broker_v2_panel.live_projection import (
     get_or_start_live_projection_hub,
-    refresh_live_projection_hubs,
     release_live_projection_hub,
     retain_live_projection_hub,
+    schedule_live_projection_refresh,
 )
 from app.services.broker_v2_panel.panel_profile_service import panel_profile_for
 from app.services.surface_hub import SnapshotUnavailableError, SurfaceHubRefreshFailure
@@ -428,7 +428,7 @@ async def _run_action(broker: str, account_id: str, sid: str, request: PanelActi
             request,
             operator_identity=settings.PANEL_OPERATOR_IDENTITY,
         )
-        await refresh_live_projection_hubs(broker, account_id, sid)
+        schedule_live_projection_refresh(broker, account_id, sid)
         return result
     except ds.PanelDataError as error:
         _raise_panel_error(error)
