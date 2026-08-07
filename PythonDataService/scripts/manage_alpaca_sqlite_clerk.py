@@ -28,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
 from app.broker.alpaca.clerk.sqlite.database_verification import DatabaseVerification
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.clerk.sqlite.recovery import (
+    ProcessStopProof,
     ResetBrokerProof,
     create_verified_backup,
     preserve_and_rebuild_from_mirror,
@@ -47,10 +48,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers.add_parser("backup")
     restore = subparsers.add_parser("restore")
     restore.add_argument("--bundle", type=Path, required=True)
-    subparsers.add_parser("rebuild")
+    _add_process_stop_evidence_arguments(restore)
+    rebuild = subparsers.add_parser("rebuild")
+    _add_process_stop_evidence_arguments(rebuild)
 
     reset = subparsers.add_parser("reset")
     _add_reset_evidence_arguments(reset)
+    _add_process_stop_evidence_arguments(reset)
 
     initialize = subparsers.add_parser("cutover-initialize")
     _add_cutover_evidence_arguments(initialize)
@@ -90,6 +94,11 @@ def _add_reset_evidence_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--stopped-bot", action="append", default=[])
 
 
+def _add_process_stop_evidence_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--process-stop-evidence", type=Path)
+    parser.add_argument("--max-process-stop-evidence-age-ms", type=int, default=120_000)
+
+
 def _add_cutover_evidence_arguments(parser: argparse.ArgumentParser) -> None:
     _add_broker_evidence_arguments(parser)
     parser.add_argument("--runner-artifacts-root", type=Path, required=True)
@@ -101,9 +110,24 @@ def main(argv: list[str] | None = None) -> int:
     if args.operation == "backup":
         result: Any = create_verified_backup(**common)
     elif args.operation == "restore":
-        result = restore_verified_backup(**common, bundle_path=args.bundle)
+        result = restore_verified_backup(
+            **common,
+            bundle_path=args.bundle,
+            process_stop_proof=_read_process_stop_evidence(
+                args.process_stop_evidence,
+                args.account_id,
+            ),
+            max_process_stop_proof_age_ms=args.max_process_stop_evidence_age_ms,
+        )
     elif args.operation == "rebuild":
-        result = preserve_and_rebuild_from_mirror(**common)
+        result = preserve_and_rebuild_from_mirror(
+            **common,
+            process_stop_proof=_read_process_stop_evidence(
+                args.process_stop_evidence,
+                args.account_id,
+            ),
+            max_process_stop_proof_age_ms=args.max_process_stop_evidence_age_ms,
+        )
     elif args.operation == "reset":
         result = reset_authority(
             **common,
@@ -113,6 +137,11 @@ def main(argv: list[str] | None = None) -> int:
             expected_strategy_instance_ids=args.expected_bot,
             stopped_strategy_instance_ids=args.stopped_bot,
             max_proof_age_ms=args.max_evidence_age_ms,
+            process_stop_proof=_read_process_stop_evidence(
+                args.process_stop_evidence,
+                args.account_id,
+            ),
+            max_process_stop_proof_age_ms=args.max_process_stop_evidence_age_ms,
         )
     elif args.operation == "cutover-initialize":
         result = initialize_cutover_authority(
@@ -211,6 +240,25 @@ def _read_reset_evidence(path: Path, account_id: str) -> ResetBrokerProof:
         proof_reference=payload["proof_reference"],
         positions=payload.get("positions", {}),
         open_order_ids=tuple(payload.get("open_order_ids", ())),
+    )
+
+
+def _read_process_stop_evidence(
+    path: Path | None,
+    account_id: str,
+) -> ProcessStopProof | None:
+    if path is None:
+        return None
+    payload = _read_json_object(path)
+    required = {"account_id", "observed_at_ms", "proof_reference"}
+    if set(payload) != required:
+        raise ValueError("process-stop evidence fields do not match schema version 1")
+    if payload.get("account_id") != account_id:
+        raise ValueError("process-stop evidence account_id does not match CLI account")
+    return ProcessStopProof(
+        account_id=payload["account_id"],
+        observed_at_ms=payload["observed_at_ms"],
+        proof_reference=payload["proof_reference"],
     )
 
 

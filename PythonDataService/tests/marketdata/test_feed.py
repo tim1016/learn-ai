@@ -97,11 +97,20 @@ class _FakeBarSource:
         self._error_msg = error_msg
         self.call_count: int = 0
 
-    async def __call__(self, client: Any, symbol: str, *, use_rth: bool = True):  # type: ignore[override]
+    async def __call__(
+        self,
+        client: Any,
+        symbol: str,
+        *,
+        use_rth: bool = True,
+        on_source_bar=None,
+    ):  # type: ignore[override]
         from app.broker.ibkr.bars import IBKRBarStreamError
 
         self.call_count += 1
         for idx, bar in enumerate(self._bars):
+            if on_source_bar is not None:
+                on_source_bar(bar.start_ms)
             yield bar
             if self._raise_after is not None and idx + 1 >= self._raise_after:
                 raise IBKRBarStreamError(self._error_msg)
@@ -227,14 +236,14 @@ async def test_feed_active_count_decrements_after_consumer_exits(
     client = _fake_connected_client()
     feed = IbkrMarketDataFeed(client)
 
-    assert feed._active_count == 0
+    assert feed.health("SPY").active_subscription_count == 0
 
     bars: list[MarketDataBar] = []
     async for bar in feed.stream_bars("SPY"):
-        assert feed._active_count == 1
+        assert feed.health("SPY").active_subscription_count == 1
         bars.append(bar)
 
-    assert feed._active_count == 0
+    assert feed.health("SPY").active_subscription_count == 0
     assert len(bars) == 1
 
 
@@ -318,6 +327,93 @@ async def test_bar_gap_is_nonfatal(monkeypatch: pytest.MonkeyPatch) -> None:
     assert collected[1].start_ms - collected[0].start_ms == 300_000  # 5-min gap preserved
 
 
+@pytest.mark.asyncio
+async def test_stalled_subscription_is_replaced_without_ending_the_bot_feed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1411: a dead IBKR request is recoverable, not an unbounded wait."""
+    from app.broker.ibkr.bars import IBKRBarSubscriptionStalled
+
+    bar = _make_ibkr_bar()
+    call_count = 0
+
+    async def recovering_source(
+        _client,
+        _symbol,
+        *,
+        use_rth=True,
+        on_source_bar=None,
+    ):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise IBKRBarSubscriptionStalled("simulated stalled subscription")
+        if on_source_bar is not None:
+            on_source_bar(bar.start_ms)
+        yield bar
+
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_feed.stream_minute_bars",
+        recovering_source,
+    )
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+
+    observed = await anext(feed.stream_bars("SPY"))
+
+    assert observed.start_ms == bar.start_ms
+    assert call_count == 2
+    assert feed.health().stale is False
+
+
+@pytest.mark.asyncio
+async def test_health_is_scoped_per_symbol_when_one_sibling_never_advances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1411: an advancing symbol cannot mask a dead sibling subscription."""
+    spy_bar = _make_ibkr_bar()
+    aapl_attached = asyncio.Event()
+
+    async def mixed_source(
+        _client,
+        symbol,
+        *,
+        use_rth=True,
+        on_source_bar=None,
+    ):
+        del use_rth
+        if symbol == "SPY":
+            if on_source_bar is not None:
+                on_source_bar(spy_bar.start_ms)
+            yield spy_bar
+            await asyncio.Event().wait()
+        aapl_attached.set()
+        await asyncio.Event().wait()
+        if False:  # pragma: no cover - keeps this branch an async generator
+            yield spy_bar
+
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_feed.stream_minute_bars",
+        mixed_source,
+    )
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+    spy_stream = feed.stream_bars("SPY")
+    aapl_stream = feed.stream_bars("AAPL")
+    aapl_next = asyncio.create_task(anext(aapl_stream))
+
+    try:
+        await anext(spy_stream)
+        await aapl_attached.wait()
+
+        assert feed.health("SPY").stale is False
+        assert feed.health("AAPL").stale is True
+        assert "AAPL" in feed.health().reason
+    finally:
+        aapl_next.cancel()
+        await asyncio.gather(aapl_next, return_exceptions=True)
+        await spy_stream.aclose()
+        await aapl_stream.aclose()
+
+
 # ---------------------------------------------------------------------------
 # AC4 (health) — health() reports unhealthy when connection is lost
 # ---------------------------------------------------------------------------
@@ -333,6 +429,19 @@ def test_health_connected_no_bars() -> None:
     assert h.last_bar_ms is None
     assert h.reason == ""
     assert isinstance(h.observed_at_ms, int)
+
+
+def test_health_active_without_first_closed_bar_is_stale() -> None:
+    """#1411: an active never-advanced stream fails closed immediately."""
+    client = _fake_connected_client(connected=True, connection_lost=False)
+    feed = IbkrMarketDataFeed(client)
+    feed._state_for("SPY").active_count = 1
+
+    health = feed.health()
+
+    assert health.stale is True
+    assert health.last_bar_ms is None
+    assert "first closed bar" in health.reason.lower()
 
 
 def test_health_disconnected_reports_reason() -> None:
@@ -360,8 +469,9 @@ def test_health_stale_after_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _fake_connected_client(connected=True, connection_lost=False)
     feed = IbkrMarketDataFeed(client, stale_threshold_ms=60_000)
     # Fake a last-bar wall-clock 5 minutes ago
-    feed._last_bar_wall_ms = fixed_now - 300_000
-    feed._last_bar_ms = 1_700_000_700_000
+    state = feed._state_for("SPY")
+    state.last_bar_wall_ms = fixed_now - 300_000
+    state.last_bar_ms = 1_700_000_700_000
 
     h = feed.health()
 
@@ -377,8 +487,9 @@ def test_health_not_stale_within_threshold(monkeypatch: pytest.MonkeyPatch) -> N
 
     client = _fake_connected_client(connected=True, connection_lost=False)
     feed = IbkrMarketDataFeed(client, stale_threshold_ms=180_000)
-    feed._last_bar_wall_ms = fixed_now - 60_000  # 1 minute ago — within 3-min threshold
-    feed._last_bar_ms = 1_700_000_940_000
+    state = feed._state_for("SPY")
+    state.last_bar_wall_ms = fixed_now - 60_000  # 1 minute ago — within 3-min threshold
+    state.last_bar_ms = 1_700_000_940_000
 
     h = feed.health()
 
@@ -399,7 +510,7 @@ async def test_health_endpoint_returns_feed_health(monkeypatch: pytest.MonkeyPat
 
     client_ibkr = _fake_connected_client(connected=True, connection_lost=False)
     feed = IbkrMarketDataFeed(client_ibkr)
-    feed._last_bar_ms = 1_700_000_000_000
+    feed._state_for("SPY").last_bar_ms = 1_700_000_000_000
 
     set_market_data_feed(feed)
     try:
@@ -445,7 +556,7 @@ def test_health_active_subscription_count_in_response() -> None:
     """health() includes the active_subscription_count field."""
     client = _fake_connected_client(connected=True)
     feed = IbkrMarketDataFeed(client)
-    feed._active_count = 3
+    feed._state_for("SPY").active_count = 3
 
     h = feed.health()
 

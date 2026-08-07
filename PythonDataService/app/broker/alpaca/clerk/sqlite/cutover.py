@@ -781,12 +781,12 @@ def _validate_cutover_broker_state(
         raise CutoverRefused("broker account identity does not match cutover account")
     if not broker_evidence.proof_reference:
         raise CutoverRefused("broker proof reference is required")
-    from app.broker.alpaca.clerk.sqlite.reconcile import POSITION_QTY_EPSILON
+    from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 
     quantities = tuple(float(quantity) for quantity in broker_evidence.positions.values())
     if any(not math.isfinite(quantity) for quantity in quantities):
         raise CutoverRefused("broker position quantity must be finite")
-    if any(abs(quantity) > POSITION_QTY_EPSILON for quantity in quantities):
+    if any(position_quantity_is_nonzero(quantity) for quantity in quantities):
         raise CutoverRefused("cutover requires a broker-flat account")
     if broker_evidence.open_order_ids:
         raise CutoverRefused("cutover requires no open broker orders")

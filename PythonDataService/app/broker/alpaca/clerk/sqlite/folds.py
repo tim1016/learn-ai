@@ -615,6 +615,18 @@ FILL_QTY_EPSILON = 1e-9
 POSITION_QTY_EPSILON = 1e-9
 
 
+def position_quantity_is_nonzero(quantity: float) -> bool:
+    """Return whether custody must treat ``quantity`` as exposure.
+
+    Formula: ``nonzero(q) = abs(q) >= POSITION_QTY_EPSILON``.
+    Reference: ``docs/references/clerk-position-drift-tolerance.md``.
+    Canonical implementation: this file.
+    Validated against:
+      ``tests/broker/alpaca/clerk/sqlite/test_reconcile.py::test_position_quantity_boundary_is_unambiguous``.
+    """
+    return abs(quantity) >= POSITION_QTY_EPSILON
+
+
 def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Namespace-attributed exposure fold: ``positions`` sums only this
     order's owned fills, keyed by ``strategy_instance_id`` — never derived by

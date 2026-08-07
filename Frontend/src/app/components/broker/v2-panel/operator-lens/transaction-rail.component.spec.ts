@@ -133,6 +133,7 @@ describe('TransactionRailComponent', () => {
       read_at_ms: 1_700_000_000_001,
     };
     const getEvidence = vi.fn().mockResolvedValue(evidence);
+    const runAction = vi.fn();
 
     const { fixture, container } = await render(TransactionRailComponent, {
       inputs: {
@@ -141,7 +142,7 @@ describe('TransactionRailComponent', () => {
         accountId: 'acc-1',
         sid: 'sid-1',
       },
-      providers: [{ provide: BrokerV2PanelService, useValue: { getEvidence } }],
+      providers: [{ provide: BrokerV2PanelService, useValue: { getEvidence, runAction } }],
     });
 
     const btn = screen.getByRole('button', { name: /view raw evidence/i });
@@ -158,6 +159,7 @@ describe('TransactionRailComponent', () => {
       'sid-1',
       expect.objectContaining({ transactionRef: 'my-tx-ref' }),
     );
+    expect(runAction).not.toHaveBeenCalled();
   });
 
   it('blocked station with OperatorBlocker shows headline text', async () => {

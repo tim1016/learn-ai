@@ -23,7 +23,11 @@ from app.broker.alpaca.clerk.sqlite.activation import (
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
     ReconciliationSweep as SqliteReconciliationSweep,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    DEFAULT_LEASE_TTL_MS,
+    ClerkSqliteRepository,
+    ExecutionLeaseHeld,
+)
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.sweep import ReconciliationSweep as LegacyReconciliationSweep
@@ -40,6 +44,8 @@ logger = logging.getLogger(__name__)
 
 AuthorityKind = Literal["legacy", "sqlite", "unavailable"]
 DEFAULT_STARTUP_RECOVERY_TIMEOUT_S = 60.0
+DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S = DEFAULT_LEASE_TTL_MS / 1000 + 5.0
+DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S = DEFAULT_LEASE_TTL_MS / 1000
 
 
 class BackgroundSweep(Protocol):
@@ -114,6 +120,28 @@ def _open_repository(account_id: str, artifacts_root: Path) -> ClerkSqliteReposi
     )
 
 
+async def _open_repository_after_lease_expiry(
+    opener: Callable[[str, Path], ClerkSqliteRepository],
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    wait_timeout_s: float,
+    retry_interval_s: float,
+) -> ClerkSqliteRepository:
+    """Retry only the expected crashed-process lease handoff condition."""
+    if wait_timeout_s < 0 or retry_interval_s <= 0:
+        raise ValueError("execution lease wait must be non-negative with a positive retry interval")
+    deadline = asyncio.get_running_loop().time() + wait_timeout_s
+    while True:
+        try:
+            return opener(account_id, artifacts_root)
+        except ExecutionLeaseHeld:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise
+            await asyncio.sleep(min(retry_interval_s, remaining))
+
+
 async def select_active_clerk_runtime(
     *,
     read: BrokerReadPort,
@@ -123,6 +151,8 @@ async def select_active_clerk_runtime(
     activation_store: ActivationResolver | None = None,
     repository_opener: Callable[[str, Path], ClerkSqliteRepository] = _open_repository,
     startup_recovery_timeout_s: float = DEFAULT_STARTUP_RECOVERY_TIMEOUT_S,
+    execution_lease_wait_timeout_s: float = DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S,
+    execution_lease_retry_interval_s: float = DEFAULT_EXECUTION_LEASE_RETRY_INTERVAL_S,
     stream_health_gate: StreamHealthGate | None = None,
 ) -> ActiveClerkRuntime:
     """Resolve the account, validate activation, and construct one authority."""
@@ -185,7 +215,13 @@ async def select_active_clerk_runtime(
     repository: ClerkSqliteRepository | None = None
     sweep: SqliteReconciliationSweep | None = None
     try:
-        repository = repository_opener(account.account_id, artifacts_root)
+        repository = await _open_repository_after_lease_expiry(
+            repository_opener,
+            account_id=account.account_id,
+            artifacts_root=artifacts_root,
+            wait_timeout_s=execution_lease_wait_timeout_s,
+            retry_interval_s=execution_lease_retry_interval_s,
+        )
         meta = repository.control_meta_snapshot()
         resolved = store.resolve(
             account.account_id,

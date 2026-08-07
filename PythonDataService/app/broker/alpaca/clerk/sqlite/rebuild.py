@@ -10,6 +10,9 @@ from app.broker.alpaca.clerk.sqlite import schema, writes
 from app.broker.alpaca.clerk.sqlite.folds import FoldRegistry
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, MirrorIdentity
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
+from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
+    assert_wal_filesystem_supported,
+)
 from app.broker.alpaca.paths import fsync_directory_chain
 from app.utils.timestamps import Clock
 
@@ -63,6 +66,7 @@ def rebuild_repository_from_mirror(
             "mirror contains a transition from a different authority generation"
         )
 
+    assert_wal_filesystem_supported(account_dir)
     account_dir.mkdir(parents=True, exist_ok=True)
     fsync_directory_chain(account_dir, artifacts_root)
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)

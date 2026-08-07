@@ -44,12 +44,13 @@ positions — same reasoning as `docs/references/clerk-fill-quantity-tolerance.m
 
 ## Reuse (#1379)
 
-`exit.py`'s "is the position flat" checks (has the reducing order closed
-out the attributed exposure? is there anything left to reduce at all?)
-import `POSITION_QTY_EPSILON` from this module rather than redefining it —
-"flat" (`abs(qty) < epsilon`) and "drifted" (`abs(delta) > epsilon`) are the
-same absolute-tolerance policy applied to two different comparisons, not two
-different tolerances.
+All SQLite custody paths call the canonical
+`folds.py::position_quantity_is_nonzero` predicate when deciding whether a
+position is exposure. It defines `abs(qty) >= epsilon` as nonzero, so exactly
+`1e-9` is never classified as both flat and nonzero by different workflows.
+Drift remains the separate strict comparison `abs(delta) > epsilon`: a drift
+delta compares two observations, while the nonzero predicate decides whether
+the authority may claim that an account or instance is flat.
 
 ## Validation
 

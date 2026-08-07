@@ -470,6 +470,15 @@ def _dry_run_last_bar_at_ms(activity: list[DryRunActivity]) -> int | None:
     return latest.recorded_at_ms
 
 
+def _decision_last_bar_at_ms(decision: DecisionReceipt | None) -> int | None:
+    if decision is None:
+        return None
+    _symbol, separator, candidate = decision.bar_ref.rpartition("@")
+    if separator and candidate.isdecimal():
+        return int(candidate)
+    return None
+
+
 def _readiness_checks(actions: list[PanelAction], now_ms: int) -> list[ReadinessCheckView]:
     """Project present-tense enforcement checks from the canonical action guards."""
     checks: list[ReadinessCheckView] = []
@@ -635,7 +644,11 @@ def build_panel(
     health_last_bar_at_ms = (
         _dry_run_last_bar_at_ms(activity)
         if status.mode == "dry_run"
-        else last_bar_at_ms
+        else (
+            last_bar_at_ms
+            if last_bar_at_ms is not None
+            else _decision_last_bar_at_ms(latest_decision)
+        )
     )
     clerk = build_clerk_card(clerk_status, now_ms)
     health = _build_health_card(

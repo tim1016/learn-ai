@@ -296,3 +296,19 @@ def test_stream_health_refusal_names_every_broken_stream() -> None:
     assert "observed_at_ms" in detail
     assert stream_health_refusal(_gate(feed_healthy=True, exec_healthy=True)) is None
     assert stream_health_refusal(None) is None
+
+
+def test_stream_health_refusal_uses_symbol_scoped_market_data() -> None:
+    gate = StreamHealthGate(
+        market_data=lambda: _health("market_data", False),
+        execution=lambda: _health("execution", True),
+        market_data_for_symbol=lambda symbol: _health(
+            "market_data",
+            symbol == "SPY",
+        ),
+    )
+
+    assert stream_health_refusal(gate, symbol="SPY") is None
+    refusal = stream_health_refusal(gate, symbol="AAPL")
+    assert refusal is not None
+    assert "market_data" in refusal[0]

@@ -21,6 +21,10 @@ import pytest
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
+from app.broker.alpaca.clerk.sqlite.folds import (
+    POSITION_QTY_EPSILON,
+    position_quantity_is_nonzero,
+)
 from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -38,6 +42,23 @@ from conftest import _clock_at, _hold_transition
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
+
+
+@pytest.mark.parametrize(
+    ("quantity", "expected"),
+    [
+        (0.0, False),
+        (POSITION_QTY_EPSILON / 2, False),
+        (-POSITION_QTY_EPSILON / 2, False),
+        (POSITION_QTY_EPSILON, True),
+        (-POSITION_QTY_EPSILON, True),
+    ],
+)
+def test_position_quantity_boundary_is_unambiguous(
+    quantity: float,
+    expected: bool,
+) -> None:
+    assert position_quantity_is_nonzero(quantity) is expected
 
 
 @pytest.fixture

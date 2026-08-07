@@ -272,6 +272,7 @@ class BotStartAdmission:
                     market_data=market_data_admission_fact(
                         feed,
                         observed_at_ms,
+                        symbol=binding.symbol,
                         use_rth=binding.use_rth,
                     ),
                 )
@@ -291,6 +292,7 @@ def market_data_admission_fact(
     feed: MarketDataFeed | None,
     observed_at_ms: int,
     *,
+    symbol: str | None = None,
     use_rth: bool,
 ) -> MarketDataAdmissionFact:
     if feed is None:
@@ -300,7 +302,7 @@ def market_data_admission_fact(
             reason="The process-level market-data feed is not installed.",
         )
     try:
-        health = feed.health()
+        health = feed.health(symbol)
     except Exception as exc:
         logger.warning(
             "market-data health could not author run admission",

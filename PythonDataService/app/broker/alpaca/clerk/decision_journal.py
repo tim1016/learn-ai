@@ -14,10 +14,15 @@ The seq field is a monotone integer used by the bounded read API.
 
 Outcome vocabulary (closed set, per spec §9):
 
-- ``entered``   — bar evaluation produced a market-entry intent
-- ``exited``    — bar evaluation produced a market-exit intent
+- ``enter_intent`` — bar evaluation produced a market-entry signal
+- ``exit_intent``  — bar evaluation produced a market-exit signal
+- ``entered``   — legacy receipt value retained for historical reads
+- ``exited``    — legacy receipt value retained for historical reads
 - ``no_action`` — bar evaluated; conditions not met for entry or exit
 - ``blocked``   — a gate (session, hold, risk) prevented evaluation/submission
+
+Custody/effect outcomes are deliberately absent from new signal receipts. SQLite
+Clerk transitions remain the authority for submitted, uncertain, filled, and flat.
 
 Read API:
 
@@ -45,7 +50,14 @@ MAX_TAIL = 500  # hard ceiling on tail reads — never a full scan
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
 _RESERVED = frozenset({".", ".."})
 
-DecisionOutcome = Literal["entered", "exited", "no_action", "blocked"]
+DecisionOutcome = Literal[
+    "enter_intent",
+    "exit_intent",
+    "entered",
+    "exited",
+    "no_action",
+    "blocked",
+]
 
 
 # ── Receipt model ─────────────────────────────────────────────────────────────
@@ -137,6 +149,7 @@ class DecisionJournal:
             trusted_root=resolved_root.resolve(),
         )
         self._lock = threading.Lock()
+        self._receipts_by_bar_ref: dict[str, DecisionReceipt] | None = None
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
@@ -144,6 +157,74 @@ class DecisionJournal:
         """Append one receipt; fflush + fsync + fsync parent dir."""
         with self._lock:
             self._wal.append(receipt)
+            self._receipts_by_bar_ref = None
+
+    def append_for_bar(
+        self,
+        *,
+        ts_ms: int,
+        bar_ref: str,
+        outcome: DecisionOutcome,
+        reason_code: str,
+        intent_id: str = "",
+        order_ref: str = "",
+        indicator_snapshot: dict[str, float | int | str | None] | None = None,
+    ) -> DecisionReceipt:
+        """Atomically allocate and append one idempotent receipt per closed bar.
+
+        A repeated delivery of any previously recorded closed bar returns its
+        existing receipt when the authored decision is identical. A conflicting
+        replay fails closed instead of writing two truths for one bar. The
+        bar-reference index is built once per journal instance during cold
+        replay and then maintained with each append.
+        """
+        with self._lock:
+            if self._receipts_by_bar_ref is None:
+                self._receipts_by_bar_ref = {}
+                for recorded in self._wal.read_all():
+                    prior = self._receipts_by_bar_ref.setdefault(
+                        recorded.bar_ref,
+                        recorded,
+                    )
+                    if prior != recorded:
+                        raise _corrupt_error(
+                            self._wal.path,
+                            f"duplicate conflicting bar_ref {recorded.bar_ref!r}",
+                        )
+            existing = self._receipts_by_bar_ref.get(bar_ref)
+            if existing is not None:
+                requested = (
+                    outcome,
+                    reason_code,
+                    intent_id,
+                    order_ref,
+                    indicator_snapshot or {},
+                )
+                authored = (
+                    existing.outcome,
+                    existing.reason_code,
+                    existing.intent_id,
+                    existing.order_ref,
+                    existing.indicator_snapshot,
+                )
+                if requested != authored:
+                    raise ValueError(
+                        f"conflicting decision receipt replay for bar_ref {bar_ref!r}"
+                    )
+                return existing
+            receipt = DecisionReceipt(
+                seq=self._wal.allocate_seq(),
+                ts_ms=ts_ms,
+                bar_ref=bar_ref,
+                outcome=outcome,
+                reason_code=reason_code,
+                intent_id=intent_id,
+                order_ref=order_ref,
+                indicator_snapshot=indicator_snapshot or {},
+            )
+            self._wal.append(receipt)
+            self._receipts_by_bar_ref[bar_ref] = receipt
+            return receipt
 
     def next_seq(self) -> int:
         """Return the seq to assign to the next receipt (1-based)."""

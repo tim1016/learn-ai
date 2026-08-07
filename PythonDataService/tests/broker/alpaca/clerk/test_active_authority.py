@@ -13,7 +13,10 @@ from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
     ActivationRecordInvalid,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteRepository,
+    ExecutionLeaseHeld,
+)
 from app.broker.contract.models import BrokerAccountSnapshot
 
 
@@ -291,6 +294,40 @@ async def test_activated_database_open_failure_never_constructs_legacy(
     assert runtime.startup_failure.authority_generation == 1
     assert runtime.startup_failure.db_identity_token == "db-token"
     assert not legacy_constructed
+
+
+async def test_activated_startup_waits_for_a_crashed_writers_lease(
+    tmp_path: Path,
+) -> None:
+    """An immediate restart recovers after the prior process lease expires."""
+    broker = _Broker()
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path,
+    )
+    attempts = 0
+
+    def _open_after_expiry(_account_id: str, _root: Path) -> ClerkSqliteRepository:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ExecutionLeaseHeld("previous process lease has not expired")
+        return repo
+
+    runtime = await select_active_clerk_runtime(
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        activation_store=_ActivationStore(_activation()),
+        legacy_factory=_Legacy,
+        repository_opener=_open_after_expiry,
+        execution_lease_wait_timeout_s=0.1,
+        execution_lease_retry_interval_s=0.001,
+    )
+
+    assert attempts == 2
+    assert runtime.authority_kind == "sqlite"
+    await runtime.close()
 
 
 async def test_activation_identity_mismatch_never_constructs_legacy(

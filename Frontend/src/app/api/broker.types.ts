@@ -13052,7 +13052,8 @@ export interface components {
          * @description Point-in-time health snapshot for a MarketDataFeed.
          *
          *     ``connected`` — the underlying broker connection is alive.
-         *     ``stale``     — connected but no bar has arrived within the stale threshold.
+         *     ``stale``     — connected but required source liveness has not been proven
+         *                     within the implementation's stale threshold.
          *     ``last_bar_ms`` — ``start_ms`` of the most recently emitted bar, or ``None``
          *                       if no bar has been emitted yet.
          *     ``reason``    — human-readable detail when unhealthy (empty string when healthy).
@@ -19252,7 +19253,7 @@ export interface components {
              * Outcome
              * @enum {string}
              */
-            outcome: "entered" | "exited" | "no_action" | "blocked";
+            outcome: "enter_intent" | "exit_intent" | "entered" | "exited" | "no_action" | "blocked";
             /** Reason Code */
             reason_code: string;
             /** Recorded At Ms */

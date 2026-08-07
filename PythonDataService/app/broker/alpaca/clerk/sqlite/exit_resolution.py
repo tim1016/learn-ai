@@ -12,7 +12,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
 )
-from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import (
     ExitSubmission,
@@ -133,7 +133,7 @@ async def _resolve_claimed(
         return _snapshot(repo, effect_operation_id)
 
     remaining_qty = repo.position(effect.strategy_instance_id, symbol)
-    if reducing is None and abs(remaining_qty) < POSITION_QTY_EPSILON:
+    if reducing is None and not position_quantity_is_nonzero(remaining_qty):
         _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, entries))
         return _snapshot(repo, effect_operation_id)
 
@@ -149,7 +149,7 @@ async def _resolve_claimed(
         ):
             return _snapshot(repo, effect_operation_id)
         remaining_qty = repo.position(effect.strategy_instance_id, symbol)
-        if abs(remaining_qty) < POSITION_QTY_EPSILON:
+        if not position_quantity_is_nonzero(remaining_qty):
             _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, entries))
             return _snapshot(repo, effect_operation_id)
         require_capability(
@@ -188,7 +188,7 @@ async def _resolve_claimed(
         return _snapshot(repo, effect_operation_id)
 
     final_qty = repo.position(effect.strategy_instance_id, symbol)
-    if abs(final_qty) < POSITION_QTY_EPSILON:
+    if not position_quantity_is_nonzero(final_qty):
         _fold_attributed_flat(repo, effect_operation_id, _primary_entry_ref(repo, entries))
     else:
         fold_failed(

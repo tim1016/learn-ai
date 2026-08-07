@@ -92,6 +92,9 @@ PythonDataService/tests/fixtures/polygon_capture/
 PythonDataService/.launcher.log
 PythonDataService/.launcher.pid
 
+# Local operator cutover/recovery evidence. May contain account and order IDs.
+PythonDataService/.cutover/
+
 # Broker System v2 raw-capture journal (files-canonical JSONL, §6). Default
 # BROKER_CAPTURE_DIR; verbatim vendor payloads, regenerable, never committed.
 PythonDataService/var/broker_captures/

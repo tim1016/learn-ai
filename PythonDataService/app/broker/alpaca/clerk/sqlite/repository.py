@@ -86,6 +86,10 @@ class IntegrityCheckFailed(ClerkSqliteError):
     """Startup check 7 (§9): ``PRAGMA integrity_check`` did not return ``ok``."""
 
 
+class UnsupportedWalFilesystem(ClerkSqliteError):
+    """The authority is on a filesystem that cannot honor SQLite WAL semantics."""
+
+
 class HashChainBroken(ClerkSqliteError):
     """Startup check 8 (§9): a stored row's hash disagrees with its recomputation."""
 

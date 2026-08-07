@@ -6,8 +6,14 @@ from collections.abc import Sequence
 
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.diagnosis import CustodyDiagnosis
+from app.broker.alpaca.clerk.exposure import (
+    ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
+)
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
-from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
+from app.broker.alpaca.clerk.sqlite.projection_models import (
+    ClerkProjection,
+    ProjectedOperation,
+)
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryPolicyContext,
@@ -124,7 +130,7 @@ def sqlite_clerk_status(
 ) -> ClerkStatus:
     hold = projection.holds[0] if projection.holds else None
     unresolved = sum(
-        operation.state in {"accepted", "in_progress", "unknown"}
+        _operation_requires_reconciliation(operation)
         for operation in projection.operations
     )
     latest = projection.latest_reconciliation
@@ -159,6 +165,19 @@ def sqlite_clerk_status(
             "SQLite custody holds close only when fresh evidence satisfies their "
             "typed resolution policy. Use the recovery actions shown by the Clerk."
         ),
+    )
+
+
+def _operation_requires_reconciliation(operation: ProjectedOperation) -> bool:
+    """Mirror the SQLite authority's broker-facing nonterminal predicate."""
+    if operation.state in {"succeeded", "failed", "rejected"}:
+        return False
+    if operation.state in {"accepted", "unknown"} or operation.kind == "EXIT":
+        return True
+    return not operation.orders or any(
+        order.broker_state is None
+        or order.broker_state.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+        for order in operation.orders
     )
 
 

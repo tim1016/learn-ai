@@ -14,7 +14,7 @@ class _Feed:
     def __init__(self, health: FeedHealth) -> None:
         self._health = health
 
-    def health(self) -> FeedHealth:
+    def health(self, _symbol: str | None = None) -> FeedHealth:
         return self._health
 
 

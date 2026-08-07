@@ -250,7 +250,11 @@ class AlpacaClerk(ClerkCustodyResolutionOperations, ClerkEffectOperations):
                 )
             # S4 dual-health gate: either stream unhealthy -> durable hold +
             # typed refusal naming the broken stream. Never auto-cleared.
-            refusal = stream_health_refusal(self._stream_health)
+            symbols = {leg.symbol.upper() for leg in legs}
+            refusal = stream_health_refusal(
+                self._stream_health,
+                symbol=next(iter(symbols)) if len(symbols) == 1 else None,
+            )
             if refusal is not None:
                 reason, detail = refusal
                 await self._set_hold(

@@ -289,9 +289,15 @@ def _read_active_sqlite_evidence(
         raise ValueError("SQLite evidence requires its opaque cursor")
     reader = SqliteClerkProjectionReader.from_repository(clerk.repository)
     try:
+        effect_operation_id = (
+            transaction_ref
+            if transaction_ref is not None and transaction_ref.startswith("effect:")
+            else None
+        )
         page = reader.timeline_page(
             strategy_instance_id=sid,
-            order_ref=transaction_ref,
+            order_ref=(transaction_ref if effect_operation_id is None else None),
+            effect_operation_id=effect_operation_id,
             cursor=cursor,
             page_size=page_size,
         )
@@ -316,8 +322,8 @@ def read_evidence_page(
     Args:
         account_id: The account whose journal to read.
         sid: Filter to this bot's namespace only.
-        transaction_ref: If given, filter further to entries whose
-            ``order_ref`` matches this ref.
+        transaction_ref: If given, filter further to the selected SQLite
+            effect operation or legacy order identity.
         cursor: Sequence position to start from (0-based); ``None`` = from end
             (newest-first, default for operator lens journal tail).
         page_size: Capped at ``PAGE_SIZE_MAX``.

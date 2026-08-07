@@ -17116,7 +17116,7 @@
         "type": "object"
       },
       "FeedHealth": {
-        "description": "Point-in-time health snapshot for a MarketDataFeed.\n\n``connected`` \u2014 the underlying broker connection is alive.\n``stale``     \u2014 connected but no bar has arrived within the stale threshold.\n``last_bar_ms`` \u2014 ``start_ms`` of the most recently emitted bar, or ``None``\n                  if no bar has been emitted yet.\n``reason``    \u2014 human-readable detail when unhealthy (empty string when healthy).\n``active_subscription_count`` \u2014 number of symbols currently subscribed.\n``observed_at_ms`` \u2014 wall-clock of this snapshot, int64 ms UTC.",
+        "description": "Point-in-time health snapshot for a MarketDataFeed.\n\n``connected`` \u2014 the underlying broker connection is alive.\n``stale``     \u2014 connected but required source liveness has not been proven\n                within the implementation's stale threshold.\n``last_bar_ms`` \u2014 ``start_ms`` of the most recently emitted bar, or ``None``\n                  if no bar has been emitted yet.\n``reason``    \u2014 human-readable detail when unhealthy (empty string when healthy).\n``active_subscription_count`` \u2014 number of symbols currently subscribed.\n``observed_at_ms`` \u2014 wall-clock of this snapshot, int64 ms UTC.",
         "properties": {
           "active_subscription_count": {
             "title": "Active Subscription Count",
@@ -31259,6 +31259,8 @@
           },
           "outcome": {
             "enum": [
+              "enter_intent",
+              "exit_intent",
               "entered",
               "exited",
               "no_action",

@@ -118,6 +118,7 @@ class BotResumeAdmission:
                     market_data=market_data_admission_fact(
                         feed,
                         observed_at_ms,
+                        symbol=prior.symbol,
                         use_rth=prior.use_rth,
                     ),
                     desired_state=status.desired_state,

@@ -56,7 +56,7 @@ class _HoldFeed:
         )
         await asyncio.Event().wait()
 
-    def health(self) -> FeedHealth:
+    def health(self, _symbol: str | None = None) -> FeedHealth:
         return FeedHealth(
             connected=True,
             stale=False,

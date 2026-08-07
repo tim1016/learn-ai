@@ -22,6 +22,80 @@ if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
 
+_UNSUPPORTED_WAL_FILESYSTEMS = frozenset(
+    {
+        "9p",
+        "afs",
+        "ceph",
+        "cifs",
+        "fuse",
+        "glusterfs",
+        "lustre",
+        "nfs",
+        "nfs4",
+        "smb3",
+        "virtiofs",
+    }
+)
+
+
+def _decode_mountinfo_path(value: str) -> str:
+    """Decode the escapes Linux uses for whitespace in ``mountinfo`` fields."""
+    return (
+        value.replace("\\040", " ")
+        .replace("\\011", "\t")
+        .replace("\\012", "\n")
+        .replace("\\134", "\\")
+    )
+
+
+def _linux_filesystem_type(path: Path) -> str | None:
+    """Return the most-specific Linux mount type containing ``path``.
+
+    Native non-Linux execution has no ``/proc/self/mountinfo`` and returns
+    ``None``. The production container is Linux, where this catches Podman
+    macOS bind mounts (``virtiofs``) before SQLite creates a WAL database on a
+    filesystem outside the container's shared-memory/locking domain.
+    """
+    mountinfo = Path("/proc/self/mountinfo")
+    try:
+        records = mountinfo.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    resolved = path.resolve()
+    best_match: tuple[int, str] | None = None
+    for record in records:
+        before_separator, separator, after_separator = record.partition(" - ")
+        before_fields = before_separator.split()
+        after_fields = after_separator.split()
+        if not separator or len(before_fields) < 5 or not after_fields:
+            continue
+        mount_point = Path(_decode_mountinfo_path(before_fields[4]))
+        if resolved != mount_point and mount_point not in resolved.parents:
+            continue
+        candidate = (len(mount_point.parts), after_fields[0].lower())
+        if best_match is None or candidate[0] > best_match[0]:
+            best_match = candidate
+    return best_match[1] if best_match is not None else None
+
+
+def assert_wal_filesystem_supported(path: Path) -> None:
+    from app.broker.alpaca.clerk.sqlite.repository import UnsupportedWalFilesystem
+
+    filesystem_type = _linux_filesystem_type(path)
+    unsupported = filesystem_type in _UNSUPPORTED_WAL_FILESYSTEMS or (
+        filesystem_type is not None and filesystem_type.startswith("fuse.")
+    )
+    if unsupported:
+        raise UnsupportedWalFilesystem(
+            "SQLite WAL authority requires a VM-local filesystem; "
+            f"{path} resolves to {filesystem_type!r}. Mount ALPACA_CLERK_DIR "
+            "from a container-local named volume and run recovery tooling "
+            "inside that same host boundary."
+        )
+
+
 def initialize_repository(
     *,
     repository_type: type[ClerkSqliteRepository],
@@ -53,6 +127,7 @@ def initialize_repository(
             "fresh initialize()"
         )
 
+    assert_wal_filesystem_supported(account_dir)
     account_dir.mkdir(parents=True, exist_ok=True)
     fsync_directory_chain(account_dir, artifacts_root)
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
@@ -283,6 +358,7 @@ def open_repository(
     mirror_path = writes.confined_account_file(artifacts_root, account_id, mirror_filename)
     registry = EstablishedAccountsRegistry(accounts_root)
     _require_existing_database(account_id=account_id, db_path=db_path, registry=registry)
+    assert_wal_filesystem_supported(account_dir)
     conn, control_row = _read_control_row(db_path)
     _validate_control_identity(
         conn=conn,

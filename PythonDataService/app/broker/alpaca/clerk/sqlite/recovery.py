@@ -37,6 +37,9 @@ from app.broker.alpaca.clerk.sqlite.registry import (
     EstablishedGeneration,
 )
 from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME, MIRROR_FILENAME, ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
+    assert_wal_filesystem_supported,
+)
 from app.broker.alpaca.paths import fsync_directory, fsync_directory_chain
 from app.utils.timestamps import Clock, now_ms_utc
 
@@ -68,6 +71,7 @@ class RecoveryReceipt:
     proof_reference: str
     preserved_path: str | None
     recorded_at_ms: int
+    process_stop_proof_reference: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,15 @@ class ResetBrokerProof:
     proof_reference: str
     positions: Mapping[str, float]
     open_order_ids: Sequence[str]
+
+
+@dataclass(frozen=True)
+class ProcessStopProof:
+    """Fresh independent evidence that the authority writer is stopped."""
+
+    account_id: str
+    observed_at_ms: int
+    proof_reference: str
 
 
 def create_verified_backup(
@@ -249,6 +262,8 @@ def restore_verified_backup(
     account_id: str,
     artifacts_root: Path,
     bundle_path: Path,
+    process_stop_proof: ProcessStopProof | None = None,
+    max_process_stop_proof_age_ms: int = 120_000,
     clock: Clock = now_ms_utc,
 ) -> RecoveryReceipt:
     """Restore only a same-generation verified bundle and preserve old files."""
@@ -258,6 +273,7 @@ def restore_verified_backup(
         bundle_path=bundle_path,
     )
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
+    assert_wal_filesystem_supported(account_dir)
     established = _require_established(accounts_root, account_id)
     _verify_snapshot_matches_mirror_head(
         account_id=account_id,
@@ -267,7 +283,13 @@ def restore_verified_backup(
     )
     db_path = writes.confined_account_file(artifacts_root, account_id, DB_FILENAME)
     recorded_at_ms = clock()
-    _assert_no_live_lease(db_path, now_ms=recorded_at_ms)
+    process_stop_reference = _assert_no_live_lease(
+        db_path,
+        account_id=account_id,
+        now_ms=recorded_at_ms,
+        process_stop_proof=process_stop_proof,
+        max_process_stop_proof_age_ms=max_process_stop_proof_age_ms,
+    )
     candidate = account_dir / f".{DB_FILENAME}.restore-{secrets.token_hex(8)}"
     shutil.copyfile(publication.snapshot_path, candidate)
     _fsync_file(candidate)
@@ -297,6 +319,7 @@ def restore_verified_backup(
         proof_reference=relative_reference(artifacts_root, publication.manifest_path),
         preserved_path=relative_reference(artifacts_root, preserved) if preserved else None,
         recorded_at_ms=recorded_at_ms,
+        process_stop_proof_reference=process_stop_reference,
     )
     _write_recovery_receipt(account_dir, receipt)
     return receipt
@@ -306,10 +329,13 @@ def preserve_and_rebuild_from_mirror(
     *,
     account_id: str,
     artifacts_root: Path,
+    process_stop_proof: ProcessStopProof | None = None,
+    max_process_stop_proof_age_ms: int = 120_000,
     clock: Clock = now_ms_utc,
 ) -> RecoveryReceipt:
     """Verify a bound contiguous mirror, preserve old DB files, then replay."""
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
+    assert_wal_filesystem_supported(account_dir)
     established = _require_established(accounts_root, account_id)
     mirror_path = writes.confined_account_file(artifacts_root, account_id, MIRROR_FILENAME)
     mirror = MirrorFile(
@@ -323,10 +349,17 @@ def preserve_and_rebuild_from_mirror(
     rows = mirror.rebuild()
     if any(row.authority_generation != established.authority_generation for row in rows):
         raise RecoveryRefused("mirror contains rows from a different generation")
-    _assert_no_live_lease(account_dir / DB_FILENAME, now_ms=clock())
+    recorded_at_ms = clock()
+    process_stop_reference = _assert_no_live_lease(
+        account_dir / DB_FILENAME,
+        account_id=account_id,
+        now_ms=recorded_at_ms,
+        process_stop_proof=process_stop_proof,
+        max_process_stop_proof_age_ms=max_process_stop_proof_age_ms,
+    )
     preserved = _preserve_database_files(
         account_dir=account_dir,
-        recorded_at_ms=clock(),
+        recorded_at_ms=recorded_at_ms,
         label="pre-rebuild",
     )
     try:
@@ -352,7 +385,8 @@ def preserve_and_rebuild_from_mirror(
         db_identity_token=verification.db_identity_token,
         proof_reference=relative_reference(artifacts_root, mirror_path),
         preserved_path=relative_reference(artifacts_root, preserved) if preserved else None,
-        recorded_at_ms=clock(),
+        recorded_at_ms=recorded_at_ms,
+        process_stop_proof_reference=process_stop_reference,
     )
     _write_recovery_receipt(account_dir, receipt)
     return receipt
@@ -366,6 +400,8 @@ def reset_authority(
     stopped_strategy_instance_ids: Sequence[str],
     expected_strategy_instance_ids: Sequence[str],
     max_proof_age_ms: int,
+    process_stop_proof: ProcessStopProof | None = None,
+    max_process_stop_proof_age_ms: int = 120_000,
     clock: Clock = now_ms_utc,
 ) -> RecoveryReceipt:
     """Rotate to a fresh empty generation only from current flat broker proof."""
@@ -379,8 +415,20 @@ def reset_authority(
         expected_strategy_instance_ids=expected_strategy_instance_ids,
     )
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
+    assert_wal_filesystem_supported(account_dir)
     established = _require_established(accounts_root, account_id)
-    _assert_no_live_lease(account_dir / DB_FILENAME, now_ms=now)
+    _preflight_regular_files(
+        account_dir,
+        (DB_FILENAME, f"{DB_FILENAME}-wal", f"{DB_FILENAME}-shm", MIRROR_FILENAME),
+        label="generation",
+    )
+    process_stop_reference = _assert_no_live_lease(
+        account_dir / DB_FILENAME,
+        account_id=account_id,
+        now_ms=now,
+        process_stop_proof=process_stop_proof,
+        max_process_stop_proof_age_ms=max_process_stop_proof_age_ms,
+    )
     previous_activation = ActivationStore(accounts_root).latest(account_id)
     preserved = _preserve_generation_files(
         account_dir=account_dir,
@@ -442,6 +490,7 @@ def reset_authority(
         proof_reference=broker_proof.proof_reference,
         preserved_path=relative_reference(artifacts_root, preserved),
         recorded_at_ms=now,
+        process_stop_proof_reference=process_stop_reference,
     )
     _write_recovery_receipt(account_dir, receipt)
     if previous_activation is not None:
@@ -528,9 +577,16 @@ def _verify_snapshot_matches_mirror_head(
         )
 
 
-def _assert_no_live_lease(db_path: Path, *, now_ms: int) -> None:
+def _assert_no_live_lease(
+    db_path: Path,
+    *,
+    account_id: str,
+    now_ms: int,
+    process_stop_proof: ProcessStopProof | None,
+    max_process_stop_proof_age_ms: int,
+) -> str | None:
     if not db_path.is_file():
-        return
+        return None
     conn: sqlite3.Connection | None = None
     try:
         conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
@@ -539,12 +595,48 @@ def _assert_no_live_lease(db_path: Path, *, now_ms: int) -> None:
             "FROM control_meta WHERE id = 1"
         ).fetchone()
     except sqlite3.DatabaseError:
-        return
+        _validate_process_stop_proof(
+            account_id=account_id,
+            proof=process_stop_proof,
+            now_ms=now_ms,
+            max_proof_age_ms=max_process_stop_proof_age_ms,
+        )
+        assert process_stop_proof is not None
+        return process_stop_proof.proof_reference
     finally:
         if conn is not None:
             conn.close()
     if row is not None and row[0] is not None and row[1] is not None and row[1] >= now_ms:
         raise RecoveryRefused("authority recovery requires the active Clerk process to be stopped")
+    return None
+
+
+def _validate_process_stop_proof(
+    *,
+    account_id: str,
+    proof: ProcessStopProof | None,
+    now_ms: int,
+    max_proof_age_ms: int,
+) -> None:
+    if proof is None:
+        raise RecoveryRefused(
+            "the authority database is unreadable; fresh independent process-stop proof is required"
+        )
+    if (
+        proof.account_id != account_id
+        or type(proof.observed_at_ms) is not int
+        or not isinstance(proof.proof_reference, str)
+        or not proof.proof_reference
+    ):
+        raise RecoveryRefused("process-stop proof identity or fields are invalid")
+    if (
+        type(max_proof_age_ms) is not int
+        or max_proof_age_ms < 1
+        or proof.observed_at_ms > now_ms
+    ):
+        raise RecoveryRefused("process-stop proof timestamp or freshness policy is invalid")
+    if now_ms - proof.observed_at_ms > max_proof_age_ms:
+        raise RecoveryRefused("process-stop proof is stale")
 
 
 def _preserve_database_files(
@@ -661,6 +753,7 @@ def _initialize_reset_generation(
     reset_provenance: dict[str, Any],
     now_ms: int,
 ) -> None:
+    assert_wal_filesystem_supported(account_dir)
     db_path = account_dir / DB_FILENAME
     mirror_path = account_dir / MIRROR_FILENAME
     conn = sqlite3.connect(db_path, isolation_level=None, check_same_thread=False)
@@ -720,7 +813,7 @@ def _validate_reset_proof(
         raise RecoveryRefused("reset broker proof timestamp or freshness policy is invalid")
     if now_ms - proof.observed_at_ms > max_proof_age_ms:
         raise RecoveryRefused("reset broker proof is stale")
-    from app.broker.alpaca.clerk.sqlite.reconcile import POSITION_QTY_EPSILON
+    from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 
     if any(
         not isinstance(symbol, str)
@@ -735,7 +828,7 @@ def _validate_reset_proof(
     quantities = tuple(float(quantity) for quantity in proof.positions.values())
     if any(not math.isfinite(quantity) for quantity in quantities):
         raise RecoveryRefused("reset broker position quantity must be finite")
-    if any(abs(quantity) > POSITION_QTY_EPSILON for quantity in quantities):
+    if any(position_quantity_is_nonzero(quantity) for quantity in quantities):
         raise RecoveryRefused("reset requires a broker-flat account")
     if proof.open_order_ids:
         raise RecoveryRefused("reset requires no open broker orders")

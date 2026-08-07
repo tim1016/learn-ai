@@ -16,6 +16,7 @@ def build_market_pulse(
     feed: MarketDataFeed | None,
     *,
     now_ms: int,
+    symbol: str | None = None,
     use_rth: bool,
     bot_running: bool,
 ) -> MarketPulseView:
@@ -34,7 +35,12 @@ def build_market_pulse(
         if use_rth
         else session.phase in {"PRE", "RTH", "POST", "OVERNIGHT"}
     )
-    fact = market_data_admission_fact(feed, now_ms, use_rth=use_rth)
+    fact = market_data_admission_fact(
+        feed,
+        now_ms,
+        symbol=symbol,
+        use_rth=use_rth,
+    )
     feed_state = {
         "AVAILABLE": "IDLE" if fact.stale else "LIVE",
         "STALE": "STALE",

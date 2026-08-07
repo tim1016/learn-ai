@@ -13,6 +13,33 @@ review. In the default compose layout those two roots are
 `artifacts/alpaca_clerk/` and `artifacts/`; do not silently substitute one for the
 other.
 
+## SQLite WAL storage boundary
+
+SQLite WAL requires every process that opens an authority database to share one
+host locking and shared-memory domain. The default Podman compose layout therefore
+masks `/app/artifacts/alpaca_clerk` with the VM-local `alpaca-clerk-data` named
+volume; it must not run from the parent macOS `virtiofs` bind mount. Startup refuses
+known remote/FUSE filesystem types before opening or creating `clerk.db`.
+
+Do not open or copy a live authority database, WAL, or SHM file from the macOS host.
+In the default compose layout, run the commands in this document inside a one-shot
+`python-service` container so recovery tooling and the service use the same Linux
+host and named volume. For example, after satisfying the stop boundary below:
+
+```bash
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_sqlite_clerk \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --account-id PA-EXAMPLE \
+  rebuild
+```
+
+Use `/app/artifacts` for runner evidence arguments and output files that must remain
+visible on the host. Native non-container deployments may use the direct
+`.venv/bin/python` examples below only when the Clerk root is on a local filesystem
+and every SQLite connection runs on that same host. Never alternate host and
+container SQLite clients against one WAL authority.
+
 ## Stop boundary
 
 Online backup is the only ceremony allowed while the Clerk is running. Before restore,
@@ -38,8 +65,24 @@ empty-list bypass.
 
 A corrupt database may make its lease row
 unreadable, so a database error is **not** proof that the process stopped. In that case,
-the independent process-stop check above is a mandatory precondition. Never remove a
-WAL, SHM, database, mirror, activation record, or quarantine file by hand.
+the independent process-stop check above is a mandatory precondition and the recovery
+command requires a fresh account-bound evidence file:
+
+```json
+{
+  "account_id": "PA-EXAMPLE",
+  "observed_at_ms": 1800000000000,
+  "proof_reference": "incident/2026-08-07/process-stop-proof.json"
+}
+```
+
+Pass it to `restore`, `rebuild`, or `reset` as
+`--process-stop-evidence /absolute/process-stop-evidence.json`. The default freshness
+window is 120 seconds; a reviewed ceremony may tighten it with
+`--max-process-stop-evidence-age-ms`. The proof is consulted only when the authority
+lease cannot be read, and its reference is copied into the recovery receipt. A readable
+unexpired lease always refuses recovery regardless of this file. Never remove a WAL,
+SHM, database, mirror, activation record, or quarantine file by hand.
 
 ## Broker evidence files
 
@@ -116,6 +159,10 @@ fence before moving the old DB files.
   --account-id PA-EXAMPLE \
   rebuild
 ```
+
+If the corrupt database prevents the command from reading its lease, repeat the
+command with the fresh process-stop evidence described above. Do not supply that file
+as a substitute for actually stopping the process.
 
 A tampered, gapped, prepare-only, substituted-account, or wrong-generation mirror is
 not recoverable by this command. Preserve the evidence and escalate to reset review.
