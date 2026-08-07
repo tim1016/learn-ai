@@ -474,7 +474,16 @@ def write_lean_daily_zip(
     Returns:
         Path to the written zip file.
     """
-    safe = _safe_symbol(symbol).lower()
+    validated_symbol = _safe_symbol(symbol)
+    # Keep the regex capture in the same function as the path operation.
+    # CodeQL recognizes Match.group() as the sanitizing boundary, while an
+    # equivalent validator hidden behind a helper can remain tainted.
+    from app.lean_sidecar.workspace import TICKER_SYMBOL_PATTERN
+
+    match = TICKER_SYMBOL_PATTERN.fullmatch(validated_symbol)
+    if match is None:  # Defensive: _safe_symbol already rejects this case.
+        raise ValueError(f"invalid validated ticker symbol: {validated_symbol!r}")
+    safe = match.group(0).lower()
     zip_path = ensure_within_root(
         output_root,
         Path(output_root) / "equity" / "usa" / "daily" / f"{safe}.zip",

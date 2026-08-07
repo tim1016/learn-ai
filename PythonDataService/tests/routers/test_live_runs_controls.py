@@ -241,9 +241,42 @@ async def test_status_cache_busts_on_command_write(live_runs_root):
     assert cs["latest_verb"] == "FLATTEN"
 
 
-async def test_path_traversal_run_id_rejected(live_runs_root):
-    """Boundary: traversal/separator run_ids are rejected (never 200)."""
+@pytest.mark.parametrize(
+    "endpoint",
+    (
+        "status",
+        "log-tail",
+        "trades",
+        "executions",
+        "failures",
+        "incidents",
+        "desired-state",
+        "commands",
+    ),
+)
+async def test_path_traversal_run_id_rejected(live_runs_root, endpoint):
+    """Boundary: no run-artifact endpoint accepts a path-like run ID."""
     async with _client() as client:
         for bad in ("..", "a%2Fb", "."):
-            resp = await client.get(f"/api/live-runs/{bad}/status")
+            resp = await client.get(f"/api/live-runs/{bad}/{endpoint}")
             assert resp.status_code in (400, 404)
+
+
+async def test_symlinked_run_directory_is_not_read(live_runs_root):
+    """Regression: a valid run ID cannot select artifacts outside the run root."""
+    run_id = "run-link-" + "z" * 55
+    outside = live_runs_root.parent / "outside"
+    outside.mkdir()
+    (outside / "run_ledger.json").write_text(
+        json.dumps(_ledger(run_id, sid="outside")), encoding="utf-8"
+    )
+    link = live_runs_root / run_id
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    async with _client() as client:
+        resp = await client.get(f"/api/live-runs/{run_id}/status")
+
+    assert resp.status_code == 404
