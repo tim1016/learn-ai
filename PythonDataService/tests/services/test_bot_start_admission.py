@@ -7,21 +7,30 @@ MarketDataAdmissionFact directly, and tests/broker/v2panel/test_market_pulse.py
 monkeypatches market_data_admission_fact itself, so neither exercises the real
 FeedHealth -> MarketDataAdmissionFact translation.
 
-Two known limitations are pinned here as characterization tests (not fixed —
-operator decision 2026-08-07 was to defer, see the incident note in
+Three known limitations are pinned here as characterization tests (not fixed
+— operator decision 2026-08-07 was to defer, see the incident note in
 docs/audits/alpaca-sqlite-closure-plan-and-session-2026-08-07.md):
 
 - H1: the 3-minute stale grace window in IbkrMarketDataFeed.health() means a
-  feed that died just after its last bar still reports stale=False (healthy)
-  until the threshold elapses.
+  feed that died just after completing its last bar still reports
+  stale=False (healthy) until the threshold elapses.
 - H2: a stale feed with no active subscription resolves to AVAILABLE/idle
   rather than STALE, since stalled_subscription requires
   active_subscription_count > 0.
+- H3: a feed that has never completed a single closed bar reports
+  stale=False *indefinitely* — not bounded by the 3-minute threshold at all.
+  This is the literal 2026-08-07 canary shape (one IBKR 5-second print, no
+  follow-up): app/broker/ibkr/bars.py::aggregate_realtime_bar only emits a
+  minute when a *later* 5-second bar rolls the accumulator over, so
+  IbkrMarketDataFeed._last_bar_wall_ms never left its None default and
+  health()'s stale computation never ran (the `elif self._last_bar_wall_ms
+  is not None` guard). H3 is strictly worse than H1 — it has no expiry.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -33,7 +42,9 @@ from app.broker.alpaca.clerk.models import (
     CustodyExposureFact,
     HoldState,
 )
+from app.broker.alpaca.clerk.stream_health import market_data_channel_health
 from app.marketdata.feed import FeedHealth
+from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.schemas.run_admission import (
     MarketDataAdmissionFact,
     RunProcessAdmissionFact,
@@ -62,6 +73,14 @@ class _RaisingFeed:
 
     def health(self) -> FeedHealth:
         raise RuntimeError("simulated health-probe failure")
+
+
+def _fake_connected_client() -> MagicMock:
+    """A minimal IbkrClient double: connected, never lost."""
+    client = MagicMock()
+    client.is_connected.return_value = True
+    client.connection_lost = False
+    return client
 
 
 def _session(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
@@ -224,28 +243,84 @@ def test_market_data_admission_fact_available_when_advancing(
 def test_grace_window_is_a_known_limitation(monkeypatch: pytest.MonkeyPatch) -> None:
     """H1: within the 3-minute stale threshold, a dead feed still reads AVAILABLE.
 
-    IbkrMarketDataFeed.health() only flips stale=True once age_ms exceeds the
-    3-minute default threshold. A feed that died just after its last bar is
-    indistinguishable from a healthy one until that threshold elapses — for a
-    5-second-bar strategy that is ~36 missed bars of unrecognized deadness.
-    This is a tracked, deferred limitation (2026-08-07 operator decision), not
-    a bug fixed by this test. If the threshold ever becomes bar-interval-aware,
-    this test should be revisited deliberately, not silently broken.
-    """
-    _session(monkeypatch, "RTH")
-    health = FeedHealth(
-        connected=True,
-        stale=False,
-        last_bar_ms=_NOW - 170_000,
-        reason="",
-        active_subscription_count=1,
-        observed_at_ms=_NOW - 1_000,
-    )
-    feed = _Feed(health)
+    Drives the real IbkrMarketDataFeed.health() threshold computation (not a
+    hand-fabricated FeedHealth) so this test actually detects a changed
+    threshold, a unit-conversion bug, or a boundary regression — then chains
+    that real health through market_data_admission_fact, exactly as
+    production does.
 
-    fact = market_data_admission_fact(feed, _NOW - 1_000, use_rth=True)
+    A feed that completed its last bar just under 3 minutes ago is
+    indistinguishable from a healthy one until the threshold elapses — for a
+    5-second-bar strategy that is up to ~36 missed bars of unrecognized
+    deadness. This is a tracked, deferred limitation (2026-08-07 operator
+    decision), not a bug fixed by this test. If the threshold ever becomes
+    bar-interval-aware, this test should be revisited deliberately, not
+    silently broken.
+    """
+    fixed_now = _NOW - 1_000
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: fixed_now)
+    _session(monkeypatch, "RTH")
+
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+    feed._last_bar_wall_ms = fixed_now - 170_000  # under the 180s default threshold
+    feed._last_bar_ms = fixed_now - 170_000
+    feed._active_count = 1
+
+    health = feed.health()
+    assert health.stale is False  # the real threshold computation, not injected
+
+    fact = market_data_admission_fact(feed, fixed_now, use_rth=True)
 
     assert fact.state == "AVAILABLE"
+
+
+def test_never_advanced_feed_is_an_unbounded_known_limitation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H3: a feed that never completed a single bar reads AVAILABLE forever.
+
+    This is the literal 2026-08-07 canary: one IBKR 5-second print arrived
+    and no follow-up ever did, so the minute accumulator never rolled over
+    and IbkrMarketDataFeed._last_bar_wall_ms never left its None default.
+    health()'s stale computation only runs `elif self._last_bar_wall_ms is
+    not None` (app/marketdata/ibkr_feed.py) — with no bar ever completed,
+    that branch never executes, so stale stays False no matter how much wall
+    clock elapses. Unlike H1, there is no threshold that eventually catches
+    this: it is unbounded.
+
+    Both the Start admission fact and the dual-health submission gate are
+    fooled by this state, so a bot could both start and keep submitting
+    against a feed that has never proven it is alive. This is a tracked,
+    deferred limitation (2026-08-07 operator decision) pinned deliberately,
+    not fixed here — see the incident note for the production risk this
+    implies and #1407 for the follow-up.
+    """
+    far_future = _NOW + 60 * 60 * 1_000  # an hour later — proves it's unbounded
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: far_future)
+    _session(monkeypatch, "RTH")
+
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+    feed._active_count = 1  # a run is actively subscribed
+    # _last_bar_ms / _last_bar_wall_ms deliberately left at their None default:
+    # no bar was ever completed, exactly like the 2026-08-07 canary.
+
+    health = feed.health()
+    assert health.connected is True
+    assert health.stale is False
+    assert health.last_bar_ms is None
+
+    fact = market_data_admission_fact(feed, far_future, use_rth=True)
+    assert fact.state == "AVAILABLE"
+
+    decision = evaluate_run_admission(
+        _start_facts(fact, observed_at_ms=far_future),
+        _clerk(observed_at_ms=far_future),
+        evaluated_at_ms=far_future,
+    )
+    assert decision.allowed is True  # the gap: Start is admitted with zero proof of life
+
+    channel_health = market_data_channel_health(health, now_ms=far_future)
+    assert channel_health.healthy is True  # the submission gate is fooled too
 
 
 def test_stale_feed_with_no_active_subscription_is_idle_available(

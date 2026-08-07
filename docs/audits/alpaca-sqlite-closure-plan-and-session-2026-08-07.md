@@ -125,16 +125,35 @@ operator hand-off for the next available market session.
 (`app/marketdata/ibkr_feed.py`) already computes `stale` from bar-advancement
 age, not from IBKR's `subscriptions_stale` flag — the 2026-08-07 canary's
 socket never raised that flag, so a connection-only health check would have
-misread the stall as healthy. The advancement-based check exists and, once it
-fires, correctly refuses Start (`MARKET_DATA_STALE`) and refuses submission
-(`STREAM_HEALTH_HOLD`) through the dual-health gate. The gap is not "no
-staleness check" — it is that the check has two known blind windows:
+misread the stall as healthy. The advancement-based check exists, but PR
+review (2026-08-07) traced the exact `app/broker/ibkr/bars.py::stream_minute_bars`
+/ `aggregate_realtime_bar` aggregation and found the check almost certainly
+**never engaged at all** in the literal incident:
 
-- **H1 — grace window.** `stale` only flips `True` once `age_ms` exceeds the
-  3-minute default threshold (`_STALE_THRESHOLD_MS`,
-  `app/marketdata/ibkr_feed.py`). A feed that dies immediately after its last
-  bar reads as healthy for up to 3 minutes — roughly 36 missed bars for a
-  5-second-bar strategy like the 2026-08-07 canary.
+`aggregate_realtime_bar` only emits a closed minute bar when a *later*
+5-second print rolls the accumulator over into a new minute — the first
+5-second print of any minute always returns `emitted=None`. The canary
+received exactly one 5-second print and no follow-up, so
+`stream_minute_bars` never yielded, `IbkrMarketDataFeed.stream_bars`'s loop
+body never ran, and `_last_bar_wall_ms` stayed at its `None` default for the
+whole stall. `health()`'s staleness branch is `elif self._last_bar_wall_ms is
+not None:` — with that guard never true, `stale` stayed `False` and would
+have stayed `False` indefinitely, not just for a bounded window. The
+operator's manual stop, not the staleness check, is what actually prevented
+exposure that morning.
+
+This reframes the gap from "the check has a grace window" to three known
+blind windows, ordered by severity:
+
+- **H3 — never advanced (most severe, unbounded).** A feed that has never
+  completed a single closed bar reports `stale=False` forever, regardless of
+  elapsed time, as long as `_last_bar_wall_ms` stays `None`. This is the
+  literal 2026-08-07 shape. No threshold ever resolves it.
+- **H1 — grace window (bounded).** Once at least one bar has completed,
+  `stale` only flips `True` after `age_ms` exceeds the 3-minute default
+  threshold (`_STALE_THRESHOLD_MS`). A feed that dies immediately after a
+  completed bar reads as healthy for up to 3 minutes — roughly 36 missed
+  bars for a 5-second-bar strategy.
 - **H2 — idle / no active subscription.** The admission translation
   (`market_data_admission_fact`, `app/services/bot_start_admission.py`) only
   treats a stale feed as blocking when `active_subscription_count > 0`. A
@@ -142,12 +161,15 @@ staleness check" — it is that the check has two known blind windows:
   `STALE`, so a feed that went stale *between* runs offers no positive proof
   of liveness before the next Start.
 
-**Operator decision (2026-08-07):** pin the current (correct, advancement-based)
-behavior with a regression and record H1/H2 as tracked, deferred limitations
-rather than changing the threshold or the idle-subscription rule today. No
-new GitHub defect issue was opened for the stall; this note is the durable
-record per that decision. A bar-interval-aware stale threshold remains a
-proposed follow-up.
+**Operator decision (2026-08-07):** pin all three as characterization
+regressions and record them as tracked, deferred limitations rather than
+changing the threshold, the idle-subscription rule, or adding a
+never-advanced guard today. No new GitHub defect issue was opened for the
+stall; this note plus #1407 are the durable record per that decision. A
+bar-interval-aware stale threshold, and a positive-liveness requirement
+before a feed with zero completed bars can authorize exposure, remain
+proposed follow-ups — the H3 finding raises the priority of the latter,
+since it is unbounded rather than a 3-minute window.
 
 **Regression added:** `PythonDataService/tests/services/test_bot_start_admission.py`
 — the previously-untested `FeedHealth -> MarketDataAdmissionFact` translation
@@ -156,21 +178,33 @@ seam (`market_data_admission_fact`). Neither `tests/services/test_run_admission.
 (monkeypatches the function) exercised this seam before.
 
 - `test_connected_nonadvancing_feed_during_rth_is_stale_and_blocks_start` —
-  headline regression: a `FeedHealth` shaped like the 2026-08-07 stall
-  (connected, stale past threshold, active subscription, RTH) resolves to
-  `STALE` and, chained through `evaluate_run_admission`, blocks Start with
-  `MARKET_DATA_STALE`. Verified to fail if the admission translation is
-  reverted to always return `AVAILABLE`.
+  headline regression: a `FeedHealth` shaped like a feed that went stale
+  *after* completing bars (connected, stale past threshold, active
+  subscription, RTH) resolves to `STALE` and, chained through
+  `evaluate_run_admission`, blocks Start with `MARKET_DATA_STALE`. Verified
+  to fail if the admission translation is reverted to always return
+  `AVAILABLE`.
 - `test_market_data_admission_fact_unavailable_when_disconnected`,
   `test_market_data_admission_fact_unknown_when_health_probe_raises` (fails
   closed to `UNKNOWN`, chained to `MARKET_DATA_UNKNOWN`),
   `test_market_data_admission_fact_available_when_advancing` — the remaining
   state matrix.
-- `test_grace_window_is_a_known_limitation` (H1) and
-  `test_stale_feed_with_no_active_subscription_is_idle_available` (H2) —
-  characterization tests that pin today's behavior deliberately, so a future
-  threshold or idle-subscription change trips them on purpose rather than
-  silently.
+- `test_grace_window_is_a_known_limitation` (H1) — drives the *real*
+  `IbkrMarketDataFeed.health()` threshold computation (not an injected
+  `FeedHealth`), so it actually detects a changed threshold or a boundary
+  regression, then chains that real health through
+  `market_data_admission_fact`.
+- `test_never_advanced_feed_is_an_unbounded_known_limitation` (H3) — the
+  literal incident replica: a real `IbkrMarketDataFeed` that never completed
+  a bar, checked an hour later to prove the blind window is unbounded.
+  Chains through both `evaluate_run_admission` (Start is admitted) and the
+  dual-health submission gate (`market_data_channel_health` — also fooled),
+  proving both authorization paths are exposed, not just Start.
+- `test_stale_feed_with_no_active_subscription_is_idle_available` (H2).
+
+All three characterization tests pin today's behavior deliberately, so a
+future threshold, idle-subscription, or never-advanced-guard change trips
+them on purpose rather than silently.
 
 This closes the synthetic half of "Diagnose the feed stall" in the Closure
 sequence below. The live read-only reproduction, the repeated canary, and the
