@@ -21,6 +21,7 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -29,6 +30,7 @@ from app.broker.alpaca.clerk import (
     ClerkAdmissionSnapshotChangedError,
     set_alpaca_clerk,
 )
+from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -141,7 +143,7 @@ class _FakeFeed:
         if self._mode == "hold":
             await asyncio.Event().wait()
 
-    def health(self) -> FeedHealth:
+    def health(self, _symbol: str | None = None) -> FeedHealth:
         return FeedHealth(
             connected=True,
             stale=False,
@@ -153,13 +155,13 @@ class _FakeFeed:
 
 
 class _StaleFeed(_FakeFeed):
-    def health(self) -> FeedHealth:
-        return super().health().model_copy(update={"stale": True, "reason": "No recent closed bar."})
+    def health(self, symbol: str | None = None) -> FeedHealth:
+        return super().health(symbol).model_copy(update={"stale": True, "reason": "No recent closed bar."})
 
 
 class _ActiveStaleFeed(_StaleFeed):
-    def health(self) -> FeedHealth:
-        return super().health().model_copy(update={"active_subscription_count": 1})
+    def health(self, symbol: str | None = None) -> FeedHealth:
+        return super().health(symbol).model_copy(update={"active_subscription_count": 1})
 
 
 class _CancellationSuppressingFeed(_FakeFeed):
@@ -2142,6 +2144,7 @@ def _green_bar(end_ms: int, symbol: str = "SPY") -> MarketDataBar:
 @pytest.mark.asyncio
 async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
     tmp_path: Path,
+    _isolated_clerk_dir: Path,
 ) -> None:
     repo = ClerkSqliteRepository.initialize(
         account_id="PA-TEST",
@@ -2193,20 +2196,26 @@ async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
 class _FakeEffectResult:
     """Minimal Clerk-authored effect receipt used by the strategy adapter."""
 
-    def __init__(self, order_ref: str) -> None:
-        self.state = type("EffectState", (), {"value": "submitted"})()
+    def __init__(self, order_ref: str, *, state: str = "submitted") -> None:
+        self.state = type("EffectState", (), {"value": state})()
         self.child_order_refs = (order_ref,)
 
 
 class _FakeClerk:
     """Minimal AlpacaClerk double that captures semantic effect operations."""
 
-    def __init__(self, *, should_raise: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        should_raise: Exception | None = None,
+        effect_state: str = "submitted",
+    ) -> None:
         self.calls: list[dict] = []
         self.stop_cancellations: list[str] = []
         self.registered_runs: list[str] = []
         self.stopped_runs: list[str] = []
         self._should_raise = should_raise
+        self._effect_state = effect_state
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         self.registered_runs.append(binding.run_id)
@@ -2248,7 +2257,10 @@ class _FakeClerk:
             "action_plan": action_plan,
         }
         self.calls.append(call)
-        return _FakeEffectResult(order_ref=f"learn-ai/{strategy_instance_id}/v1:fake{len(self.calls):02d}")
+        return _FakeEffectResult(
+            order_ref=f"learn-ai/{strategy_instance_id}/v1:fake{len(self.calls):02d}",
+            state=self._effect_state,
+        )
 
 
 def _install_fake_clerk(monkeypatch: pytest.MonkeyPatch, clerk: _FakeClerk) -> None:
@@ -2320,6 +2332,139 @@ async def test_ema_trade_bot_matches_first_lean_round_trip(
         (f"{_EMA_FIRST_ENTER_MS}:ENTER", "ENTER", 3),
         (f"{_EMA_FIRST_EXIT_MS}:EXIT", "EXIT", 3),
     ]
+
+
+@pytest.mark.asyncio
+async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolated_clerk_dir: Path,
+) -> None:
+    clerk = _FakeClerk()
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    _install_fake_clerk(monkeypatch, clerk)
+    feed = _FakeFeed(
+        [_bar(_RTH_MS + offset * 60_000) for offset in range(3)],
+        mode="hold",
+    )
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        symbol="SPY",
+        mode="trade",
+        quantity=1,
+    )
+    await _wait_for(lambda: feed.bars_consumed == 3)
+    await _wait_for(
+        lambda: len(
+            DecisionJournal(
+                account_id="PA-TEST",
+                sid=_SID,
+                root=_isolated_clerk_dir,
+            ).tail(3)
+        )
+        == 3
+    )
+    await registry.stop("alpaca", _SID)
+
+    decisions = DecisionJournal(
+        account_id="PA-TEST",
+        sid=_SID,
+        root=_isolated_clerk_dir,
+    ).tail(3)
+    assert [decision.outcome for decision in decisions] == [
+        "no_action",
+        "enter_intent",
+        "no_action",
+    ]
+    assert [decision.bar_ref for decision in decisions] == [
+        f"SPY@{_RTH_MS + offset * 60_000 + 60_000}" for offset in range(3)
+    ]
+    assert decisions[1].intent_id.endswith(":ENTER")
+    assert decisions[1].order_ref == ""
+
+
+@pytest.mark.asyncio
+async def test_sqlite_trade_bot_does_not_label_an_uncertain_effect_as_entered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolated_clerk_dir: Path,
+) -> None:
+    clerk = _FakeClerk(effect_state="uncertain")
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    _install_fake_clerk(monkeypatch, clerk)
+    feed = _FakeFeed(
+        [_bar(_RTH_MS + offset * 60_000) for offset in range(2)],
+        mode="hold",
+    )
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        symbol="SPY",
+        mode="trade",
+        quantity=1,
+    )
+    await _wait_for(lambda: len(clerk.calls) == 1)
+    await registry.stop("alpaca", _SID)
+
+    decisions = DecisionJournal(
+        account_id="PA-TEST",
+        sid=_SID,
+        root=_isolated_clerk_dir,
+    ).tail(2)
+    assert decisions[-1].outcome == "enter_intent"
+    assert decisions[-1].reason_code == "STRATEGY_ENTER"
+
+
+@pytest.mark.asyncio
+async def test_decision_receipt_failure_prevents_the_broker_effect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolated_clerk_dir: Path,
+) -> None:
+    clerk = _FakeClerk()
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    _install_fake_clerk(monkeypatch, clerk)
+    original = DecisionJournal.append_for_bar
+
+    def fail_enter_receipt(
+        self: DecisionJournal,
+        **fields: Any,
+    ) -> DecisionReceipt:
+        if fields["outcome"] == "enter_intent":
+            raise OSError("injected decision journal failure")
+        return original(self, **fields)
+
+    monkeypatch.setattr(DecisionJournal, "append_for_bar", fail_enter_receipt)
+    feed = _FakeFeed(
+        [_bar(_RTH_MS + offset * 60_000) for offset in range(2)],
+        mode="hold",
+    )
+    registry = _registry(tmp_path, feed)
+
+    await registry.deploy(
+        broker="alpaca",
+        strategy_instance_id=_SID,
+        strategy_key="deployment_validation",
+        symbol="SPY",
+        mode="trade",
+        quantity=1,
+    )
+    await _wait_for(lambda: not registry.status("alpaca", _SID).running)
+
+    assert clerk.calls == []
+    outcome = registry.status("alpaca", _SID).duty_outcome
+    assert outcome is not None
+    assert outcome.kind == "CRASHED"
 
 
 @pytest.mark.asyncio

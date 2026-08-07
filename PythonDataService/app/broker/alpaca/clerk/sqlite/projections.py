@@ -256,6 +256,7 @@ class SqliteClerkProjectionReader:
         *,
         strategy_instance_id: str | None = None,
         order_ref: str | None = None,
+        effect_operation_id: str | None = None,
         cursor: str | None = None,
         page_size: int = DEFAULT_TIMELINE_PAGE_SIZE,
     ) -> TimelinePage:
@@ -274,6 +275,7 @@ class SqliteClerkProjectionReader:
                     cursor,
                     strategy_instance_id=strategy_instance_id,
                     order_ref=order_ref,
+                    effect_operation_id=effect_operation_id,
                 )
             where = "sequence <= ? AND sequence < ?"
             parameters: list[object] = [anchor_sequence, before_sequence]
@@ -283,6 +285,9 @@ class SqliteClerkProjectionReader:
             if order_ref is not None:
                 where += " AND order_ref = ?"
                 parameters.append(order_ref)
+            if effect_operation_id is not None:
+                where += " AND effect_operation_id = ?"
+                parameters.append(effect_operation_id)
             rows = self._conn.execute(
                 "SELECT sequence, effect_operation_id, command_id, order_ref, broker_order_id, "
                 "transition_kind, operation_state, broker_state, custody_owner, "
@@ -299,6 +304,9 @@ class SqliteClerkProjectionReader:
             if order_ref is not None:
                 total_where += " AND order_ref = ?"
                 total_parameters.append(order_ref)
+            if effect_operation_id is not None:
+                total_where += " AND effect_operation_id = ?"
+                total_parameters.append(effect_operation_id)
             total = self._conn.execute(
                 f"SELECT COUNT(*) AS count FROM custody_transitions WHERE {total_where}",
                 total_parameters,
@@ -313,6 +321,7 @@ class SqliteClerkProjectionReader:
                 before_sequence=entries[-1].sequence,
                 strategy_instance_id=strategy_instance_id,
                 order_ref=order_ref,
+                effect_operation_id=effect_operation_id,
             )
         return TimelinePage(
             account_id=self._account_id,
@@ -777,6 +786,7 @@ class SqliteClerkProjectionReader:
         before_sequence: int,
         strategy_instance_id: str | None,
         order_ref: str | None,
+        effect_operation_id: str | None,
     ) -> str:
         encoded = json.dumps(
             {
@@ -784,6 +794,7 @@ class SqliteClerkProjectionReader:
                 "authority_generation": self._authority_generation,
                 "strategy_instance_id": strategy_instance_id,
                 "order_ref": order_ref,
+                "effect_operation_id": effect_operation_id,
                 "anchor_sequence": anchor_sequence,
                 "before_sequence": before_sequence,
             },
@@ -798,6 +809,7 @@ class SqliteClerkProjectionReader:
         *,
         strategy_instance_id: str | None,
         order_ref: str | None,
+        effect_operation_id: str | None,
     ) -> tuple[int, int]:
         try:
             padding = "=" * (-len(cursor) % 4)
@@ -809,12 +821,14 @@ class SqliteClerkProjectionReader:
                 payload["authority_generation"],
                 payload["strategy_instance_id"],
                 payload["order_ref"],
+                payload["effect_operation_id"],
             )
             actual_scope = (
                 self._account_id,
                 self._authority_generation,
                 strategy_instance_id,
                 order_ref,
+                effect_operation_id,
             )
             anchor = payload["anchor_sequence"]
             before = payload["before_sequence"]

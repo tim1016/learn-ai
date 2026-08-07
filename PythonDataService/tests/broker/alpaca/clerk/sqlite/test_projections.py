@@ -157,6 +157,40 @@ def test_timeline_exposes_source_observation_and_record_clocks(tmp_path: Path) -
     assert entry.recorded_at_ms > 0
 
 
+def test_timeline_can_filter_by_effect_operation_identity(tmp_path: Path) -> None:
+    clock = _Clock()
+    repo = _repository(tmp_path, clock)
+    submit_start_run(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+        clock=clock,
+    )
+    accepted = accept_enter(
+        repo,
+        account_id=ACCOUNT_ID,
+        strategy_instance_id=SID,
+        decision_id="decision-1",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=clock)
+    try:
+        page = reader.timeline_page(
+            strategy_instance_id=SID,
+            effect_operation_id=accepted.effect_operation_id,
+        )
+    finally:
+        reader.close()
+        repo.close()
+
+    assert page.total_entries > 0
+    assert {entry.effect_operation_id for entry in page.entries} == {
+        accepted.effect_operation_id
+    }
+
+
 def test_bot_snapshot_is_one_coherent_read_despite_a_concurrent_commit(
     tmp_path: Path, monkeypatch
 ) -> None:

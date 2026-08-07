@@ -39,6 +39,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy application code
 COPY ./app ./app
+COPY ./scripts ./scripts
 
 # Pytest config — the runtime image does not ship pytest, but operators
 # install it ad-hoc into the running container (`podman exec ... pytest

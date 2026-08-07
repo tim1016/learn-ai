@@ -15,14 +15,13 @@ Architecture (phase-3 design §4 + #1258 L2 "one shared feed, in-process fan-out
   ``stream_bars("SPY")`` share one ``reqRealTimeBars`` subscription; each gets
   every closed minute bar; the last caller's ``async for`` exit releases the
   underlying IBKR subscription.
-* ``IBKRBarStreamError`` is caught at the boundary and re-raised as
-  ``MarketDataFeedError`` so no IBKR type escapes the port.
+* A connected but stalled ``reqRealTimeBars`` line is invalidated and
+  transparently replaced. Other ``IBKRBarStreamError`` failures are re-raised
+  as ``MarketDataFeedError`` so no IBKR type escapes the port.
 * ``health()`` reads the IBKR client's connection signals synchronously.  A
-  stale feed is detected by comparing the last-bar wall-clock against a
-  configurable threshold (default: 3 minutes, chosen to tolerate normal
-  pre-market and intra-day bar gaps without crying wolf, while surfacing a
-  truly dead feed within a reasonable window).  Bar gaps within the threshold
-  are non-fatal.
+  newly active feed fails closed until its first closed minute. Thereafter,
+  raw 5-second source activity must advance within a configurable threshold
+  (default: 30 seconds). Ordinary bar gaps remain non-fatal.
 * ``IbkrMinuteBar → MarketDataBar`` translation happens here, at the boundary.
   The translated bar carries ``feed_id="ibkr"`` as provenance.
 
@@ -35,8 +34,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 
-from app.broker.ibkr.bars import IBKRBarStreamError, stream_minute_bars
+from app.broker.ibkr.bars import (
+    IBKRBarStreamError,
+    IBKRBarSubscriptionStalled,
+    stream_minute_bars,
+)
 from app.broker.ibkr.client import IbkrClient, NotConnectedError
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.marketdata.feed import FeedHealth, MarketDataBar, MarketDataFeedError
@@ -44,7 +48,19 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-_STALE_THRESHOLD_MS: int = 3 * 60 * 1_000  # 3 minutes in ms
+_STALE_THRESHOLD_MS: int = 30_000
+
+
+@dataclass
+class _SymbolLiveness:
+    """Mutable ingestion watermarks owned by one normalized symbol."""
+
+    last_bar_ms: int | None = None
+    last_bar_wall_ms: int | None = None
+    last_source_ms: int | None = None
+    last_source_wall_ms: int | None = None
+    first_bar_seen: bool = False
+    active_count: int = 0
 
 
 class IbkrMarketDataFeed:
@@ -58,9 +74,9 @@ class IbkrMarketDataFeed:
         The data-plane's existing in-container ``IbkrClient``.  This feed
         uses it *read-only* — no order submission, no account queries.
     stale_threshold_ms:
-        How long without a bar before ``health()`` reports ``stale=True``.
-        Default is 3 minutes (180 000 ms).  Bar gaps shorter than this are
-        not reported as stale.
+        How long without raw source activity before ``health()`` reports
+        ``stale=True``. Default is 30 seconds. A newly active subscription is
+        stale until it emits its first closed minute.
     """
 
     feed_id: str = "ibkr"
@@ -73,11 +89,7 @@ class IbkrMarketDataFeed:
     ) -> None:
         self._client = client
         self._stale_threshold_ms = stale_threshold_ms
-        # Watermarks updated by every active stream_bars coroutine.
-        self._last_bar_ms: int | None = None
-        self._last_bar_wall_ms: int | None = None  # wall-clock when last bar arrived
-        # Count of currently active symbol subscriptions (one per active stream_bars call).
-        self._active_count: int = 0
+        self._symbol_liveness: dict[str, _SymbolLiveness] = {}
 
     async def stream_bars(
         self,
@@ -91,66 +103,143 @@ class IbkrMarketDataFeed:
         underlying ``reqRealTimeBars`` subscription.  The last caller's exit
         releases it.
 
-        Raises ``MarketDataFeedError`` when the IBKR connection dies.  Bar gaps
-        are non-fatal: the iterator resumes when the next bar arrives.
+        Raises ``MarketDataFeedError`` when the IBKR connection dies or the
+        source violates a data invariant. A stalled request is replaced
+        transparently. Closed-minute output gaps are non-fatal; source-heartbeat
+        silence is evaluated against IBKR's documented one-bar-per-five-seconds
+        ``reqRealTimeBars`` contract.
         """
-        self._active_count += 1
+        normalized_symbol = symbol.upper()
+        state = self._state_for(normalized_symbol)
+        if state.active_count == 0:
+            state.first_bar_seen = False
+        state.active_count += 1
         logger.info(
             "MarketDataFeed consumer attached",
             extra={
                 "action": "marketdata_consumer_attached",
                 "feed_id": self.feed_id,
-                "symbol": symbol,
+                "symbol": normalized_symbol,
                 "use_rth": use_rth,
-                "active_count": self._active_count,
+                "active_count": state.active_count,
             },
         )
         try:
-            async for ibkr_bar in stream_minute_bars(self._client, symbol, use_rth=use_rth):
-                bar = self._translate(ibkr_bar)
-                self._last_bar_ms = bar.start_ms
-                self._last_bar_wall_ms = now_ms_utc()
-                yield bar
+            replacements = 0
+            while True:
+                try:
+                    async for ibkr_bar in stream_minute_bars(
+                        self._client,
+                        normalized_symbol,
+                        use_rth=use_rth,
+                        on_source_bar=lambda source_ms: self._observe_source_bar(
+                            normalized_symbol,
+                            source_ms,
+                        ),
+                    ):
+                        bar = self._translate(ibkr_bar)
+                        state.last_bar_ms = bar.start_ms
+                        state.last_bar_wall_ms = now_ms_utc()
+                        state.first_bar_seen = True
+                        yield bar
+                    break
+                except IBKRBarSubscriptionStalled as exc:
+                    state.first_bar_seen = False
+                    replacements += 1
+                    logger.warning(
+                        "Replacing stalled IBKR real-time-bar subscription",
+                        extra={
+                            "action": "marketdata_stalled_subscription_replaced",
+                            "feed_id": self.feed_id,
+                            "symbol": normalized_symbol,
+                            "use_rth": use_rth,
+                            "replacement_count": replacements,
+                            "reason": str(exc),
+                        },
+                    )
         except (IBKRBarStreamError, NotConnectedError) as exc:
             raise MarketDataFeedError(str(exc)) from exc
         finally:
-            self._active_count = max(0, self._active_count - 1)
+            state.active_count = max(0, state.active_count - 1)
+            if state.active_count == 0:
+                state.first_bar_seen = False
             logger.info(
                 "MarketDataFeed consumer detached",
                 extra={
                     "action": "marketdata_consumer_detached",
                     "feed_id": self.feed_id,
-                    "symbol": symbol,
-                    "active_count": self._active_count,
+                    "symbol": normalized_symbol,
+                    "active_count": state.active_count,
                 },
             )
 
-    def health(self) -> FeedHealth:
-        """Return a synchronous point-in-time health snapshot."""
+    def health(self, symbol: str | None = None) -> FeedHealth:
+        """Return aggregate or symbol-scoped point-in-time feed health."""
         connected = self._client.is_connected() and not self._client.connection_lost
         now = now_ms_utc()
         stale = False
         reason = ""
+        normalized_symbol = symbol.upper() if symbol is not None else None
+        states = (
+            [(normalized_symbol, self._symbol_liveness.get(normalized_symbol))]
+            if normalized_symbol is not None
+            else list(self._symbol_liveness.items())
+        )
+        present_states = [(name, state) for name, state in states if state is not None]
+        active_states = [
+            (name, state)
+            for name, state in present_states
+            if state.active_count > 0
+        ]
+        active_count = sum(state.active_count for _, state in present_states)
+        last_bar_ms = max(
+            (state.last_bar_ms for _, state in present_states if state.last_bar_ms is not None),
+            default=None,
+        )
 
         if not connected:
             reason = "IBKR connection lost"
-        elif self._last_bar_wall_ms is not None:
-            age_ms = now - self._last_bar_wall_ms
-            if age_ms > self._stale_threshold_ms:
+        elif missing_first := [name for name, state in active_states if not state.first_bar_seen]:
+            stale = True
+            reason = (
+                f"Active IBKR feed for {', '.join(missing_first)} has not produced "
+                "its first closed bar"
+            )
+        else:
+            stale_ages = [
+                (name, now - freshness_wall_ms)
+                for name, state in active_states
+                if (freshness_wall_ms := state.last_source_wall_ms or state.last_bar_wall_ms)
+                is not None
+                and now - freshness_wall_ms > self._stale_threshold_ms
+            ]
+            if stale_ages:
                 stale = True
+                stale_names = ", ".join(name for name, _ in stale_ages)
+                oldest_age_ms = max(age_ms for _, age_ms in stale_ages)
                 reason = (
-                    f"No bar in {age_ms // 1000}s "
+                    f"No source bar for {stale_names} in {oldest_age_ms // 1000}s "
                     f"(threshold {self._stale_threshold_ms // 1000}s)"
                 )
 
         return FeedHealth(
             connected=connected,
             stale=stale,
-            last_bar_ms=self._last_bar_ms,
+            last_bar_ms=last_bar_ms,
             reason=reason,
-            active_subscription_count=self._active_count,
+            active_subscription_count=active_count,
             observed_at_ms=now,
         )
+
+    def _state_for(self, symbol: str) -> _SymbolLiveness:
+        """Return the one mutable liveness record for ``symbol``."""
+        return self._symbol_liveness.setdefault(symbol.upper(), _SymbolLiveness())
+
+    def _observe_source_bar(self, symbol: str, source_ms: int) -> None:
+        """Advance the raw-source liveness watermark at the ingestion edge."""
+        state = self._state_for(symbol)
+        state.last_source_ms = source_ms
+        state.last_source_wall_ms = now_ms_utc()
 
     @staticmethod
     def _translate(ibkr_bar: IbkrMinuteBar) -> MarketDataBar:

@@ -41,13 +41,33 @@ _WORKING_BROKER_STATES = frozenset(
 # received zero fill and must not render as satisfied.
 _FILLED_BROKER_STATES = frozenset({"filled", "partially_filled"})
 
+# SQLite owns broker-recovery actions after activation, but Resume remains a
+# bot-lifecycle action.  Preserve it from the generic panel policy instead of
+# trying to reconstruct its admission guard from the custody projection.
+SQLITE_PANEL_LIFECYCLE_ACTION_IDS = frozenset({"resume"})
+
 
 def adapt_sqlite_panel(
     panel: BotPanelView,
     projection: ClerkProjection,
 ) -> BotPanelView:
     """Replace JSONL-derived custody fields with one SQLite fold snapshot."""
-    actions = [_panel_action(item, projection.control_revision) for item in projection.recovery_actions]
+    lifecycle_actions = [
+        action.model_copy(update={"revision": projection.control_revision})
+        for action in panel.actions
+        if (
+            action.action_id in SQLITE_PANEL_LIFECYCLE_ACTION_IDS
+            and not panel.health.running
+        )
+    ]
+    actions = [
+        *lifecycle_actions,
+        *(
+            _panel_action(item, projection.control_revision)
+            for item in projection.recovery_actions
+            if item.action_id not in SQLITE_PANEL_LIFECYCLE_ACTION_IDS
+        ),
+    ]
     checks = [_readiness_check(item, projection.generated_at_ms) for item in projection.recovery_actions]
     ready_count = sum(check.ready for check in checks)
     return panel.model_copy(
@@ -365,4 +385,9 @@ def _station(station_id: str, state: str, receipt: str) -> StationView:
     )
 
 
-__all__ = ["adapt_sqlite_catalog", "adapt_sqlite_panel", "build_sqlite_catalog"]
+__all__ = [
+    "SQLITE_PANEL_LIFECYCLE_ACTION_IDS",
+    "adapt_sqlite_catalog",
+    "adapt_sqlite_panel",
+    "build_sqlite_catalog",
+]

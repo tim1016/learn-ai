@@ -12,6 +12,7 @@ import pytest
 from app.broker.ibkr import bars as bars_mod
 from app.broker.ibkr.bars import (
     IBKRBarStreamError,
+    IBKRBarSubscriptionStalled,
     LiveBarCounters,
     aggregate_realtime_bar,
     fetch_historical_minute_bars,
@@ -89,6 +90,18 @@ def test_realtime_bar_provenance_stamped_on_emitted_minute() -> None:
     assert emitted.venue == "SMART"
     assert emitted.session_phase == "RTH"
     assert emitted.use_rth is False
+
+
+def test_extended_hours_liveness_respects_weekend_calendar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sunday_overnight_ms = int(
+        datetime(2026, 8, 9, 5, 0, tzinfo=UTC).timestamp() * 1000
+    )
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: sunday_overnight_ms)
+
+    assert bars_mod._session_phase_for_ms(sunday_overnight_ms) == "CLOSED"
+    assert bars_mod._bars_expected_now(use_rth=False) is False
 
 
 def test_new_minute_fires_previous_closed_bar() -> None:
@@ -367,6 +380,50 @@ async def test_stream_minute_bars_yields_closed_bar_and_cancels() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_minute_bars_reports_raw_source_activity() -> None:
+    """#1411: source liveness advances before the minute consumer yields."""
+    client = _FakeClient()
+    client.ib.bars.insert(1, client.ib.bars[0])
+    source_ms: list[int] = []
+    stream = stream_minute_bars(
+        client,
+        "SPY",
+        use_rth=True,
+        on_source_bar=source_ms.append,
+    )
+
+    await stream.__anext__()
+    await stream.aclose()
+
+    assert source_ms == [
+        int(client.ib.bars[0].time.timestamp() * 1000),
+        int(client.ib.bars[2].time.timestamp() * 1000),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_raw_stream_invalidates_a_bounded_stalled_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1411: a connected one-print/zero-print line cannot hang forever."""
+    client = _FakeClient()
+    client.ib.bars = []
+    monkeypatch.setattr(bars_mod, "_bars_expected_now", lambda _use_rth: True)
+
+    stream = stream_raw_5s_bars(
+        client,
+        "SPY",
+        use_rth=True,
+        stall_timeout_s=0.01,
+    )
+
+    with pytest.raises(IBKRBarSubscriptionStalled, match="stalled"):
+        await stream.__anext__()
+
+    assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
 async def test_fetch_historical_minute_bars_stamps_provenance() -> None:
     client = _FakeClient()
     client.ib.historical_bars = [
@@ -540,6 +597,35 @@ async def test_late_shared_consumer_starts_after_existing_list_tail() -> None:
     assert client.ib.realtime_bar_cancel_count == 0
     second.release()
     assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_invalidated_generation_cannot_release_its_replacement() -> None:
+    """#1411: late cleanup from the dead line must not cancel the new line."""
+    client = _FakeClient()
+    client.ib.bars = []
+    registry = bars_mod._RealtimeBarSubscriptionRegistry()
+    contract = SimpleNamespace(conId=1, symbol="SPY")
+
+    stalled = await registry.acquire(
+        client, contract, bar_size=5, what_to_show="TRADES", use_rth=True
+    )
+    stalled_peer = await registry.acquire(
+        client, contract, bar_size=5, what_to_show="TRADES", use_rth=True
+    )
+
+    assert stalled.invalidate() is True
+    assert client.ib.realtime_bar_cancel_count == 1
+
+    client.ib.bars = []
+    replacement = await registry.acquire(
+        client, contract, bar_size=5, what_to_show="TRADES", use_rth=True
+    )
+
+    assert stalled_peer.release() is False
+    assert client.ib.realtime_bar_cancel_count == 1
+    assert replacement.release() is True
+    assert client.ib.realtime_bar_cancel_count == 2
 
 
 @pytest.mark.asyncio

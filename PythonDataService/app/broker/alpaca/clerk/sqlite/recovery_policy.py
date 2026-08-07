@@ -14,6 +14,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Literal, TypeGuard
 
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     AuthorityHealth,
     ClerkScope,
@@ -288,7 +289,7 @@ def _relevant_positions(ctx: RecoveryPolicyContext) -> tuple[ProjectedPosition, 
         position
         for position in _scoped_positions(ctx)
         if math.isfinite(position.attributed_qty)
-        and abs(position.attributed_qty) > 0
+        and position_quantity_is_nonzero(position.attributed_qty)
     )
 
 

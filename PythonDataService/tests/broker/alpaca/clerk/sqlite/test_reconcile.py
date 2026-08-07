@@ -21,6 +21,10 @@ import pytest
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
+from app.broker.alpaca.clerk.sqlite.folds import (
+    POSITION_QTY_EPSILON,
+    position_quantity_is_nonzero,
+)
 from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -38,6 +42,25 @@ from conftest import _clock_at, _hold_transition
 ACCOUNT_ID = "PA-TEST"
 SID = "spy-bot"
 RUN_ID = "run-1"
+APPROVED_POSITION_QTY_EPSILON = 0.000000001
+
+
+@pytest.mark.parametrize(
+    ("quantity", "expected"),
+    [
+        (0.0, False),
+        (0.0000000005, False),
+        (-0.0000000005, False),
+        (0.000000001, True),
+        (-0.000000001, True),
+    ],
+)
+def test_position_quantity_boundary_is_unambiguous(
+    quantity: float,
+    expected: bool,
+) -> None:
+    assert POSITION_QTY_EPSILON == APPROVED_POSITION_QTY_EPSILON
+    assert position_quantity_is_nonzero(quantity) is expected
 
 
 @pytest.fixture
@@ -343,6 +366,18 @@ def test_plan_drift_tolerance_ignores_float_residue_within_epsilon() -> None:
         attributed_positions={"SPY": 3.0},
     )
     assert plan.verdict == "clean"
+
+
+def test_plan_drift_uses_canonical_exact_epsilon_boundary() -> None:
+    plan = plan_account_reconciliation(
+        namespaces=_namespaces(),
+        broker_orders=[],
+        broker_positions=[_position("SPY", quantity=APPROVED_POSITION_QTY_EPSILON)],
+        attributed_positions={},
+    )
+
+    assert plan.verdict == "position_drift"
+    assert plan.drifted_symbols == ("SPY",)
 
 
 # ── reconcile_uncertain_order ────────────────────────────────────────────────

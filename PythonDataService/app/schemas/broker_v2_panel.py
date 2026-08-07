@@ -305,7 +305,14 @@ class RecentDecisionView(BaseModel):
 
     seq: int
     recorded_at_ms: int
-    outcome: Literal["entered", "exited", "no_action", "blocked"]
+    outcome: Literal[
+        "enter_intent",
+        "exit_intent",
+        "entered",
+        "exited",
+        "no_action",
+        "blocked",
+    ]
     reason_code: str
     bar_ref: str
     order_ref: str | None

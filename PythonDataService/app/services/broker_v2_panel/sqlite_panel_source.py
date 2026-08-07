@@ -29,6 +29,9 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     StaleRevisionError,
 )
+from app.services.broker_v2_panel.sqlite_panel_adapter import (
+    SQLITE_PANEL_LIFECYCLE_ACTION_IDS,
+)
 from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
     sqlite_clerk_status,
@@ -97,7 +100,11 @@ def _sqlite_roster_status(
     )
 
 
-async def read_sqlite_clerk_status(broker: str = "alpaca") -> ClerkStatus | None:
+async def read_sqlite_clerk_status(
+    broker: str = "alpaca",
+    *,
+    symbol: str | None = None,
+) -> ClerkStatus | None:
     facade = active_sqlite_facade(broker)
     if facade is None:
         return None
@@ -110,7 +117,7 @@ async def read_sqlite_clerk_status(broker: str = "alpaca") -> ClerkStatus | None
         raise RuntimeError("The active SQLite Clerk projection is unavailable.")
     return sqlite_clerk_status(
         projection,
-        channel_healths=facade.channel_health_snapshot(),
+        channel_healths=facade.channel_health_snapshot(symbol),
     )
 
 
@@ -171,6 +178,8 @@ async def execute_sqlite_panel_action(
     """Execute through the same policy that authored the presented action."""
     facade = active_sqlite_facade(broker)
     if facade is None:
+        return None
+    if request.action_id in SQLITE_PANEL_LIFECYCLE_ACTION_IDS:
         return None
     if request.revision != panel.revision:
         raise StaleRevisionError(

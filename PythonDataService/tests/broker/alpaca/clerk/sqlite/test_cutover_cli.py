@@ -15,6 +15,7 @@ from app.broker.alpaca.clerk.sqlite.cutover import CutoverRefused
 from scripts.manage_alpaca_sqlite_clerk import (
     _read_catalog_quarantine_plan,
     _read_cutover_evidence,
+    _read_process_stop_evidence,
     _read_reset_evidence,
 )
 from scripts.manage_alpaca_sqlite_clerk import main as recovery_cli
@@ -230,3 +231,27 @@ def test_read_reset_and_cutover_evidence_use_distinct_models(
     assert not hasattr(reset, "account_mode")
     with pytest.raises(ValueError, match="cutover broker evidence"):
         _read_cutover_evidence(evidence_path, ACCOUNT_ID)
+
+
+def test_read_process_stop_evidence_requires_exact_account_bound_fields(
+    tmp_path: Path,
+) -> None:
+    evidence_path = tmp_path / "process-stop-evidence.json"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "account_id": ACCOUNT_ID,
+                "observed_at_ms": PLAN_MS,
+                "proof_reference": "container-supervisor:stopped",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proof = _read_process_stop_evidence(evidence_path, ACCOUNT_ID)
+
+    assert proof is not None
+    assert proof.proof_reference == "container-supervisor:stopped"
+    with pytest.raises(ValueError, match="account_id"):
+        _read_process_stop_evidence(evidence_path, "OTHER")
+    assert _read_process_stop_evidence(None, ACCOUNT_ID) is None

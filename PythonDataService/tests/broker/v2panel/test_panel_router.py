@@ -93,7 +93,7 @@ class _HoldFeed:
         )
         await asyncio.Event().wait()
 
-    def health(self) -> FeedHealth:
+    def health(self, _symbol: str | None = None) -> FeedHealth:
         observed_at_ms = now_ms_utc()
         return FeedHealth(
             connected=True,

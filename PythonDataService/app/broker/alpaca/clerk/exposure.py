@@ -26,6 +26,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.contract.models import BrokerOrder, BrokerPosition, OrderSide
 from app.engine.live.journal_exposure import (
     ExecutionExposureEffect,
@@ -136,16 +137,18 @@ def account_exposure_deltas(
     *,
     inflight_symbols: frozenset[str] = frozenset(),
 ) -> dict[str, tuple[float, float]]:
-    """Per-symbol (expected, observed) exposure for symbols whose drift exceeds 1e-9.
+    """Per-symbol (expected, observed) exposure at the canonical nonzero boundary.
 
     Formula: for every symbol in expected ∪ observed, skipping any symbol in
       ``inflight_symbols`` (a working/non-terminal order can leave the
       broker's snapshot ahead of the journal's last fill callback — see
       ``derive.inflight_order_symbols``), include the pair when
-      ``abs(observed - expected) > 1e-9``.
+      ``position_quantity_is_nonzero(observed - expected)``.
     Reference: docs/references/clerk-custody-exposure-deltas.md (ADR 0030
       account-rooted custody; repository strict-float tolerance policy).
-    Canonical implementation: this function. Shared by
+    Canonical implementation: the boundary predicate is
+      ``app/broker/alpaca/clerk/sqlite/folds.py::position_quantity_is_nonzero``;
+      this function owns the legacy journal aggregation. Shared by
       ``derive.has_missing_intent``'s position-drift branch (boolean) and
       ``diagnosis._attribution_deltas`` (concrete per-symbol rows) so the
       comparison lives in exactly one place.
@@ -166,7 +169,7 @@ def account_exposure_deltas(
             continue
         expected_quantity = expected.get(symbol, 0.0)
         observed_quantity = observed.get(symbol, 0.0)
-        if abs(observed_quantity - expected_quantity) > 1e-9:
+        if position_quantity_is_nonzero(observed_quantity - expected_quantity):
             deltas[symbol] = (expected_quantity, observed_quantity)
     return deltas
 

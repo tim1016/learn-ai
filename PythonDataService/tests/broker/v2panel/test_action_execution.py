@@ -29,6 +29,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     execute_action,
 )
 from app.services.broker_v2_panel.panel_data_source import _action_performers, run_action
+from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_panel_action
 
 _SID = "bot-alpha"
 
@@ -246,6 +247,28 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
     assert exc.value.detail == "Start the bot before Stop."
 
 
+async def test_sqlite_panel_resume_defers_to_lifecycle_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1410: Resume is lifecycle work, not a SQLite recovery capability."""
+    monkeypatch.setattr(
+        "app.services.broker_v2_panel.sqlite_panel_source.active_sqlite_facade",
+        lambda _broker: object(),
+    )
+
+    result = await execute_sqlite_panel_action(
+        "alpaca",
+        "account-1",
+        _SID,
+        request=_request(action_id="resume"),
+        panel=SimpleNamespace(revision=42),
+        action=SimpleNamespace(concurrency_token="token"),
+        availability_error=None,
+    )
+
+    assert result is None
+
+
 async def test_idempotent_repost_survives_revision_advance() -> None:
     """A retry of an applied action stays a no-op even after the panel advances."""
 
@@ -436,7 +459,7 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
             return []
 
         def binding_for_control(self, _broker: str, _sid: str):
-            return SimpleNamespace(use_rth=True)
+            return SimpleNamespace(symbol="SPY", use_rth=True)
 
     class _Owner:
         def sync(self, *_args, **_kwargs) -> None:
@@ -448,7 +471,7 @@ async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> 
     async def _account(*_args) -> str:
         return "account-1"
 
-    async def _clerk():
+    async def _clerk(**_kwargs):
         return SimpleNamespace()
 
     status = SimpleNamespace(running=True)

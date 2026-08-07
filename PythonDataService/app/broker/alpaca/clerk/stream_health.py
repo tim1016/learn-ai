@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.models import ChannelHealth
 from app.marketdata.feed import FeedHealth
 
 ChannelHealthProvider = Callable[[], ChannelHealth]
+SymbolChannelHealthProvider = Callable[[str], ChannelHealth]
 
 
 def market_data_channel_health(
@@ -81,15 +82,27 @@ class StreamHealthGate:
 
     market_data: ChannelHealthProvider
     execution: ChannelHealthProvider
+    market_data_for_symbol: SymbolChannelHealthProvider | None = None
 
-    def snapshot(self) -> tuple[ChannelHealth, ChannelHealth]:
-        return (self.market_data(), self.execution())
+    def snapshot(self, symbol: str | None = None) -> tuple[ChannelHealth, ChannelHealth]:
+        market_data = (
+            self.market_data_for_symbol(symbol)
+            if symbol is not None and self.market_data_for_symbol is not None
+            else self.market_data()
+        )
+        return (market_data, self.execution())
 
-    def broken(self) -> tuple[ChannelHealth, ...]:
-        return tuple(health for health in self.snapshot() if not health.healthy)
+    def broken(self, symbol: str | None = None) -> tuple[ChannelHealth, ...]:
+        return tuple(
+            health for health in self.snapshot(symbol) if not health.healthy
+        )
 
 
-def stream_health_refusal(gate: StreamHealthGate | None) -> tuple[str, str] | None:
+def stream_health_refusal(
+    gate: StreamHealthGate | None,
+    *,
+    symbol: str | None = None,
+) -> tuple[str, str] | None:
     """``(reason, detail)`` for a submit refusal, or ``None`` when clear.
 
     ``reason`` names the broken stream(s) for the hold line; ``detail`` adds
@@ -98,7 +111,7 @@ def stream_health_refusal(gate: StreamHealthGate | None) -> tuple[str, str] | No
     """
     if gate is None:
         return None
-    broken = gate.broken()
+    broken = gate.broken(symbol)
     if not broken:
         return None
     names = ", ".join(health.stream for health in broken)
@@ -119,13 +132,20 @@ def build_default_stream_health_gate() -> StreamHealthGate:
     """
     from app.utils.timestamps import now_ms_utc
 
-    def _market_data() -> ChannelHealth:
+    def _market_data_scoped(symbol: str | None) -> ChannelHealth:
         from app.marketdata.ibkr_feed import get_market_data_feed
 
         feed = get_market_data_feed()
         return market_data_channel_health(
-            feed.health() if feed is not None else None, now_ms=now_ms_utc()
+            feed.health(symbol) if feed is not None else None,
+            now_ms=now_ms_utc(),
         )
+
+    def _market_data() -> ChannelHealth:
+        return _market_data_scoped(None)
+
+    def _market_data_for_symbol(symbol: str) -> ChannelHealth:
+        return _market_data_scoped(symbol)
 
     def _execution() -> ChannelHealth:
         from app.broker.alpaca.trade_updates import get_trade_updates_consumer
@@ -141,4 +161,8 @@ def build_default_stream_health_gate() -> StreamHealthGate:
             now_ms=now_ms_utc(),
         )
 
-    return StreamHealthGate(market_data=_market_data, execution=_execution)
+    return StreamHealthGate(
+        market_data=_market_data,
+        execution=_execution,
+        market_data_for_symbol=_market_data_for_symbol,
+    )

@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
+from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite import recovery as recovery_module
+from app.broker.alpaca.clerk.sqlite import repository_lifecycle
 from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
     ActivationRecordInvalid,
@@ -17,18 +22,22 @@ from app.broker.alpaca.clerk.sqlite.database_verification import verify_database
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorChainBroken
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.clerk.sqlite.recovery import (
+    ProcessStopProof,
     RecoveryRefused,
     ResetBrokerProof,
     create_verified_backup,
     preserve_and_rebuild_from_mirror,
     reset_authority,
     restore_verified_backup,
+    verify_authority_head,
     verify_backup_bundle,
 )
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     IntegrityCheckFailed,
+    RecoveryInProgress,
+    UnsupportedWalFilesystem,
 )
 
 ACCOUNT_ID = "PA-RECOVERY"
@@ -159,6 +168,26 @@ def test_interrupted_backup_keeps_previous_verified_publication(tmp_path: Path) 
     assert any(path.name.startswith(".incomplete-") for path in first.bundle_path.parent.iterdir())
 
 
+def test_verify_authority_head_matches_database_and_finalized_mirror(
+    tmp_path: Path,
+) -> None:
+    repo = _initialized(tmp_path)
+    repo.register_strategy_instance(
+        strategy_instance_id="spy",
+        symbol="SPY",
+        config_hash="h1",
+    )
+    repo.close()
+
+    verification = verify_authority_head(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+    )
+
+    assert verification.account_id == ACCOUNT_ID
+    assert verification.transition_count == 1
+
+
 def test_backup_creation_rejects_a_symbolic_link_publication_root(tmp_path: Path) -> None:
     repo = _initialized(tmp_path)
     account_dir = repo.db_path.parent
@@ -286,6 +315,12 @@ def test_restore_rejects_tampering_and_preserves_corrupt_database(tmp_path: Path
         account_id=ACCOUNT_ID,
         artifacts_root=tmp_path,
         bundle_path=backup.bundle_path,
+        process_stop_proof=ProcessStopProof(
+            account_id=ACCOUNT_ID,
+            observed_at_ms=NOW_MS,
+            proof_reference="container-supervisor:stopped",
+        ),
+        max_process_stop_proof_age_ms=1_000,
         clock=_clock,
     )
 
@@ -360,6 +395,188 @@ def test_rebuild_refuses_to_move_a_database_with_a_live_execution_lease(
 
     assert repo.db_path.is_file()
     repo.close()
+
+
+@pytest.mark.parametrize("operation", ["restore", "rebuild", "reset"])
+def test_destructive_recovery_excludes_concurrent_authority_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    repo = _initialized(tmp_path)
+    repo.register_strategy_instance(
+        strategy_instance_id="spy",
+        symbol="SPY",
+        config_hash="h1",
+    )
+    repo.close()
+    backup = create_verified_backup(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock,
+    )
+    preserve_name = (
+        "_preserve_generation_files" if operation == "reset" else "_preserve_database_files"
+    )
+    original_preserve = getattr(recovery_module, preserve_name)
+    recovery_entered = Event()
+    allow_recovery = Event()
+
+    def _pause_after_fence(*args: Any, **kwargs: Any) -> Any:
+        recovery_entered.set()
+        if not allow_recovery.wait(timeout=5):
+            raise TimeoutError("test did not release the recovery operation")
+        return original_preserve(*args, **kwargs)
+
+    monkeypatch.setattr(recovery_module, preserve_name, _pause_after_fence)
+
+    def _recover() -> object:
+        if operation == "restore":
+            return restore_verified_backup(
+                account_id=ACCOUNT_ID,
+                artifacts_root=tmp_path,
+                bundle_path=backup.bundle_path,
+                clock=_clock,
+            )
+        if operation == "rebuild":
+            return preserve_and_rebuild_from_mirror(
+                account_id=ACCOUNT_ID,
+                artifacts_root=tmp_path,
+                clock=_clock,
+            )
+        return reset_authority(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            broker_proof=ResetBrokerProof(
+                account_id=ACCOUNT_ID,
+                observed_at_ms=NOW_MS,
+                proof_reference="fake-broker-proof",
+                positions={},
+                open_order_ids=(),
+            ),
+            stopped_strategy_instance_ids=("spy",),
+            expected_strategy_instance_ids=("spy",),
+            max_proof_age_ms=1_000,
+            clock=_clock,
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_recover)
+        assert recovery_entered.wait(timeout=5)
+        try:
+            with pytest.raises(RecoveryInProgress, match="fence"):
+                ClerkSqliteRepository.open(
+                    account_id=ACCOUNT_ID,
+                    artifacts_root=tmp_path,
+                    clock=_clock,
+                )
+        finally:
+            allow_recovery.set()
+        assert future.result(timeout=5) is not None
+
+
+def test_rebuild_refuses_an_unreadable_database_without_process_stop_proof(
+    tmp_path: Path,
+) -> None:
+    repo = _initialized(tmp_path)
+    db_path = repo.db_path
+    repo.close()
+    db_path.write_bytes(b"not a sqlite database")
+
+    with pytest.raises(RecoveryRefused, match="process-stop proof"):
+        preserve_and_rebuild_from_mirror(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            clock=_clock,
+        )
+
+    assert db_path.read_bytes() == b"not a sqlite database"
+
+
+def test_rebuild_accepts_fresh_process_stop_proof_for_an_unreadable_database(
+    tmp_path: Path,
+) -> None:
+    repo = _initialized(tmp_path)
+    repo.register_strategy_instance(
+        strategy_instance_id="spy",
+        symbol="SPY",
+        config_hash="h1",
+    )
+    db_path = repo.db_path
+    repo.close()
+    db_path.write_bytes(b"not a sqlite database")
+
+    receipt = preserve_and_rebuild_from_mirror(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        process_stop_proof=ProcessStopProof(
+            account_id=ACCOUNT_ID,
+            observed_at_ms=NOW_MS,
+            proof_reference="container-supervisor:stopped",
+        ),
+        max_process_stop_proof_age_ms=1_000,
+        clock=_clock,
+    )
+
+    assert receipt.process_stop_proof_reference == "container-supervisor:stopped"
+    assert verify_database(db_path, expected_account_id=ACCOUNT_ID).transition_count == 1
+
+
+def test_rebuild_refuses_virtiofs_before_creating_a_wal_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _initialized(tmp_path)
+    db_path = repo.db_path
+    repo.close()
+    db_path.unlink()
+    monkeypatch.setattr(
+        repository_lifecycle,
+        "_linux_filesystem_type",
+        lambda _path: "virtiofs",
+    )
+
+    with pytest.raises(UnsupportedWalFilesystem, match="virtiofs"):
+        ClerkSqliteRepository.rebuild_from_mirror(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            clock=_clock,
+        )
+
+    assert not db_path.exists()
+
+
+def test_reset_refuses_virtiofs_before_preserving_the_old_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = _initialized(tmp_path)
+    db_path = repo.db_path
+    repo.close()
+    monkeypatch.setattr(
+        repository_lifecycle,
+        "_linux_filesystem_type",
+        lambda _path: "virtiofs",
+    )
+
+    with pytest.raises(UnsupportedWalFilesystem, match="virtiofs"):
+        reset_authority(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            broker_proof=ResetBrokerProof(
+                account_id=ACCOUNT_ID,
+                observed_at_ms=NOW_MS,
+                proof_reference="fake-broker-proof",
+                positions={},
+                open_order_ids=(),
+            ),
+            stopped_strategy_instance_ids=(),
+            expected_strategy_instance_ids=(),
+            max_proof_age_ms=1_000,
+            clock=_clock,
+        )
+
+    assert db_path.is_file()
 
 
 @pytest.mark.parametrize(

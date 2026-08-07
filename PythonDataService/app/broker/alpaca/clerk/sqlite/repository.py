@@ -86,6 +86,10 @@ class IntegrityCheckFailed(ClerkSqliteError):
     """Startup check 7 (§9): ``PRAGMA integrity_check`` did not return ``ok``."""
 
 
+class UnsupportedWalFilesystem(ClerkSqliteError):
+    """The authority is on a filesystem that cannot honor SQLite WAL semantics."""
+
+
 class HashChainBroken(ClerkSqliteError):
     """Startup check 8 (§9): a stored row's hash disagrees with its recomputation."""
 
@@ -96,6 +100,10 @@ class ExecutionLeaseHeld(ClerkSqliteError):
 
 class ExecutionLeaseLost(ClerkSqliteError):
     """§9a: this handle's lease expired or was reassigned; it can no longer write."""
+
+
+class RecoveryInProgress(ClerkSqliteError):
+    """Startup fence: an exclusive offline recovery currently owns the account."""
 
 
 class RepositoryPoisoned(ClerkSqliteError):

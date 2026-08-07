@@ -32,9 +32,11 @@ from app.broker.alpaca.clerk.journal import (
 )
 from app.broker.alpaca.clerk.models import ClerkStatus, HoldState, ReconciliationSummary
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.models import BrokerOrderLeg
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
@@ -253,6 +255,57 @@ async def test_evidence_uses_active_sqlite_timeline_with_opaque_stable_cursor(
         first_body["entries"][0]["seq"],
         second.json()["entries"][0]["seq"],
     } == {1, 2}
+    repo.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_evidence_filters_selected_effect_operation(
+    app_and_tmp,
+) -> None:
+    fast_app, tmp_path = app_and_tmp
+    repo = ClerkSqliteRepository.initialize(account_id=ACCT, artifacts_root=tmp_path)
+    repo.register_strategy_instance(
+        strategy_instance_id=SID,
+        symbol="SPY",
+        config_hash="config-1",
+    )
+    submit_start_run(
+        repo,
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        lifecycle_run_id="run-1",
+    )
+    accepted = accept_enter(
+        repo,
+        account_id=ACCT,
+        strategy_instance_id=SID,
+        decision_id="decision-1",
+        lifecycle_run_id="run-1",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=_FakeReadPort(),  # type: ignore[arg-type]
+        trade=_FakeReadPort(),  # type: ignore[arg-type]
+    )
+    set_active_clerk_runtime(
+        ActiveClerkRuntime(authority_kind="sqlite", clerk=facade)
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=fast_app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/evidence",
+            params={"transaction_ref": accepted.effect_operation_id},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_entries"] > 0
+    assert {
+        entry["operation_ref"] for entry in body["entries"]
+    } == {accepted.effect_operation_id}
     repo.close()
 
 

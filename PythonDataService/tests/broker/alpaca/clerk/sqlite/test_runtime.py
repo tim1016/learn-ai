@@ -327,6 +327,86 @@ async def test_execute_for_instance_enter_fails_closed_when_execution_stream_unh
     repo.close()
 
 
+async def test_execute_for_instance_uses_its_symbols_market_data_health(
+    tmp_path: Path,
+) -> None:
+    """An AAPL stall cannot block a healthy SPY ENTER or authorize AAPL."""
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path,
+    )
+    broker = _Broker()
+    broker.release_submit.set()
+    gate = StreamHealthGate(
+        market_data=lambda: ChannelHealth(
+            stream="market_data",
+            healthy=False,
+            reason="A sibling symbol is stale",
+            observed_at_ms=1,
+        ),
+        execution=lambda: ChannelHealth(
+            stream="execution",
+            healthy=True,
+            reason="",
+            observed_at_ms=1,
+        ),
+        market_data_for_symbol=lambda symbol: ChannelHealth(
+            stream="market_data",
+            healthy=symbol == "SPY",
+            reason="" if symbol == "SPY" else f"{symbol} is stale",
+            observed_at_ms=1,
+        ),
+    )
+    facade = SqliteAlpacaClerkFacade(
+        repo=repo,
+        read=broker,
+        trade=broker,
+        stream_health=gate,
+    )
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+
+    receipt = await facade.execute_for_instance(
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        decision_id="decision-spy-healthy",
+        purpose=EffectPurpose.ENTER,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+    )
+
+    assert receipt.state is EffectOperationState.SUBMITTED
+    assert len(broker.submissions) == 1
+
+    aapl_binding = binding.model_copy(
+        update={
+            "strategy_instance_id": "aapl-bot",
+            "symbol": "AAPL",
+            "action_plan": alpaca_v1_action_plan("AAPL"),
+            "run_id": "run-aapl",
+        }
+    )
+    await facade.register_strategy_run(aapl_binding)
+    aapl_receipt = await facade.execute_for_instance(
+        strategy_instance_id=aapl_binding.strategy_instance_id,
+        run_id=aapl_binding.run_id,
+        decision_id="decision-aapl-stale",
+        purpose=EffectPurpose.ENTER,
+        action_plan=aapl_binding.action_plan,
+        quantity=aapl_binding.quantity,
+    )
+
+    assert aapl_receipt.state is EffectOperationState.REJECTED
+    assert len(broker.submissions) == 1
+    hold = repo.active_hold(
+        scope="ACCOUNT_CLERK",
+        reason_code=runtime_module.STREAM_HEALTH_REASON_CODE,
+    )
+    assert hold is not None
+    assert "AAPL is stale" in hold["evidence_refs_json"]
+    repo.close()
+
+
 async def test_execute_for_instance_enter_resumes_and_resolves_hold_once_streams_recover(
     tmp_path: Path,
 ) -> None:
@@ -448,6 +528,32 @@ async def test_custody_snapshot_uses_folds_without_full_transition_replay(
 
     assert snapshot.strategy_instance_id == binding.strategy_instance_id
     assert snapshot.reconciliation_state == "clean"
+    repo.close()
+
+
+async def test_instance_custody_proof_omits_zero_quantity_position_rows(
+    tmp_path: Path,
+) -> None:
+    """A durable zero balance is flat, not carryover exposure."""
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path,
+    )
+    broker = _Broker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker)
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+    repo._conn.execute(
+        "INSERT INTO positions "
+        "(strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
+        "VALUES (?, 'SPY', 0.0, 10)",
+        (binding.strategy_instance_id,),
+    )
+    repo._conn.commit()
+
+    proof = await facade.prove_instance_custody(binding.strategy_instance_id)
+
+    assert proof.exposure == {}
     repo.close()
 
 

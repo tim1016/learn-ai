@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.clerk.clerk import get_alpaca_clerk
+from app.broker.alpaca.clerk.decision_journal import (
+    DecisionJournal,
+    DecisionOutcome,
+)
+from app.broker.alpaca.clerk.journal import get_clerk_settings
 from app.broker.alpaca.clerk.models import EffectPurpose
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.portfolio import Portfolio
@@ -30,6 +36,7 @@ from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
 from app.schemas.broker_bots import AlpacaPaperStrategyKey
+from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
     from app.services.bot_dry_run import DryRunActivityJournal
@@ -53,6 +60,14 @@ _INTENT_BY_DEPLOYMENT_DECISION = {
 EXPOSURE_CARRYOVER_STRATEGY_KEYS: frozenset[AlpacaPaperStrategyKey] = frozenset(
     {AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION}
 )
+
+
+@dataclass(frozen=True)
+class StrategyEvaluation:
+    """One closed bar and the zero-or-one semantic intent it produced."""
+
+    bar: MarketDataBar
+    intents: tuple[SignalIntent, ...]
 
 
 class _RecordingSignalIntentExecutor:
@@ -80,10 +95,10 @@ def _engine_bar(bar: MarketDataBar) -> TradeBar:
     )
 
 
-async def _deployment_validation_intents(
+async def _deployment_validation_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
-) -> AsyncIterator[SignalIntent]:
+) -> AsyncIterator[StrategyEvaluation]:
     kernel = DeploymentValidationDecisionKernel()
     async for bar in feed.stream_bars(binding.symbol, use_rth=binding.use_rth):
         decision = kernel.on_closed_bar(
@@ -92,18 +107,24 @@ async def _deployment_validation_intents(
             close_price=bar.close,
         )
         kind = _INTENT_BY_DEPLOYMENT_DECISION.get(decision)
-        if kind is not None:
-            yield SignalIntent(
-                kind=kind,
-                bar_close_ms=bar.end_ms,
-                intended_price=bar.close,
+        intents = (
+            ()
+            if kind is None
+            else (
+                SignalIntent(
+                    kind=kind,
+                    bar_close_ms=bar.end_ms,
+                    intended_price=bar.close,
+                ),
             )
+        )
+        yield StrategyEvaluation(bar=bar, intents=intents)
 
 
-async def _ema_crossover_intents(
+async def _ema_crossover_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
-) -> AsyncIterator[SignalIntent]:
+) -> AsyncIterator[StrategyEvaluation]:
     """Run the canonical EMA strategy against the production minute stream.
 
     Formula: canonical EMA(5)/EMA(10), RSI(14), gap and five-bar lifecycle.
@@ -129,36 +150,46 @@ async def _ema_crossover_intents(
         # charting. This adapter is long-lived and has no chart consumer, so
         # release each emitted bar after the strategy has processed it.
         context.consolidated_bars.clear()
-        for intent in intents:
-            yield intent
+        yield StrategyEvaluation(bar=market_bar, intents=intents)
+
+
+async def strategy_evaluations(
+    binding: BrokerBotBinding,
+    feed: MarketDataFeed,
+) -> AsyncIterator[StrategyEvaluation]:
+    try:
+        strategy_key = AlpacaPaperStrategyKey(binding.strategy_key)
+    except ValueError as exc:
+        raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}") from exc
+    evaluation_stream = _STRATEGY_EVALUATION_STREAMS[strategy_key]
+    async for evaluation in evaluation_stream(binding, feed):
+        yield evaluation
 
 
 async def strategy_intents(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
 ) -> AsyncIterator[SignalIntent]:
-    try:
-        strategy_key = AlpacaPaperStrategyKey(binding.strategy_key)
-    except ValueError as exc:
-        raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}") from exc
-    intent_stream = _STRATEGY_INTENT_STREAMS[strategy_key]
-    async for intent in intent_stream(binding, feed):
-        yield intent
+    async for evaluation in strategy_evaluations(binding, feed):
+        for intent in evaluation.intents:
+            yield intent
 
 
-_StrategyIntentStream = Callable[
+_StrategyEvaluationStream = Callable[
     ["BrokerBotBinding", MarketDataFeed],
-    AsyncIterator[SignalIntent],
+    AsyncIterator[StrategyEvaluation],
 ]
-_STRATEGY_INTENT_STREAMS: dict[AlpacaPaperStrategyKey, _StrategyIntentStream] = {
-    AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION: _deployment_validation_intents,
-    AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: _ema_crossover_intents,
+_STRATEGY_EVALUATION_STREAMS: dict[
+    AlpacaPaperStrategyKey, _StrategyEvaluationStream
+] = {
+    AlpacaPaperStrategyKey.DEPLOYMENT_VALIDATION: _deployment_validation_evaluations,
+    AlpacaPaperStrategyKey.EMA_CROSSOVER_SIGNAL: _ema_crossover_evaluations,
 }
 
 
 def supported_alpaca_paper_strategy_keys() -> frozenset[AlpacaPaperStrategyKey]:
     """Return the strategies backed by an executable Clerk intent stream."""
-    return frozenset(_STRATEGY_INTENT_STREAMS)
+    return frozenset(_STRATEGY_EVALUATION_STREAMS)
 
 
 async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None:
@@ -166,7 +197,42 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
     clerk = get_alpaca_clerk()
     if clerk is None:
         raise RuntimeError("AlpacaClerk is not installed; cannot execute trade-mode decisions.")
-    async for intent in strategy_intents(binding, feed):
+    decision_journal: DecisionJournal | None = None
+    if getattr(clerk, "authority_kind", "legacy") == "sqlite":
+        account_id = getattr(clerk, "account_id", None)
+        if not isinstance(account_id, str) or not account_id:
+            raise RuntimeError("The active SQLite Clerk has no account identity for decision receipts.")
+        decision_journal = DecisionJournal(
+            account_id=account_id,
+            sid=binding.strategy_instance_id,
+            root=get_clerk_settings().dir,
+        )
+    async for evaluation in strategy_evaluations(binding, feed):
+        if len(evaluation.intents) > 1:
+            raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
+        if not evaluation.intents:
+            _append_decision_receipt(
+                decision_journal,
+                binding=binding,
+                evaluation=evaluation,
+                outcome="no_action",
+                reason_code="NO_ACTION",
+            )
+            continue
+        intent = evaluation.intents[0]
+        intent_id = f"{intent.bar_close_ms}:{intent.kind.value}"
+        _append_decision_receipt(
+            decision_journal,
+            binding=binding,
+            evaluation=evaluation,
+            outcome=(
+                "enter_intent"
+                if intent.kind is SignalIntentKind.ENTER
+                else "exit_intent"
+            ),
+            reason_code=f"STRATEGY_{intent.kind.value}",
+            intent_id=intent_id,
+        )
         logger.info(
             "Trade bot decision",
             extra={
@@ -181,7 +247,7 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
         receipt = await clerk.execute_for_instance(
             strategy_instance_id=binding.strategy_instance_id,
             run_id=binding.run_id,
-            decision_id=f"{intent.bar_close_ms}:{intent.kind}",
+            decision_id=intent_id,
             purpose=_EFFECT_PURPOSE_BY_INTENT[intent.kind],
             action_plan=binding.action_plan,
             quantity=binding.quantity,
@@ -197,6 +263,28 @@ async def run_trade_bot(binding: BrokerBotBinding, feed: MarketDataFeed) -> None
                 "order_refs": receipt.child_order_refs,
             },
         )
+
+
+def _append_decision_receipt(
+    journal: DecisionJournal | None,
+    *,
+    binding: BrokerBotBinding,
+    evaluation: StrategyEvaluation,
+    outcome: DecisionOutcome,
+    reason_code: str,
+    intent_id: str = "",
+    order_ref: str = "",
+) -> None:
+    if journal is None:
+        return
+    journal.append_for_bar(
+        ts_ms=now_ms_utc(),
+        bar_ref=f"{binding.symbol}@{evaluation.bar.end_ms}",
+        outcome=outcome,
+        reason_code=reason_code,
+        intent_id=intent_id,
+        order_ref=order_ref,
+    )
 
 
 async def run_dry_run_bot(

@@ -258,9 +258,9 @@ def _bot_process_fact(broker: str, sid: str) -> BotProcessFact:
         raise PanelUnavailableError(str(exc), detail=exc.detail) from exc
 
 
-async def _clerk_status() -> ClerkStatus:
+async def _clerk_status(*, symbol: str | None = None) -> ClerkStatus:
     try:
-        sqlite_status = await read_sqlite_clerk_status()
+        sqlite_status = await read_sqlite_clerk_status(symbol=symbol)
     except (RuntimeError, ValueError) as exc:
         raise PanelUnavailableError(str(exc)) from exc
     if sqlite_status is not None:
@@ -587,7 +587,8 @@ async def _get_panel_with_entries(
     except SqlitePanelBotNotFound as exc:
         raise UnknownBotError(str(exc)) from exc
     entries = _read_order_journal(broker, resolved)
-    clerk_status = await _clerk_status()
+    binding = registry.binding_for_control(broker, sid)
+    clerk_status = await _clerk_status(symbol=binding.symbol)
     decisions = _recent_decisions(resolved, sid)
     decision = decisions[-1] if decisions else None
 
@@ -616,7 +617,6 @@ async def _get_panel_with_entries(
     now_ms = now_ms_utc()
     from app.marketdata.ibkr_feed import get_market_data_feed
 
-    binding = registry.binding_for_control(broker, sid)
     panel = build_panel(
         status,
         clerk_status,
@@ -639,6 +639,7 @@ async def _get_panel_with_entries(
         market_pulse=build_market_pulse(
             get_market_data_feed(),
             now_ms=now_ms,
+            symbol=binding.symbol,
             use_rth=binding.use_rth,
             bot_running=status.running,
         ),

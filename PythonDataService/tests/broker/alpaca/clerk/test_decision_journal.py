@@ -171,7 +171,10 @@ def test_unsafe_sid_raises(tmp_path: Path) -> None:
 # ── Outcome variety ───────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("outcome", ["entered", "exited", "no_action", "blocked"])
+@pytest.mark.parametrize(
+    "outcome",
+    ["enter_intent", "exit_intent", "entered", "exited", "no_action", "blocked"],
+)
 def test_all_outcomes_accepted(journal: DecisionJournal, outcome: str) -> None:
     r = DecisionReceipt(
         seq=1, ts_ms=1000, bar_ref="SPY@1000",
@@ -180,6 +183,100 @@ def test_all_outcomes_accepted(journal: DecisionJournal, outcome: str) -> None:
     )
     journal.append(r)
     assert journal.tail(1)[0].outcome == outcome
+
+
+def test_append_for_bar_is_idempotent_for_an_identical_immediate_replay(
+    journal: DecisionJournal,
+) -> None:
+    first = journal.append_for_bar(
+        ts_ms=1_000,
+        bar_ref="SPY@1000",
+        outcome="enter_intent",
+        reason_code="STRATEGY_ENTER",
+        intent_id="1000:ENTER",
+    )
+    replay = journal.append_for_bar(
+        ts_ms=2_000,
+        bar_ref="SPY@1000",
+        outcome="enter_intent",
+        reason_code="STRATEGY_ENTER",
+        intent_id="1000:ENTER",
+    )
+
+    assert replay == first
+    assert journal.next_seq() == 2
+
+
+def test_append_for_bar_is_idempotent_after_journal_reopen(tmp_path: Path) -> None:
+    initial = DecisionJournal(account_id="ACC1", sid="bot-123", root=tmp_path)
+    first = initial.append_for_bar(
+        ts_ms=1_000,
+        bar_ref="SPY@1000",
+        outcome="enter_intent",
+        reason_code="STRATEGY_ENTER",
+        intent_id="1000:ENTER",
+    )
+    reopened = DecisionJournal(account_id="ACC1", sid="bot-123", root=tmp_path)
+
+    replay = reopened.append_for_bar(
+        ts_ms=2_000,
+        bar_ref="SPY@1000",
+        outcome="enter_intent",
+        reason_code="STRATEGY_ENTER",
+        intent_id="1000:ENTER",
+    )
+
+    assert replay == first
+    assert reopened.next_seq() == 2
+
+
+def test_append_for_bar_rejects_a_conflicting_replay(
+    journal: DecisionJournal,
+) -> None:
+    journal.append_for_bar(
+        ts_ms=1_000,
+        bar_ref="SPY@1000",
+        outcome="enter_intent",
+        reason_code="STRATEGY_ENTER",
+    )
+
+    with pytest.raises(ValueError, match="conflicting"):
+        journal.append_for_bar(
+            ts_ms=2_000,
+            bar_ref="SPY@1000",
+            outcome="exit_intent",
+            reason_code="STRATEGY_EXIT",
+        )
+
+
+def test_append_for_bar_is_idempotent_for_a_nonadjacent_historical_replay(
+    journal: DecisionJournal,
+) -> None:
+    first = journal.append_for_bar(
+        ts_ms=1_000,
+        bar_ref="SPY@1000",
+        outcome="enter_intent",
+        reason_code="STRATEGY_ENTER",
+        intent_id="1000:ENTER",
+    )
+    journal.append_for_bar(
+        ts_ms=2_000,
+        bar_ref="SPY@2000",
+        outcome="no_action",
+        reason_code="NO_ACTION",
+    )
+
+    replay = journal.append_for_bar(
+        ts_ms=3_000,
+        bar_ref="SPY@1000",
+        outcome="enter_intent",
+        reason_code="STRATEGY_ENTER",
+        intent_id="1000:ENTER",
+    )
+
+    assert replay == first
+    assert [row.bar_ref for row in journal.tail(3)] == ["SPY@1000", "SPY@2000"]
+    assert journal.next_seq() == 3
 
 
 # ── Indicator snapshot round-trip ─────────────────────────────────────────────

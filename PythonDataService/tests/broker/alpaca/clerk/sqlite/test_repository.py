@@ -18,13 +18,18 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import process_repositories
+from app.broker.alpaca.clerk.sqlite import process_repositories, repository_lifecycle
 from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyRaisedFacts,
     UncertaintyResolvedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorChainBroken, MirrorFile
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.projection_models import (
+    ProjectedCommand,
+    ProjectedOperation,
+    ProjectedOrder,
+)
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.clerk.sqlite.repository import (
     AlreadyInitialized,
@@ -34,7 +39,9 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseHeld,
     HashChainBroken,
     IntegrityCheckFailed,
+    UnsupportedWalFilesystem,
 )
+from app.services.sqlite_clerk_compat import _operation_requires_reconciliation
 from conftest import _hold_transition
 
 ACCOUNT_ID = "PA-TEST"
@@ -98,6 +105,183 @@ def test_initialize_creates_db_mirror_and_registry_entry(tmp_path: Path) -> None
     established = registry.latest(ACCOUNT_ID)
     assert established is not None
     assert established.db_identity_token == snapshot.db_identity_token
+    repo.close()
+
+
+def test_initialize_refuses_virtiofs_for_wal_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        repository_lifecycle,
+        "_linux_filesystem_type",
+        lambda _path: "virtiofs",
+    )
+
+    with pytest.raises(UnsupportedWalFilesystem, match="virtiofs"):
+        ClerkSqliteRepository.initialize(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            clock=_clock_seq(),
+        )
+
+    assert not (tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
+
+
+def test_initialize_refuses_fuseblk_for_wal_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        repository_lifecycle,
+        "_linux_filesystem_type",
+        lambda _path: "fuseblk",
+    )
+
+    with pytest.raises(UnsupportedWalFilesystem, match="fuseblk"):
+        ClerkSqliteRepository.initialize(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            clock=_clock_seq(),
+        )
+
+
+def test_open_refuses_existing_wal_authority_on_virtiofs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock_seq(),
+    )
+    repo.close()
+    monkeypatch.setattr(
+        repository_lifecycle,
+        "_linux_filesystem_type",
+        lambda _path: "virtiofs",
+    )
+
+    with pytest.raises(UnsupportedWalFilesystem, match="virtiofs"):
+        ClerkSqliteRepository.open(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            clock=_clock_seq(),
+        )
+
+
+def test_reconcilable_effect_projection_matches_authority_for_every_state_and_order_status(
+    tmp_path: Path,
+) -> None:
+    """#1412: the panel predicate stays in parity with the authority query."""
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock_seq(),
+    )
+    repo.register_strategy_instance(
+        strategy_instance_id="spy",
+        symbol="SPY",
+        config_hash="h1",
+    )
+    states = (
+        "reserved",
+        "accepted",
+        "in_progress",
+        "unknown",
+        "succeeded",
+        "failed",
+        "rejected",
+    )
+    projected: list[ProjectedOperation] = []
+    now_ms = 1_700_000_000_000
+    for state in states:
+        for kind in ("ENTER", "EXIT"):
+            for order_status in (None, "new", "filled"):
+                suffix = order_status or "absent"
+                operation_id = f"op-{state}-{kind.lower()}-{suffix}"
+                command_id = f"cmd-{state}-{kind.lower()}-{suffix}"
+                repo._conn.execute(
+                    "INSERT INTO commands "
+                    "(command_id, authority_generation, idempotency_key, payload_hash, "
+                    "kind, strategy_instance_id, run_id, action, intended_end_state, state, "
+                    "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
+                    "VALUES (?, 1, ?, 'hash', 'strategy_decision', 'spy', NULL, ?, NULL, "
+                    "?, NULL, NULL, ?, ?)",
+                    (command_id, command_id, kind, state, now_ms, now_ms),
+                )
+                repo._conn.execute(
+                    "INSERT INTO effect_operations "
+                    "(effect_operation_id, authority_generation, idempotency_key, command_id, "
+                    "strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, "
+                    "updated_at_ms) VALUES (?, 1, ?, ?, 'spy', NULL, ?, ?, "
+                    "'ACCOUNT_CLERK', ?, ?)",
+                    (operation_id, operation_id, command_id, kind, state, now_ms, now_ms),
+                )
+                orders: tuple[ProjectedOrder, ...] = ()
+                if order_status is not None:
+                    order_ref = f"order-{state}-{kind.lower()}-{order_status}"
+                    role = "ENTRY" if kind == "ENTER" else "REDUCING"
+                    repo._conn.execute(
+                        "INSERT INTO orders "
+                        "(order_ref, effect_operation_id, client_order_id, broker_order_id, "
+                        "role, broker_state, submitted_at_ms, updated_at_ms) "
+                        "VALUES (?, ?, ?, NULL, ?, ?, ?, ?)",
+                        (order_ref, operation_id, order_ref, role, order_status, now_ms, now_ms),
+                    )
+                    repo._conn.execute(
+                        "INSERT INTO operation_order_links "
+                        "(effect_operation_id, order_ref, role, linked_at_ms) "
+                        "VALUES (?, ?, ?, ?)",
+                        (operation_id, order_ref, role, now_ms),
+                    )
+                    orders = (
+                        ProjectedOrder(
+                            order_ref=order_ref,
+                            client_order_id=order_ref,
+                            broker_order_id=None,
+                            role=role,
+                            broker_state=order_status,
+                            submitted_at_ms=now_ms,
+                            updated_at_ms=now_ms,
+                        ),
+                    )
+                projected.append(
+                    ProjectedOperation(
+                        effect_operation_id=operation_id,
+                        kind=kind,
+                        state=state,
+                        custody_owner="ACCOUNT_CLERK",
+                        strategy_instance_id="spy",
+                        run_id=None,
+                        created_at_ms=now_ms,
+                        updated_at_ms=now_ms,
+                        latest_transition_sequence=0,
+                        transition_count=0,
+                        terminal_receipt_id=None,
+                        command=ProjectedCommand(
+                            command_id=command_id,
+                            kind="strategy_decision",
+                            action=kind,
+                            state=state,
+                            run_id=None,
+                            receipt_id=None,
+                            created_at_ms=now_ms,
+                            updated_at_ms=now_ms,
+                        ),
+                        orders=orders,
+                    )
+                )
+    repo._conn.commit()
+
+    authority_ids = {
+        operation.effect_operation_id
+        for operation in repo.reconcilable_effect_operations()
+    }
+    projection_ids = {
+        operation.effect_operation_id
+        for operation in projected
+        if _operation_requires_reconciliation(operation)
+    }
+
+    assert projection_ids == authority_ids
     repo.close()
 
 

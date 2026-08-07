@@ -72,8 +72,8 @@ class PauseAwareFeed:
                 continue
             yield bar
 
-    def health(self) -> FeedHealth:
-        return self._source.health()
+    def health(self, symbol: str | None = None) -> FeedHealth:
+        return self._source.health(symbol)
 
 
 def require_live_managed_bot(

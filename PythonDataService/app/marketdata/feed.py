@@ -9,7 +9,8 @@ Design constraints (from ADR 0022 + phase-3 design §4 + #1258 L2):
   signature satisfies it without inheriting from it.
 * Fan-out is reference-counted: N consumers of the same symbol share one
   underlying broker subscription; the last unsubscribe releases it.
-* Bar gaps are non-fatal.  Connection death is fatal and typed.
+* Ordinary bar gaps are non-fatal. A bounded stalled broker request is
+  replaced internally; connection death is fatal and typed.
 """
 
 from __future__ import annotations
@@ -25,8 +26,8 @@ class MarketDataFeedError(Exception):
     """Fatal feed error: connection death or unrecoverable broker failure.
 
     Raised by ``MarketDataFeed.stream_bars`` when the underlying connection
-    dies.  Bar gaps (expected during pre-market or after-hours silence) are
-    *not* raised as errors.
+    dies or violates an unrecoverable data invariant. Ordinary bar gaps
+    (expected during pre-market or after-hours silence) are not errors.
     """
 
 
@@ -63,7 +64,8 @@ class FeedHealth(BaseModel):
     """Point-in-time health snapshot for a MarketDataFeed.
 
     ``connected`` — the underlying broker connection is alive.
-    ``stale``     — connected but no bar has arrived within the stale threshold.
+    ``stale``     — connected but required source liveness has not been proven
+                    within the implementation's stale threshold.
     ``last_bar_ms`` — ``start_ms`` of the most recently emitted bar, or ``None``
                       if no bar has been emitted yet.
     ``reason``    — human-readable detail when unhealthy (empty string when healthy).
@@ -93,9 +95,9 @@ class MarketDataFeed(Protocol):
     orders.
 
     ``stream_bars`` returns an async iterator of closed 1-minute bars.  It
-    raises ``MarketDataFeedError`` when the underlying connection dies; bar
-    gaps (no bar for several minutes) are silent — the iterator simply
-    resumes when the next bar arrives.
+    raises ``MarketDataFeedError`` when the underlying connection dies or an
+    unrecoverable invariant fails. Implementations may replace a bounded
+    stalled subscription transparently; ordinary bar gaps are silent.
 
     ``health`` is a synchronous point-in-time snapshot.  Callers may poll it
     on any cadence; it never blocks.
@@ -110,4 +112,4 @@ class MarketDataFeed(Protocol):
         use_rth: bool = True,
     ) -> AsyncIterator[MarketDataBar]: ...
 
-    def health(self) -> FeedHealth: ...
+    def health(self, symbol: str | None = None) -> FeedHealth: ...

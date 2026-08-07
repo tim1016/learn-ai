@@ -36,7 +36,7 @@ from app.broker.alpaca.clerk.sqlite.enter import submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import submit_exit
 from app.broker.alpaca.clerk.sqlite.exit_resolution import cancel_and_prove_owned_entry
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts, AccountHoldResolvedFacts
-from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
+from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import OrderResource, TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconcile import (
@@ -148,11 +148,14 @@ class SqliteAlpacaClerkFacade:
     def intake(self) -> ReentrantAsyncLock:
         return self._intake
 
-    def channel_health_snapshot(self) -> tuple[ChannelHealth, ChannelHealth] | None:
+    def channel_health_snapshot(
+        self,
+        symbol: str | None = None,
+    ) -> tuple[ChannelHealth, ChannelHealth] | None:
         """Expose the exact submission-gate facts to retained status surfaces."""
         if self._stream_health is None:
             return None
-        return self._stream_health.snapshot()
+        return self._stream_health.snapshot(symbol)
 
     async def register_strategy_run(self, binding: BrokerBotBinding) -> None:
         """Durably register immutable strategy + run before order capability."""
@@ -288,7 +291,14 @@ class SqliteAlpacaClerkFacade:
                 quantity=float(quantity * entry.qty_ratio),
             )
             if purpose is EffectPurpose.ENTER:
-                if _sync_stream_health_hold(self._repo, gate=self._stream_health) is not None:
+                if (
+                    _sync_stream_health_hold(
+                        self._repo,
+                        gate=self._stream_health,
+                        symbol=entry.instrument.underlying,
+                    )
+                    is not None
+                ):
                     # S4 parity (#1262): either channel unhealthy -> durable
                     # ACCOUNT_CLERK hold + rejected receipt, no broker
                     # contact. EXIT/cancel remain unaffected: exit.py never
@@ -413,7 +423,11 @@ class SqliteAlpacaClerkFacade:
             result = await self._reconcile()
             proof = self._proof(strategy_instance_id, result)
             meta = self._repo.control_meta_snapshot()
-            exposure = {symbol: qty for symbol, qty in proof.exposure.items() if abs(qty) >= POSITION_QTY_EPSILON}
+            exposure = {
+                symbol: qty
+                for symbol, qty in proof.exposure.items()
+                if position_quantity_is_nonzero(qty)
+            }
             working = self._working_order_refs_for_proof(strategy_instance_id)
             unresolved = self._unresolved_order_refs(strategy_instance_id)
             trusted = proof.reconciliation_verdict == "clean"
@@ -505,12 +519,19 @@ class SqliteAlpacaClerkFacade:
         working = self._working_order_refs_for_proof(strategy_instance_id)
         unresolved = self._unresolved_order_refs(strategy_instance_id)
         freeze = _freeze_state(result, observed_at_ms=self._repo.clock())
+        exposure = {
+            symbol: quantity
+            for symbol, quantity in self._repo.attributed_positions_for_strategy(
+                strategy_instance_id
+            ).items()
+            if position_quantity_is_nonzero(quantity)
+        }
         return InstanceCustodyProof(
             account_id=self.account_id,
             strategy_instance_id=strategy_instance_id,
             reconciliation_verdict=verdict,
             freeze=freeze,
-            exposure=self._repo.attributed_positions_for_strategy(strategy_instance_id),
+            exposure=exposure,
             working_order_refs=working,
             unresolved_intent_refs=unresolved,
             observed_at_ms=self._repo.clock(),
@@ -558,6 +579,7 @@ def _sync_stream_health_hold(
     repo: ClerkSqliteRepository,
     *,
     gate: StreamHealthGate | None,
+    symbol: str | None = None,
 ) -> tuple[str, str] | None:
     """Raise/refresh or resolve the durable stream-health hold; return the
     refusal (reason, detail) when either channel is unhealthy, else None.
@@ -566,7 +588,7 @@ def _sync_stream_health_hold(
     shape: no gate installed ("gate is None" — production wiring always
     installs one) refuses nothing.
     """
-    refusal = stream_health_refusal(gate)
+    refusal = stream_health_refusal(gate, symbol=symbol)
     if refusal is None:
         facts = AccountHoldResolvedFacts(reason_code=STREAM_HEALTH_REASON_CODE, evidence_refs=[])
         repo.resolve_account_hold_if_active(

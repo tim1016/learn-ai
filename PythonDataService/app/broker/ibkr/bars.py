@@ -50,7 +50,7 @@ from app.broker.ibkr.api_evidence import (
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
 from app.broker.ibkr.models import BarProvenance, IbkrMinuteBar
-from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.services.session_authority import session_state_at_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 DuplicatePolicy = Literal["strict", "live_idempotent"]
 NO_BAR_WARNING_INITIAL_INTERVAL_S = 30.0
 NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
+REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
 _NY_TZ = ZoneInfo("America/New_York")
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60
@@ -67,6 +68,10 @@ _REALTIME_BAR_DEFAULT_MAX_ACTIVE = 100
 
 class IBKRBarStreamError(Exception):
     """Raised when IBKR real-time bars violate timestamp invariants."""
+
+
+class IBKRBarSubscriptionStalled(IBKRBarStreamError):
+    """Raised when a connected real-time-bar request stops advancing."""
 
 
 class _RealtimeBarRequestPacer:
@@ -133,6 +138,7 @@ class _RealtimeBarSubscription:
     client: IbkrClient
     bars: list[object]
     consumer_count: int = 1
+    invalidated: bool = False
 
 
 @dataclass
@@ -141,18 +147,31 @@ class _RealtimeBarLease:
 
     registry: _RealtimeBarSubscriptionRegistry
     key: _SubscriptionKey
+    subscription: _RealtimeBarSubscription
     bars: list[object]
     start_index: int
     multiplexed: bool
     consumer_count: int
     _released: bool = False
 
+    @property
+    def invalidated(self) -> bool:
+        """Whether another consumer invalidated this shared broker line."""
+        return self.subscription.invalidated
+
+    def invalidate(self) -> bool:
+        """Invalidate the shared line; return whether this call cancelled it."""
+        if self._released:
+            return False
+        self._released = True
+        return self.registry.invalidate(self.key, self.subscription)
+
     def release(self) -> bool:
         """Release this consumer; return whether the broker line was cancelled."""
         if self._released:
             return False
         self._released = True
-        return self.registry.release(self.key)
+        return self.registry.release(self.key, self.subscription)
 
 
 class _RealtimeBarSubscriptionRegistry:
@@ -202,6 +221,7 @@ class _RealtimeBarSubscriptionRegistry:
                 return _RealtimeBarLease(
                     registry=self,
                     key=key,
+                    subscription=existing,
                     bars=existing.bars,
                     start_index=start_index,
                     multiplexed=True,
@@ -241,6 +261,7 @@ class _RealtimeBarSubscriptionRegistry:
             return _RealtimeBarLease(
                 registry=self,
                 key=key,
+                subscription=subscription,
                 bars=bars,
                 start_index=0,
                 multiplexed=False,
@@ -256,9 +277,13 @@ class _RealtimeBarSubscriptionRegistry:
         configured = getattr(settings, "realtime_bar_max_active", self._default_max_active)
         return int(configured)
 
-    def release(self, key: _SubscriptionKey) -> bool:
+    def release(
+        self,
+        key: _SubscriptionKey,
+        expected: _RealtimeBarSubscription,
+    ) -> bool:
         subscription = self._subscriptions.get(key)
-        if subscription is None:
+        if subscription is not expected:
             return False
         subscription.consumer_count -= 1
         if subscription.consumer_count > 0:
@@ -269,6 +294,24 @@ class _RealtimeBarSubscriptionRegistry:
             subscription.client.ib.cancelRealTimeBars(subscription.bars)
         except Exception as exc:
             logger.debug("cancelRealTimeBars raised on shared-subscription shutdown: %s", exc)
+        return True
+
+    def invalidate(
+        self,
+        key: _SubscriptionKey,
+        expected: _RealtimeBarSubscription,
+    ) -> bool:
+        """Cancel and evict exactly the stalled generation for ``key``."""
+        subscription = self._subscriptions.get(key)
+        if subscription is not expected:
+            return False
+
+        self._subscriptions.pop(key, None)
+        subscription.invalidated = True
+        try:
+            subscription.client.ib.cancelRealTimeBars(subscription.bars)
+        except Exception as exc:
+            logger.debug("cancelRealTimeBars raised on stalled-subscription invalidation: %s", exc)
         return True
 
 
@@ -398,20 +441,50 @@ def _minute_start_ms(ts_ms: int) -> int:
 
 
 def _session_phase_for_ms(ts_ms: int) -> Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]:
-    """Classify a bar timestamp into the exchange session used for provenance."""
-    now_ny = datetime.fromtimestamp(ts_ms / 1000, tz=UTC).astimezone(_NY_TZ)
-    minutes = now_ny.hour * 60 + now_ny.minute
-    if minutes < 4 * 60 or minutes >= 20 * 60:
-        return "OVERNIGHT"
-    try:
-        window = session_window_for_date(now_ny.date())
-    except LookupError:
-        return "CLOSED"
-    if ts_ms < window.open_ms_utc:
-        return "PRE"
-    if ts_ms < window.close_ms_utc:
-        return "RTH"
-    return "POST"
+    """Classify one instant through the canonical session authority."""
+    return session_state_at_ms(now_ms=ts_ms).phase
+
+
+def _bars_expected_now(use_rth: bool) -> bool:
+    """Return whether a real-time stock bar should be arriving now."""
+    phase = _session_phase_for_ms(now_ms_utc())
+    if use_rth:
+        return phase == "RTH"
+    return phase in {"PRE", "RTH", "POST", "OVERNIGHT"}
+
+
+def _check_realtime_subscription_liveness(
+    *,
+    client: IbkrClient,
+    lease: _RealtimeBarLease,
+    symbol: str,
+    use_rth: bool,
+    stall_timeout_s: float,
+    last_progress_at: float,
+) -> tuple[float, bool, bool]:
+    """Fail closed on a disconnected, invalidated, or bounded-stall line."""
+    connected = client.is_connected()
+    connection_lost = client.connection_lost
+    if not connected or connection_lost:
+        raise IBKRBarStreamError(
+            f"IBKR connection lost while streaming {symbol} 5-second "
+            "bars; halting rather than hanging on a dead feed."
+        )
+    if lease.invalidated:
+        raise IBKRBarSubscriptionStalled(
+            f"IBKR real-time-bar subscription for {symbol} was invalidated "
+            "after another consumer observed it stalled."
+        )
+    now_monotonic = time.monotonic()
+    if not _bars_expected_now(use_rth):
+        last_progress_at = now_monotonic
+    elif now_monotonic - last_progress_at >= stall_timeout_s:
+        lease.invalidate()
+        raise IBKRBarSubscriptionStalled(
+            f"IBKR real-time-bar subscription for {symbol} stalled for "
+            f"{stall_timeout_s:g}s while bars were expected."
+        )
+    return last_progress_at, connected, connection_lost
 
 
 def _contract_venue(contract: object) -> str | None:
@@ -740,6 +813,7 @@ async def stream_raw_5s_bars(
     symbol: str,
     *,
     use_rth: bool = True,
+    stall_timeout_s: float = REALTIME_BAR_STALL_TIMEOUT_S,
 ) -> AsyncIterator[IbkrMinuteBar]:
     """Yield raw 5-second TRADES bars from IBKR's ``reqRealTimeBars``.
 
@@ -802,16 +876,21 @@ async def stream_raw_5s_bars(
         ),
     )
     index = lease.start_index
+    last_progress_at = time.monotonic()
+    last_source_ms: int | None = None
     try:
         while True:
             if index >= len(bars):
-                connected = client.is_connected()
-                connection_lost = client.connection_lost
-                if not connected or connection_lost:
-                    raise IBKRBarStreamError(
-                        f"IBKR connection lost while streaming {symbol} 5-second "
-                        "raw bars; halting rather than hanging on a dead feed."
+                last_progress_at, connected, connection_lost = (
+                    _check_realtime_subscription_liveness(
+                        client=client,
+                        lease=lease,
+                        symbol=symbol,
+                        use_rth=use_rth,
+                        stall_timeout_s=stall_timeout_s,
+                        last_progress_at=last_progress_at,
                     )
+                )
                 delivery_logger.maybe_log_no_bar(
                     bar_count=len(bars),
                     connected=connected,
@@ -833,6 +912,9 @@ async def stream_raw_5s_bars(
                 response=evidence_response("realTimeBar", objects=[raw_bar]),
             )
             source_ms = _bar_time_ms(raw_bar)
+            if last_source_ms is None or source_ms > last_source_ms:
+                last_source_ms = source_ms
+                last_progress_at = time.monotonic()
             contribution = _contribution(raw_bar)
             yield IbkrMinuteBar(
                 symbol=sym,
@@ -863,6 +945,8 @@ async def stream_minute_bars(
     symbol: str,
     *,
     use_rth: bool = True,
+    on_source_bar: Callable[[int], None] | None = None,
+    stall_timeout_s: float = REALTIME_BAR_STALL_TIMEOUT_S,
 ) -> AsyncIterator[IbkrMinuteBar]:
     """Yield closed 1-minute bars built from IBKR 5-second TRADES bars.
 
@@ -918,6 +1002,7 @@ async def stream_minute_bars(
     current: _MinuteAccumulator | None = None
     last_source_ms: int | None = None
     counters = LiveBarCounters()
+    last_progress_at = time.monotonic()
     try:
         while True:
             if index >= len(bars):
@@ -926,13 +1011,16 @@ async def stream_minute_bars(
                 # disconnect and raises nothing, so without this check the loop
                 # would spin forever yielding no bars and the live engine would
                 # go silently blind. Surface a fatal error instead.
-                connected = client.is_connected()
-                connection_lost = client.connection_lost
-                if not connected or connection_lost:
-                    raise IBKRBarStreamError(
-                        f"IBKR connection lost while streaming {symbol} 5-second "
-                        "bars; halting rather than hanging on a dead feed."
+                last_progress_at, connected, connection_lost = (
+                    _check_realtime_subscription_liveness(
+                        client=client,
+                        lease=lease,
+                        symbol=symbol,
+                        use_rth=use_rth,
+                        stall_timeout_s=stall_timeout_s,
+                        last_progress_at=last_progress_at,
                     )
+                )
                 delivery_logger.maybe_log_no_bar(
                     bar_count=len(bars),
                     connected=connected,
@@ -953,6 +1041,7 @@ async def stream_minute_bars(
                 request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES", useRTH=use_rth),
                 response=evidence_response("realTimeBar", objects=[raw_bar]),
             )
+            previous_source_ms = last_source_ms
             current, emitted, last_source_ms = aggregate_realtime_bar(
                 current,
                 raw_bar,
@@ -964,6 +1053,10 @@ async def stream_minute_bars(
                 use_rth=use_rth,
                 provenance="ibkr_realtime",
             )
+            if last_source_ms != previous_source_ms:
+                last_progress_at = time.monotonic()
+                if on_source_bar is not None:
+                    on_source_bar(last_source_ms)
             if emitted is not None:
                 yield emitted
     finally:

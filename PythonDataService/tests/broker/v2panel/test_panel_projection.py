@@ -38,6 +38,7 @@ from app.services.broker_v2_panel.panel_projection_service import (
     compute_revision,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import adapt_sqlite_panel
+from app.services.sqlite_clerk_compat import sqlite_clerk_status
 from tests.broker.v2panel.fixtures import (
     ACCT,
     SID,
@@ -137,6 +138,7 @@ def _panel(
     exposure: dict[str, float] | None = None,
     resume_allowed: bool | None = None,
     dry_run_activity: list[DryRunActivity] | None = None,
+    last_bar_at_ms: int | None = _NOW - 300,
     admission_evidence_refs: tuple[str, ...] = ("test:resume-admission",),
 ):
     resolved_exposure = {"SPY": 100.0} if exposure is None else exposure
@@ -188,7 +190,7 @@ def _panel(
         realized_pnl_today=0.0,
         open_pnl=None,
         latest_decision=decision,
-        last_bar_at_ms=_NOW - 300,
+        last_bar_at_ms=last_bar_at_ms,
         journal_tail_ref=f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/decisions",
         journal_tail_seq=(decision.seq if decision is not None else None),
         flatten_supported=True,
@@ -394,8 +396,108 @@ def _rail_projection(
     )
 
 
+def test_sqlite_status_does_not_count_a_filled_entry_as_outstanding() -> None:
+    projection = _rail_projection(
+        orders=(
+            ProjectedOrder(
+                order_ref="order:enter",
+                client_order_id="order:enter",
+                broker_order_id="broker-1",
+                role="ENTRY",
+                broker_state="filled",
+                submitted_at_ms=_NOW - 350,
+                updated_at_ms=_NOW - 300,
+            ),
+        ),
+    )
+
+    assert sqlite_clerk_status(projection).outstanding_intents == 0
+
+
+def test_sqlite_status_counts_a_working_entry_as_outstanding() -> None:
+    projection = _rail_projection(
+        orders=(
+            ProjectedOrder(
+                order_ref="order:enter",
+                client_order_id="order:enter",
+                broker_order_id="broker-1",
+                role="ENTRY",
+                broker_state="accepted",
+                submitted_at_ms=_NOW - 350,
+                updated_at_ms=_NOW - 300,
+            ),
+        ),
+    )
+
+    assert sqlite_clerk_status(projection).outstanding_intents == 1
+
+
+def test_trade_health_uses_decision_bar_reference_for_last_evaluated_bar() -> None:
+    decision = decision_receipt(
+        seq=1,
+        ts_ms=_NOW - 100,
+        outcome="no_action",
+        reason_code="NO_ACTION",
+        bar_ref=f"SPY@{_NOW - 60_000}",
+    )
+
+    panel = _panel(
+        _status(mode="trade"),
+        _clerk_status(),
+        [],
+        decision,
+        last_bar_at_ms=None,
+    )
+
+    assert panel.health.last_decision_at_ms == _NOW - 100
+    assert panel.health.last_bar_at_ms == _NOW - 60_000
+
+
 def _station_states(adapted: BotPanelView) -> dict[str, str]:
     return {station.station_id: station.state for station in adapted.rail.stations}
+
+
+def test_sqlite_adapter_preserves_stopped_bot_resume_with_sqlite_recovery_actions() -> None:
+    """#1410: activating SQLite must not remove the admitted Resume control."""
+    base = _panel(
+        _status(running=False),
+        _clerk_status(),
+        [],
+        exposure={},
+    )
+    recovery_action = RecoveryCapability(
+        action_id="reconcile_now",
+        label="Reconcile now",
+        explanation="Compare durable custody with Alpaca.",
+        available=True,
+        unavailable_reason_code=None,
+        unavailable_reason=None,
+        scope="BOT",
+        freshness="not_required",
+        evidence=(),
+        reduction_plan=None,
+        confirmation=None,
+        next_step="Run the comparison.",
+        concurrency_token="sqlite-token",
+        execution_ref=None,
+        mutation=True,
+        primary=True,
+    )
+    projection = replace(
+        _rail_projection(orders=()),
+        runs=(),
+        commands=(),
+        operations=(),
+        recovery_actions=(recovery_action,),
+    )
+
+    adapted = adapt_sqlite_panel(base, projection)
+
+    actions = {action.action_id: action for action in adapted.actions}
+    assert list(actions) == ["resume", "reconcile_now"]
+    assert actions["resume"].enabled is True
+    assert actions["reconcile_now"].concurrency_token == "sqlite-token"
+    assert len(adapted.actions) == len(actions)
 
 
 def test_reconciled_station_requires_resolved_success_outcome() -> None:

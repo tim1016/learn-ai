@@ -113,13 +113,10 @@ Production authority was not replaced by either rehearsal.
 
 ## Feed-stall regression and incident note — 2026-08-07 addendum
 
-This addendum records the synthetic (non-live) half of the "Diagnose the feed
-stall" step above. The live read-only reproduction against IB Gateway
-(farm/session state, request identity, disconnect/error callbacks) is **not**
-performed here — it requires a host-process data plane with a live IBKR
-connection during market hours (the containerized data plane cannot drive
-live IBKR; see `PythonDataService/CLAUDE.md`). That capture remains an
-operator hand-off for the next available market session.
+This addendum originally recorded the synthetic (non-live) half of the
+"Diagnose the feed stall" step above. A later supervised attempt on the same
+date completed the live read-only reproduction and superseded the initial
+deferral; that result and fix are recorded below.
 
 **Root-cause characterization.** `IbkrMarketDataFeed.health()`
 (`app/marketdata/ibkr_feed.py`) already computes `stale` from bar-advancement
@@ -161,15 +158,13 @@ blind windows, ordered by severity:
   `STALE`, so a feed that went stale *between* runs offers no positive proof
   of liveness before the next Start.
 
-**Operator decision (2026-08-07):** pin all three as characterization
-regressions and record them as tracked, deferred limitations rather than
-changing the threshold, the idle-subscription rule, or adding a
-never-advanced guard today. No new GitHub defect issue was opened for the
-stall; this note plus #1407 are the durable record per that decision. A
-bar-interval-aware stale threshold, and a positive-liveness requirement
-before a feed with zero completed bars can authorize exposure, remain
-proposed follow-ups — the H3 finding raises the priority of the latter,
-since it is unbounded rather than a 3-minute window.
+**Initial operator decision (2026-08-07, later superseded):** pin all three as
+characterization regressions and defer the threshold and never-advanced guard.
+The later Qualification A attempt reproduced the one-print stall in both live
+consumers while the product still presented Live/Healthy. That recurrence made
+H1 and H3 release blockers and opened
+[#1411](https://github.com/tim1016/learn-ai/issues/1411). H2 remains the
+intentional stopped-bot candidate-subscription policy.
 
 **Regression added:** `PythonDataService/tests/services/test_bot_start_admission.py`
 — the previously-untested `FeedHealth -> MarketDataAdmissionFact` translation
@@ -189,27 +184,40 @@ seam (`market_data_admission_fact`). Neither `tests/services/test_run_admission.
   closed to `UNKNOWN`, chained to `MARKET_DATA_UNKNOWN`),
   `test_market_data_admission_fact_available_when_advancing` — the remaining
   state matrix.
-- `test_grace_window_is_a_known_limitation` (H1) — drives the *real*
-  `IbkrMarketDataFeed.health()` threshold computation (not an injected
-  `FeedHealth`), so it actually detects a changed threshold or a boundary
-  regression, then chains that real health through
-  `market_data_admission_fact`.
-- `test_never_advanced_feed_is_an_unbounded_known_limitation` (H3) — the
-  literal incident replica: a real `IbkrMarketDataFeed` that never completed
-  a bar, checked an hour later to prove the blind window is unbounded.
-  Chains through both `evaluate_run_admission` (Start is admitted) and the
-  dual-health submission gate (`market_data_channel_health` — also fooled),
-  proving both authorization paths are exposed, not just Start.
+- `test_source_stall_is_bounded_at_thirty_seconds` (H1) — drives the real
+  raw-source liveness threshold and requires `STALE` after 30 seconds without
+  a distinct source timestamp.
+- `test_never_advanced_feed_fails_closed` (H3) — the literal incident replica
+  now requires both Start admission and the dual-health submission gate to
+  deny authorization while an active feed has no first closed bar.
 - `test_stale_feed_with_no_active_subscription_is_idle_available` (H2).
 
-All three characterization tests pin today's behavior deliberately, so a
-future threshold, idle-subscription, or never-advanced-guard change trips
-them on purpose rather than silently.
+The H1/H3 tests now pin the corrected fail-closed contract. The H2 test keeps
+the stopped-bot candidate policy explicit rather than conflating an idle feed
+with a failed active subscription.
 
-This closes the synthetic half of "Diagnose the feed stall" in the Closure
-sequence below. The live read-only reproduction, the repeated canary, and the
-full Phase 2 scenario set remain outstanding and require an operator-present
-market session.
+### Live reproduction and bounded recovery implementation
+
+Qualification A attached both the raw chart and closed-minute decision
+consumers to the host IBKR data plane. Each received one 5-second print and
+then stopped advancing without a socket disconnect; farm callbacks remained
+healthy. Independent read-only client probes delivered consecutive bars, so
+the failure was isolated to an individual long-lived `reqRealTimeBars` line,
+not an exchange-session or Gateway-wide outage.
+
+The local #1411 fix now:
+
+- invalidates a shared line after 60 seconds without timestamp advancement
+  while bars are expected and cancels exactly that subscription generation;
+- prevents late release by an old consumer from cancelling its replacement;
+- transparently resubscribes the broker-neutral decision feed;
+- treats an active feed with no first closed bar as stale immediately; and
+- uses distinct raw 5-second timestamps as a 30-second health watermark
+  between emitted closed minutes.
+
+Focused feed/admission tests and the complete IBKR, market-data, and Broker V2
+set are recorded in the supervised qualification report. A repeated live
+canary remains required before #1411 or the parent qualification can close.
 
 ## No legacy writer in the activated scope — proof
 
