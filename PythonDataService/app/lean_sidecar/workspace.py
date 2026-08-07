@@ -43,18 +43,13 @@ def validate_symbol(symbol: str) -> str:
     """
     if not isinstance(symbol, str):
         raise SymbolValidationError(f"symbol must be str, got {type(symbol).__name__}")
-    match = TICKER_SYMBOL_PATTERN.fullmatch(symbol)
-    if match is None:
+    if not TICKER_SYMBOL_PATTERN.fullmatch(symbol):
         raise SymbolValidationError(f"symbol must match {TICKER_SYMBOL_PATTERN.pattern} (got {symbol!r})")
-    safe_symbol = match.group(0)
     # A dot-only string would pass the regex but resolve to ``.`` /
     # ``..`` in path joins. Reject up-front.
-    if set(safe_symbol) <= {"."}:
+    if set(symbol) <= {"."}:
         raise SymbolValidationError(f"symbol cannot be only dots (got {symbol!r})")
-    # Return the regex capture, not the original caller-provided string. This
-    # preserves the validated value as the sole input to downstream paths and
-    # is recognized by CodeQL's py/path-injection dataflow analysis.
-    return safe_symbol.upper()
+    return symbol.upper()
 
 
 class WorkspaceError(ValueError):

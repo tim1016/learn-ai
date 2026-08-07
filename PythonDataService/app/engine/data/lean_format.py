@@ -474,20 +474,19 @@ def write_lean_daily_zip(
     Returns:
         Path to the written zip file.
     """
-    validated_symbol = _safe_symbol(symbol)
-    # Keep the regex capture in the same function as the path operation.
-    # CodeQL recognizes Match.group() as the sanitizing boundary, while an
-    # equivalent validator hidden behind a helper can remain tainted.
-    from app.lean_sidecar.workspace import TICKER_SYMBOL_PATTERN
-
-    match = TICKER_SYMBOL_PATTERN.fullmatch(validated_symbol)
-    if match is None:  # Defensive: _safe_symbol already rejects this case.
-        raise ValueError(f"invalid validated ticker symbol: {validated_symbol!r}")
-    safe = match.group(0).lower()
+    safe = _safe_symbol(symbol).lower()
     zip_path = ensure_within_root(
         output_root,
         Path(output_root) / "equity" / "usa" / "daily" / f"{safe}.zip",
     )
+    # Repeat containment at this read boundary because CodeQL does not carry
+    # the sanitizer through ensure_within_root's return value. The normalized
+    # path, rather than the request-influenced candidate, is opened below.
+    root_real = os.path.realpath(os.fspath(output_root)).rstrip(os.sep) + os.sep
+    candidate = os.path.realpath(os.fspath(zip_path))
+    if not candidate.startswith(root_real):
+        raise ValueError(f"path {candidate!r} escapes root {root_real!r}")
+    zip_path = Path(candidate)
     csv_name = f"{safe}.csv"
 
     # Merge with any existing file so partial-range fetches don't clobber
