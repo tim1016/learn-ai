@@ -493,6 +493,30 @@ async def test_control_action_prompt_refresh_publishes_only_changed_semantics() 
 
 
 @pytest.mark.asyncio
+async def test_scheduled_control_prompt_is_tracked_without_blocking_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await live_projection.stop_live_projection_hubs()
+    live_projection.reset_live_projection_hubs_for_testing()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_refresh(_broker: str, _account_id: str, _sid: str) -> None:
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(live_projection, "refresh_live_projection_hubs", blocked_refresh)
+
+    live_projection.schedule_live_projection_refresh("alpaca", "PA-1", "sid-1")
+    await started.wait()
+
+    assert len(live_projection._HUB_PROMPT_TASKS) == 1
+    release.set()
+    await live_projection.stop_live_projection_hubs()
+    assert not live_projection._HUB_PROMPT_TASKS
+
+
+@pytest.mark.asyncio
 async def test_snapshot_watchers_are_latest_wins_queue_one() -> None:
     source_state = "one"
 
