@@ -189,13 +189,22 @@ class ClerkSqliteRepository:
         return self._lease_ttl_ms
 
     def close(self) -> None:
-        """Release the execution lease and close the connection."""
-        self._conn.execute(
-            "UPDATE control_meta SET execution_lease_owner = NULL, "
-            "execution_lease_expires_at_ms = NULL WHERE id = 1"
-        )
-        self._conn.commit()
-        self._conn.close()
+        """Release the execution lease and close the connection.
+
+        Acquire the same write coordinator every mutation uses so a
+        shutdown cannot close the connection out from under an in-flight
+        lease heartbeat: cancelling the ``asyncio.to_thread`` renewal
+        wrapper does not stop the worker thread already inside
+        :meth:`renew_execution_lease`, so ``close`` waits for that worker to
+        release the lock before touching the connection.
+        """
+        with self._write_lock:
+            self._conn.execute(
+                "UPDATE control_meta SET execution_lease_owner = NULL, "
+                "execution_lease_expires_at_ms = NULL WHERE id = 1"
+            )
+            self._conn.commit()
+            self._conn.close()
 
     # ------------------------------------------------------------------
     # Construction

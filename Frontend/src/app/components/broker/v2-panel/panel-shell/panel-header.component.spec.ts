@@ -191,7 +191,8 @@ describe('PanelHeaderComponent', () => {
       actions: [action('stop_bot_decisions', 'Stop bot decisions')],
     }));
 
-    expect(screen.getByRole('button', { name: 'Stop bot decisions' })).toBeTruthy();
+    const stopButton = screen.getByRole('button', { name: 'Stop bot decisions' });
+    expect(stopButton.classList.contains('panel-action__button--danger')).toBe(true);
   });
 
   it('disables the lifecycle action and exposes pending state while a command is running', async () => {

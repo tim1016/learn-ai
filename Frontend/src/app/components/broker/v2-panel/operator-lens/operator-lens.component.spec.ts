@@ -464,7 +464,8 @@ describe('OperatorLensComponent', () => {
     });
 
     expandReadiness('Stop bot decisions');
-    expect(await screen.findByRole('button', { name: 'Stop bot decisions' })).toBeTruthy();
+    const stopButton = await screen.findByRole('button', { name: 'Stop bot decisions' });
+    expect(stopButton.classList.contains('panel-action__button--danger')).toBe(true);
   });
 
   it('flatten-stop button is disabled when action is disabled', async () => {

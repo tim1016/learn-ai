@@ -93,6 +93,12 @@ async def execute_recovery_action(
             lifecycle_run_id=request.execution_ref,
         )
         if existing is not None:
+            # The durable STOP already committed on a prior attempt. A retry
+            # must still re-drive local quiescence: an earlier attempt could
+            # have failed after committing the STOP but before the in-process
+            # task stopped, leaving it free to keep consuming bars.
+            # `_quiesce_bot_process` is idempotent for an already-stopped task.
+            await _quiesce_bot_process(strategy_instance_id, reason=request.reason)
             return RecoveryExecutionResult(
                 action_id=request.action_id,
                 applied=False,

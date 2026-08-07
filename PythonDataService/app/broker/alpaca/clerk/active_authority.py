@@ -183,6 +183,7 @@ async def select_active_clerk_runtime(
         )
 
     repository: ClerkSqliteRepository | None = None
+    sweep: SqliteReconciliationSweep | None = None
     try:
         repository = repository_opener(account.account_id, artifacts_root)
         meta = repository.control_meta_snapshot()
@@ -200,11 +201,20 @@ async def select_active_clerk_runtime(
             trade=trade,
             stream_health=stream_health_gate,
         )
+        # Keep the execution lease alive across the (possibly slow) startup
+        # recovery passes. The reconcile loop still starts after boot recovery
+        # in main.py, but the lease heartbeat must begin now so a clean-account
+        # boot whose recovery only reads from the broker cannot let the lease
+        # expire before the sweep is running.
+        sweep = SqliteReconciliationSweep(repo=repository, read=read, trade=trade)
+        sweep.start_lease_heartbeat()
         await asyncio.wait_for(
             facade.recover(),
             timeout=startup_recovery_timeout_s,
         )
     except Exception as exc:
+        if sweep is not None:
+            await sweep.stop()
         if repository is not None:
             repository.close()
         logger.warning(
@@ -231,11 +241,7 @@ async def select_active_clerk_runtime(
     return ActiveClerkRuntime(
         authority_kind="sqlite",
         clerk=facade,
-        sweep=SqliteReconciliationSweep(
-            repo=repository,
-            read=read,
-            trade=trade,
-        ),
+        sweep=sweep,
         evidence_sink=SqliteTradeUpdateEvidenceSink(
             repo=repository,
             read=read,

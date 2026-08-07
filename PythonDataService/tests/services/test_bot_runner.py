@@ -1936,6 +1936,11 @@ async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
             mode="trade",
         )
 
+        # Model the recovery flow: the SQLite authority already committed the
+        # durable STOP before entering the registry. The registry must reap the
+        # task *after* that commit, without authoring a second STOP.
+        clerk.stop_committed.set()
+
         await registry.stop_after_durable_clerk_stop(
             "alpaca",
             _SID,
@@ -1944,6 +1949,7 @@ async def test_quiesce_after_clerk_stop_does_not_commit_a_second_stop(
         )
 
         assert clerk.stopped_runs == []
+        assert feed.cancelled_after_stop
         assert registry.status("alpaca", _SID).running is False
     finally:
         set_alpaca_clerk(None)

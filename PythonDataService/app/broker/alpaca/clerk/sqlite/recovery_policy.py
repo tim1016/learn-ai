@@ -311,6 +311,26 @@ def _working_orders(ctx: RecoveryPolicyContext) -> tuple[ProjectedOrder, ...]:
     return tuple(sorted(unique.values(), key=lambda order: order.order_ref))
 
 
+def _relevant_uncertainties(
+    ctx: RecoveryPolicyContext,
+) -> tuple[ProjectedUncertainty, ...]:
+    """Uncertainties in scope for the current authority view.
+
+    Account-wide views (``strategy_instance_id is None``) own every
+    uncertainty; a bot view owns account-scoped ones plus its own. This is
+    the single source of truth for uncertainty scoping — both the
+    safe-flatten gate and the projection guidance read it so the copy the
+    operator sees can never disagree with the action that is blocked.
+    """
+    return tuple(
+        uncertainty
+        for uncertainty in ctx.uncertainties
+        if ctx.strategy_instance_id is None
+        or uncertainty.scope == "ACCOUNT_CLERK"
+        or uncertainty.strategy_instance_id == ctx.strategy_instance_id
+    )
+
+
 def _is_successful_account_reconciliation(
     reconciliation: ProjectedReconciliation | None,
 ) -> TypeGuard[ProjectedReconciliation]:
@@ -433,13 +453,7 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         observed_at_ms=(reconciliation.attempted_at_ms if reconciliation is not None else None),
         required_fresh=True,
     )
-    relevant_uncertainties = tuple(
-        uncertainty
-        for uncertainty in ctx.uncertainties
-        if ctx.strategy_instance_id is None
-        or uncertainty.scope == "ACCOUNT_CLERK"
-        or uncertainty.strategy_instance_id == ctx.strategy_instance_id
-    )
+    relevant_uncertainties = _relevant_uncertainties(ctx)
     reason_code: str | None = None
     reason: str | None = None
     if non_finite_positions:
@@ -748,12 +762,7 @@ def recheck_recovery_action(
 
 def build_projection_guidance(ctx: RecoveryPolicyContext) -> ProjectionGuidance:
     """Author Trader/Operator impact copy from the same state as capabilities."""
-    relevant = tuple(
-        uncertainty
-        for uncertainty in ctx.uncertainties
-        if uncertainty.scope == "ACCOUNT_CLERK"
-        or uncertainty.strategy_instance_id == ctx.strategy_instance_id
-    )
+    relevant = _relevant_uncertainties(ctx)
     actions = build_recovery_catalog(ctx)
     available = tuple(action.label for action in actions if action.available)
     if ctx.authority_health != "healthy":

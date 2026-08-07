@@ -398,6 +398,69 @@ async def test_presented_stop_quiesces_a_running_bot_task(api: FastAPI) -> None:
 
 
 @pytest.mark.asyncio
+async def test_presented_stop_retry_requiesces_the_local_task(api: FastAPI) -> None:
+    """#1404 review: a retry that replays an already-committed durable STOP
+    must still re-drive local quiescence. If the first attempt committed the
+    STOP but failed before stopping the task, the retry is the only chance to
+    reap it — returning the existing command without quiescing would leave the
+    process evaluating signals after the operator was told it stopped."""
+    from app.services.bot_runner import set_bot_task_registry
+
+    class _RecordingRegistry:
+        def __init__(self) -> None:
+            self.stop_calls: list[tuple[str, str]] = []
+
+        async def stop_after_durable_clerk_stop(
+            self,
+            broker: str,
+            strategy_instance_id: str,
+            *,
+            updated_by: str = "operator",
+            reason: str | None = None,
+        ) -> None:
+            self.stop_calls.append((broker, strategy_instance_id))
+
+    fake_registry = _RecordingRegistry()
+    set_bot_task_registry(fake_registry)  # type: ignore[arg-type]
+    try:
+        async with _client(api) as client:
+            await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/start",
+                json={"lifecycle_run_id": "run-1"},
+            )
+            snapshot = await client.get(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/snapshot"
+            )
+            action = next(
+                item
+                for item in snapshot.json()["recovery_actions"]
+                if item["action_id"] == "stop_bot_decisions"
+            )
+            request = {
+                "action_id": action["action_id"],
+                "concurrency_token": action["concurrency_token"],
+                "execution_ref": action["execution_ref"],
+                "reason": "Operator stopped decisions from the custody projection.",
+            }
+            first = await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+                json=request,
+            )
+            retry = await client.post(
+                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/recovery-actions/execute",
+                json=request,
+            )
+    finally:
+        set_bot_task_registry(None)
+
+    assert first.status_code == retry.status_code == 200
+    assert first.json()["applied"] is True
+    assert retry.json()["applied"] is False
+    # The retry replayed the existing command AND re-drove quiescence.
+    assert fake_registry.stop_calls == [("alpaca", SID), ("alpaca", SID)]
+
+
+@pytest.mark.asyncio
 async def test_presented_reconciliation_returns_its_durable_receipt_clock(
     api: FastAPI,
 ) -> None:

@@ -96,8 +96,8 @@ writer, fabricated terminal result, or stale evidence authorizing exposure.
 
 ## Verification
 
-- Python focused regression suite: 163 passed.
-- Frontend focused component suite: 22 passed.
+- Python-focused regression suite: 163 passed.
+- Frontend-focused component suite: 22 passed.
 - Python lint: passed.
 - Frontend lint and repository frontend contract guards: passed.
 - Existing 1,000,000-transition qualification artifact:

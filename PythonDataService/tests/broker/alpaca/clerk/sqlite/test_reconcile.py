@@ -1063,12 +1063,11 @@ async def test_started_sweep_renews_the_execution_lease_while_idle(tmp_path: Pat
     )
     heartbeat_renewed = asyncio.Event()
     hold_heartbeat = asyncio.Event()
-    heartbeat_sleeps = 0
+    heartbeat_delays: list[float] = []
 
-    async def controlled_heartbeat_sleep(_: float) -> None:
-        nonlocal heartbeat_sleeps
-        heartbeat_sleeps += 1
-        if heartbeat_sleeps == 1:
+    async def controlled_heartbeat_sleep(delay: float) -> None:
+        heartbeat_delays.append(delay)
+        if len(heartbeat_delays) == 1:
             now["ms"] += 30
             return
         heartbeat_renewed.set()
@@ -1087,6 +1086,10 @@ async def test_started_sweep_renews_the_execution_lease_while_idle(tmp_path: Pat
     try:
         sweep.start()
         await asyncio.wait_for(heartbeat_renewed.wait(), timeout=1.0)
+        # The heartbeat must renew three times per TTL (90ms / 3 = 0.03s) so a
+        # single missed renewal still leaves margin before the lease expires.
+        # Pin the cadence: a regression to an unsafe (larger) interval must fail.
+        assert heartbeat_delays[0] == pytest.approx(0.03, abs=1e-9)
         lease = clerk_repo._conn.execute(
             "SELECT execution_lease_expires_at_ms FROM control_meta WHERE id = 1"
         ).fetchone()

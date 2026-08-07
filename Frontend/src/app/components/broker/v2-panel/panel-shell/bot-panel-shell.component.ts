@@ -25,6 +25,7 @@ import type {
 } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
+import { BrokersService } from '../../../../services/brokers.service';
 import {
   actionOutcomeToast,
   deriveActionRejection,
@@ -81,6 +82,7 @@ export class BotPanelShellComponent {
   // ── Services ──────────────────────────────────────────────────────────────
 
   private readonly panelSvc = inject(BrokerV2PanelService);
+  private readonly brokers = inject(BrokersService);
   private readonly liveStore = inject(BotPanelLiveStore);
   private readonly destroyRef = inject(DestroyRef);
   private readonly route = inject(ActivatedRoute);
@@ -274,10 +276,10 @@ export class BotPanelShellComponent {
     this.actionReceipt.set(null);
     this.reductionPlan.set(null);
     try {
-      const capability = await this.panelSvc.checkSqliteSafeFlattenPlan(
+      const capability = await this.brokers.checkSqliteRecoveryAction(
         this.accountId(),
+        { action_id: 'prepare_safe_flatten', concurrency_token: action.concurrency_token },
         this.sid(),
-        action,
       );
       if (requestIdentity !== this.routeIdentity()) return;
       this.reductionPlan.set(capability.reduction_plan);

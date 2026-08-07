@@ -13,6 +13,11 @@ from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 logger = logging.getLogger(__name__)
 type Sleep = Callable[[float], Awaitable[None]]
+# Renew the execution lease three times per TTL. This is a safety-margin
+# choice, not ported math: at 3x cadence a single missed renewal (transient
+# disk stall, scheduler delay) still leaves ~2/3 of the TTL before the lease
+# expires and writes fail closed. Pinned by test_reconcile.py's cadence assert.
+# Rationale: docs/references/alpaca-sqlite-clerk-lease-heartbeat-cadence.md
 _LEASE_HEARTBEATS_PER_TTL = 3
 
 
@@ -51,6 +56,17 @@ class ReconciliationSweep:
             self._task = asyncio.create_task(
                 self.run(), name="alpaca-sqlite-reconciliation-sweep"
             )
+        self.start_lease_heartbeat()
+
+    def start_lease_heartbeat(self) -> None:
+        """Begin (or ensure) only the execution-lease heartbeat.
+
+        Started as soon as the repository is acquired — before the startup
+        recovery passes and before the reconcile loop — so a slow
+        clean-account boot that only reads from the broker cannot let the
+        lease expire before the sweep exists. Idempotent: a later
+        :meth:`start` reuses the already-running task.
+        """
         if self._lease_task is None or self._lease_task.done():
             self._lease_task = asyncio.create_task(
                 self._run_lease_heartbeat(),
