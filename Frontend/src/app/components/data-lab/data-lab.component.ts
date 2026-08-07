@@ -402,7 +402,7 @@ export class DataLabComponent {
   dateRangeWarning = computed(() => validateDateRange(this.fromDate(), this.toDate()));
 
   session = signal<'rth' | 'extended'>('rth');
-  forwardFill = signal(true);
+  forwardFill = signal(false);
   /** Adjust for stock splits (Polygon's built-in adjusted=true). Reliable. */
   adjustForSplits = signal(true);
   /**
@@ -788,7 +788,7 @@ export class DataLabComponent {
 
   // Estimated output columns
   estimatedColumns = computed(() => {
-    const base = ['unix_ts', 'iso_time', 'open', 'high', 'low', 'close', 'volume'];
+    const base = ['unix_ts', 'open', 'high', 'low', 'close', 'volume'];
     if (this.includeVwapColumn()) base.push('vwap');
     if (this.includeTransactionsColumn()) base.push('transactions');
     const indicatorCols: string[] = [];
@@ -815,7 +815,7 @@ export class DataLabComponent {
     return [...base, ...indicatorCols];
   });
 
-  private static readonly BASE_COL_SET = new Set(['unix_ts', 'iso_time']);
+  private static readonly BASE_COL_SET = new Set(['unix_ts']);
   private static readonly OHLCV_COL_SET = new Set([
     'open', 'high', 'low', 'close', 'volume', 'vwap', 'transactions',
   ]);
@@ -1001,6 +1001,7 @@ export class DataLabComponent {
       indicator_entries: this.entries(),
       session: this.session(),
       forward_fill: this.forwardFill(),
+      fail_on_gaps: !this.forwardFill(),
       adjusted: this.adjustForSplits(),
       adjust_for_dividends: this.adjustForDividends(),
       warmup: this.warmup(),
@@ -1669,6 +1670,7 @@ export class DataLabComponent {
         indicator_entries: this.entries(),
         session: this.session(),
         forward_fill: this.forwardFill(),
+        fail_on_gaps: !this.forwardFill(),
         adjusted: this.adjustForSplits(),
         adjust_for_dividends: this.adjustForDividends(),
         warmup: this.warmup(),

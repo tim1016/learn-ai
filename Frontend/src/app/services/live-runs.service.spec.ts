@@ -7,10 +7,7 @@ import { LiveRunsService } from './live-runs.service';
 import { operatorBlockerFixture } from '../testing/operator-blocker-fixtures';
 import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type { HostRunnerActionResponse, HostRunnerHealth } from '../api/live-runs.types';
-import type {
-  CrashRecoveryOverrideResponse,
-  SetInstanceDesiredStateResponse,
-} from '../api/live-instances.types';
+import type { SetInstanceDesiredStateResponse } from '../api/live-instances.types';
 
 /**
  * Start/Stop/health all go through the data plane (`/api/live-instances/...`),
@@ -167,33 +164,6 @@ describe('LiveRunsService start/stop proxy', () => {
         candidate.params.get('instance_id') === 'bot-1',
     );
     expect(req.request.method).toBe('GET');
-    req.flush(response);
-
-    await expect(promise).resolves.toEqual(response);
-  });
-
-  it('records crash recovery overrides through the data-plane instance endpoint', async () => {
-    const response: CrashRecoveryOverrideResponse = {
-      accepted: true,
-      account_id: 'DU123',
-      strategy_instance_id: 'sid-x',
-      run_id: 'run-x',
-      bot_order_namespace: 'learn-ai/sid-x/v1',
-      override_id: 'crash-recovery-1',
-      recorded_at_ms: 1_700_000_000_001,
-      blocking_recorded_at_ms: 1_700_000_000_000,
-      event_type: 'account_audited_override_recorded',
-      rung_receipt_warnings: [],
-    };
-    const promise = service.recordCrashRecoveryOverride('sid/x', {
-      confirm_account_flat: true,
-      approved_by: 'operator',
-    });
-
-    const req = httpMock.expectOne('/api/live-instances/sid%2Fx/crash-recovery-override');
-    expect(req.request.method).toBe('POST');
-    expect(req.request.url.startsWith('http')).toBe(false);
-    expect(req.request.body).toEqual({ confirm_account_flat: true, approved_by: 'operator' });
     req.flush(response);
 
     await expect(promise).resolves.toEqual(response);

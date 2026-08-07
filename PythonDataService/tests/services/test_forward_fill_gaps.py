@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
+from app.models.requests import DatasetGenerationRequest
 from app.services.dataset_service import forward_fill_gaps, preprocess_and_calculate
 
 _ET = ZoneInfo("US/Eastern")
@@ -144,8 +145,8 @@ def test_fail_on_gaps_raises_on_gap():
         )
 
 
-def test_fail_on_gaps_false_allows_fill():
-    """fail_on_gaps=False (default) must not raise even when gaps exist."""
+def test_explicit_fill_allows_gap_synthesis():
+    """Gap synthesis remains available only through explicit request flags."""
     df, _ = preprocess_and_calculate(
         bars=_bars_with_gap(),
         indicator_entries=[],
@@ -157,6 +158,17 @@ def test_fail_on_gaps_false_allows_fill():
     )
     # Gaps filled — the 4 input bars expanded to 390 RTH slots
     assert len(df) == 390
+
+
+def test_dataset_request_defaults_to_raw_gap_failing_input() -> None:
+    request = DatasetGenerationRequest(
+        ticker="SPY",
+        from_date="2026-01-05",
+        to_date="2026-01-06",
+    )
+
+    assert request.forward_fill is False
+    assert request.fail_on_gaps is True
 
 
 def test_fail_on_gaps_no_gap_does_not_raise():

@@ -7,12 +7,14 @@ Every action and action token comes from the SQLite recovery catalog.
 
 from __future__ import annotations
 
+from app.broker.alpaca.clerk.rollup_cache import BotRollup
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedOperation,
     RecoveryCapability,
 )
 from app.broker.v2panel.vocabulary import copy_for
+from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotCatalogView,
     BotPanelView,
@@ -28,6 +30,7 @@ from app.schemas.operator_blocker import (
     OperatorBlocker,
     OperatorConfirmationCopy,
 )
+from app.services.broker_v2_panel.catalog_projection_service import compose_catalog_view
 
 _WORKING_BROKER_STATES = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
@@ -114,6 +117,7 @@ def adapt_sqlite_catalog(
                         or projection.uncertainties
                         or projection.authority_health != "healthy"
                     ),
+                    "status_explanation": _sqlite_catalog_explanation(row, projection),
                     # Recovery mutations require the bot panel's typed
                     # confirmation flow; the compact fleet row links there.
                     "row_action": None,
@@ -121,6 +125,48 @@ def adapt_sqlite_catalog(
             )
         )
     return adapted
+
+
+def build_sqlite_catalog(
+    statuses: list[BotStatusView],
+    projections: dict[str, ClerkProjection],
+    *,
+    account_id: str,
+) -> list[BotCatalogView]:
+    """Compose the activated catalog without legacy journals or runner scans."""
+    rows = [
+        compose_catalog_view(
+            status,
+            BotRollup(
+                sid=status.strategy_instance_id,
+                exposure={},
+                fills_today=0,
+                realized_pnl_today=0.0,
+                open_pnl=None,
+                last_activity_at_ms=None,
+                needs_attention=False,
+                as_of_ms=None,
+            ),
+            account_id=account_id,
+        )
+        for status in statuses
+    ]
+    return adapt_sqlite_catalog(rows, projections)
+
+
+def _sqlite_catalog_explanation(
+    row: BotCatalogView,
+    projection: ClerkProjection,
+) -> str:
+    if projection.holds or projection.uncertainties or projection.authority_health != "healthy":
+        return "SQLite Account Clerk evidence requires operator attention."
+    if row.phase == "RETIRED":
+        return "Retired; no further runs can start."
+    if row.running:
+        return "Running under SQLite Account Clerk custody."
+    if any(abs(position.attributed_qty) > 0 for position in projection.positions):
+        return "Off duty with Clerk-attributed exposure."
+    return "Off duty and flat."
 
 
 def _panel_action(capability: RecoveryCapability, revision: int) -> PanelAction:
@@ -319,4 +365,4 @@ def _station(station_id: str, state: str, receipt: str) -> StationView:
     )
 
 
-__all__ = ["adapt_sqlite_catalog", "adapt_sqlite_panel"]
+__all__ = ["adapt_sqlite_catalog", "adapt_sqlite_panel", "build_sqlite_catalog"]

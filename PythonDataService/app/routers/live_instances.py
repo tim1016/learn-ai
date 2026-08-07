@@ -1,144 +1,58 @@
-"""Instance-addressed operator console API (ADR 0004).
+"""Retained runner boundaries, fleet summary, and daemon diagnostics.
 
-The operator's subject is the **strategy instance**, not the run. These
-endpoints resolve, *server-side*, the authoritative live binding from the host
-daemon (the process registry) and merge it with disk-derived evidence
-(latest run by ledger) and durable desired-state. The client never scans runs
-to infer liveness; it receives both bindings with names that make misuse hard
-(`live_binding` vs `evidence_binding`).
-
-Run-addressed reads stay in ``live_runs.py`` and are evidence-only.
+The deprecated IBKR bot catalog and per-instance operator-control projections
+have been removed. Canonical bot control lives under the Alpaca Broker V2 API;
+this router retains the generic deploy/start/stop adapter and shared operational
+diagnostics still used outside that retired UI.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import os
-import re
-from collections.abc import Mapping
-from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
+from typing import Annotated, Literal, NoReturn
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Header, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
-from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
-from app.config import settings as app_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
-    AccountClerkLeaseUnavailableError,
     AccountFreezeEvidence,
-    read_account_clerk_generation,
-    read_account_events,
     read_account_freeze,
-    read_active_accepting_account_clerk_generation,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
-from app.engine.live.account_observation_lease import (
-    assess_account_observation_lease,
-)
 from app.engine.live.bot_lifecycle_evaluator import (
     BotLifecycleEvaluator,
     LifecycleStartAdmissionEvidence,
     LifecycleTransitionRefusedError,
 )
-from app.engine.live.bot_lifecycle_state import (
-    BotLifecyclePhase,
-    BotLifecycleStateCorruptError,
-    BotLifecycleStateRecord,
-    BotLifecycleStateRepo,
-    stable_bot_lifecycle_state_path,
-)
-from app.engine.live.clock_out import clock_out_is_in_progress
-from app.engine.live.command_channel import CommandChannel, CommandVerb
-from app.engine.live.daemon_connectivity_monitor import (
-    get_monitor as get_daemon_connectivity_monitor,
-)
-from app.engine.live.daemon_transport import DaemonResult
+from app.engine.live.command_channel import CommandVerb
 from app.engine.live.desired_state import (
     DesiredState,
     DesiredStateCorruptError,
     DesiredStateRecord,
 )
-from app.engine.live.engine_runtime import (
-    ENGINE_RUNTIME_FILENAME,
-    EngineRuntimeSnapshot,
-    read_engine_runtime_snapshot,
-)
-from app.engine.live.halt import read_poisoned_flag
-from app.engine.live.intent_events import IntentEvent, IntentEventType
-from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
-from app.engine.live.live_artifact_io import (
-    artifact_exists,
-    read_parquet_rows,
-    read_parquet_tail,
-)
-from app.engine.live.live_state_sidecar import (
-    LiveStateSidecarCorruptError,
-    LiveStateSidecarRepo,
-    stable_live_state_path,
-)
-from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
-from app.engine.live.signal_tone import latest_signal_tone
-from app.engine.strategy.spec.descriptors import decision_column_descriptors
-from app.engine.strategy.spec.schema import load_spec_from_path
-from app.lean_sidecar.trading_calendar import session_state_at_ms
-from app.operator.incidents.store import IncidentStore
-from app.operator.notices.schema import OperatorNotice
 from app.routers.broker_dependencies import require_connected_client
 from app.routers.live_runs import (
-    COMMAND_POLL_INTERVAL_MS,
     _confine,
-    _desired_state_root,
     _now_ms,
     _read_ledger,
-    _read_sidecar,
     _resolve_desired_state,
     _validate_path_segment,
-    build_command_timeline,
 )
-from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
-from app.schemas.daemon_diagnostics import DaemonDiagnosticReport, DaemonDominantCondition
+from app.schemas.broker_bots import BotStatusView
+from app.schemas.daemon_diagnostics import DaemonDiagnosticReport
 from app.schemas.live_runs import (
-    ActiveDateEntry,
-    ActivityBrokerCategorySummary,
-    ActivityBrokerEventRow,
-    ActivityEvidenceRef,
-    ActivityFillMarker,
-    ActivityOrderRow,
-    ActivityPositionAnnotation,
-    ActivityPositionSnapshot,
-    ActivityReconciliationWarning,
     AuditCopySizingLookup,
-    BotCatalogPageResponse,
-    BotCatalogResponse,
-    BotDeleteRequest,
-    BotDeleteResponse,
-    BotLifecycleMutationResponse,
-    BotLifecycleRosterRequest,
-    BotRetireReplaceRequest,
-    BotRollCallResponse,
-    BrokerObservationConsistency,
-    ChartOverlayNotice,
-    ChartSnapshotResponse,
-    ChartSnapshotRun,
-    CommandsTimeline,
-    CommandView,
-    DesiredStateAction,
-    DesiredStateRecordResponse,
-    EndDayIntentResponse,
-    EnqueueCommandRequest,
     FleetAccountSummary,
     FleetContamination,
     FleetRosterSnapshot,
@@ -148,29 +62,15 @@ from app.schemas.live_runs import (
     HostRunnerHealth,
     HostRunnerStartRequest,
     HostRunnerStopRequest,
-    InstanceLastExit,
     InstanceProcessView,
-    InstanceProvenance,
-    InstanceSizing,
-    InstanceStartDefaults,
-    IntentActuation,
     LiveBinding,
-    LiveInstanceActivityProjection,
     LiveInstanceDeployRequest,
-    LiveInstanceStatus,
     LiveInstanceSummary,
     MutationOutcomeUnknownResponse,
     MutationRungReceipt,
-    OperatorSurfaceAccountClerk,
-    OperatorSurfaceAccountObservation,
     QcAuditCopyListing,
     ReadinessVector,
-    ReconcileAckResponse,
-    ReconcileMutationResponse,
-    SetDesiredStateRequest,
     SetInstanceDesiredStateResponse,
-    SignalTone,
-    SizingAuditRow,
 )
 from app.schemas.operator_blocker import (
     SURFACE_ANCHOR,
@@ -182,70 +82,25 @@ from app.schemas.operator_blocker import (
 from app.services import deploy_preflight as deploy_preflight_service
 from app.services import fleet_contamination as fleet_contamination_service
 from app.services.account_crash_recovery import (
-    CrashRecoveryNotRequiredError,
     crash_recovery_block_detail,
     crash_recovery_blocking_binding,
-    crash_recovery_gate_for_instance,
-    record_crash_recovery_override_evidence,
 )
-from app.services.account_fleet_read_context import AccountFleetReadContext
 from app.services.account_start_gate import AccountStartGateError, ensure_account_start_gate
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
-from app.services.activity_evidence_matching import (
-    activity_evidence_ref_from_event,
-    matching_evidence_refs,
-)
-from app.services.activity_lifecycle_consistency import (
-    NY_TZ as _NY_TZ,
-)
-from app.services.activity_lifecycle_consistency import (
-    activity_lifecycle_consistency_warnings as compare_activity_lifecycle_refs,
-)
-from app.services.activity_lifecycle_consistency import (
-    activity_order_refs_for_session,
-    ny_session_bounds_ms,
-    runs_active_in_window,
-)
-from app.services.activity_projection_contract import (
-    activity_cluster_label,
-    activity_evidence_narrative,
-    fold_activity_event_rows,
-)
-from app.services.activity_repair_projection import load_activity_repair_projection
-from app.services.bot_daily_lifecycle import project_bot_daily_lifecycle
 from app.services.bot_deletion import (
-    BOT_DELETION_FILENAME,
     BotDeletionCorruptError,
-    BotDeletionRecord,
     bot_has_soft_deletion,
-    bot_lifecycle_operation_fence,
     bot_run_is_soft_deleted,
-    read_bot_deletion,
-    retire_bot_lifecycle_and_bindings_under_operation_fence,
-    soft_delete_and_retire_bot_runs_under_operation_fence,
-    stable_bot_deletion_path,
-)
-from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
-from app.services.bot_lifecycle_conditions import lifecycle_conditions_for_instance
-from app.services.bot_lifecycle_projection import (
-    account_event_to_lifecycle_event,
-    project_account_events,
-    project_intent_events,
-    sort_lifecycle_events,
 )
 from app.services.bot_roll_call import (
     bot_roll_call_offer_repo,
     safe_active_roll_call_offer,
-    status_is_roll_call_eligible,
 )
-from app.services.broker_activity_publisher_registry import get_publisher_registry
-from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
-from app.services.broker_capability_service import get_broker_capability_service
 from app.services.broker_free_fleet_reads import (
     BrokerFreeFleetReadDependencies,
     BrokerFreeFleetReadService,
-    catalog_page_response,
 )
+from app.services.broker_v2_panel.sqlite_panel_source import read_sqlite_roster_statuses
 from app.services.daemon_diagnostics import (
     DaemonHealthPayloadError,
     DaemonHealthProbeError,
@@ -258,15 +113,11 @@ from app.services.deploy_admission import (
     evaluate_deploy_start_admission,
     resolve_symbol_from_ledger,
 )
-from app.services.end_day_intent import persist_end_day_intent_response
 from app.services.fleet_contamination import (
     fetch_net_positions as _fetch_net_positions,
 )
 from app.services.fleet_contamination import (
     instance_broker as _instance_broker,
-)
-from app.services.fleet_contamination import (
-    read_instance_live_state as _read_instance_live_state,
 )
 from app.services.fleet_contamination import (
     scan_runs_by_instance as _scan_runs_by_instance,
@@ -275,127 +126,32 @@ from app.services.fleet_daemon_snapshot_provider import (
     FleetDaemonObservation,
     FleetDaemonSnapshotProvider,
 )
-from app.services.instance_context import InstanceContext, load_instance_context
-from app.services.live_chart_window import (
-    ChartWindowError,
-    coerce_chart_timeframe,
-    resolve_chart_window,
-)
 from app.services.live_instance_config import live_config_for_run_dir
-from app.services.live_instance_surface_assembler import (
-    LiveInstanceSurfaceAssembler,
-    LiveInstanceSurfaceDependencies,
-    VisibleRunsSnapshotCache,
-)
 from app.services.mutation_attempt import (
-    TERMINAL_STATES,
     MutationAttempt,
     MutationAttemptRepo,
     MutationAttemptScope,
-    ReconciliationEvidence,
-    reconcile_mutation_effect,
-    transition_attempt,
 )
-from app.services.mutation_rung_receipts import mutation_rung_receipts
-from app.services.operator_capability import evaluate_action
-from app.services.operator_surface import (
-    compute_operator_surface,
-)
+from app.services.mutation_rung_receipts import accepted_mutation_receipts
 from app.services.presented_lifecycle_http import require_presented_lifecycle_action
-from app.services.resume_guard_state import (
-    ResumeGuardState,
-    empty_guard_state,
-    resolve_guard_state_from_paths,
-)
 from app.services.risk_reducing_lifecycle_intent import (
     RiskReducingIntentRefusedError,
-    persist_risk_reducing_intent,
     persist_risk_reducing_intent_response,
-)
-from app.services.runtime_freshness import (
-    RuntimeFreshness,
-    evaluate_runtime_freshness,
-    unavailable_runtime_freshness,
 )
 from app.services.start_admission_policy import StartAdmissionDependencies, StartAdmissionService
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
 )
-from app.services.surface_hub import (
-    SnapshotUnavailableError,
-    SurfaceHub,
-    SurfaceHubRegistry,
-)
-
-if TYPE_CHECKING:
-    from app.services.broker_activity_publisher import BrokerActivityPublisher
-
-# The instance command channel is reserved for one-shot operations; PAUSE/
-# RESUME/STOP are the durable intent knob (POST .../desired-state), not commands.
-_ONE_SHOT_VERBS = frozenset({CommandVerb.FLATTEN, CommandVerb.RECONCILE, CommandVerb.MARK_POISONED})
-
-# Durable intent action -> live-actuation command verb. PAUSE/RESUME/STOP are the
-# only verbs the durable knob actuates; the engine persists them as reconciling
-# writers, so live actuation leaves desired_state.json at the same semantic state.
-_ACTION_TO_VERB = {
-    DesiredStateAction.pause: CommandVerb.PAUSE,
-    DesiredStateAction.resume: CommandVerb.RESUME,
-    DesiredStateAction.stop: CommandVerb.STOP,
-}
-_ACTION_TO_STATE = {
-    DesiredStateAction.pause: DesiredState.PAUSED,
-    DesiredStateAction.resume: DesiredState.RUNNING,
-    DesiredStateAction.stop: DesiredState.STOPPED,
-}
-
-_STATUS_DAEMON_DIAGNOSTICS_TIMEOUT_S = 1.5
+from app.services.surface_hub import SurfaceHub
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["live-instances"])
-_SURFACE_HUBS = SurfaceHubRegistry[LiveInstanceStatus]()
-_SURFACE_RUNS_CACHE = VisibleRunsSnapshotCache()
 _FLEET_DAEMON_PROVIDER: FleetDaemonSnapshotProvider | None = None
 _FLEET_ROSTER_HUB: SurfaceHub[FleetRosterSnapshot] | None = None
 
-# strategy_instance_id flows into a daemon URL and a filesystem path; confine it
-# to a single safe segment at the boundary.
-_INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-
 # Process states that mean a run is being actively written right now.
 _LIVE_STATES = frozenset({"running", "stopping"})
-_LIFECYCLE_ACTIVITY_ORDER_EVENT_TYPES = frozenset(
-    {
-        IntentEventType.PENDING_INTENT,
-        IntentEventType.SUBMITTED,
-        IntentEventType.ACK_FAILED_UNCERTAIN,
-        IntentEventType.SUBMITTED_RECOVERED,
-        IntentEventType.INTENT_NOT_ACCEPTED,
-        IntentEventType.SUBMIT_UNCERTAIN_HALTED,
-        IntentEventType.ADOPTED_BROKER_ORDER,
-    }
-)
-
-
-def _validate_instance_id(strategy_instance_id: str) -> str:
-    """Validate the operator-supplied instance id and return a sanitized literal.
-
-    Mirrors ``_validate_run_id``: run the value through ``_validate_path_segment``
-    then assert a strict single-segment regex via ``fullmatch`` as the sole guard
-    on the *returned* literal. That regex guard on the value that reaches the
-    daemon URL and the desired-state path is the form the scanner recognizes as
-    breaking the CodeQL py/path-injection taint chain.
-    """
-    try:
-        safe = _validate_path_segment(strategy_instance_id, field="strategy_instance_id")
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
-    if _INSTANCE_ID_RE.fullmatch(safe) is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid strategy_instance_id: {strategy_instance_id!r}",
-        )
-    return safe
 
 
 def _run_is_soft_deleted(artifacts_root: Path, sid: str, run_id: str) -> bool:
@@ -418,69 +174,6 @@ def _sid_has_soft_deletion(artifacts_root: Path, sid: str) -> bool:
             extra={"strategy_instance_id": sid, "exception": repr(exc)},
         )
         return False
-
-
-def _sid_has_soft_deletion_from_directory(artifacts_root: Path, sid: str) -> bool:
-    """Prove a deletion marker without using request input in a path.
-
-    Directory entries originate from the trusted artifacts root; ``sid`` is
-    used only for equality. This keeps cached-status deletion proof off the
-    user-input-to-filesystem dataflow while preserving the durable marker as
-    authority across process restarts.
-    """
-
-    live_state_root = artifacts_root / "live_state"
-    try:
-        with os.scandir(live_state_root) as entries:
-            matched = next((entry for entry in entries if entry.name == sid), None)
-        if matched is None or not matched.is_dir(follow_symlinks=False):
-            return False
-        with os.scandir(matched.path) as children:
-            return any(
-                child.name == BOT_DELETION_FILENAME and child.is_file(follow_symlinks=False) for child in children
-            )
-    except FileNotFoundError:
-        return False
-    except OSError as exc:
-        logger.warning(
-            "failed to scan bot deletion markers",
-            extra={"strategy_instance_id": sid, "exception": repr(exc)},
-        )
-        return False
-
-
-def _resolve_bot_lifecycle_state(root: Path, sid: str) -> BotLifecycleStateRecord | None:
-    try:
-        path = stable_bot_lifecycle_state_path(root.parent, sid)
-    except ValueError:
-        return None
-    try:
-        return BotLifecycleStateRepo(path).read()
-    except BotLifecycleStateCorruptError as exc:
-        logger.warning(
-            "failed to read bot lifecycle state",
-            extra={"strategy_instance_id": sid, "exception": repr(exc)},
-        )
-        return None
-
-
-async def _daily_lifecycle_mutation_response(
-    sid: str,
-    root: Path,
-    settings: IbkrSettings,
-) -> BotLifecycleMutationResponse:
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    status_view = await _resolve_instance_status_from_process(
-        sid,
-        root,
-        settings,
-        daemon,
-        runs_by_instance=_visible_runs_by_instance(root),
-    )
-    return BotLifecycleMutationResponse(
-        strategy_instance_id=sid,
-        lifecycle=status_view.daily_lifecycle,
-    )
 
 
 def _visible_runs_by_instance(
@@ -651,195 +344,6 @@ def _raise_if_crash_recovery_blocks_start(
     )
 
 
-def _resolve_account_clerk_surface(
-    artifacts_root: Path,
-    account_id: str | None,
-    *,
-    now_ms: int,
-) -> OperatorSurfaceAccountClerk | None:
-    if account_id is None:
-        return None
-    try:
-        generation = read_account_clerk_generation(artifacts_root, account_id)
-    except (OSError, json.JSONDecodeError, ValidationError) as exc:
-        logger.warning(
-            "failed to read account clerk generation while resolving operator surface",
-            extra={"account_id": account_id, "exception": repr(exc)},
-        )
-        return OperatorSurfaceAccountClerk(account_id=account_id, phase="unknown")
-    try:
-        active_generation = read_active_accepting_account_clerk_generation(
-            artifacts_root,
-            account_id,
-            now_ms=now_ms,
-        )
-    except AccountClerkLeaseUnavailableError:
-        active_generation = None
-    except (OSError, json.JSONDecodeError, ValidationError) as exc:
-        logger.warning(
-            "failed to read account clerk generation while resolving operator surface",
-            extra={"account_id": account_id, "exception": repr(exc)},
-        )
-        return OperatorSurfaceAccountClerk(account_id=account_id, phase="unknown")
-    if generation is None:
-        return OperatorSurfaceAccountClerk(account_id=account_id, phase="unknown")
-    return OperatorSurfaceAccountClerk(
-        account_id=generation.account_id,
-        generation=generation.generation,
-        phase=generation.phase,
-        lease_active=active_generation is not None,
-        recorded_at_ms=generation.recorded_at_ms,
-        source=generation.source,
-    )
-
-
-def _resolve_account_observation_surface(
-    artifacts_root: Path,
-    account_id: str | None,
-    *,
-    now_ms: int,
-) -> OperatorSurfaceAccountObservation | None:
-    if account_id is None:
-        return None
-    assessment = assess_account_observation_lease(
-        artifacts_root,
-        account_id,
-        now_ms=now_ms,
-    )
-    lease = assessment.lease
-    return OperatorSurfaceAccountObservation(
-        state=assessment.state,
-        reason_line=assessment.reason,
-        observed_at_ms=lease.observed_at_ms if lease is not None else None,
-        valid_until_ms=lease.valid_until_ms if lease is not None else None,
-    )
-
-
-def _project_instance_account_lifecycle_events(
-    artifacts_root: Path,
-    *,
-    account_id: str | None,
-    sid: str,
-    run_id: str | None,
-    bot_order_namespace: str | None,
-) -> list:
-    if account_id is None:
-        return []
-    try:
-        rows = read_account_events(artifacts_root, account_id)
-    except (OSError, json.JSONDecodeError, AccountArtifactError) as exc:
-        logger.warning(
-            "failed to read account events while resolving lifecycle chart",
-            extra={"account_id": account_id, "exception": repr(exc)},
-        )
-        return []
-    projected_account_events = project_account_events(
-        [
-            row
-            for row in rows
-            if isinstance(row, Mapping)
-            and _account_event_matches_instance(
-                row,
-                sid=sid,
-                run_id=run_id,
-                bot_order_namespace=bot_order_namespace,
-            )
-        ],
-        account_id=account_id,
-    )
-    return [
-        account_event_to_lifecycle_event(event).model_copy(update={"bot_id": sid}) for event in projected_account_events
-    ]
-
-
-def _account_event_matches_instance(
-    row: Mapping,
-    *,
-    sid: str,
-    run_id: str | None,
-    bot_order_namespace: str | None,
-) -> bool:
-    diagnostics = row.get("diagnostics")
-    diagnostic_values = diagnostics if isinstance(diagnostics, Mapping) else {}
-
-    row_sid = _nonempty_str(diagnostic_values.get("strategy_instance_id")) or _nonempty_str(
-        diagnostic_values.get("bot_id")
-    )
-    row_sid = row_sid or _nonempty_str(row.get("strategy_instance_id")) or _nonempty_str(row.get("bot_id"))
-    row_run_id = _nonempty_str(diagnostic_values.get("run_id")) or _nonempty_str(row.get("run_id"))
-    row_namespace = _nonempty_str(row.get("bot_order_namespace"))
-    order_ref = _nonempty_str(diagnostic_values.get("order_ref")) or _nonempty_str(row.get("order_ref"))
-    if row_namespace is None and order_ref is not None and ":" in order_ref:
-        row_namespace = order_ref.rsplit(":", 1)[0]
-
-    sid_matches = row_sid == sid
-    run_matches = run_id is not None and row_run_id == run_id
-    namespace_matches = bot_order_namespace is not None and row_namespace == bot_order_namespace
-    if row_sid is not None and not sid_matches:
-        return False
-    if run_id is not None and row_run_id is not None and not run_matches:
-        return False
-    if bot_order_namespace is not None and row_namespace is not None and not namespace_matches:
-        return False
-    return sid_matches or run_matches or namespace_matches
-
-
-def _nonempty_str(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
-
-
-def _strategy_state(
-    root: Path,
-    live_binding: LiveBinding | None,
-    runs: list[dict],
-) -> tuple[dict | None, SignalTone, list[dict]]:
-    """Latest decision row + spec-derived column descriptors for the instance.
-
-    Reads from the live run when visible, else the latest evidence run. The
-    descriptors come from the run's strategy spec (the single source of column
-    semantics), so the console renders any strategy's indicators generically.
-    """
-    run_dir: Path | None = None
-    if live_binding is not None:
-        run_dir = _visible_live_run_dir(root, live_binding)
-    if run_dir is None and runs:
-        run_dir = Path(runs[0]["run_dir"])
-    if run_dir is None:
-        return None, "neutral", []
-
-    decisions_path = run_dir / "decisions.parquet"
-    rows = read_parquet_tail(decisions_path, 1, on_error="warn_empty") if artifact_exists(decisions_path) else []
-    latest_decision = rows[0] if rows else None
-
-    descriptors: list[dict] = []
-    try:
-        ledger = _read_ledger(run_dir)
-        spec = load_spec_from_path(ledger["strategy_spec_path"])
-        descriptors = decision_column_descriptors(spec)
-    except (OSError, ValueError, KeyError):
-        descriptors = []
-    return latest_decision, latest_signal_tone(latest_decision), descriptors
-
-
-def _resolve_readonly_default(settings: object) -> bool:
-    """The Start-card's default for the suppress-orders flag.
-
-    Defaults to ``False`` (place orders) **only** when both hold:
-      * IBKR is in paper mode (``mode == "paper"``) — orders are paper, so
-        trading-by-default is safe and expected; and
-      * ``IBKR_READONLY`` is not set (the engine's ``place_paper_order`` refuses
-        orders when ``settings.readonly`` is true, so promising order placement
-        while readonly is on would be a lie).
-
-    Fails **closed** otherwise — a missing/unknown ``mode`` (config drift, partial
-    rollout) or ``IBKR_READONLY=true`` yields ``True`` (shadow / no orders), so a
-    real-money or locked-down run never auto-trades from a server default.
-    """
-    mode = getattr(settings, "mode", None)
-    operator_readonly = bool(getattr(settings, "readonly", True))
-    return operator_readonly or mode != "paper"
-
-
 def _resolve_evidence_run_dir(
     root: Path,
     live_binding: LiveBinding | None,
@@ -908,311 +412,6 @@ def _mutation_error_detail(detail: object, attempt: MutationAttempt) -> dict[str
     return body
 
 
-def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None):
-    """Read the cold-start reconciliation receipt + current freshness inputs
-    for the operator-surface projection (ADR-0008 §5 / PR 1).
-
-    Returns ``(receipt, current_wal_seq, current_run_id, current_namespace,
-    wal_events)``.
-    Every element is ``None`` when the input is unresolvable — e.g. no live
-    binding, the run dir is missing, the WAL is empty / corrupt, or the
-    receipt is absent. The projection turns absences into ``NOT_AVAILABLE``
-    rather than raising.
-    """
-    from app.services.resume_guard_state import read_full_reconciliation_receipt
-
-    run_dir = _resolve_live_run_dir(root, live_binding)
-    if run_dir is None or not run_dir.exists():
-        return None, None, None, None, []
-    receipt = read_full_reconciliation_receipt(run_dir)
-    current_run_id = live_binding.run_id
-    current_namespace: str | None = None
-    current_wal_seq: int | None = None
-    events: list[IntentEvent] = []
-    wal_path = run_dir / "intent_events.jsonl"
-    if wal_path.exists():
-        try:
-            events = IntentWal(wal_path).read_tail()
-            if events:
-                current_wal_seq = events[-1].seq
-                current_namespace = events[-1].bot_order_namespace
-        except IntentWalCorruptError:
-            # A corrupt WAL is surfaced elsewhere; for the reconciliation
-            # projection we treat it as "no current seq" so a stale-flag
-            # comparison falls through to the other rules.
-            current_wal_seq = None
-            events = []
-    return receipt, current_wal_seq, current_run_id, current_namespace, events
-
-
-def _session_started_at_ms(process: InstanceProcessView, live_binding: LiveBinding | None) -> int | None:
-    if live_binding is None:
-        return None
-    started_at_ms = process.started_at_ms
-    if isinstance(started_at_ms, bool):
-        return None
-    if isinstance(started_at_ms, int) and started_at_ms >= 0:
-        return started_at_ms
-    return None
-
-
-def _resolve_live_run_dir(root: Path, live_binding: LiveBinding | None) -> Path | None:
-    if live_binding is None or live_binding.run_dir is None:
-        return None
-    run_dir = Path(live_binding.run_dir)
-    return run_dir if run_dir.is_absolute() else root / run_dir
-
-
-def _resolve_durable_control_write_failure(run_dir: Path | None) -> str | None:
-    """Keep a typed failure until a newer durable-control command succeeds."""
-
-    if run_dir is None:
-        return None
-    timeline = build_command_timeline(_confine(run_dir, "commands"))
-    for entry in timeline.entries:
-        if not entry.durable_control:
-            continue
-        if entry.failure_kind == "durable_control_write_failed":
-            return entry.outcome_detail or "The bot could not persist its control state."
-        if entry.status == "acknowledged":
-            return None
-    return None
-
-
-def _resolve_durable_control_write_failure_for_status(
-    root: Path,
-    live_binding: LiveBinding | None,
-    runs: list[dict],
-) -> str | None:
-    return _resolve_durable_control_write_failure(_resolve_evidence_run_dir(root, live_binding, runs))
-
-
-def _resolve_incident_headline(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> OperatorNotice | None:
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    if run_dir is None or not run_dir.is_dir():
-        return None
-    incidents = [
-        incident
-        for incident in IncidentStore(run_dir).list_unresolved()
-        if incident.category in {"watchdog", "order", "submit", "safety-halt"}
-    ]
-    if not incidents:
-        return None
-    latest = max(incidents, key=lambda incident: incident.started_at_ms)
-    return latest.notice
-
-
-def _resolve_latest_mutation(live_runs_root: Path, strategy_instance_id: str) -> MutationAttempt | None:
-    """Read the most recent ``MutationAttempt`` for the instance.
-
-    Returns ``None`` when no attempts have been persisted (typical for
-    a freshly-deployed instance) or when the storage root is absent.
-    Malformed and forward-incompatible artifacts are also surfaced as
-    ``None`` per ``MutationAttemptRepo.latest_for`` semantics — the
-    action-conflict matrix treats absence and corruption identically:
-    no prior unresolved mutation to consider.
-    """
-    return MutationAttemptRepo(_mutation_attempt_root(live_runs_root)).latest_for(strategy_instance_id)
-
-
-def _resolve_runtime_freshness(
-    root: Path,
-    live_binding: LiveBinding | None,
-    *,
-    now_ms: int,
-) -> RuntimeFreshness | None:
-    """Resolve child-authored runtime evidence for the current live binding.
-
-    Runtime freshness is meaningful only for a bound child. Missing,
-    malformed, or forward-incompatible artifacts fail closed and are
-    surfaced explicitly rather than falling back to process-registry
-    liveness.
-    """
-    _, freshness = _resolve_engine_runtime_snapshot_and_freshness(
-        root,
-        live_binding,
-        now_ms=now_ms,
-    )
-    return freshness
-
-
-def _resolve_engine_runtime_snapshot_and_freshness(
-    root: Path,
-    live_binding: LiveBinding | None,
-    *,
-    now_ms: int,
-) -> tuple[EngineRuntimeSnapshot | None, RuntimeFreshness | None]:
-    """Read child-authored runtime evidence once and evaluate freshness."""
-    if live_binding is None:
-        return None, None
-    run_dir = _visible_live_run_dir(root, live_binding)
-    if run_dir is None:
-        return None, unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
-    path = run_dir / ENGINE_RUNTIME_FILENAME
-    if not path.is_file():
-        return None, unavailable_runtime_freshness("ENGINE_RUNTIME_MISSING")
-    snapshot = read_engine_runtime_snapshot(path)
-    if snapshot is None:
-        return None, unavailable_runtime_freshness("ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE")
-    return snapshot, evaluate_runtime_freshness(
-        snapshot,
-        now_ms=now_ms,
-        session_state=session_state_at_ms(now_ms),
-    )
-
-
-def _safety_verdict_final_from_engine_runtime(
-    snapshot: EngineRuntimeSnapshot | None,
-) -> Literal["paper-only", "unsafe", "unknown"] | None:
-    """Resolve ADR-0011 safety from fresh child-authored broker identity."""
-    if snapshot is None:
-        return None
-    if snapshot.broker.identity == "PAPER_VERIFIED":
-        return "paper-only"
-    if snapshot.broker.identity == "LIVE_DETECTED":
-        return "unsafe"
-    return "unknown"
-
-
-def _broker_connection_state_from_engine_runtime(
-    snapshot: EngineRuntimeSnapshot | None,
-) -> (
-    Literal[
-        "connected",
-        "soft_lost",
-        "subscriptions_stale",
-        "degraded_data_farm",
-        "reconnecting",
-        "recovering",
-        "hard_down",
-        "disconnected",
-        "disabled",
-        "unknown",
-    ]
-    | None
-):
-    """Resolve broker connection from fresh child-authored runtime evidence.
-
-    Readiness is still the engine's readiness-gate contract, but it can be
-    absent while the child process is running and publishing a fresh
-    ``engine_runtime.json`` broker probe. In that case, prefer the fresh
-    runtime broker block so the operator surface does not report an unknown
-    broker while the child has just proven the session state.
-    """
-    if snapshot is None:
-        return None
-    state = snapshot.broker.connection_state
-    if state in {
-        "connected",
-        "soft_lost",
-        "subscriptions_stale",
-        "degraded_data_farm",
-        "reconnecting",
-        "recovering",
-        "hard_down",
-        "disconnected",
-        "disabled",
-    }:
-        return state
-    return "unknown"
-
-
-def _resolve_broker_observation_consistency(
-    live_binding: LiveBinding | None,
-    *,
-    runtime_snapshot: EngineRuntimeSnapshot | None,
-    configured_mode: Literal["paper", "live"] | None,
-    now_ms: int,
-) -> BrokerObservationConsistency | None:
-    """Compute the divergence verdict for the current live binding.
-
-    Returns ``None`` when there is nothing to compare (no live
-    binding) so the cockpit hides the card.  Otherwise returns the
-    backend-authored verdict — including ``UNKNOWN`` when the child
-    runtime artifact is missing.  The data-plane snapshot is read at
-    the same instant as the freshness evaluator to keep both views
-    consistent within a single status response.
-    """
-    from app.broker.runtime_snapshot import snapshot_data_plane_broker
-    from app.services.broker_observation_consistency import (
-        evaluate_broker_observation_consistency,
-    )
-
-    if live_binding is None:
-        return None
-    child_block = runtime_snapshot.broker if runtime_snapshot is not None else None
-    return evaluate_broker_observation_consistency(
-        child=child_block,
-        data_plane=snapshot_data_plane_broker(),
-        child_configured_mode=configured_mode,
-        now_ms=now_ms,
-    )
-
-
-def _resolve_start_run_id(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> str | None:
-    """Run_id the per-instance Start affordance will POST against.
-
-    The cockpit's Start button targets ``POST /runs/{run_id}/start``. The
-    canonical run is the bound run if present, else the latest evidence
-    run — the same resolution ``_start_defaults`` uses to seed the form
-    body. Returns ``None`` when the instance has no run on disk yet
-    (nothing-deployed); the projection then disables Start with
-    ``START_SETTINGS_INCOMPLETE``.
-    """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    return run_dir.name if run_dir is not None else None
-
-
-def _start_defaults(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict], *, readonly_default: bool
-) -> InstanceStartDefaults | None:
-    """Pre-filled Start-card values for the console (#416).
-
-    Resolves the same run the rest of the status view does (the visible live
-    run, else the latest evidence run) and seeds ``strategy`` from that ledger's
-    ``strategy_key`` — the algorithm module the ledger is reconciled to. ``None``
-    when the instance has no run to resolve a ledger from (nothing-deployed); a
-    ledger without a ``strategy_key`` (legacy) yields an empty ``strategy`` for
-    the operator to supply.
-
-    ``readonly_default`` is resolved by :func:`_resolve_readonly_default` (paper
-    mode + ``IBKR_READONLY`` unset → place orders; everything else → shadow).
-    """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    if run_dir is None:
-        return None
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError):
-        return InstanceStartDefaults(readonly=readonly_default)
-    raw_start_defaults = ledger.get("start_defaults")
-    start_default_payload = {
-        "strategy": str(ledger.get("strategy_key", "")),
-        "readonly": readonly_default,
-        "strategy_spec_path": str(ledger.get("strategy_spec_path", "")),
-        "qc_audit_copy_path": str(ledger.get("qc_audit_copy_path", "")),
-        "qc_cloud_backtest_id": str(ledger.get("qc_cloud_backtest_id", "")),
-        "account_id": str(ledger.get("account_id", "")),
-    }
-    if isinstance(raw_start_defaults, dict):
-        start_default_payload.update(
-            {
-                key: raw_start_defaults[key]
-                for key in (
-                    "strategy",
-                    "hydrate_policy",
-                    "max_orders_per_day",
-                    "ibkr_host",
-                )
-                if key in raw_start_defaults
-            }
-        )
-        captured_readonly = raw_start_defaults.get("readonly")
-        if isinstance(captured_readonly, bool):
-            start_default_payload["readonly"] = readonly_default or captured_readonly
-    return InstanceStartDefaults(**start_default_payload)
-
-
 def _resolve_symbol_resolution(
     root: Path,
     live_binding: LiveBinding | None,
@@ -1228,62 +427,9 @@ def _resolve_symbol_resolution(
     return resolve_symbol_from_ledger(ledger, _container_resolve_repo_path)
 
 
-def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> str | None:
-    """Monitor/chart symbol for the instance.
-
-    Resolution order:
-      1. ``ledger.live_config.action`` single stock target, when present
-      2. ``ledger.live_config.symbol`` (signal stream; legacy signal=trade runs)
-      3. ``strategy_spec.symbols[0]`` (the spec the ledger is reconciled to —
-         the canonical signal stream fallback)
-
-    Slice 2: the operator console reads this on the chart card instead of
-    hardcoding 'SPY'. Returns ``None`` only when nothing is deployed, the
-    ledger is unreadable, OR neither the live_config nor the spec carry a
-    symbol; the UI treats null as "unknown" rather than substituting a
-    default.
-
-    The spec fallback (added post-Slice-2 — see deployment validation
-    smoke run 2026-06-12) is what closes the gap where a clean-tree deploy
-    leaves ``live_config: {}`` because the operator didn't pass a symbol
-    override.
-
-    TODO(PR #483 review): when an instance is redeployed with a different
-    symbol (e.g. ``QQQ`` -> ``SPY``), a historical ``/chart-snapshot`` for
-    a pre-redeploy date queries persistence with the new symbol and either
-    misses bars or returns the wrong partition. Acceptable for the current
-    one-strategy-per-instance fleet; revisit by accepting a ``target_date``
-    here and resolving the symbol from the run(s) that overlap that date,
-    returning ``None`` on a mixed-symbol day.
-    """
-    resolution = _resolve_symbol_resolution(root, live_binding, runs)
-    return resolution.value if resolution is not None else None
-
-
-def _resolve_session_capability_for_symbol(symbol: str | None):
-    if symbol is None:
-        return None
-    symbol_normalized = symbol.upper()
-    snapshots = get_broker_capability_service().read_latest()
-    matches = [snapshot for snapshot in snapshots if snapshot.symbol == symbol_normalized]
-    if not matches:
-        return None
-    return max(matches, key=lambda snapshot: snapshot.probed_at_ms)
-
-
 def _container_resolve_repo_path(path: str) -> list[Path]:
-    """Yield candidate container paths for a host-recorded repo path.
+    """Resolve a host-recorded repo path inside the data-plane container."""
 
-    The host daemon writes absolute host paths into the ledger (e.g.
-    ``/Users/.../learn-ai/PythonDataService/app/engine/strategy/spec/...``)
-    because *its* process sees the repo at the host root. The data plane
-    runs inside a container where the same file lives under ``/app/app/...``
-    (compose volume ``./PythonDataService/app:/app/app``).
-
-    Try the literal first, then translate by anchoring on common repo
-    sub-roots — the same path eventually resolves under one of them. The
-    caller stops at the first existing file.
-    """
     candidates = [Path(path)]
     for marker, container_root in (
         ("PythonDataService/app/", "/app/app/"),
@@ -1292,340 +438,8 @@ def _container_resolve_repo_path(path: str) -> list[Path]:
     ):
         idx = path.find(marker)
         if idx >= 0:
-            translated = container_root + path[idx + len(marker) :]
-            candidates.append(Path(translated))
-    return [c for c in candidates if c.is_file()] or candidates
-
-
-def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
-    """Read the per-trade sizing audit log for the instance's Sizing card.
-
-    VCR-0003 PR B — prefer the durable WAL+skip-log fold from the latest
-    run dir (the source of truth that survives a restart). Fall back to
-    the in-memory ``sizing_resolutions`` sidecar projection only when the
-    fold is empty — preserves backward-compat for runs that predate
-    Phase 8 (no WAL evidence on disk).
-
-    Returns the most recent 50 rows (newest first). Empty when neither
-    source has evidence. Never raises.
-    """
-    settings = get_settings()
-    artifacts_root = Path(settings.live_runs_root).parent
-
-    from app.engine.live.run_lookup import latest_run_dir_for_instance
-
-    run_dir = latest_run_dir_for_instance(artifacts_root, strategy_instance_id)
-    if run_dir is not None:
-        wal_rows = _fold_wal_sizing_audit(run_dir)
-        if wal_rows:
-            return wal_rows
-
-    try:
-        sidecar_path = stable_live_state_path(artifacts_root, strategy_instance_id)
-    except ValueError:
-        return []
-    try:
-        envelope = LiveStateSidecarRepo(sidecar_path, trusted_root=artifacts_root / "live_state").read()
-    except (LiveStateSidecarCorruptError, OSError):
-        return []
-    if envelope is None:
-        return []
-    rows = list(envelope.sizing_resolutions or [])
-    rows.reverse()  # newest first for the UI
-    return rows[:50]
-
-
-def _fold_wal_sizing_audit(run_dir: Path) -> list[dict]:
-    """VCR-0003 PR A — fold the durable Sizing-card audit from a run's WAL
-    and skip log into the merged per-trade row shape the in-memory sidecar
-    already surfaces.
-
-    Reads SIZING_RESOLVED events from ``<run_dir>/intent_events.jsonl`` and
-    SIZING_SKIP rows from ``<run_dir>/sizing_skip.jsonl``. The two sources
-    are **disjoint** by construction (Phase 8 / ADR 0009 § 11): a skip
-    never mints an intent_id and so never writes SIZING_RESOLVED; a
-    non-skip always mints and writes SIZING_RESOLVED but never appends to
-    the skip log. Returns the most recent 50 rows newest-first.
-
-    Within the WAL slice, the authoritative chronology is ``seq`` (monotone
-    by spec — ADR-0008 §3/§5), NOT ``ts_ms``: wall-clock can collide or
-    step-back around fsync. ``read_tail()`` returns events in seq order, so
-    the last 50 by iteration order are the last 50 by seq. The WAL
-    contribution is capped by seq BEFORE the cross-source ts_ms sort so
-    wall-clock reorder cannot silently drop the seq-most-recent
-    SIZING_RESOLVED below the 50-row cap.
-
-    Fail-open: a missing file is empty; a corrupt file degrades to "no
-    rows from that source" for unrecoverable IO failures, and per-line for
-    malformed JSONL. The Sizing card is a UI surface — it should render
-    the surviving evidence rather than block on partial corruption. PR B
-    will wire this as the primary source for ``_sizing_audit_rows``, with
-    the sidecar projection as the legacy-run fallback.
-    """
-    wal_rows: list[dict] = []
-    skip_rows: list[dict] = []
-
-    wal_path = run_dir / "intent_events.jsonl"
-    if wal_path.is_file():
-        try:
-            events = IntentWal(wal_path).read_tail()
-        except (IntentWalCorruptError, OSError):
-            events = []
-        for event in events:
-            # Use ``!=`` rather than ``is not``: a future ConfigDict tweak
-            # (e.g. ``use_enum_values=True``) would make event_type a raw
-            # ``str`` and ``is`` comparison would silently always be True,
-            # dropping every SIZING_RESOLVED row.
-            if event.event_type != IntentEventType.SIZING_RESOLVED:
-                continue
-            wal_rows.append(
-                {
-                    "ts_ms": event.ts_ms or 0,
-                    "symbol": event.symbol or "",
-                    "policy_kind": event.policy_kind or "",
-                    "policy_value": event.policy_value or "",
-                    "intended_qty": int(event.intended_qty or 0),
-                    "reference_price": event.reference_price,
-                    "sized_via": event.sized_via or "policy_set_holdings",
-                    # VCR-0003 last-mile — surface the provenance stamp the
-                    # engine mints at resolve time so the per-trade audit
-                    # can attribute each fill to the policy that produced
-                    # it ({reference_native, live_override, spec_default}).
-                    # SIZING_RESOLVED events authored before this field
-                    # was minted (or skip rows that never carry it) render
-                    # as ``None`` — preserved as ``None`` rather than
-                    # coerced to a sentinel string so the frontend can
-                    # render the "unknown" badge variant.
-                    "sizing_provenance_at_resolve_time": (event.sizing_provenance_at_resolve_time or None),
-                }
-            )
-
-    skip_path = run_dir / "sizing_skip.jsonl"
-    if skip_path.is_file():
-        try:
-            text = skip_path.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                payload = json.loads(stripped)
-            except ValueError:
-                # Per-line fail-open: a single corrupt line drops only
-                # itself, not the trailing prefix of valid lines.
-                continue
-            if not isinstance(payload, dict):
-                # A syntactically-valid non-dict JSON value (``null``,
-                # ``42``, ``[]``, ``"foo"``) would crash ``.get(...)`` with
-                # AttributeError — guard it explicitly.
-                continue
-            try:
-                row = {
-                    "ts_ms": int(payload.get("ts_ms_utc") or 0),
-                    "symbol": payload.get("symbol", ""),
-                    "policy_kind": payload.get("policy_kind", ""),
-                    "policy_value": payload.get("policy_value", ""),
-                    "intended_qty": int(payload.get("target_qty") or 0),
-                    "reference_price": payload.get("reference_price", ""),
-                    "sized_via": "policy_set_holdings_skip",
-                    "skipped": True,
-                    "skip_reason": payload.get("reason", ""),
-                    # VCR-0003 last-mile — sizing skip rows don't currently
-                    # capture provenance (the IntentEvent invariant carve-out
-                    # for skips lives in sizing_skip.jsonl, which has its
-                    # own minimal schema). Surface ``None`` rather than
-                    # omitting the key so the frontend renders the
-                    # "unknown" badge variant uniformly across WAL and
-                    # skip rows. If a future sizing_skip.jsonl revision
-                    # adds the field, pass it through here.
-                    "sizing_provenance_at_resolve_time": payload.get("sizing_provenance_at_resolve_time"),
-                }
-            except (TypeError, ValueError):
-                # ``int(<list>)`` raises TypeError; ``int("not-a-number")``
-                # raises ValueError. Either is per-line fail-open.
-                continue
-            skip_rows.append(row)
-
-    # ADR-0008 — cap the WAL contribution by seq order (iteration order
-    # from read_tail is monotone-by-spec) BEFORE the cross-source ts_ms
-    # sort. Skip rows have no seq; cap them by ts_ms.
-    wal_rows = wal_rows[-50:]
-    skip_rows.sort(key=lambda r: r["ts_ms"], reverse=True)
-    skip_rows = skip_rows[:50]
-
-    merged = wal_rows + skip_rows
-    merged.sort(key=lambda r: r["ts_ms"], reverse=True)
-    return merged[:50]
-
-
-def _sizing(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict], strategy_instance_id: str
-) -> InstanceSizing | None:
-    """ADR 0009 — surface the bound (or latest evidence) run's sizing surface
-    to the instance console's Sizing card.
-
-    A run with no ``live_config.sizing`` key (legacy/pre-policy) returns an
-    ``InstanceSizing`` with ``policy=None`` and ``preset=None`` — the UI shows
-    the honest "Pre-policy run" degraded variant (Decision 14). A ledger that
-    predates the ``governed_by`` / ``sizing_provenance`` fields uses the same
-    ``live_config`` / ``live_override`` defaults the engine derives.
-    """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    if run_dir is None:
-        return None
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError):
-        return None
-
-    live_config = ledger.get("live_config") or {}
-    sizing_payload = live_config.get("sizing") if isinstance(live_config, dict) else None
-    governed_by = ledger.get("governed_by", "live_config")
-    sizing_provenance = ledger.get("sizing_provenance", "live_override")
-
-    preset: str | None
-    if sizing_payload is None:
-        preset = None
-    else:
-        kind = sizing_payload.get("kind") if isinstance(sizing_payload, dict) else None
-        if kind == "FixedShares" and sizing_payload.get("value") == 1:
-            preset = "safe_canary"
-        elif kind == "SetHoldings" and sizing_payload.get("fraction") == "1.0":
-            preset = "reference_parity"
-        elif kind == "StrategyExplicit":
-            preset = "explicit"
-        else:
-            preset = "custom"
-
-    return InstanceSizing(
-        policy=sizing_payload if isinstance(sizing_payload, dict) else None,
-        preset=preset,
-        governed_by=governed_by if governed_by in ("live_config", "strategy_explicit") else "live_config",
-        sizing_provenance=sizing_provenance
-        if sizing_provenance in ("reference_native", "live_override", "spec_default")
-        else "live_override",
-        per_trade_audit=[
-            SizingAuditRow.model_validate(row)
-            for row in _sizing_audit_rows(strategy_instance_id)
-            if isinstance(row, dict)
-        ],
-    )
-
-
-def _resolve_action_plan(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> dict | None:
-    """PRD #593 Slice 1A — surface the bound (or evidence) run's declared
-    instrument plan to the cockpit.
-
-    Returns ``None`` when nothing is deployed, the ledger is unreadable,
-    or the ledger pre-dates the ``live_config.action`` key — the cockpit
-    distinguishes that case from "operator declared an empty plan", which
-    serializes as ``{"on_enter": [], "on_exit": []}``.
-    """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    if run_dir is None:
-        return None
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError) as exc:
-        logger.warning(
-            "Failed to resolve action_plan from run ledger",
-            extra={"run_dir": str(run_dir), "error": repr(exc)},
-        )
-        return None
-    live_config = ledger.get("live_config") or {}
-    if not isinstance(live_config, dict):
-        return None
-    action = live_config.get("action")
-    return action if isinstance(action, dict) else None
-
-
-def _resolve_lineage(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> dict | None:
-    """PRD #593 Slice 1E (#598) — surface the bound (or evidence) run's
-    redeploy lineage to the cockpit. The block is persisted by the
-    daemon at deploy time alongside other unhashed metadata; it lives
-    OUTSIDE ``live_config`` so the fields stay out of ``run_id``.
-
-    Returns ``None`` when nothing is deployed, the ledger is unreadable,
-    or the ledger pre-dates the lineage block (legacy runs).
-    """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    if run_dir is None:
-        return None
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError):
-        return None
-    lineage = ledger.get("lineage")
-    return lineage if isinstance(lineage, dict) else None
-
-
-def _resolve_instrument_surface(
-    root: Path, live_binding: LiveBinding | None, runs: list[dict]
-) -> Literal["policy", "explicit"] | None:
-    """PRD #593 Slice 1A — surface the registered ``instrument_surface``
-    for the bound run's strategy. Informational in Slices 1–3 (every
-    current strategy is ``explicit``); Slice 4 introduces enforcement.
-
-    Returns ``None`` when nothing is deployed, the ledger is unreadable,
-    the ledger has no ``strategy_key``, or the strategy is not registered
-    — the cockpit treats null as "unknown" rather than substituting a
-    default.
-    """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    if run_dir is None:
-        return None
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError) as exc:
-        logger.warning(
-            "Failed to resolve instrument_surface from run ledger",
-            extra={"run_dir": str(run_dir), "error": repr(exc)},
-        )
-        return None
-    strategy_key = ledger.get("strategy_key")
-    if not isinstance(strategy_key, str) or not strategy_key:
-        return None
-    from app.engine.strategy.registry import _STRATEGY_REGISTRY
-
-    reg = _STRATEGY_REGISTRY.get(strategy_key)
-    if reg is None:
-        return None
-    return reg.instrument_surface
-
-
-def _provenance(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> InstanceProvenance | None:
-    """What the bound/evidence run's content-addressed identity attests to (the
-    hashed deploy inputs), so the console can explain the hashes instead of
-    dumping them. ``None`` when nothing is deployed or the ledger is unreadable;
-    legacy ledgers contribute whatever fields they carry."""
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    if run_dir is None:
-        return None
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError):
-        return None
-
-    def _opt_int(key: str) -> int | None:
-        value = ledger.get(key)
-        return int(value) if isinstance(value, int) else None
-
-    return InstanceProvenance(
-        run_id=str(ledger.get("run_id") or run_dir.name),
-        schema_version=str(ledger.get("schema_version", "")),
-        code_sha=str(ledger.get("code_sha", "")),
-        strategy_spec_path=str(ledger.get("strategy_spec_path", "")),
-        strategy_spec_sha256=str(ledger.get("strategy_spec_sha256", "")),
-        qc_audit_copy_path=str(ledger.get("qc_audit_copy_path", "")),
-        qc_audit_copy_sha256=str(ledger.get("qc_audit_copy_sha256", "")),
-        qc_cloud_backtest_id=str(ledger.get("qc_cloud_backtest_id", "")),
-        account_id=str(ledger.get("account_id", "")),
-        start_date_ms=_opt_int("start_date_ms"),
-        created_at_ms=_opt_int("created_at_ms"),
-        live_config=dict(ledger.get("live_config") or {}),
-    )
+            candidates.append(Path(container_root + path[idx + len(marker) :]))
+    return [candidate for candidate in candidates if candidate.is_file()] or candidates
 
 
 async def _build_live_instance_summaries(
@@ -1634,6 +448,14 @@ async def _build_live_instance_summaries(
     *,
     fleet_observation: FleetDaemonObservation | None = None,
 ) -> list[LiveInstanceSummary]:
+    sqlite_statuses = read_sqlite_roster_statuses("alpaca")
+    if sqlite_statuses is not None:
+        return await _sqlite_live_instance_summaries(
+            settings,
+            sqlite_statuses,
+            fleet_observation=fleet_observation,
+        )
+
     by_instance = _visible_runs_by_instance(root)
 
     if fleet_observation is None:
@@ -1696,6 +518,58 @@ async def _build_live_instance_summaries(
     return summaries
 
 
+async def _sqlite_live_instance_summaries(
+    settings: IbkrSettings,
+    statuses: list[BotStatusView],
+    *,
+    fleet_observation: FleetDaemonObservation | None,
+) -> list[LiveInstanceSummary]:
+    """Join the SQLite roster to daemon process facts without artifact scans."""
+    if fleet_observation is None:
+        result, daemon = await host_daemon_client.fetch_instances(
+            settings.live_runner_daemon_url
+        )
+        daemon_reachable = result.kind == "CONNECTED" and daemon is not None
+    else:
+        daemon = fleet_observation.payload
+        daemon_reachable = fleet_observation.is_current
+
+    daemon_by_sid = {
+        str(item["strategy_instance_id"]): item
+        for item in (daemon or {}).get("instances", [])
+        if item.get("strategy_instance_id") and daemon_reachable
+    }
+    summaries: list[LiveInstanceSummary] = []
+    for item in statuses:
+        managed = daemon_by_sid.get(item.strategy_instance_id)
+        process_state = (
+            str(managed.get("process", {}).get("state") or "idle")
+            if managed is not None
+            else "offline"
+            if daemon_reachable
+            else "unreachable"
+        )
+        bound_run_id = (
+            str(managed["run_id"])
+            if managed is not None
+            and process_state in _LIVE_STATES
+            and managed.get("run_id")
+            else None
+        )
+        summaries.append(
+            LiveInstanceSummary(
+                strategy_instance_id=item.strategy_instance_id,
+                process_state=process_state,
+                bound_run_id=bound_run_id,
+                latest_run_id=item.active_run_id,
+                desired_state=item.desired_state,
+                readiness_verdict="UNKNOWN",
+                readiness_as_of_ms=item.last_transition_at_ms,
+            )
+        )
+    return summaries
+
+
 def _fleet_roster_blockers(
     *,
     strategy_instance_id: str,
@@ -1709,22 +583,22 @@ def _fleet_roster_blockers(
     if process_state == "unreachable":
         condition_id = "fleet_member_unreachable"
         headline = f"{strategy_instance_id} host is unreachable"
-        detail = "Open the bot cockpit to inspect host-process recovery before starting more account work."
+        detail = "Open Broker V2 to inspect host-process recovery before starting more account work."
         severity: Literal["blocking", "warning"] = "blocking"
     elif readiness_verdict == "BLOCKED":
         condition_id = "fleet_member_blocked"
         headline = f"{strategy_instance_id} is blocked"
-        detail = "Open the bot cockpit for the backend-authored blocker and recovery move."
+        detail = "Open Broker V2 for the backend-authored blocker and recovery move."
         severity = "blocking"
     elif readiness_verdict == "DEGRADED":
         condition_id = "fleet_member_degraded"
         headline = f"{strategy_instance_id} is degraded"
-        detail = "Open the bot cockpit to review degraded readiness before fleet operations."
+        detail = "Open Broker V2 to review degraded readiness before fleet operations."
         severity = "warning"
     else:
         condition_id = "fleet_member_readiness_unknown"
         headline = f"{strategy_instance_id} readiness is unknown"
-        detail = "Open the bot cockpit to refresh readiness evidence before fleet operations."
+        detail = "Open Broker V2 to refresh readiness evidence before fleet operations."
         severity = "warning"
 
     return [
@@ -1738,10 +612,10 @@ def _fleet_roster_blockers(
             headline=headline,
             detail=detail,
             primary_move=OperatorMove(
-                label="Open bot cockpit",
+                label="Open Broker V2",
                 action=NavigateAction(
                     kind="navigate",
-                    route=f"/broker/bots/{strategy_instance_id}",
+                    route="/brokers/alpaca/bots",
                     fragment=None,
                 ),
             ),
@@ -1768,221 +642,15 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
     return await _build_live_instance_summaries(settings, root)
 
 
-def _daemon_process_from_instance(managed: dict | None) -> dict | None:
-    if managed is None:
-        return None
-    process = dict(managed.get("process") or {})
-    if not process.get("run_id") and managed.get("run_id"):
-        process["run_id"] = managed.get("run_id")
-    return process
-
-
-async def _resolve_activity_publisher_for_status(
-    sid: str,
-    live_binding: LiveBinding | None,
-) -> tuple[BrokerActivityPublisher | None, int | None]:
-    """Read publisher facts without starting or mutating producer lifecycle."""
-    del live_binding
-    registry = get_publisher_registry()
-    publisher = registry.get(sid)
-    return publisher, registry.registered_at_ms(sid)
-
-
-async def _resolve_daemon_diagnostic_condition_for_status(
-    sid: str,
-) -> DaemonDominantCondition | None:
-    del sid
-    # The per-bot status surface is produced on a background cadence for every
-    # visible instance. Full daemon diagnostics compose health, registry, socket
-    # mirror, and per-instance checks; running that report from each status
-    # producer creates an avoidable polling fan-out. Keep the heavy report on the
-    # explicit /daemon-diagnose route and let status-time host-process and broker
-    # gates carry ordinary readiness blockers.
-    return None
-
-
-async def _surface_visible_runs_by_instance(root: Path) -> dict[str, list[dict]]:
-    return await _SURFACE_RUNS_CACHE.get(root, _visible_runs_by_instance)
-
-
-async def _fetch_surface_instance_process(
-    daemon_url: str,
-    strategy_instance_id: str,
-) -> tuple[DaemonResult, dict | None]:
-    """Read the fleet owner in producer lifecycles.
-
-    The direct call is retained only for pure assembler tests and compatibility
-    callers that deliberately invoke the composition function without starting
-    application lifecycle. ``start_surface_hubs`` installs the shared provider
-    before it creates any producer.
-    """
-
-    provider = _FLEET_DAEMON_PROVIDER
-    if provider is None:
-        return await host_daemon_client.fetch_instance_process(
-            daemon_url,
-            strategy_instance_id,
-        )
-    return await provider.process_for(strategy_instance_id)
-
-
-def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
-    return LiveInstanceSurfaceAssembler(
-        LiveInstanceSurfaceDependencies(
-            get_settings=get_settings,
-            visible_runs_by_instance=_surface_visible_runs_by_instance,
-            sid_has_soft_deletion=_sid_has_soft_deletion_from_directory,
-            bot_soft_deleted_detail=_bot_soft_deleted_detail,
-            fetch_instance_process=_fetch_surface_instance_process,
-            interpret_daemon_process=_interpret_daemon_process,
-            scan_runs_by_instance=_scan_runs_by_instance,
-            resolve_account_freeze=_resolve_account_freeze,
-            resolve_desired_state=_resolve_desired_state,
-            strategy_state=_strategy_state,
-            instance_last_exit=_instance_last_exit,
-            resolve_readiness=_resolve_readiness,
-            resolve_readonly_default=_resolve_readonly_default,
-            instance_broker=_instance_broker,
-            start_defaults=_start_defaults,
-            sizing=_sizing,
-            resolve_action_plan=_resolve_action_plan,
-            get_daemon_connectivity_monitor=get_daemon_connectivity_monitor,
-            resolve_resume_guard_state_for=_resolve_resume_guard_state_for,
-            now_ms=_now_ms,
-            resolve_engine_runtime_snapshot_and_freshness=(_resolve_engine_runtime_snapshot_and_freshness),
-            safety_verdict_final_from_engine_runtime=(_safety_verdict_final_from_engine_runtime),
-            resolve_safety_verdict_final=_resolve_safety_verdict_final,
-            broker_connection_state_from_engine_runtime=(_broker_connection_state_from_engine_runtime),
-            broker_connection_state_from_readiness=(_broker_connection_state_from_readiness),
-            instance_ledger_account_id=_instance_ledger_account_id,
-            crash_recovery_gate_for_instance=crash_recovery_gate_for_instance,
-            resolve_account_clerk_surface=_resolve_account_clerk_surface,
-            resolve_account_observation_surface=_resolve_account_observation_surface,
-            get_account_truth_snapshot_provider=get_account_truth_snapshot_provider,
-            resolve_latest_mutation=_resolve_latest_mutation,
-            resolve_broker_observation_consistency=(_resolve_broker_observation_consistency),
-            resolve_reconciliation_inputs=_resolve_reconciliation_inputs,
-            resolve_activity_publisher_for_status=_resolve_activity_publisher_for_status,
-            resolve_daemon_diagnostic_condition_for_status=(_resolve_daemon_diagnostic_condition_for_status),
-            resolve_incident_headline=_resolve_incident_headline,
-            resolve_bot_lifecycle_state=_resolve_bot_lifecycle_state,
-            resolve_live_run_dir=_resolve_live_run_dir,
-            clock_out_in_progress=clock_out_is_in_progress,
-            compute_operator_surface=compute_operator_surface,
-            resolve_durable_control_write_failure_for_status=(_resolve_durable_control_write_failure_for_status),
-            resolve_start_run_id=_resolve_start_run_id,
-            active_roll_call_offer=safe_active_roll_call_offer,
-            lifecycle_conditions_for_instance=lifecycle_conditions_for_instance,
-            project_bot_daily_lifecycle=project_bot_daily_lifecycle,
-            provenance=_provenance,
-            resolve_symbol=_resolve_symbol,
-            resolve_session_capability_for_symbol=_resolve_session_capability_for_symbol,
-            resolve_instrument_surface=_resolve_instrument_surface,
-            resolve_lineage=_resolve_lineage,
-            read_instance_live_state=_read_instance_live_state,
-            session_started_at_ms=_session_started_at_ms,
-            project_intent_events=project_intent_events,
-            project_instance_account_lifecycle_events=(_project_instance_account_lifecycle_events),
-            sort_lifecycle_events=sort_lifecycle_events,
-            compose_bot_lifecycle_chart=compose_bot_lifecycle_chart,
-        )
-    )
-
-
 def _broker_free_fleet_read_service() -> BrokerFreeFleetReadService:
     return BrokerFreeFleetReadService(
         BrokerFreeFleetReadDependencies(
             visible_runs_by_instance=_visible_runs_by_instance,
-            sid_has_soft_deletion=_sid_has_soft_deletion,
-            resolve_bot_lifecycle_state=_resolve_bot_lifecycle_state,
             run_dir_account_id=_run_dir_account_id,
-            fetch_instances=host_daemon_client.fetch_instances,
-            fetch_instance_process=host_daemon_client.fetch_instance_process,
-            daemon_process_from_instance=_daemon_process_from_instance,
-            resolve_status_from_process=_resolve_instance_status_from_process,
             get_account_truth_snapshot_provider=get_account_truth_snapshot_provider,
             now_ms=_now_ms,
-            read_sidecar=_read_sidecar,
-            live_config_for_run_dir=live_config_for_run_dir,
-            status_is_roll_call_eligible=status_is_roll_call_eligible,
             fetch_broker_connected_account=_fetch_broker_connected_account,
         )
-    )
-
-
-async def _resolve_instance_status_from_process(
-    sid: str,
-    root: Path,
-    settings: IbkrSettings,
-    daemon_process: dict | None,
-    *,
-    runs_by_instance: dict[str, list[dict]] | None = None,
-    account_fleet_read_context: AccountFleetReadContext | None = None,
-) -> LiveInstanceStatus:
-    """Compatibility entry point for non-HTTP projections and tests."""
-
-    return await _get_surface_assembler().assemble_from_process(
-        sid,
-        root,
-        settings,
-        daemon_process,
-        runs_by_instance=runs_by_instance,
-        account_fleet_read_context=account_fleet_read_context,
-    )
-
-
-async def _assemble_instance_surface(strategy_instance_id: str) -> LiveInstanceStatus:
-    return await _get_surface_assembler().assemble(strategy_instance_id)
-
-
-async def _reconcile_surface_activity_publisher(snapshot: LiveInstanceStatus) -> None:
-    """Match publisher ownership to the producer-observed live binding."""
-
-    strategy_instance_id = snapshot.strategy_instance_id
-    registry = get_publisher_registry()
-    if snapshot.live_binding is None:
-        await registry.unregister(strategy_instance_id)
-        return
-    if registry.get(strategy_instance_id) is not None:
-        return
-
-    from app.routers.broker_activity import (
-        PublisherBootstrapError,
-        bootstrap_publisher_for_instance,
-    )
-
-    try:
-        await asyncio.wait_for(
-            bootstrap_publisher_for_instance(strategy_instance_id),
-            timeout=2.0,
-        )
-    except TimeoutError:
-        logger.warning(
-            "surface producer activity bootstrap timed out",
-            extra={"strategy_instance_id": strategy_instance_id},
-        )
-    except PublisherBootstrapError as exc:
-        logger.info(
-            "surface producer activity bootstrap deferred (%s): %s",
-            exc.code,
-            exc.detail,
-            extra={
-                "strategy_instance_id": strategy_instance_id,
-                "bootstrap_error_code": exc.code,
-            },
-        )
-    except Exception:
-        logger.exception(
-            "surface producer activity bootstrap failed unexpectedly",
-            extra={"strategy_instance_id": strategy_instance_id},
-        )
-
-
-def _surface_hub_for(strategy_instance_id: str) -> SurfaceHub[LiveInstanceStatus]:
-    return _SURFACE_HUBS.get_or_create(
-        strategy_instance_id,
-        assemble=lambda: _assemble_instance_surface(strategy_instance_id),
-        on_snapshot=_reconcile_surface_activity_publisher,
     )
 
 
@@ -2016,14 +684,13 @@ def _fleet_roster_hub_for() -> SurfaceHub[FleetRosterSnapshot]:
 
 
 async def start_surface_hubs() -> None:
-    """Start producer lifecycles for every bot visible at data-plane boot."""
+    """Start the one shared fleet producer at data-plane boot."""
 
     global _FLEET_DAEMON_PROVIDER
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
     MutationAttemptRepo(_mutation_attempt_root(root)).recover_inflight(transitioned_at_ms=_now_ms())
-    strategy_instance_ids = set(await _surface_visible_runs_by_instance(root))
     provider = _FLEET_DAEMON_PROVIDER
     if provider is None:
         provider = FleetDaemonSnapshotProvider(
@@ -2035,23 +702,16 @@ async def start_surface_hubs() -> None:
             now_ms=_now_ms,
         )
         _FLEET_DAEMON_PROVIDER = provider
-    observation = await provider.observation() if provider.is_running else await provider.start()
-    daemon = observation.payload
-    for instance in (daemon or {}).get("instances", []):
-        sid = instance.get("strategy_instance_id")
-        if isinstance(sid, str) and sid:
-            strategy_instance_ids.add(sid)
+    if not provider.is_running:
+        await provider.start()
     await _fleet_roster_hub_for().start()
-    hubs = [_surface_hub_for(sid) for sid in sorted(strategy_instance_ids)]
-    await _SURFACE_HUBS.start_all(hubs)
 
 
 async def stop_surface_hubs() -> None:
-    """Stop every producer task during data-plane shutdown."""
+    """Stop the shared fleet producer during data-plane shutdown."""
 
     global _FLEET_DAEMON_PROVIDER, _FLEET_ROSTER_HUB
 
-    await _SURFACE_HUBS.stop_all()
     fleet_hub = _FLEET_ROSTER_HUB
     _FLEET_ROSTER_HUB = None
     if fleet_hub is not None:
@@ -2060,15 +720,11 @@ async def stop_surface_hubs() -> None:
     _FLEET_DAEMON_PROVIDER = None
     if provider is not None:
         await provider.stop()
-    await _SURFACE_RUNS_CACHE.invalidate()
 
 
-async def _ensure_surface_hub_started(
+async def _refresh_fleet_roster_after_mutation(
     strategy_instance_id: str,
 ) -> None:
-    root = Path(get_settings().live_runs_root)
-    await _SURFACE_RUNS_CACHE.invalidate(root)
-    hub = _surface_hub_for(strategy_instance_id)
     try:
         provider = _FLEET_DAEMON_PROVIDER
         if provider is not None:
@@ -2078,173 +734,11 @@ async def _ensure_surface_hub_started(
             await provider.refresh(force=True)
         if _FLEET_ROSTER_HUB is not None:
             await _FLEET_ROSTER_HUB.refresh()
-        if hub.is_running:
-            await hub.refresh()
-        else:
-            await hub.start()
     except Exception:
         logger.exception(
-            "surface hub refresh deferred after mutation",
+            "fleet roster refresh deferred after mutation",
             extra={"strategy_instance_id": strategy_instance_id},
         )
-
-
-@router.get("/catalog", response_model=BotCatalogResponse)
-async def list_bot_catalog() -> BotCatalogResponse:
-    """Server-authored bot catalog cards for the frontend DataView."""
-    settings = get_settings()
-    return await _broker_free_fleet_read_service().catalog(settings, Path(settings.live_runs_root))
-
-
-@router.get("/catalog/page", response_model=BotCatalogPageResponse)
-async def list_bot_catalog_page(
-    limit: Annotated[int, Query(ge=1, le=100)] = 25,
-    cursor: Annotated[str | None, Query(max_length=256)] = None,
-) -> BotCatalogPageResponse:
-    """Return one broker-free catalog page for post-first-paint loading."""
-    return await catalog_page_response(
-        _broker_free_fleet_read_service(),
-        get_settings(),
-        limit=limit,
-        cursor=cursor,
-    )
-
-
-@router.post("/roll-call", response_model=BotRollCallResponse)
-async def run_roll_call() -> BotRollCallResponse:
-    """Persist offers projected from cached account truth and durable state."""
-
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    return await _broker_free_fleet_read_service().roll_call(settings, root)
-
-
-def _is_retired_bot(root: Path, sid: str) -> bool:
-    return (state := _resolve_bot_lifecycle_state(root, sid)) is not None and state.phase == BotLifecyclePhase.RETIRED
-
-
-@router.delete("/{strategy_instance_id}", response_model=BotDeleteResponse)
-async def delete_instance(
-    strategy_instance_id: str,
-    body: Annotated[BotDeleteRequest | None, Body()] = None,
-) -> BotDeleteResponse:
-    """Soft-delete a stopped bot from operator catalog/control surfaces.
-
-    The deletion marker is durable and run-id scoped. It hides every run that
-    currently belongs to the instance while preserving the artifacts for audit.
-    A later redeploy with a new run id is visible again.
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    request = body or BotDeleteRequest()
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    with bot_lifecycle_operation_fence(root.parent, sid):
-        _result, daemon = await host_daemon_client.fetch_instance_process(
-            settings.live_runner_daemon_url, sid
-        )
-        if daemon is None:
-            if not _is_retired_bot(root, sid):
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    detail={
-                        "reason_code": "HOST_SERVICE_OFFLINE",
-                        "message": "Cannot delete this bot because the bot service is offline; stopped state is unproven.",
-                    },
-                )
-        else:
-            process, _live_binding = _interpret_daemon_process(daemon, root)
-            if process.state in _LIVE_STATES:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    detail={
-                        "reason_code": "BOT_PROCESS_ACTIVE",
-                        "message": "Stop the bot process before deleting it from the catalog.",
-                        "process_state": process.state,
-                        "bound_run_id": process.bound_run_id,
-                    },
-                )
-
-        runs = _scan_runs_by_instance(root).get(sid, [])
-        existing = _read_bot_deletion_for_endpoint(root.parent, sid)
-        if not runs and existing is None:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND,
-                detail={"reason_code": "BOT_NOT_FOUND", "message": f"No bot exists for {sid}."},
-            )
-
-        run_ids = [str(run["run_id"]) for run in runs]
-        try:
-            record = await asyncio.to_thread(
-                soft_delete_and_retire_bot_runs_under_operation_fence,
-                root.parent,
-                sid,
-                run_ids=run_ids,
-                deleted_by=request.deleted_by,
-                reason=request.reason,
-                now_ms=_now_ms(),
-            )
-        except OSError as exc:
-            logger.warning(
-                "could not retire bot bindings before soft delete",
-                extra={"strategy_instance_id": sid, "exception": repr(exc)},
-            )
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "reason_code": "ACCOUNT_REGISTRY_RETIRE_UNAVAILABLE",
-                    "message": "The account registry could not prove this bot retired; it was not deleted.",
-                },
-            ) from exc
-        except (ValueError, BotDeletionCorruptError) as exc:
-            logger.warning(
-                "failed to soft-delete bot",
-                extra={"strategy_instance_id": sid, "exception": repr(exc)},
-            )
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="bot deletion marker could not be written",
-            ) from exc
-    await _SURFACE_RUNS_CACHE.invalidate(root)
-    for cleanup in (
-        lambda: _SURFACE_HUBS.remove(sid),
-        lambda: get_publisher_registry().unregister(sid),
-    ):
-        try:
-            await cleanup()
-        except Exception as cleanup_error:
-            logger.error(
-                "post-delete producer cleanup failed",
-                extra={
-                    "strategy_instance_id": sid,
-                    "exception": repr(cleanup_error),
-                },
-            )
-    return _bot_delete_response(root.parent, record)
-
-
-def _read_bot_deletion_for_endpoint(artifacts_root: Path, sid: str) -> BotDeletionRecord | None:
-    try:
-        return read_bot_deletion(artifacts_root, sid)
-    except (ValueError, BotDeletionCorruptError) as exc:
-        logger.warning(
-            "failed to read bot deletion marker",
-            extra={"strategy_instance_id": sid, "exception": repr(exc)},
-        )
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="bot deletion marker could not be read",
-        ) from exc
-
-
-def _bot_delete_response(artifacts_root: Path, record: BotDeletionRecord) -> BotDeleteResponse:
-    return BotDeleteResponse(
-        strategy_instance_id=record.strategy_instance_id,
-        deleted_at_ms=record.deleted_at_ms,
-        deleted_by=record.deleted_by,
-        reason=record.reason,
-        deleted_run_ids=list(record.deleted_run_ids),
-        marker_path=str(stable_bot_deletion_path(artifacts_root, record.strategy_instance_id)),
-    )
 
 
 def _raise_if_deploy_admission_blocks_start(
@@ -2451,7 +945,7 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
     if not parsed.created:
         response.status_code = status.HTTP_200_OK
     if daemon_request.strategy_instance_id:
-        await _ensure_surface_hub_started(daemon_request.strategy_instance_id)
+        await _refresh_fleet_roster_after_mutation(daemon_request.strategy_instance_id)
     return parsed
 
 
@@ -2475,30 +969,10 @@ async def _mutation_rung_receipts_from_process(
     *,
     mutation_key: str,
 ) -> tuple[MutationRungReceipt, list[MutationRungReceipt]]:
-    status_view = await _resolve_instance_status_from_process(
-        sid,
-        root,
-        settings,
-        daemon_process,
-        runs_by_instance=_visible_runs_by_instance(root),
-    )
-    return mutation_rung_receipts(status_view, mutation_key=mutation_key)
-
-
-async def _mutation_rung_receipts_for_instance(
-    sid: str,
-    root: Path,
-    settings: IbkrSettings,
-    *,
-    mutation_key: str,
-) -> tuple[MutationRungReceipt, list[MutationRungReceipt]]:
-    _result, daemon_process = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    return await _mutation_rung_receipts_from_process(
-        sid,
-        root,
-        settings,
-        daemon_process,
+    del sid, root, settings, daemon_process
+    return accepted_mutation_receipts(
         mutation_key=mutation_key,
+        occurred_at_ms=_now_ms(),
     )
 
 
@@ -2783,7 +1257,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
             )
         except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
             unknown = scope.unknown(error=exc)
-            await _ensure_surface_hub_started(sid)
+            await _refresh_fleet_roster_after_mutation(sid)
             _raise_outcome_unknown(
                 "start_run",
                 exc,
@@ -2797,7 +1271,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
             rejected = scope.reject_not_observed(
                 outcome={"accepted": False, "status_code": exc.status_code},
             )
-            await _ensure_surface_hub_started(sid)
+            await _refresh_fleet_roster_after_mutation(sid)
             raise HTTPException(
                 exc.status_code,
                 detail=_mutation_error_detail(exc.detail, rejected),
@@ -2831,7 +1305,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
                 "mutation_dispatch_state": confirmed.dispatch_state,
             }
         )
-    await _ensure_surface_hub_started(sid)
+    await _refresh_fleet_roster_after_mutation(sid)
     return response
 
 
@@ -2940,210 +1414,8 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> SetInstanceDesir
                 "mutation_dispatch_state": exc.dispatch_state,
             },
         ) from exc
-    await _ensure_surface_hub_started(sid)
+    await _refresh_fleet_roster_after_mutation(sid)
     return response
-
-
-@router.post("/{strategy_instance_id}/end-day-now", response_model=EndDayIntentResponse)
-async def end_day_now(
-    strategy_instance_id: str,
-    body: HostRunnerStopRequest | None = None,
-) -> EndDayIntentResponse:
-    """Persist a safe clock-out intent before attempting a live command."""
-
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    request = body or HostRunnerStopRequest()
-    account_id = _instance_ledger_account_id(root, sid)
-    require_presented_lifecycle_action(
-        root.parent, "" if account_id is None else account_id, sid, None, "end_day", request.presented_action
-    )
-    response = await persist_end_day_intent_response(
-        mutation_scope=_operator_mutation_scope(root, instance_id=sid, action="stop", run_id=None),
-        rung_receipts=lambda daemon: _mutation_rung_receipts_from_process(
-            sid,
-            root,
-            settings,
-            daemon,
-            mutation_key="clock_out",
-        ),
-        artifacts_root=root.parent,
-        strategy_instance_id=sid,
-        idempotency_key=(
-            None if request.presented_action is None else request.presented_action.idempotency_key
-        ),
-        now_ms=_now_ms,
-        daemon_url=settings.live_runner_daemon_url,
-        interpret_process=lambda daemon: _interpret_daemon_process(daemon, root),
-        visible_live_run_dir=lambda live_binding: _visible_live_run_dir(root, live_binding),
-        clock_out_is_in_progress=clock_out_is_in_progress,
-    )
-    await _ensure_surface_hub_started(sid)
-    return response
-
-
-@router.post("/{strategy_instance_id}/lifecycle/roster", response_model=BotLifecycleMutationResponse)
-async def set_lifecycle_roster(
-    strategy_instance_id: str,
-    body: BotLifecycleRosterRequest,
-) -> BotLifecycleMutationResponse:
-    """Add/remove a bot from the duty roster."""
-
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    try:
-        BotLifecycleEvaluator(root.parent, sid).set_roster(
-            body.on_roster,
-            now_ms=_now_ms(),
-            updated_by=body.updated_by,
-            reason=body.reason,
-        )
-    except LifecycleTransitionRefusedError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "RETIRED_LIFECYCLE",
-                "message": str(exc),
-                "strategy_instance_id": sid,
-            },
-        ) from exc
-    return await _daily_lifecycle_mutation_response(sid, root, settings)
-
-
-@router.post("/{strategy_instance_id}/retire-and-replace", response_model=BotLifecycleMutationResponse)
-async def retire_and_replace(
-    strategy_instance_id: str,
-    body: BotRetireReplaceRequest,
-) -> BotLifecycleMutationResponse:
-    """Retire this bot's machinery before the UI continues to replacement deploy."""
-
-    sid = _validate_instance_id(strategy_instance_id)
-    if not body.confirm_account_flat:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "ACCOUNT_FLAT_ATTESTATION_REQUIRED",
-                "message": "Confirm the broker account is flat before retiring and replacing this bot.",
-            },
-        )
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    with bot_lifecycle_operation_fence(root.parent, sid):
-        _result, daemon = await host_daemon_client.fetch_instance_process(
-            settings.live_runner_daemon_url, sid
-        )
-        process, _live_binding = _interpret_daemon_process(daemon, root)
-        if process.state == "unreachable":
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={
-                    "reason_code": "HOST_SERVICE_OFFLINE",
-                    "message": "The bot service is unreachable. Reconnect it before retiring and replacing this bot.",
-                    "process_state": process.state,
-                },
-            )
-        if process.state in {"running", "stopping"}:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={
-                    "reason_code": "BOT_ON_DUTY",
-                    "message": "End the day before retiring and replacing this bot.",
-                    "process_state": process.state,
-                },
-            )
-        retire_bot_lifecycle_and_bindings_under_operation_fence(
-            root.parent,
-            sid,
-            run_ids=[str(run["run_id"]) for run in _scan_runs_by_instance(root).get(sid, [])],
-            now_ms=_now_ms(),
-            updated_by=body.updated_by,
-            reason=body.reason,
-        )
-    return await _daily_lifecycle_mutation_response(sid, root, settings)
-
-
-def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
-    """Why the instance's newest run ended — for the console's STOPPED-reason
-    surface. Returns None while a run is still live (no terminal ``ended_at_ms``)
-    or when nothing was ever deployed.
-
-    Reads the run's ``run_status.json`` for exit code/reason, and the
-    indicator-state hydration receipt (``indicator_state_hydration.json``) when
-    present so a cold-start rejection (``accepted=false`` /
-    ``failure_reason="missing"``) is explained rather than left as a bare exit 4.
-    """
-    if not runs:
-        return None
-    latest = runs[0]
-    run_dir = Path(latest["run_dir"])
-    sidecar = _read_sidecar(run_dir)
-    # Only surface a *terminated* run. A live run has ended_at_ms=None; showing a
-    # stale exit for it would contradict the RUNNING badge.
-    if sidecar is None or sidecar.ended_at_ms is None:
-        return None
-
-    hydration_accepted: bool | None = None
-    hydration_failure_reason: str | None = None
-    receipt_path = run_dir / "indicator_state_hydration.json"
-    if receipt_path.exists():
-        try:
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            receipt = None
-        if isinstance(receipt, dict):
-            # Type-guard before handing to the Pydantic model: a hand-edited or
-            # corrupt receipt with a non-bool ``accepted`` would raise a
-            # ValidationError and 500 the whole status endpoint. A bad receipt
-            # should degrade to "unknown", not break status.
-            accepted = receipt.get("accepted")
-            if isinstance(accepted, bool):
-                hydration_accepted = accepted
-            validation = receipt.get("validation")
-            if isinstance(validation, dict):
-                reason = validation.get("failure_reason")
-                if isinstance(reason, str):
-                    hydration_failure_reason = reason
-
-    # The specific safety trigger, when the run left a poisoned.flag (written on
-    # both a fatal_halt and an operator MARK_POISONED). A corrupt flag degrades to
-    # no detail rather than 500-ing status — the poison_sentinel gate still flags
-    # the run as unsafe.
-    halt_trigger: str | None = None
-    halt_at_ms: int | None = None
-    halt_detail: dict | None = None
-    try:
-        poison = read_poisoned_flag(run_dir)
-    except ValueError as exc:
-        # A corrupt poisoned.flag must not 500 the status call, but it is a
-        # forensic signal during incident response — surface it, don't swallow.
-        logger.warning(
-            "Invalid poisoned.flag for run %s (%s): %s",
-            sidecar.run_id,
-            run_dir,
-            exc,
-        )
-        poison = None
-    if poison is not None:
-        halt_trigger = poison.trigger.value
-        halt_at_ms = poison.halted_at_ms
-        halt_detail = dict(poison.details)
-
-    return InstanceLastExit(
-        run_id=sidecar.run_id,
-        ended_at_ms=sidecar.ended_at_ms,
-        exit_code=sidecar.exit_code,
-        exit_reason=sidecar.exit_reason,
-        exit_error_code=sidecar.exit_error_code,
-        exit_error_message=sidecar.exit_error_message,
-        exit_error_detail=sidecar.exit_error_detail,
-        hydration_accepted=hydration_accepted,
-        hydration_failure_reason=hydration_failure_reason,
-        halt_trigger=halt_trigger,
-        halt_at_ms=halt_at_ms,
-        halt_detail=halt_detail,
-    )
 
 
 @router.get("/audit-copy-sizing-lookup", response_model=AuditCopySizingLookup)
@@ -3307,33 +1579,6 @@ async def renew_daemon_lease() -> HostRunnerHealth:
             status.HTTP_502_BAD_GATEWAY,
             detail=str(exc),
         ) from exc
-
-
-def _instance_ledger_account_id(
-    root: Path,
-    sid: str,
-    *,
-    runs_by_instance: dict[str, list[dict]] | None = None,
-) -> str | None:
-    """Latest ledger ``account_id`` for ``sid`` (``None`` when no ledger
-    or the ledger pre-dates the field).  Pure read; used by the fleet
-    account-identity aggregation."""
-    if runs_by_instance is None:
-        runs_by_instance = _scan_runs_by_instance(root)
-    runs = runs_by_instance.get(sid, [])
-    if not runs:
-        return None
-    try:
-        ledger = _read_ledger(Path(runs[0]["run_dir"]))
-    except (OSError, json.JSONDecodeError):
-        return None
-    value = ledger.get("account_id")
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        return normalize_account_id(value)
-    except InvalidAccountIdError:
-        return None
 
 
 async def _fetch_broker_connected_account(
@@ -3508,17 +1753,6 @@ async def get_account_summary(account_id: str | None = Query(default=None)) -> F
     )
 
 
-def _surface_snapshot_unavailable(strategy_instance_id: str) -> HTTPException:
-    return HTTPException(
-        status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail={
-            "reason_code": "SURFACE_SNAPSHOT_UNAVAILABLE",
-            "message": "The bot surface producer has not completed a successful refresh yet.",
-            "strategy_instance_id": strategy_instance_id,
-        },
-    )
-
-
 @router.get(
     "/fleet/stream",
     summary="Latest-wins SSE stream of complete fleet roster snapshots",
@@ -3559,254 +1793,6 @@ async def stream_fleet_roster(
     )
 
 
-@router.get(
-    "/{strategy_instance_id}/operator-surface/stream",
-    summary="Latest-wins SSE stream of complete Bot Cockpit snapshots",
-)
-async def stream_instance_operator_surface(
-    strategy_instance_id: str,
-    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
-) -> StreamingResponse:
-    """Emit the current full snapshot and every later semantic version."""
-
-    del last_event_id  # State reconnect always sends current truth; no replay.
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    if sid not in _visible_runs_by_instance(root) and _sid_has_soft_deletion_from_directory(
-        root.parent,
-        sid,
-    ):
-        raise HTTPException(
-            status.HTTP_410_GONE,
-            detail=_bot_soft_deleted_detail(sid),
-        )
-    hub = _SURFACE_HUBS.get(sid)
-    if hub is None or hub.latest is None:
-        raise _surface_snapshot_unavailable(sid)
-
-    async def event_source():
-        queue = hub.subscribe()
-        try:
-            while True:
-                snapshot = await queue.get()
-                if snapshot is None:
-                    yield "event: end\ndata: {}\n\n"
-                    return
-                event_id = f"{snapshot.stream_epoch}:{snapshot.surface_version}"
-                yield (f"id: {event_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n")
-        finally:
-            hub.unsubscribe(queue)
-
-    return StreamingResponse(
-        event_source(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.get("/{strategy_instance_id}/status", response_model=LiveInstanceStatus)
-async def get_instance_status(
-    strategy_instance_id: str,
-    refresh: bool = Query(default=False),
-) -> LiveInstanceStatus:
-    """Return the snapshot stored by this bot's producer-owned hub."""
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    if sid not in _visible_runs_by_instance(root) and _sid_has_soft_deletion_from_directory(
-        root.parent,
-        sid,
-    ):
-        raise HTTPException(
-            status.HTTP_410_GONE,
-            detail=_bot_soft_deleted_detail(sid),
-        )
-    hub = _SURFACE_HUBS.get(sid)
-    if hub is None and refresh:
-        hub = _surface_hub_for(sid)
-    if hub is None:
-        raise _surface_snapshot_unavailable(sid)
-    try:
-        return await hub.snapshot(refresh=refresh)
-    except SnapshotUnavailableError as exc:
-        raise _surface_snapshot_unavailable(sid) from exc
-
-
-@router.post(
-    "/{strategy_instance_id}/crash-recovery-override",
-    response_model=CrashRecoveryOverrideResponse,
-)
-async def record_crash_recovery_override(
-    strategy_instance_id: str,
-    body: CrashRecoveryOverrideRequest,
-) -> CrashRecoveryOverrideResponse:
-    """Record audited evidence allowing a crash-retired runner to restart."""
-
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    runs = _scan_runs_by_instance(root).get(sid, [])
-    if not runs:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail={
-                "reason_code": "INSTANCE_RUN_NOT_FOUND",
-                "message": f"No run directory was found for {sid}. Deploy before recording recovery evidence.",
-            },
-        )
-    account_id = _run_dir_account_id(Path(runs[0]["run_dir"]))
-    if account_id is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "ACCOUNT_ID_UNAVAILABLE",
-                "message": "The latest run ledger does not contain an account_id.",
-                "remediation": "Redeploy with broker account evidence before recording crash recovery.",
-            },
-        )
-    try:
-        override = record_crash_recovery_override_evidence(
-            root.parent,
-            account_id=account_id,
-            strategy_instance_id=sid,
-            request=body,
-            now_ms=_now_ms(),
-        )
-    except CrashRecoveryNotRequiredError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "CRASH_RECOVERY_NOT_REQUIRED",
-                "message": "This bot is not blocked by crash-retired recovery proof.",
-                "remediation": "Refresh Bot Control and use the currently enabled action.",
-            },
-        ) from exc
-    # The audited override is already durably recorded above. The receipt is a
-    # convenience projection off the fresh ladder; if resolving it fails (daemon
-    # unreachable, artifact read error) the mutation still succeeded, so degrade
-    # to a receipt-less 200 rather than 500-ing a request whose retry would hit
-    # CrashRecoveryNotRequiredError → 409 and never report success.
-    try:
-        receipt, warnings = await _mutation_rung_receipts_for_instance(
-            sid,
-            root,
-            settings,
-            mutation_key="crash_recovery_override",
-        )
-    except Exception as exc:
-        # Post-commit projection must not mask the durable write.
-        logger.warning(
-            "crash-recovery override recorded, but post-commit receipt resolution failed",
-            extra={"strategy_instance_id": sid, "override_id": override.override_id, "exception": repr(exc)},
-        )
-        return override
-    return override.model_copy(
-        update={
-            "rung_receipt": receipt,
-            "rung_receipt_warnings": warnings,
-        }
-    )
-
-
-def _resolve_safety_verdict_final(
-    configured_mode: Literal["paper", "live"] | None,
-) -> Literal["paper-only", "unsafe", "unknown"]:
-    """PRD #616 — derive ADR-0011's reactive ``BrokerSafetyVerdict.final_verdict``
-    for the operator-surface projection.
-
-    PRD #619-A: routed through the typed ``BrokerRuntimeSnapshot`` so
-    the read uses only public ``IbkrClient`` API and a missing/torn-down
-    singleton surfaces as a structured ``client_available=False``
-    snapshot rather than being swallowed by a broad ``except Exception``.
-    Per the ADR-0011 amendment, ``readonly_flag`` is no longer part of
-    the identity derivation; the snapshot still carries it for the
-    per-gate breakdown.
-
-    The fleet-level singleton is the *data-plane* observation; for live
-    runs the authoritative verdict comes from the child's own
-    ``verdict_snapshot.json`` (see PRD #619-A §A3 — the engine writes
-    that file via its ``verdict_provider`` closure).
-    """
-    from app.broker.runtime_snapshot import snapshot_data_plane_broker
-    from app.broker.safety_verdict import derive_broker_safety_verdict
-
-    snapshot = snapshot_data_plane_broker()
-    # When the singleton is unavailable (broker disabled, lifespan has
-    # not constructed it, or it has been torn down) the snapshot fields
-    # are all ``None``. Feeding those Nones to the pure derivation yields
-    # an honest ``unknown`` driven by the cockpit's own ``configured_mode``.
-    verdict = derive_broker_safety_verdict(
-        configured_mode=configured_mode,
-        readonly_flag=snapshot.readonly,
-        port=snapshot.port,
-        connected_account=snapshot.connected_account,
-    )
-    return verdict.final_verdict
-
-
-def _resolve_resume_guard_state_for(
-    root: Path,
-    live_binding: LiveBinding | None,
-    runs: list[dict],
-) -> ResumeGuardState:
-    """Resolve the canonical ``ResumeGuardState`` for an instance.
-
-    The bound run's artifacts are the truth; absent a binding the most recent
-    run that produced safety evidence is consulted (``require_started`` — so an
-    EXITED instance still surfaces its last verdict / WAL state, and a
-    never-started ledger-only child from a failed Deploy & run cannot shadow it).
-    When no run exists at all, ``empty_guard_state()`` is returned.
-    """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs, require_started=True)
-    if run_dir is None:
-        return empty_guard_state()
-    return resolve_guard_state_from_paths(
-        verdict_snapshot_path=run_dir / "verdict_snapshot.json",
-        run_status_path=run_dir / "run_status.json",
-        run_dir_for_reconciliation=run_dir,
-        intent_wal_path=run_dir / "intent_events.jsonl",
-    )
-
-
-async def _load_instance_context_for_router(sid: str) -> InstanceContext:
-    """PRD #619-A §A4 — single-call assembly for the mutation endpoints.
-
-    Wires the pure ``load_instance_context`` service to this router's
-    helpers / settings. Each mutation endpoint calls this once for its
-    pre-write capability gate; the post-write daemon revalidation is a
-    *separate* fetch (the durable write may move daemon-side state).
-    """
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-
-    async def _fetch_daemon(_sid: str) -> dict | None:
-        # C2: typed read returns ``(DaemonResult, dict | None)``; the
-        # operator-surface ``control_plane`` section (C3) surfaces the
-        # typed kind via the connectivity monitor's accumulated state, so
-        # this per-call result is discarded here.
-        _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, _sid)
-        return daemon
-
-    return await load_instance_context(
-        sid,
-        now_ms=_now_ms,
-        fetch_daemon_process=_fetch_daemon,
-        interpret_daemon_process=lambda daemon: _interpret_daemon_process(daemon, root),
-        scan_runs_for_instance=lambda _sid: _scan_runs_by_instance(root).get(_sid, []),
-        resolve_desired_state=lambda _sid: _resolve_desired_state(root, _sid),
-        instance_last_exit=_instance_last_exit,
-        instance_broker=lambda _sid: _instance_broker(root, _sid),
-        resolve_guard_state_for=lambda live_binding, runs: _resolve_resume_guard_state_for(root, live_binding, runs),
-        resolve_runtime_freshness_for=lambda live_binding, _runs, observed_at_ms: _resolve_runtime_freshness(
-            root,
-            live_binding,
-            now_ms=observed_at_ms,
-        ),
-        resolve_latest_mutation_for=lambda _sid: _resolve_latest_mutation(root, _sid),
-    )
-
-
 # PRD #619-C5 — single-shot mutation OUTCOME_UNKNOWN surfacing.
 
 _OUTCOME_UNKNOWN_RUNBOOK_HINTS: dict[str, str] = {
@@ -3819,22 +1805,12 @@ _OUTCOME_UNKNOWN_RUNBOOK_HINTS: dict[str, str] = {
     ),
     "start_run": (
         "A start request was sent to the host runner daemon but the response "
-        "was lost. The run may or may not be running. Refresh the cockpit "
+        "was lost. The run may or may not be running. Refresh the Broker V2 panel "
         "to read live state before deciding whether to retry."
-    ),
-    "stop_run": (
-        "A stop request was sent to the host runner daemon but the response "
-        "was lost. The run may or may not have stopped. Refresh the cockpit "
-        "to read live state before deciding whether to retry."
-    ),
-    "end_day_now": (
-        "An end-day stop request was sent to the host runner daemon but the response "
-        "was lost. The run may or may not have stopped. Read the latest Bot Cockpit "
-        "state before deciding whether to retry."
     ),
     "renew_daemon_lease": (
         "A control-plane lease renewal request was sent to the host runner "
-        "daemon but the response was lost. Refresh the cockpit to read the "
+        "daemon but the response was lost. Refresh the fleet roster to read the "
         "latest control-plane state before deciding whether to retry."
     ),
 }
@@ -3844,9 +1820,6 @@ def _raise_outcome_unknown(
     endpoint: Literal[
         "deploy",
         "start_run",
-        "stop_run",
-        "end_day_now",
-        "emergency_flatten",
         "renew_daemon_lease",
     ],
     exc: host_daemon_client.HostDaemonOutcomeUnknownError,
@@ -3855,7 +1828,7 @@ def _raise_outcome_unknown(
 ) -> NoReturn:
     """Surface an ambiguous-outcome mutation failure as a typed 409 (PRD #619-C5).
 
-    The body is :class:`MutationOutcomeUnknownResponse`; the cockpit
+    The body is :class:`MutationOutcomeUnknownResponse`; the caller
     renders the runbook hint verbatim and tells the operator to refresh
     state before retrying. Distinct from 503 ``host daemon unreachable``,
     which means the request was provably not sent.
@@ -3875,1667 +1848,3 @@ def _raise_outcome_unknown(
         status_code=status.HTTP_409_CONFLICT,
         detail=detail,
     ) from exc
-
-
-def _broker_connection_state_from_readiness(
-    readiness: ReadinessVector | None,
-) -> Literal["connected", "disconnected", "unknown"] | None:
-    """Collapse the live readiness ``broker_connection`` gate into the
-    operator-surface broker-connection-state enum.
-
-    The live readiness vector today only emits pass/fail on
-    ``broker_connection`` (see ``app/engine/live/readiness.py``).  When a
-    richer ``BrokerConnectionState`` channel lands on the wire, this
-    helper grows to read it; degraded transport states are unreachable from the
-    current pass/fail signal, which is the honest answer.
-    """
-    if readiness is None:
-        return None
-    for gate in readiness.gates:
-        if gate.name == "broker_connection":
-            if gate.status == "pass":
-                return "connected"
-            if gate.status == "fail":
-                return "disconnected"
-            return "unknown"
-    return None
-
-
-def _read_parquet_rows(path: Path, since_ms: int | None = None, key: str = "ts_ms") -> list[dict]:
-    """Read a Parquet artifact's rows; optionally filter by a ms cursor.
-
-    A missing file legitimately returns ``[]`` (run had no trades yet). A
-    read failure logs with context and still returns ``[]`` rather than
-    500-ing the chart — but the warning makes corruption visible during
-    incident response (PR #483 review).
-    """
-    rows = read_parquet_rows(path, on_error="warn_empty")
-    if since_ms is not None:
-        rows = [r for r in rows if int(r.get(key, 0)) > since_ms]
-    return rows
-
-
-def _filter_rows_to_utc_day(rows: list[dict], day: date, key: str = "ts_ms") -> list[dict]:
-    """Keep only rows whose ``key`` (int64 ms UTC) falls within ``day``.
-
-    Used by ``/chart-snapshot`` so a multi-day run doesn't project the
-    other days' markers onto every per-date response (PR #483 review).
-    """
-    day_start_ms = int(datetime.combine(day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000)
-    day_end_ms = day_start_ms + 86_400_000
-    return [r for r in rows if day_start_ms <= int(r.get(key, -1)) < day_end_ms]
-
-
-def _filter_rows_to_window(rows: list[dict], start_ms: int, end_ms: int, key: str = "ts_ms") -> list[dict]:
-    """Keep only rows whose ``key`` (int64 ms UTC) falls in ``[start_ms, end_ms)``."""
-    return [r for r in rows if start_ms <= int(r.get(key, -1)) < end_ms]
-
-
-def _runs_active_on(runs: list[dict], day: date, *, live_binding: LiveBinding | None) -> list[dict]:
-    """Subset of ``runs`` whose session overlaps the given UTC date.
-
-    A run "touches" the day when its ``started_at_ms`` ≤ end-of-day AND its
-    ``ended_at_ms`` (or now) ≥ start-of-day. Live binding's run is always
-    considered active on today regardless of sidecar contents.
-    """
-    day_start_ms = int(datetime.combine(day, datetime.min.time(), tzinfo=UTC).timestamp() * 1000)
-    day_end_ms = day_start_ms + 86_400_000
-    out: list[dict] = []
-    for run in runs:
-        run_dir = Path(run["run_dir"])
-        sidecar = _read_sidecar(run_dir)
-        started = sidecar.started_at_ms if sidecar is not None else None
-        ended = sidecar.ended_at_ms if sidecar is not None else None
-        if started is None:
-            # Fall back to created_at_ms when no sidecar yet.
-            started = int(run.get("created_at_ms") or 0)
-        effective_end = ended if ended is not None else day_end_ms
-        if started < day_end_ms and effective_end >= day_start_ms:
-            out.append({**run, "started_at_ms": started, "ended_at_ms": ended, "sidecar_started": sidecar is not None})
-        elif live_binding is not None and run.get("run_id") == live_binding.run_id and day == _today_ny():
-            out.append({**run, "started_at_ms": started, "ended_at_ms": None, "sidecar_started": False})
-    return out
-
-
-def _runs_active_in_window(
-    runs: list[dict],
-    start_ms: int,
-    end_ms: int,
-    *,
-    live_binding: LiveBinding | None,
-    now_ms: int,
-) -> list[dict]:
-    """Subset of ``runs`` whose lifecycle overlaps an explicit UTC-ms window."""
-    out: list[dict] = []
-    for run in runs:
-        run_dir = Path(run["run_dir"])
-        sidecar = _read_sidecar(run_dir)
-        started = sidecar.started_at_ms if sidecar is not None else None
-        ended = sidecar.ended_at_ms if sidecar is not None else None
-        if started is None:
-            started = int(run.get("created_at_ms") or 0)
-        effective_end = ended if ended is not None else now_ms
-        if started < end_ms and effective_end >= start_ms:
-            out.append({**run, "started_at_ms": started, "ended_at_ms": ended, "sidecar_started": sidecar is not None})
-        elif live_binding is not None and run.get("run_id") == live_binding.run_id and start_ms <= now_ms < end_ms:
-            out.append({**run, "started_at_ms": started, "ended_at_ms": None, "sidecar_started": False})
-    return out
-
-
-# VCR-P3-I — Trading-day boundaries are America/New_York, not UTC. At
-# the UTC boundary (00:00 UTC = 19:00 ET in winter / 20:00 ET in summer)
-# bars from the ET trading session could fall on the wrong UTC date,
-# making the chart-snapshot "today" view miss bars or show yesterday's
-# bars under today's banner. The chart-snapshot is the only consumer in
-# this module; everything else operates on bar-time milliseconds where
-# the timezone is already explicit.
-_ACTIVITY_EVIDENCE_BACKFILL_LIMIT = 10_000
-
-
-def _today_ny() -> date:
-    """Today as America/New_York date — the trading-day partition key.
-
-    VCR-P3-I: at the UTC boundary, bars from the ET trading session
-    can fall on the wrong UTC date. The chart-snapshot endpoint reads
-    by trading day, so the "today" reference must be the NY trading
-    date, not the UTC calendar date.
-    """
-    return datetime.now(_NY_TZ).date()
-
-
-def _ny_session_bounds_ms(day: date) -> tuple[int, int]:
-    """Return America/New_York calendar-day bounds as UTC ms.
-
-    The Activity tab's selected date is the exchange/session date, not a
-    UTC bucket. This includes PRE/RTH/POST/CLOSED broker events whose
-    wall-clock belongs to that NY date.
-    """
-    return ny_session_bounds_ms(day)
-
-
-def _activity_evidence_refs_for_session(
-    *,
-    sid: str,
-    symbol: str | None,
-    start_ms: int,
-    end_ms: int,
-) -> list[ActivityEvidenceRef]:
-    refs: list[ActivityEvidenceRef] = []
-    events = get_ibkr_api_evidence_recorder().backfill(
-        after_seq=0,
-        limit=_ACTIVITY_EVIDENCE_BACKFILL_LIMIT,
-    )
-    for event in events:
-        if not (start_ms <= event.ts_ms < end_ms):
-            continue
-        if event.strategy_instance_id not in (None, sid):
-            continue
-        if symbol is not None and event.symbol not in (None, symbol):
-            continue
-        refs.append(activity_evidence_ref_from_event(event))
-    return refs
-
-
-def _activity_row_time_ms(row) -> int:
-    return int(row.exec_ts_ms or row.ts_ms)
-
-
-def _activity_order_key(row) -> str:
-    if row.perm_id is not None:
-        return f"perm:{row.perm_id}"
-    if row.order_ref:
-        return f"ref:{row.order_ref}"
-    if row.exec_id:
-        return f"exec:{row.exec_id}"
-    return f"row:{row.seq}"
-
-
-def _activity_fill_key(row) -> str:
-    if row.exec_id:
-        return f"exec:{row.exec_id}"
-    return _activity_order_key(row)
-
-
-def _position_effect_for_fill(
-    *, prior: float, side: Literal["BUY", "SELL"], quantity: float
-) -> tuple[str, float, str | None]:
-    signed = quantity if side == "BUY" else -quantity
-    next_position = prior + signed
-
-    if abs(prior) <= 1e-9 and next_position > 0:
-        return "Open long", next_position, "OPEN"
-    if abs(prior) <= 1e-9 and next_position < 0:
-        return "Open short", next_position, "OPEN"
-    if prior > 0 and signed > 0:
-        return "Add long", next_position, None
-    if prior < 0 and signed < 0:
-        return "Add short", next_position, None
-    if prior > 0 and next_position > 0:
-        return "Reduce long", next_position, None
-    if prior < 0 and next_position < 0:
-        return "Reduce short", next_position, None
-    if prior > 0 and abs(next_position) <= 1e-9:
-        return "Close long", next_position, "CLOSE"
-    if prior < 0 and abs(next_position) <= 1e-9:
-        return "Close short", next_position, "CLOSE"
-    return "Reverse", next_position, "REVERSE"
-
-
-def _read_activity_wal_rows(*, artifacts_root: Path, sid: str, start_ms: int, end_ms: int) -> list:
-    wal = BrokerActivityWal(
-        instance_broker_activity_wal_path(artifacts_root, sid),
-        trusted_root=artifacts_root / "live_instances",
-    )
-    rows = wal.read_all()
-    return [row for row in rows if start_ms <= _activity_row_time_ms(row) < end_ms]
-
-
-def _latest_activity_wal_day(*, artifacts_root: Path, sid: str) -> date | None:
-    wal = BrokerActivityWal(
-        instance_broker_activity_wal_path(artifacts_root, sid),
-        trusted_root=artifacts_root / "live_instances",
-    )
-    rows = wal.read_all()
-    if not rows:
-        return None
-    latest_ms = max(_activity_row_time_ms(row) for row in rows)
-    return datetime.fromtimestamp(latest_ms / 1000, tz=UTC).astimezone(_NY_TZ).date()
-
-
-def _build_activity_projection(
-    *,
-    sid: str,
-    day: date,
-    symbol: str | None,
-    resolution: str,
-    wal_rows: list,
-    evidence_refs: list[ActivityEvidenceRef],
-) -> LiveInstanceActivityProjection:
-    by_fill_key: dict[str, list] = {}
-    for row in wal_rows:
-        if row.verdict == "engine_only_pending" or row.price is None or row.exec_ts_ms is None:
-            continue
-        by_fill_key.setdefault(_activity_fill_key(row), []).append(row)
-
-    fill_markers: list[ActivityFillMarker] = []
-    annotations: list[ActivityPositionAnnotation] = []
-    warnings: list[ActivityReconciliationWarning] = []
-    net_by_symbol: dict[str, float] = {}
-    selected_fill_rows: dict[str, object] = {}
-
-    for fill_key, fill_rows in sorted(
-        by_fill_key.items(), key=lambda item: min(_activity_row_time_ms(row) for row in item[1])
-    ):
-        row = sorted(fill_rows, key=lambda r: (0 if r.verdict != "unexpected" else 1, r.seq))[0]
-        selected_fill_rows[fill_key] = row
-        prior = net_by_symbol.get(row.symbol, 0.0)
-        effect, next_position, lifecycle_label = _position_effect_for_fill(
-            prior=prior,
-            side=row.side,
-            quantity=float(row.quantity),
-        )
-        net_by_symbol[row.symbol] = next_position
-        marker = ActivityFillMarker(
-            id=fill_key,
-            row_seq=row.seq,
-            order_key=_activity_order_key(row),
-            symbol=row.symbol,
-            side=row.side,
-            quantity=float(row.quantity),
-            price=float(row.price),
-            chart_ts_ms=int(row.ts_ms),
-            exec_ts_ms=int(row.exec_ts_ms),
-            position_effect=effect,
-            replay_count=len(fill_rows),
-            evidence=matching_evidence_refs(
-                row,
-                evidence_refs,
-                request_calls={"placeOrder", "reqExecutionsAsync", "reqAllOpenOrders"},
-            ),
-        )
-        fill_markers.append(marker)
-        if len(fill_rows) > 1:
-            warnings.append(
-                ActivityReconciliationWarning(
-                    code="broker_replay_collapsed",
-                    message=(
-                        f"Broker execution {fill_key} was observed {len(fill_rows)} times; "
-                        "the chart and Orders Today count it once."
-                    ),
-                    row_ids=[str(r.seq) for r in fill_rows],
-                )
-            )
-        if lifecycle_label is not None:
-            annotations.append(
-                ActivityPositionAnnotation(
-                    id=f"{lifecycle_label.lower()}:{fill_key}",
-                    ts_ms=int(row.ts_ms),
-                    symbol=row.symbol,
-                    label=lifecycle_label,
-                    net_position=next_position,
-                )
-            )
-
-    orders_today: list[ActivityOrderRow] = []
-    for order_key, rows in sorted(
-        _group_rows_by_order_key(wal_rows).items(),
-        key=lambda item: max(_activity_row_time_ms(row) for row in item[1]),
-        reverse=True,
-    ):
-        ordered = sorted(rows, key=_activity_row_time_ms)
-        first = ordered[0]
-        fill_rows = [
-            row
-            for row in ordered
-            if row.verdict != "engine_only_pending" and row.price is not None and row.exec_ts_ms is not None
-        ]
-        unique_fill_rows = {_activity_fill_key(row): row for row in fill_rows}
-        filled_quantity = sum(float(row.quantity) for row in unique_fill_rows.values())
-        avg_fill = (
-            sum(float(row.price) * float(row.quantity) for row in unique_fill_rows.values()) / filled_quantity
-            if filled_quantity > 0
-            else None
-        )
-        has_pending = any(row.verdict == "engine_only_pending" for row in ordered)
-        has_terminal = bool(fill_rows) or any(
-            code.value in {"cancellation", "rejection"} for row in ordered for code in row.reason_codes
-        )
-        group: Literal["active", "resolved", "engine_pending"]
-        if has_terminal:
-            group = "resolved"
-            status_label = "filled" if fill_rows else "resolved"
-        elif has_pending:
-            group = "engine_pending"
-            status_label = "engine pending"
-        else:
-            group = "active"
-            status_label = "working"
-        latest = ordered[-1]
-        orders_today.append(
-            ActivityOrderRow(
-                order_key=order_key,
-                symbol=first.symbol,
-                side=first.side,
-                quantity=float(first.quantity),
-                order_type=first.order_type,
-                status=status_label,
-                group=group,
-                chart_ts_ms=int(first.ts_ms),
-                submitted_ts_ms=int(first.ts_ms),
-                last_update_ts_ms=_activity_row_time_ms(latest),
-                filled_quantity=filled_quantity,
-                avg_fill_price=avg_fill,
-                position_effect=(next((m.position_effect for m in fill_markers if m.order_key == order_key), None)),
-                replay_count=max(1, len(fill_rows) - len(unique_fill_rows) + 1),
-                evidence=matching_evidence_refs(
-                    first,
-                    evidence_refs,
-                    request_calls={"placeOrder", "reqAllOpenOrders"},
-                ),
-            )
-        )
-
-    broker_events: list[ActivityBrokerEventRow] = []
-    for marker in fill_markers:
-        selected_row = selected_fill_rows[marker.id]
-        source = (
-            "activity_repair_projection"
-            if selected_row.recovery_provenance == "reconstructed"
-            else "broker_activity_wal"
-        )
-        broker_events.append(
-            ActivityBrokerEventRow(
-                id=marker.id,
-                visible_row_id=f"fill:{marker.id}",
-                ts_ms=marker.chart_ts_ms,
-                row_type="fill",
-                display_type="Broker fill",
-                source=source,
-                source_label=(
-                    "Repaired trade evidence" if source == "activity_repair_projection" else "Broker activity stream"
-                ),
-                symbol=marker.symbol,
-                side=marker.side,
-                quantity=marker.quantity,
-                price=marker.price,
-                status=marker.position_effect,
-                summary=(
-                    f"{marker.side} {marker.quantity:g} {marker.symbol} @ {marker.price:.2f} · {marker.position_effect}"
-                ),
-                verdict=selected_row.verdict.value,
-                replay_count=marker.replay_count,
-                cluster_key=marker.order_key,
-                cluster_label=activity_cluster_label(selected_row),
-                evidence=marker.evidence,
-            )
-        )
-    for row in wal_rows:
-        if row.verdict == "engine_only_pending":
-            broker_events.append(
-                ActivityBrokerEventRow(
-                    id=f"pending:{row.seq}",
-                    visible_row_id=f"order_intent:{row.seq}",
-                    ts_ms=int(row.ts_ms),
-                    row_type="order_intent",
-                    display_type="Order intent",
-                    source="broker_activity_wal",
-                    source_label="Broker activity stream",
-                    symbol=row.symbol,
-                    side=row.side,
-                    quantity=float(row.quantity),
-                    status="engine pending",
-                    summary=row.headline,
-                    verdict=row.verdict.value,
-                    evidence=matching_evidence_refs(
-                        row,
-                        evidence_refs,
-                        request_calls={"placeOrder"},
-                    ),
-                )
-            )
-        elif row.price is None and any(code.value in {"cancellation", "rejection"} for code in row.reason_codes):
-            broker_events.append(
-                ActivityBrokerEventRow(
-                    id=f"terminal:{row.seq}",
-                    visible_row_id=f"order_terminal:{row.seq}",
-                    ts_ms=_activity_row_time_ms(row),
-                    row_type="order_terminal",
-                    display_type="Order terminal state",
-                    source="broker_activity_wal",
-                    source_label="Broker activity stream",
-                    symbol=row.symbol,
-                    side=row.side,
-                    quantity=float(row.quantity),
-                    status="/".join(code.value for code in row.reason_codes),
-                    summary=row.headline,
-                    verdict=row.verdict.value,
-                    evidence=matching_evidence_refs(
-                        row,
-                        evidence_refs,
-                        request_calls={"reqAllOpenOrders"},
-                    ),
-                )
-            )
-    for ref in evidence_refs:
-        narrative = activity_evidence_narrative(ref)
-        broker_events.append(
-            ActivityBrokerEventRow(
-                id=f"evidence:{ref.seq}",
-                visible_row_id=f"evidence:{ref.seq}",
-                ts_ms=ref.ts_ms,
-                row_type="broker_evidence",
-                display_type=narrative["display_type"],
-                source=ref.source,
-                source_label=narrative["source_label"],
-                status=narrative["status"],
-                summary=narrative["summary"],
-                verdict="evidence",
-                fold_key=narrative["fold_key"],
-                evidence=[ref],
-            )
-        )
-    broker_events = fold_activity_event_rows(sorted(broker_events, key=lambda row: row.ts_ms, reverse=True))
-
-    if not any(ref.request_call == "reqPositionsAsync" for ref in evidence_refs):
-        warnings.append(
-            ActivityReconciliationWarning(
-                code="broker_position_snapshot_unavailable",
-                message=(
-                    "No full broker positions snapshot was captured for this selected session date; "
-                    "position lifecycle annotations are derived from fills and should be treated as explanatory."
-                ),
-            )
-        )
-
-    return LiveInstanceActivityProjection(
-        strategy_instance_id=sid,
-        session_date=day.isoformat(),
-        symbol=symbol or "",
-        resolution=resolution,
-        has_bars=False,
-        now_ms=_now_ms(),
-        bars=[],
-        fill_markers=fill_markers,
-        position_annotations=annotations,
-        order_overlays=[],
-        orders_today=orders_today,
-        broker_activity_summary=_broker_activity_summary(broker_events),
-        broker_activity_rows=broker_events,
-        position_snapshot=[
-            ActivityPositionSnapshot(
-                symbol=sym,
-                quantity=qty,
-                source="unavailable",
-                as_of_ms=None,
-            )
-            for sym, qty in sorted(net_by_symbol.items())
-            if abs(qty) > 1e-9
-        ],
-        reconciliation_warnings=warnings,
-        evidence=evidence_refs,
-    )
-
-
-def _activity_lifecycle_consistency_warnings(
-    *,
-    artifacts_root: Path,
-    sid: str,
-    day: date,
-    runs: list[dict],
-    live_binding: LiveBinding | None,
-    activity_rows: list,
-) -> list[ActivityReconciliationWarning]:
-    start_ms, end_ms = _ny_session_bounds_ms(day)
-    lifecycle_refs = _lifecycle_order_refs_for_activity(
-        artifacts_root=artifacts_root,
-        sid=sid,
-        day=day,
-        runs=runs,
-        live_binding=live_binding,
-        start_ms=start_ms,
-        end_ms=end_ms,
-    )
-    activity_refs = activity_order_refs_for_session(
-        activity_rows,
-        start_ms=start_ms,
-        end_ms=end_ms,
-        row_time_ms=_activity_row_time_ms,
-    )
-    return compare_activity_lifecycle_refs(lifecycle_refs=lifecycle_refs, activity_refs=activity_refs)
-
-
-def _lifecycle_order_refs_for_activity(
-    *,
-    artifacts_root: Path,
-    sid: str,
-    day: date,
-    runs: list[dict],
-    live_binding: LiveBinding | None,
-    start_ms: int,
-    end_ms: int,
-) -> set[str]:
-    refs: set[str] = set()
-    live_run_id = live_binding.run_id if live_binding is not None else None
-    for run in runs_active_in_window(
-        runs,
-        start_ms=start_ms,
-        end_ms=end_ms,
-        live_run_id=live_run_id,
-        force_include_live_run=day == _today_ny(),
-        read_sidecar=_read_sidecar,
-    ):
-        run_dir = run.run_dir
-        run_id = run.run_id
-        intent_events = _read_intent_events_for_activity(run_dir, sid=sid)
-        namespace = next((event.bot_order_namespace for event in intent_events), None)
-        for event in intent_events:
-            ts_ms = event.appended_at_ms if event.appended_at_ms is not None else event.ts_ms
-            if event.event_type in _LIFECYCLE_ACTIVITY_ORDER_EVENT_TYPES and _ts_in_window(ts_ms, start_ms, end_ms):
-                refs.add(event.order_ref)
-
-        account_id = _run_account_id(run_dir)
-        for event in _project_instance_account_lifecycle_events(
-            artifacts_root,
-            account_id=account_id,
-            sid=sid,
-            run_id=run_id,
-            bot_order_namespace=namespace,
-        ):
-            if event.category != "order" or not _ts_in_window(event.ts_ms, start_ms, end_ms):
-                continue
-            order_ref = _order_ref_from_lifecycle_payload(event.payload)
-            if order_ref is not None:
-                refs.add(order_ref)
-    return refs
-
-
-def _read_intent_events_for_activity(run_dir: Path, *, sid: str) -> list[IntentEvent]:
-    wal_path = run_dir / "intent_events.jsonl"
-    if not wal_path.exists():
-        return []
-    try:
-        return IntentWal(wal_path).read_tail()
-    except IntentWalCorruptError as exc:
-        logger.warning(
-            "failed to read intent WAL while checking activity consistency",
-            extra={"strategy_instance_id": sid, "path": str(wal_path), "exception": repr(exc)},
-        )
-        return []
-
-
-def _run_account_id(run_dir: Path) -> str | None:
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, json.JSONDecodeError):
-        return None
-    value = _nonempty_str(ledger.get("account_id"))
-    if value is None:
-        return None
-    try:
-        return normalize_account_id(value)
-    except InvalidAccountIdError:
-        return None
-
-
-def _ts_in_window(ts_ms: int | None, start_ms: int, end_ms: int) -> bool:
-    return ts_ms is not None and start_ms <= ts_ms < end_ms
-
-
-def _order_ref_from_lifecycle_payload(payload: Mapping[str, object]) -> str | None:
-    order_ref = _nonempty_str(payload.get("order_ref"))
-    if order_ref is not None:
-        return order_ref
-    diagnostics = payload.get("diagnostics")
-    if isinstance(diagnostics, Mapping):
-        return _nonempty_str(diagnostics.get("order_ref"))
-    return None
-
-
-def _group_rows_by_order_key(rows: list) -> dict[str, list]:
-    groups: dict[str, list] = {}
-    for row in rows:
-        groups.setdefault(_activity_order_key(row), []).append(row)
-    return groups
-
-
-class _BrokerActivitySummaryBucket(TypedDict):
-    label: str
-    kind: Literal["order", "heartbeat", "evidence"]
-    event_count: int
-    last_event_ts_ms: int | None
-    row_ids: list[str]
-
-
-def _broker_activity_summary(rows: list[ActivityBrokerEventRow]) -> list[ActivityBrokerCategorySummary]:
-    groups: dict[str, _BrokerActivitySummaryBucket] = {}
-    for row in rows:
-        category_id, label, kind = _broker_activity_category(row)
-        bucket = groups.setdefault(
-            category_id,
-            {
-                "label": label,
-                "kind": kind,
-                "event_count": 0,
-                "last_event_ts_ms": None,
-                "row_ids": [],
-            },
-        )
-        bucket["event_count"] += max(1, int(row.fold_count))
-        last_event_ts_ms = bucket["last_event_ts_ms"]
-        if last_event_ts_ms is None or row.ts_ms > last_event_ts_ms:
-            bucket["last_event_ts_ms"] = row.ts_ms
-        bucket["row_ids"].append(row.visible_row_id or row.id)
-
-    kind_rank = {"order": 0, "heartbeat": 1, "evidence": 2}
-    out = [
-        ActivityBrokerCategorySummary(
-            category_id=category_id,
-            label=bucket["label"],
-            kind=bucket["kind"],
-            event_count=bucket["event_count"],
-            last_event_ts_ms=bucket["last_event_ts_ms"],
-            row_ids=bucket["row_ids"],
-        )
-        for category_id, bucket in groups.items()
-    ]
-    return sorted(
-        out,
-        key=lambda item: (
-            kind_rank[item.kind],
-            -(item.last_event_ts_ms or 0),
-            item.label,
-        ),
-    )
-
-
-def _broker_activity_category(
-    row: ActivityBrokerEventRow,
-) -> tuple[str, str, Literal["order", "heartbeat", "evidence"]]:
-    if row.row_type == "fill":
-        return "order_fill", "Broker fills", "order"
-    if row.row_type == "order_intent":
-        return "order_intent", "Order intents", "order"
-    if row.row_type == "order_terminal":
-        return "order_terminal", "Terminal order states", "order"
-    display = row.display_type or row.row_type.replace("_", " ").title()
-    text = f"{display} {row.source_label or row.source} {row.summary}".lower()
-    kind: Literal["order", "heartbeat", "evidence"] = "heartbeat" if "heartbeat" in text else "evidence"
-    category_id = re.sub(r"[^a-z0-9]+", "_", display.lower()).strip("_") or "broker_evidence"
-    return f"evidence_{category_id}", display, kind
-
-
-@router.get(
-    "/{strategy_instance_id}/chart-snapshot",
-    response_model=ChartSnapshotResponse,
-)
-async def get_chart_snapshot(
-    strategy_instance_id: str,
-    date_str: Annotated[str | None, Query(alias="date")] = None,
-    resolution: Annotated[str, Query()] = "1m",
-    timeframe: Annotated[str | None, Query()] = None,
-    from_ms: Annotated[int | None, Query()] = None,
-    to_ms: Annotated[int | None, Query()] = None,
-) -> ChartSnapshotResponse:
-    """Aggregated chart payload for one (instance, date, resolution) — Slice 5.
-
-    Replaces the chart card's prior split between ``/bars/snapshot``,
-    per-run ``/trades`` and per-run ``/executions`` calls. Returns the
-    day's bars + every run of the instance that touched the day so the
-    frontend renders per-run trade markers and inactive-interval shading
-    without knowing how many runs exist.
-
-    ``date`` defaults to today (UTC). A past date stops polling on the
-    frontend; the absence of ``has_bars`` lets the UI surface a "bars
-    unavailable" badge for pre-persistence dates (Slice 6).
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    try:
-        requested_timeframe = coerce_chart_timeframe(timeframe or resolution)
-    except ChartWindowError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
-
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    now_ms = _now_ms()
-
-    explicit_window = from_ms is not None or to_ms is not None
-    if explicit_window:
-        if from_ms is None or to_ms is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="from_ms and to_ms must be provided together")
-        window_from_ms = int(from_ms)
-        window_to_ms = min(int(to_ms), now_ms)
-        day = datetime.fromtimestamp(window_from_ms / 1000, tz=UTC).astimezone(_NY_TZ).date()
-    else:
-        try:
-            day = date.fromisoformat(date_str) if date_str else _today_ny()
-        except ValueError:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid date") from None
-        window_from_ms, fallback_to_ms = _ny_session_bounds_ms(day)
-        window_to_ms = min(fallback_to_ms, now_ms) if day == _today_ny() else fallback_to_ms
-
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    _process, live_binding = _interpret_daemon_process(daemon, root)
-    runs = _scan_runs_by_instance(root).get(sid, [])
-
-    symbol = _resolve_symbol(root, live_binding, runs)
-
-    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-    # Nudge the live stream only when the requested window is at the live edge.
-    live_edge_threshold_ms = 30_000 if requested_timeframe == "5s" else 180_000
-    if symbol is not None and window_from_ms <= now_ms and window_to_ms >= now_ms - live_edge_threshold_ms:
-        try:
-            if requested_timeframe == "5s":
-                await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(symbol)
-            else:
-                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
-        except Exception as exc:
-            # The stream may legitimately be unavailable (broker offline,
-            # subsystem disabled). Surface as a log; the response still
-            # carries has_bars=false from persistence.
-            logger.info("ensure_subscribed for %s/%s declined: %s", symbol, requested_timeframe, exc)
-
-    try:
-        chart_window = await resolve_chart_window(
-            symbol=symbol,
-            timeframe=requested_timeframe,
-            from_ms=window_from_ms,
-            to_ms=window_to_ms,
-            now_ms=now_ms,
-            polygon_api_key=app_settings.POLYGON_API_KEY,
-            live_aggregator=LIVE_BAR_AGGREGATOR,
-        )
-    except ChartWindowError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
-
-    runs_in_window = _runs_active_in_window(
-        runs,
-        window_from_ms,
-        window_to_ms,
-        live_binding=live_binding,
-        now_ms=now_ms,
-    )
-    snapshot_runs: list[ChartSnapshotRun] = []
-    # Color index is assigned by sort order (oldest run first) so a fresh
-    # deployment doesn't shift the color of older runs.
-    for color_index, run in enumerate(sorted(runs_in_window, key=lambda r: r.get("started_at_ms") or 0)):
-        run_dir = Path(run["run_dir"])
-        is_current = live_binding is not None and run["run_id"] == live_binding.run_id
-        trades = _filter_rows_to_window(
-            _read_parquet_rows(run_dir / "trades.parquet"),
-            window_from_ms,
-            window_to_ms,
-            key="entry_time_ms",
-        )
-        executions = _filter_rows_to_window(
-            _read_parquet_rows(run_dir / "executions.parquet"),
-            window_from_ms,
-            window_to_ms,
-            key="ts_ms",
-        )
-        snapshot_runs.append(
-            ChartSnapshotRun(
-                run_id=run["run_id"],
-                started_at_ms=run.get("started_at_ms"),
-                ended_at_ms=run.get("ended_at_ms"),
-                is_current=is_current,
-                color_index=color_index,
-                trades=trades,
-                executions=executions,
-            )
-        )
-
-    return ChartSnapshotResponse(
-        date=day.isoformat(),
-        # Symbol is the resolved ticker for the day, or empty if unresolved
-        # (legacy ledger, nothing deployed). The frontend treats both `null`
-        # and empty as "unknown" with a single `||` fallback (PR #483 review).
-        symbol=symbol or "",
-        resolution=chart_window.resolution,
-        timeframe=chart_window.timeframe,
-        from_ms=window_from_ms,
-        to_ms=window_to_ms,
-        has_bars=bool(chart_window.bars),
-        is_streaming=chart_window.is_streaming,
-        now_ms=now_ms,
-        bars=chart_window.bars,
-        runs=snapshot_runs,
-        overlay_notices=[
-            ChartOverlayNotice(
-                code=notice.code,
-                message=notice.message,
-                session_date=notice.session_date,
-                source=notice.source,
-            )
-            for notice in chart_window.overlay_notices
-        ],
-    )
-
-
-@router.get(
-    "/{strategy_instance_id}/activity",
-    response_model=LiveInstanceActivityProjection,
-)
-async def get_instance_activity(
-    strategy_instance_id: str,
-    session_date: Annotated[str | None, Query(alias="session_date")] = None,
-    resolution: Annotated[str, Query()] = "1m",
-) -> LiveInstanceActivityProjection:
-    """Materialized Activity-tab projection for one exchange/session date.
-
-    This is the canonical source for the Activity tab. The chart markers,
-    Orders Today blotter, Broker Activity ledger, and attached raw IBKR
-    endpoint evidence all come from this one response so the frontend cannot
-    render a broker fill on the chart that is absent from the activity table.
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    if resolution not in ("1m", "5s"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="resolution must be '1m' or '5s'")
-
-    explicit_session_date = session_date is not None
-    try:
-        day = date.fromisoformat(session_date) if explicit_session_date else _today_ny()
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid session_date") from None
-
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    artifacts_root = root.parent
-    if not explicit_session_date:
-        today_start_ms, today_end_ms = _ny_session_bounds_ms(day)
-        today_wal_rows = _read_activity_wal_rows(
-            artifacts_root=artifacts_root,
-            sid=sid,
-            start_ms=today_start_ms,
-            end_ms=today_end_ms,
-        )
-        if not today_wal_rows:
-            day = _latest_activity_wal_day(artifacts_root=artifacts_root, sid=sid) or day
-
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    _process, live_binding = _interpret_daemon_process(daemon, root)
-    runs = _scan_runs_by_instance(root).get(sid, [])
-    symbol = _resolve_symbol(root, live_binding, runs)
-
-    start_ms, end_ms = _ny_session_bounds_ms(day)
-    wal_rows = _read_activity_wal_rows(
-        artifacts_root=artifacts_root,
-        sid=sid,
-        start_ms=start_ms,
-        end_ms=end_ms,
-    )
-    repair_projection = load_activity_repair_projection(
-        artifacts_root=artifacts_root,
-        strategy_instance_id=sid,
-        runs=runs,
-        start_ms=start_ms,
-        end_ms=end_ms,
-        existing_rows=wal_rows,
-    )
-    evidence_refs = _activity_evidence_refs_for_session(
-        sid=sid,
-        symbol=symbol,
-        start_ms=start_ms,
-        end_ms=end_ms,
-    )
-    activity_rows = [*wal_rows, *repair_projection.broker_rows]
-    projection = _build_activity_projection(
-        sid=sid,
-        day=day,
-        symbol=symbol,
-        resolution=resolution,
-        wal_rows=activity_rows,
-        evidence_refs=evidence_refs,
-    )
-    consistency_warnings = _activity_lifecycle_consistency_warnings(
-        artifacts_root=artifacts_root,
-        sid=sid,
-        day=day,
-        runs=runs,
-        live_binding=live_binding,
-        activity_rows=activity_rows,
-    )
-    if consistency_warnings:
-        projection = projection.model_copy(
-            update={"reconciliation_warnings": [*projection.reconciliation_warnings, *consistency_warnings]}
-        )
-    broker_rows = fold_activity_event_rows(
-        [
-            *projection.broker_activity_rows,
-            *repair_projection.closed_trade_rows,
-        ]
-    )
-    return projection.model_copy(
-        update={
-            "broker_activity_summary": _broker_activity_summary(broker_rows),
-            "broker_activity_rows": broker_rows,
-        }
-    )
-
-
-@router.get(
-    "/{strategy_instance_id}/active-dates",
-    response_model=list[ActiveDateEntry],
-)
-async def get_active_dates(
-    strategy_instance_id: str,
-    resolution: Annotated[str, Query()] = "1m",
-) -> list[ActiveDateEntry]:
-    """All dates the operator can pick for this instance (Slice 6).
-
-    Returns the union of:
-      * dates with at least one run touching them (from the run-dir scan)
-      * dates with persisted bars under the BarPersistence root
-    so a date that has bars but no run-dir (rare; future seed-bar import)
-    still appears, and a date the instance ran on but pre-dates
-    persistence appears with ``has_bars=False``.
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    if resolution not in ("1m", "5s"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="resolution must be '1m' or '5s'")
-
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    runs = _scan_runs_by_instance(root).get(sid, [])
-
-    # Bar-bearing dates come from the live aggregator's persistence — the
-    # one process-wide store. Symbol is sourced from the latest run's ledger.
-    symbol = _resolve_symbol(root, None, runs)
-    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-    bar_dates: set[date] = set()
-    persistence = LIVE_BAR_AGGREGATOR._persistence
-    if persistence is not None and symbol is not None:
-        try:
-            bar_dates = set(persistence.active_dates(symbol, resolution))
-        except Exception as exc:
-            logger.warning("active_dates lookup failed for %s/%s: %s", symbol, resolution, exc)
-
-    # Run-bearing dates: count every UTC day a run overlaps (PR #483 review).
-    # A run spanning midnight must appear on both UTC dates the picker
-    # shows — anchoring only on started_at_ms hid the later days unless
-    # persistence happened to carry bars for them.
-    now_ms = _now_ms()
-    runs_by_date: dict[date, int] = {}
-    for run in runs:
-        run_dir = Path(run["run_dir"])
-        sidecar = _read_sidecar(run_dir)
-        started = (
-            sidecar.started_at_ms
-            if sidecar is not None and sidecar.started_at_ms is not None
-            else int(run.get("created_at_ms") or 0)
-        )
-        if started <= 0:
-            continue
-        # End at the sidecar's ended_at_ms when present (terminated run)
-        # else now (still live). A live run's "last touched" day is today.
-        ended = sidecar.ended_at_ms if sidecar is not None and sidecar.ended_at_ms is not None else now_ms
-        start_day = datetime.fromtimestamp(started / 1000.0, tz=UTC).date()
-        end_day = datetime.fromtimestamp(ended / 1000.0, tz=UTC).date()
-        cursor_day = start_day
-        while cursor_day <= end_day:
-            runs_by_date[cursor_day] = runs_by_date.get(cursor_day, 0) + 1
-            cursor_day = cursor_day + timedelta(days=1)
-
-    all_dates = sorted(set(runs_by_date) | bar_dates)
-    return [
-        ActiveDateEntry(
-            date=d.isoformat(),
-            run_count=runs_by_date.get(d, 0),
-            has_bars=d in bar_dates,
-        )
-        for d in all_dates
-    ]
-
-
-@router.post("/{strategy_instance_id}/desired-state", response_model=SetInstanceDesiredStateResponse)
-async def set_instance_desired_state(
-    strategy_instance_id: str, body: SetDesiredStateRequest
-) -> SetInstanceDesiredStateResponse:
-    """Persist operator intent and separately report any observed runtime effect."""
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-
-    artifacts_root = _desired_state_root(root)
-    action_name = body.action.value  # "pause" | "resume" | "stop"
-    account_id = _instance_ledger_account_id(root, sid)
-    require_presented_lifecycle_action(
-        root.parent, "" if account_id is None else account_id, sid, None, action_name, body.presented_action
-    )
-    if action_name in {"pause", "stop"}:
-        try:
-            response = await persist_risk_reducing_intent_response(
-                mutation_scope=_operator_mutation_scope(
-                    root,
-                    instance_id=sid,
-                    action=action_name,
-                    run_id=None,
-                ),
-                rung_receipts=lambda daemon: _mutation_rung_receipts_from_process(
-                    sid,
-                    root,
-                    settings,
-                    daemon,
-                    mutation_key=action_name,
-                ),
-                artifacts_root=artifacts_root,
-                strategy_instance_id=sid,
-                desired_state=_ACTION_TO_STATE[body.action],
-                command_verb=_ACTION_TO_VERB[body.action],
-                updated_by=body.updated_by,
-                reason=body.reason,
-                idempotency_key=(
-                    None if body.presented_action is None else body.presented_action.idempotency_key
-                ),
-                now_ms=_now_ms,
-                daemon_url=settings.live_runner_daemon_url,
-                live_binding_from_process=lambda daemon: _interpret_daemon_process(daemon, root)[1],
-                visible_live_run_dir=lambda live_binding: _visible_live_run_dir(root, live_binding),
-            )
-        except RiskReducingIntentRefusedError as exc:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={
-                    "reason_code": "LIFECYCLE_TRANSITION_REFUSED",
-                    "refusal_code": exc.refusal_code,
-                    "mutation_attempt_id": exc.mutation_attempt_id,
-                    "mutation_dispatch_state": exc.dispatch_state,
-                },
-            ) from exc
-        await _ensure_surface_hub_started(sid)
-        return response
-
-    # Resume reuses the canonical pre-write capability assembly.
-    ctx = await _load_instance_context_for_router(sid)
-    account_freeze = _resolve_account_freeze(root.parent, ctx.runs)
-    if action_name == "resume" and account_freeze is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "disabled_reason_code": "ACCOUNT_FROZEN",
-                "disabled_reasons": ["ACCOUNT_FROZEN"],
-                "gate_results": [account_freeze.to_gate_result().model_dump(mode="json")],
-                "guard_state": ctx.guard_state.model_dump(mode="json"),
-            },
-        )
-    gate = evaluate_action(
-        action_name,  # type: ignore[arg-type]
-        process=ctx.process,
-        live_binding=ctx.live_binding,
-        poisoned=ctx.poisoned,
-        owned_positions_empty=ctx.owned_positions_empty,
-        desired_state=ctx.desired_state,
-        guard_state=ctx.guard_state,
-        runtime_freshness=ctx.runtime_freshness,
-        latest_mutation=ctx.latest_mutation,
-    )
-    if not gate.enabled:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "disabled_reason_code": gate.disabled_reason_code,
-                "disabled_reasons": gate.disabled_reasons,
-                "guard_state": ctx.guard_state.model_dump(mode="json"),
-            },
-        )
-    scope = _operator_mutation_scope(
-        root,
-        instance_id=sid,
-        action=body.action.value,
-        run_id=(ctx.live_binding.run_id if ctx.live_binding is not None else None),
-    )
-    with scope:
-        scope.stage = "durable_intent_write"
-        disposition = BotLifecycleEvaluator(artifacts_root, sid).set_desired_state(
-            _ACTION_TO_STATE[body.action],
-            updated_by=body.updated_by,
-            reason=body.reason,
-            now_ms=_now_ms(),
-            idempotency_key=(
-                None if body.presented_action is None else body.presented_action.idempotency_key
-            ),
-        )
-        record = disposition.desired_state
-        if record is None:
-            raise OSError("lifecycle evaluator did not return a desired-state record")
-        durable = DesiredStateRecordResponse(
-            state=record.desired_state.value,
-            updated_at_ms=record.updated_at_ms,
-            updated_by=record.updated_by,
-            reason=record.reason,
-            version=record.version,
-        )
-        # Re-fetch after the durable write so actuation uses the latest binding.
-        scope.stage = "daemon_observation"
-        _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-        _process, live_binding = _interpret_daemon_process(daemon, root)
-        live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
-        if disposition.replayed:
-            actuation = IntentActuation(
-                actuated=False,
-                run_id=None if live_binding is None else live_binding.run_id,
-                detail="durable intent already accepted; runtime effect remains subject to reconciliation",
-            )
-        elif live_binding is None or live_run_dir is None:
-            detail = (
-                "durable only; will gate next start"
-                if live_binding is None
-                else f"durable only; bound run {live_binding.run_id} is not visible locally"
-            )
-            actuation = IntentActuation(actuated=False, detail=detail)
-        else:
-            verb = _ACTION_TO_VERB[body.action]
-            try:
-                command = CommandChannel(live_run_dir / "commands").write_from_operator(verb)
-            except Exception as exc:
-                actuation = IntentActuation(
-                    actuated=False,
-                    run_id=live_binding.run_id,
-                    detail=f"failed to enqueue live command: {exc}",
-                )
-            else:
-                actuation = IntentActuation(
-                    actuated=True,
-                    run_id=live_binding.run_id,
-                    command_seq=command.seq,
-                    detail=f"{verb.value} queued on {live_binding.run_id}; awaiting ack",
-                )
-
-        scope.stage = "receipt_assembly"
-        receipt, warnings = await _mutation_rung_receipts_from_process(
-            sid,
-            root,
-            settings,
-            daemon,
-            mutation_key=action_name,
-        )
-        confirmed = scope.confirm(
-            outcome={
-                "durable_state": durable.state,
-                "actuated": actuation.actuated,
-                "run_id": actuation.run_id,
-                "command_seq": actuation.command_seq,
-            },
-        )
-        response = SetInstanceDesiredStateResponse(
-            durable=durable,
-            actuation=actuation,
-            rung_receipt=receipt,
-            rung_receipt_warnings=warnings,
-            mutation_attempt_id=confirmed.mutation_attempt_id,
-            mutation_dispatch_state=confirmed.dispatch_state,
-        )
-    await _ensure_surface_hub_started(sid)
-    return response
-
-
-@router.post(
-    "/{strategy_instance_id}/flatten-and-pause",
-    response_model=SetInstanceDesiredStateResponse,
-)
-async def flatten_and_pause_instance(
-    strategy_instance_id: str,
-    body: SetDesiredStateRequest | None = None,
-) -> SetInstanceDesiredStateResponse:
-    """Persist signed Pause first, then best-effort enqueue Flatten."""
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-
-    payload = body or SetDesiredStateRequest(
-        action=DesiredStateAction.pause,
-        reason="flatten-and-pause",
-        updated_by="operator",
-    )
-    if payload.action is not DesiredStateAction.pause:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="flatten-and-pause only accepts action=pause",
-        )
-    account_id = _instance_ledger_account_id(root, sid)
-    presented = require_presented_lifecycle_action(
-        root.parent, "" if account_id is None else account_id, sid, None, "pause", payload.presented_action
-    )
-    scope = _operator_mutation_scope(
-        root,
-        instance_id=sid,
-        action="flatten",
-        run_id=None,
-    )
-    with scope:
-        scope.stage = "durable_pause_write"
-        try:
-            dispatch = await persist_risk_reducing_intent(
-                artifacts_root=_desired_state_root(root),
-                strategy_instance_id=sid,
-                desired_state=DesiredState.PAUSED,
-                command_verb=CommandVerb.PAUSE,
-                updated_by=payload.updated_by,
-                reason=payload.reason or "flatten-and-pause",
-                idempotency_key=None if presented is None else presented.idempotency_key,
-                now_ms=_now_ms,
-                daemon_url=settings.live_runner_daemon_url,
-                live_binding_from_process=lambda daemon: _interpret_daemon_process(daemon, root)[1],
-                visible_live_run_dir=lambda live_binding: _visible_live_run_dir(root, live_binding),
-            )
-        except OSError as exc:
-            unknown = scope.unknown(error=exc)
-            await _ensure_surface_hub_started(sid)
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=_mutation_error_detail(
-                    "flatten_and_pause aborted before FLATTEN_NOW: durable PAUSE write failed",
-                    unknown,
-                ),
-            ) from exc
-
-        durable = dispatch.durable
-        daemon = dispatch.daemon_process
-        live_binding = _interpret_daemon_process(daemon, root)[1]
-        live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
-        if daemon is None or dispatch.replayed:
-            actuation = dispatch.actuation
-        elif live_binding is None:
-            actuation = IntentActuation(
-                actuated=False,
-                detail="PAUSE persisted; no live binding so FLATTEN_NOW was not enqueued",
-            )
-        elif live_run_dir is None:
-            actuation = IntentActuation(
-                actuated=False,
-                run_id=live_binding.run_id,
-                detail=(
-                    f"PAUSE persisted; bound run {live_binding.run_id} is not visible locally, "
-                    "FLATTEN_NOW was not enqueued"
-                ),
-            )
-        else:
-            try:
-                command = CommandChannel(live_run_dir / "commands").write_from_operator(CommandVerb.FLATTEN)
-            except OSError as exc:
-                actuation = IntentActuation(
-                    actuated=False,
-                    run_id=live_binding.run_id,
-                    detail=(
-                        "PAUSE persisted but FLATTEN_NOW failed to enqueue — "
-                        f"retry the flatten one-shot manually: {exc}"
-                    ),
-                )
-            else:
-                actuation = IntentActuation(
-                    actuated=True,
-                    run_id=live_binding.run_id,
-                    command_seq=command.seq,
-                    detail=f"PAUSE persisted; FLATTEN_NOW queued on {live_binding.run_id}; awaiting flatten ack",
-                )
-
-        scope.stage = "receipt_assembly"
-        receipt, warnings = await _mutation_rung_receipts_from_process(
-            sid,
-            root,
-            settings,
-            daemon,
-            mutation_key="flatten_and_pause",
-        )
-        confirmed = scope.confirm(
-            outcome={
-                "durable_state": durable.state,
-                "actuated": actuation.actuated,
-                "run_id": actuation.run_id,
-                "command_seq": actuation.command_seq,
-            },
-        )
-        response = SetInstanceDesiredStateResponse(
-            durable=durable,
-            actuation=actuation,
-            rung_receipt=receipt,
-            rung_receipt_warnings=warnings,
-            mutation_attempt_id=confirmed.mutation_attempt_id,
-            mutation_dispatch_state=confirmed.dispatch_state,
-        )
-    await _ensure_surface_hub_started(sid)
-    return response
-
-
-@router.post(
-    "/{strategy_instance_id}/reconcile",
-    response_model=ReconcileAckResponse,
-)
-async def reconcile_instance(strategy_instance_id: str) -> ReconcileAckResponse:
-    """Enqueue a RECONCILE command for the instance's live binding.
-
-    Reconciliation PR 2 (runtime async). The data plane resolves the live
-    binding through the daemon, writes a RECONCILE command into the run's
-    ``commands/`` directory, and returns the ack envelope so the cockpit
-    can render IN_PROGRESS while the engine's async control task probes
-    the broker, runs the orchestrator, and overwrites the command ack
-    with its verdict (Continue / Adopt / Adopt+Pause / Poison).
-
-    The cockpit then polls ``operator_surface.reconciliation`` to observe
-    IN_PROGRESS → CLEAN / ADOPTED / FAILED transitions. The receipt
-    projection is the source of truth for state changes; this envelope
-    just confirms the request was queued.
-
-    Failure modes:
-
-    - 409 NO_LIVE_BINDING when no bot process is running for the
-      instance. Runtime reconciliation requires a live engine to acquire
-      the submit lock and probe the broker — a durable-only enqueue
-      would never be acted on.
-    - 404 when the daemon reports a live binding but the bound run dir
-      is not visible under this service's live_runs_root (root mismatch
-      / missing artifacts).
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    _process, live_binding = _interpret_daemon_process(daemon, root)
-    if live_binding is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "NO_LIVE_BINDING",
-                "message": ("No bot process is running for this instance — reconciliation requires a live engine."),
-            },
-        )
-    live_run_dir = _visible_live_run_dir(root, live_binding)
-    if live_run_dir is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"Bound run {live_binding.run_id} is not visible under this "
-                "service's live_runs_root; cannot enqueue a runtime reconcile."
-            ),
-        )
-
-    try:
-        CommandChannel(live_run_dir / "commands").write_from_operator(CommandVerb.RECONCILE)
-    except OSError as exc:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"failed to enqueue RECONCILE command: {exc}",
-        ) from exc
-
-    receipt, warnings = await _mutation_rung_receipts_from_process(
-        sid,
-        root,
-        settings,
-        daemon,
-        mutation_key="reconcile",
-    )
-    return ReconcileAckResponse(
-        request_id=mint_intent_id(),
-        accepted_at_ms=_now_ms(),
-        rung_receipt=receipt,
-        rung_receipt_warnings=warnings,
-    )
-
-
-@router.post(
-    "/{strategy_instance_id}/reconcile-mutation",
-    response_model=ReconcileMutationResponse,
-)
-async def reconcile_instance_mutation(
-    strategy_instance_id: str,
-) -> ReconcileMutationResponse:
-    """PRD #619-D3 — Reconcile the latest mutation_attempt for the instance.
-
-    Read-only inspection that joins:
-
-    - The latest persisted ``MutationAttempt`` (D1 repo).
-    - Current daemon process state + binding (live snapshot, observed
-      now — not the snapshot the original mutation acted on).
-    - Child ``engine_runtime.json`` ``command_loop.state`` if present.
-    - Durable ``desired_state`` sidecar.
-    - Broker view's owned-positions emptiness.
-
-    Calls the pure ``reconcile_mutation_effect`` classifier on the
-    assembled evidence, advances the attempt to the resulting
-    terminal state via ``transition_attempt``, persists, and returns
-    the outcome.
-
-    **The endpoint never replays the original mutation.** If the
-    operator wants to retry, the matrix surfaces the next allowed
-    action through ``operator_surface.actions``; that is a separate
-    UI step.
-
-    Returns 404 when no mutation has been persisted for the instance.
-    Returns 409 when the attempt is in a state that cannot be
-    Reconciled (``PREPARED`` / ``DISPATCHING`` — still in flight)
-    or when it is already terminal (the prior outcome is available
-    via the status projection's mutation evidence).
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    repo = MutationAttemptRepo(_mutation_attempt_root(root))
-    attempt = repo.latest_for(sid)
-    if attempt is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail="no mutation_attempt to reconcile for this instance",
-        )
-    if attempt.dispatch_state in TERMINAL_STATES:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "error": "mutation_attempt is already terminal",
-                "mutation_attempt_id": attempt.mutation_attempt_id,
-                "dispatch_state": attempt.dispatch_state,
-            },
-        )
-    if attempt.dispatch_state in {"PREPARED", "DISPATCHING"}:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "error": "mutation_attempt is still in flight; wait for the response before reconciling",
-                "mutation_attempt_id": attempt.mutation_attempt_id,
-                "dispatch_state": attempt.dispatch_state,
-            },
-        )
-
-    evidence = await _assemble_reconciliation_evidence(sid, root, daemon_url=settings.live_runner_daemon_url)
-    outcome = reconcile_mutation_effect(attempt, evidence)
-    transitioned_at_ms = _now_ms()
-    advanced = transition_attempt(
-        attempt,
-        outcome,
-        transitioned_at_ms=transitioned_at_ms,
-        evidence=evidence.model_dump(),
-    )
-    repo.write(advanced)
-    return ReconcileMutationResponse(
-        mutation_attempt_id=advanced.mutation_attempt_id,
-        action=advanced.action,
-        outcome=outcome,
-        dispatch_state=advanced.dispatch_state,  # type: ignore[arg-type]
-        evidence=advanced.evidence or {},
-        reconciled_at_ms=transitioned_at_ms,
-    )
-
-
-async def _assemble_reconciliation_evidence(sid: str, root: Path, *, daemon_url: str) -> ReconciliationEvidence:
-    """Read every evidence source the Reconcile classifier consumes.
-
-    Each read is fail-soft: missing daemon / runtime / desired-state
-    surfaces as ``None`` on the corresponding field rather than
-    raising.  ``daemon_reachable=False`` only when the typed daemon
-    fetch itself fails — distinct from "daemon reachable but reports
-    the instance as ``unreachable``".
-    """
-    observed_at_ms = _now_ms()
-    result, daemon = await host_daemon_client.fetch_instance_process(daemon_url, sid)
-    daemon_reachable = result.kind == "CONNECTED"
-    process_state = None
-    bound_run_id = None
-    if daemon is not None:
-        process, live_binding = _interpret_daemon_process(daemon, root)
-        process_state = process.state  # type: ignore[assignment]
-        if live_binding is not None:
-            bound_run_id = live_binding.run_id
-
-    desired_state = _read_desired_state_literal(root, sid)
-    engine_runtime_state = _read_engine_runtime_state(root, sid)
-    broker_owned_positions_empty = _read_owned_positions_empty(root, sid)
-
-    return ReconciliationEvidence(
-        daemon_reachable=daemon_reachable,
-        process_state=process_state,
-        bound_run_id=bound_run_id,
-        desired_state=desired_state,
-        engine_runtime_state=engine_runtime_state,
-        broker_owned_positions_empty=broker_owned_positions_empty,
-        observed_at_ms=observed_at_ms,
-    )
-
-
-def _read_desired_state_literal(root: Path, sid: str) -> str | None:
-    """Return the durable desired_state as one of RUNNING / PAUSED /
-    STOPPED, or ``None`` when the sidecar is missing / unreadable.
-    """
-    view = _resolve_desired_state(root, sid)
-    state = getattr(view, "state", None)
-    if state in {"RUNNING", "PAUSED", "STOPPED"}:
-        return state
-    return None
-
-
-def _read_engine_runtime_state(root: Path, sid: str) -> str | None:
-    """Return the latest engine_runtime ``command_loop.state`` or
-    ``None`` when no runtime artifact is present / readable.
-    """
-    runs = _scan_runs_by_instance(root).get(sid, [])
-    if not runs:
-        return None
-    run_dir = Path(runs[0]["run_dir"])
-    snapshot = read_engine_runtime_snapshot(run_dir / ENGINE_RUNTIME_FILENAME)
-    if snapshot is None:
-        return None
-    return snapshot.command_loop.state
-
-
-def _read_owned_positions_empty(root: Path, sid: str) -> bool | None:
-    """Return ``True`` iff broker view exists and every non-zero owned
-    position is empty; ``False`` when at least one is non-zero;
-    ``None`` when no broker view exists.
-    """
-    broker = _instance_broker(root, sid)
-    if broker is None:
-        return None
-    return not any(qty != 0 for qty in broker.owned_positions.values())
-
-
-@router.get("/{strategy_instance_id}/commands", response_model=CommandsTimeline)
-async def get_instance_commands(strategy_instance_id: str) -> CommandsTimeline:
-    """Unified one-shot command timeline for the instance's bound run (#397).
-
-    Commands route to the live binding only, so the timeline is empty when no
-    live binding is visible.
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    _process, live_binding = _interpret_daemon_process(daemon, root)
-    if live_binding is not None:
-        run_dir = _visible_live_run_dir(root, live_binding)
-        if run_dir is not None:
-            return build_command_timeline(_confine(run_dir, "commands"))
-    return CommandsTimeline(entries=[], poll_interval_ms=COMMAND_POLL_INTERVAL_MS)
-
-
-@router.post("/{strategy_instance_id}/commands", response_model=CommandView)
-async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommandRequest) -> CommandView:
-    """Enqueue a one-shot command on the instance's bound run (#397).
-
-    Reserved to FLATTEN / RECONCILE / MARK_POISONED — PAUSE/RESUME/STOP are the
-    durable intent knob, not commands. Requires a live binding.
-    """
-    sid = _validate_instance_id(strategy_instance_id)
-    try:
-        verb = CommandVerb(body.verb)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid command verb") from exc
-    if verb not in _ONE_SHOT_VERBS:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail=f"{verb.value} is not a one-shot command; use the desired-state intent knob",
-        )
-
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    # PRD #619-A §A4 — single-call assembly. The post-write-style
-    # actuation here still needs ``run_dir`` (filesystem confine), so
-    # we resolve it after the gate from the same observation.
-    ctx = await _load_instance_context_for_router(sid)
-    run_dir = _visible_live_run_dir(root, ctx.live_binding) if ctx.live_binding is not None else None
-
-    # PRD #607 / Slice 1 (#608) — shared-capability gate for the cockpit
-    # actions that flow through this endpoint.  Currently only
-    # ``MARK_POISONED`` has a Slice-1 capability rule (NO_LIVE_BINDING /
-    # ALREADY_POISONED); other one-shots fall back to the legacy
-    # binding check below.
-    if verb is CommandVerb.MARK_POISONED:
-        capability = evaluate_action(
-            "mark_poisoned",
-            process=ctx.process,
-            live_binding=ctx.live_binding,
-            poisoned=ctx.poisoned,
-            runtime_freshness=ctx.runtime_freshness,
-            latest_mutation=ctx.latest_mutation,
-        )
-        if not capability.enabled:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={"disabled_reason_code": capability.disabled_reason_code},
-            )
-
-    if run_dir is None:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="no live run bound to this instance to command")
-    if verb is not CommandVerb.FLATTEN:
-        command = CommandChannel(run_dir / "commands").write_from_operator(verb)
-        receipt, warnings = await _mutation_rung_receipts_for_instance(
-            sid,
-            root,
-            settings,
-            mutation_key=verb.value.lower(),
-        )
-        return CommandView(
-            seq=command.seq,
-            verb=command.verb.value,
-            rung_receipt=receipt,
-            rung_receipt_warnings=warnings,
-        )
-
-    scope = _operator_mutation_scope(
-        root,
-        instance_id=sid,
-        action="flatten",
-        run_id=(ctx.live_binding.run_id if ctx.live_binding is not None else None),
-    )
-    with scope:
-        scope.stage = "one_shot_flatten"
-        command = CommandChannel(run_dir / "commands").write_from_operator(verb)
-        receipt, warnings = await _mutation_rung_receipts_for_instance(
-            sid,
-            root,
-            settings,
-            mutation_key=verb.value.lower(),
-        )
-        confirmed = scope.confirm(
-            outcome={"accepted": True, "command_seq": command.seq},
-        )
-        response = CommandView(
-            seq=command.seq,
-            verb=command.verb.value,
-            rung_receipt=receipt,
-            rung_receipt_warnings=warnings,
-            mutation_attempt_id=confirmed.mutation_attempt_id,
-            mutation_dispatch_state=confirmed.dispatch_state,
-        )
-    await _ensure_surface_hub_started(sid)
-    return response

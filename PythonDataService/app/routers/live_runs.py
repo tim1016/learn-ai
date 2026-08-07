@@ -50,11 +50,9 @@ from app.schemas.live_runs import (
     CommandsTimeline,
     CommandSummary,
     CommandTimelineEntry,
-    CommandView,
     DecisionsSummary,
     DesiredStatePathStatus,
     DesiredStateView,
-    EnqueueCommandRequest,
     ExecutionsSummary,
     FailureRecord,
     FlagsSummary,
@@ -124,16 +122,6 @@ def _confine(root: Path, segment: str) -> Path:
     return Path(resolved)
 
 
-def _validate_run_id(run_id: str, root: Path) -> Path:
-    """Validate run_id is safe and the resolved path stays within root."""
-    safe = _validate_path_segment(run_id, field="run_id")
-    if _RUN_ID_RE.fullmatch(safe) is None:
-        raise ValueError(f"Invalid run_id format: {run_id!r}")
-    # Use the validated literal — regex + confinement breaks the CodeQL
-    # py/path-injection taint chain.
-    return _confine(root, safe)
-
-
 def _existing_run_dir_from_listing(root: Path, run_id: str) -> Path:
     """Return a run dir by selecting from the server-owned directory listing.
 
@@ -145,15 +133,39 @@ def _existing_run_dir_from_listing(root: Path, run_id: str) -> Path:
     safe = _validate_path_segment(run_id, field="run_id")
     if _RUN_ID_RE.fullmatch(safe) is None:
         raise ValueError(f"Invalid run_id format: {run_id!r}")
-    for run_dir in _get_run_dirs(root):
-        if run_dir.name == safe:
-            return run_dir
+    root_real = os.path.realpath(root)
+    root_prefix = root_real.rstrip(os.sep) + os.sep
     # The list endpoint intentionally caches directory scans for the cockpit,
     # but artifact endpoints need to see a just-created run immediately.
-    for run_dir in _refresh_run_dirs(root):
-        if run_dir.name == safe:
-            return run_dir
+    candidates = _get_run_dirs(root)
+    for attempt in range(2):
+        for run_dir in candidates:
+            if run_dir.name != safe or run_dir.is_symlink():
+                continue
+            resolved = os.path.realpath(run_dir)
+            if not resolved.startswith(root_prefix):
+                continue
+            # Return the server-enumerated, realpath-confined candidate. The
+            # request value is used only for equality selection and never for
+            # path construction, which breaks the CodeQL taint chain.
+            return Path(resolved)
+        if attempt == 0:
+            candidates = _refresh_run_dirs(root)
     raise FileNotFoundError(safe)
+
+
+def _run_dir_or_http_error(root: Path, run_id: str) -> Path:
+    """Resolve one server-owned run directory or raise the HTTP contract error."""
+    try:
+        return _existing_run_dir_from_listing(root, run_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}"
+        ) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found"
+        ) from exc
 
 
 # Whitelist of artifact filenames any operator-facing endpoint may read out
@@ -184,10 +196,10 @@ _ARTIFACT_NAMES: frozenset[str] = frozenset(
 def _artifact_path(run_dir: Path, name: str) -> Path:
     """Resolve ``run_dir/name`` against a whitelist; raise on unknown name.
 
-    Belt-and-suspenders alongside ``_validate_run_id``: the static filename
-    is constant, so this is mainly a structural marker that prevents an
-    accidental future ``f"{user_input}.parquet"`` from sneaking past code
-    review. Routes through the existing ``_confine`` helper — the explicit
+    Belt-and-suspenders alongside server-owned run-directory selection: the
+    static filename is constant, so this mainly prevents an accidental future
+    ``f"{user_input}.parquet"`` from sneaking past code review. Routes through
+    the existing ``_confine`` helper — the explicit
     ``resolve() + relative_to()`` check is what the CodeQL py/path-injection
     scanner recognizes as a sanitizer (the bare ``run_dir / name`` operator
     propagates taint even though the right-hand side is a static literal).
@@ -656,12 +668,7 @@ async def get_run_status(run_id: str) -> LiveRunStatus:
         reconcile summary, and last-bar timing.
     """
     root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    run_dir = _run_dir_or_http_error(root, run_id)
 
     now_ms = int(time.time() * 1000)
     sig = _mtime_sig(run_dir)
@@ -695,12 +702,7 @@ async def get_log_tail(
         consolidator/snapshot metadata; other lines have ``event_type="raw"``.
     """
     root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    run_dir = _run_dir_or_http_error(root, run_id)
 
     log_path = run_dir / "live.log"
     log_state = _update_log_tail(run_id, log_path)
@@ -744,12 +746,7 @@ async def get_trades(
     incremental polling on the closed-trades stream.
     """
     root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    run_dir = _run_dir_or_http_error(root, run_id)
 
     path = _artifact_path(run_dir, "trades.parquet")
     rows = read_parquet_rows(path, on_error="warn_empty")
@@ -774,12 +771,7 @@ async def get_executions(
     ``ts_ms > since_ms``.
     """
     root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    run_dir = _run_dir_or_http_error(root, run_id)
 
     path = _artifact_path(run_dir, "executions.parquet")
     rows = read_parquet_rows(path, on_error="warn_empty")
@@ -810,12 +802,7 @@ async def get_failures(
         Failures in source order (oldest first within the returned window).
     """
     root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    run_dir = _run_dir_or_http_error(root, run_id)
 
     log_path = _artifact_path(run_dir, "live.log")
     if not log_path.exists():
@@ -863,12 +850,7 @@ async def get_incidents(
         Incidents in source order (oldest first within the returned window).
     """
     root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _existing_run_dir_from_listing(root, run_id)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    except FileNotFoundError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    run_dir = _run_dir_or_http_error(root, run_id)
 
     rows = _operator_incident_records(run_dir)
     log_path = _artifact_path(run_dir, "live.log")
@@ -1110,62 +1092,9 @@ def _validate_strategy_instance_id(sid: str) -> None:
 async def get_desired_state(run_id: str) -> DesiredStateView:
     """Return the resolved durable-intent view for a run (UI-1)."""
     root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    run_dir = _run_dir_or_http_error(root, run_id)
     ledger = _ledger_or_404(run_dir, run_id)
     return _resolve_desired_state(root, ledger.strategy_instance_id)
-
-
-@router.post("/{run_id}/desired-state", deprecated=True, status_code=status.HTTP_410_GONE)
-async def set_desired_state(run_id: str) -> None:
-    """Retire unsigned run-addressed writes in favour of signed instance intent."""
-    raise HTTPException(
-        status.HTTP_410_GONE,
-        detail={
-            "reason_code": "INSTANCE_INTENT_ENDPOINT_REQUIRED",
-            "message": "Use the signed instance desired-state control instead.",
-        },
-    )
-
-
-@router.post("/{run_id}/commands", response_model=CommandView, deprecated=True)
-async def enqueue_command(run_id: str, body: EnqueueCommandRequest) -> CommandView:
-    """DEPRECATED (#400 cutover): superseded by the instance-addressed one-shot
-    command ``POST /api/live-instances/{id}/commands`` (reserved to
-    FLATTEN/RECONCILE/MARK_POISONED). Run-addressed routes are evidence-only.
-    Kept temporarily for back-compat — slated for removal once the cutover is
-    signed off."""
-    root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
-    try:
-        verb = CommandVerb(body.verb)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid command verb") from exc
-    if verb in {
-        CommandVerb.PAUSE,
-        CommandVerb.RESUME,
-        CommandVerb.STOP,
-        CommandVerb.CLOCK_OUT,
-    }:
-        raise HTTPException(
-            status.HTTP_410_GONE,
-            detail={
-                "reason_code": "DURABLE_INTENT_ENDPOINT_REQUIRED",
-                "message": "Use the instance desired-state control for Pause, Resume, Stop, or Clock out.",
-            },
-        )
-    channel = CommandChannel(run_dir / "commands")
-    command = channel.write_from_operator(verb)
-    return CommandView(seq=command.seq, verb=command.verb.value)
 
 
 # The bot polls the command dir at ~1s, independent of the bar loop
@@ -1257,10 +1186,5 @@ def build_command_timeline(commands_dir: Path) -> CommandsTimeline:
 async def get_command_timeline(run_id: str) -> CommandsTimeline:
     """Return the unified command timeline for a run's channel (#397, evidence read)."""
     root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
+    run_dir = _run_dir_or_http_error(root, run_id)
     return build_command_timeline(_confine(run_dir, "commands"))

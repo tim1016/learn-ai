@@ -232,10 +232,7 @@ export class BrokerDeployFormComponent {
   readonly error = signal<OperationError | null>(null);
   readonly deployed = signal<HostRunnerDeployResponse | null>(null);
   readonly deployedInstanceId = signal<string | null>(null);
-  readonly deployedBotControlLink = computed(() => {
-    const id = this.deployedInstanceId();
-    return id ? ['/broker/bots', id] : ['/broker/bots'];
-  });
+  readonly deployedBotControlLink = computed(() => ['/brokers/alpaca/bots']);
   readonly postSubmitCommandStatus = computed<string | null>(() => {
     const deployed = this.deployed();
     if (!deployed?.start?.accepted) return null;

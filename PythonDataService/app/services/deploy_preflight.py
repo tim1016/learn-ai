@@ -351,7 +351,7 @@ def author_deploy_blockers(
                 disposition="fix_elsewhere",
                 headline="Deployment name already running",
                 detail="A bot with this name is already live. Go to it, or choose a different name.",
-                primary_move=_nav("Go to the running bot", "/broker/bots"),
+                primary_move=_nav("Go to the running bot", "/brokers/alpaca/bots"),
                 applies_to="deploy",
             )
         )

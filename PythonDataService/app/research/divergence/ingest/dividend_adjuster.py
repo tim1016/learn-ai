@@ -193,7 +193,7 @@ def detect_dividends_from_gap(
     days where the absolute diff exceeds ``min_step`` are candidate ex-dates.
     """
     df = merged[[et_col, tv_close_col, pg_close_col]].copy()
-    df["et_date"] = pd.to_datetime(df[et_col]).dt.tz_convert("America/New_York").dt.date
+    df["et_date"] = pd.to_datetime(df[et_col], utc=True).dt.tz_convert("America/New_York").dt.date
     df["gap"] = df[pg_close_col] - df[tv_close_col]
     daily = df.groupby("et_date").agg(gap=("gap", "last")).reset_index()
     daily["delta"] = daily["gap"].diff()

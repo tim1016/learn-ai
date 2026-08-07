@@ -544,14 +544,8 @@ def test_summary_metrics_formulas():
 
 
 @needs_pandas_ta
-def test_duplicate_timestamps_are_deduped():
-    """Regression for audit § 2.9 — dedupe by timestamp before processing.
-
-    Before fix: sort_values preserved duplicates; two trades could be emitted
-    at the same ms in non-deterministic order, violating strict-float determinism.
-    After fix: drop_duplicates(keep='last') removes the dup, and monotonicity
-    is asserted before the engine runs.
-    """
+def test_duplicate_timestamps_are_rejected():
+    """Finite backtest input must surface duplicate timestamps as corruption."""
     from app.services.rule_based_backtest import run_rule_based_backtest
 
     interval_ms = 15 * 60 * 1000
@@ -572,7 +566,7 @@ def test_duplicate_timestamps_are_deduped():
                 "volume": 100000,
             }
         )
-    # Inject duplicate of bar 40 (same timestamp, slightly different close — the 'last' wins)
+    # Inject a conflicting duplicate of bar 40.
     bars.insert(41, {**bars[40], "close": bars[40]["close"] + 1.0})
 
     params = {
@@ -588,9 +582,10 @@ def test_duplicate_timestamps_are_deduped():
 
     result = run_rule_based_backtest("SPY", bars, params)
 
-    # Should succeed after dedupe; bars_processed should be 100 (not 101).
-    assert result.success, f"Backtest should succeed after dedupe, got: {result.error}"
-    assert result.bars_processed == 100, f"Expected 100 bars after dedupe, got {result.bars_processed}"
+    assert not result.success
+    assert result.bars_processed == 0
+    assert result.error is not None
+    assert "duplicate timestamp" in result.error.lower()
 
 
 class TestFormatTimestampRegression:

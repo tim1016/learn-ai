@@ -37,7 +37,7 @@ _READ_PATH = "/api/broker/health"
 _ORDER_STREAM_READ_PATH = "/api/broker/orders/stream"
 _MIRROR_READ_PATH = "/api/broker/session-mirror"
 _BROKERS_READ_PATH = "/api/brokers/alpaca/account"
-_LIVE_INSTANCES_READ_PATH = "/api/live-instances/bot-a/operator-surface/stream"
+_LIVE_INSTANCES_READ_PATH = "/api/live-instances/fleet/stream"
 _ACCOUNT_TRANSACTIONS_READ_PATH = "/api/accounts/DU1234567/transactions"
 _ALPACA_CLERK_SQLITE_READ_PATH = "/api/alpaca-clerk-sqlite/accounts/PA-TEST/snapshot"
 

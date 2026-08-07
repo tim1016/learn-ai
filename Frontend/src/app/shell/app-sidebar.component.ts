@@ -86,9 +86,9 @@ const NAV: NavGroup[] = [
       { label: 'Orders', route: '/broker/orders' },
       { label: 'Session Mirror', route: '/broker/session-mirror' },
       { label: 'Deploy', route: '/broker/deploy' },
-      { label: 'Bots', route: '/broker/bots' },
+      { label: 'Bots', route: '/brokers/alpaca/bots' },
       { label: 'Offline Replay', route: '/broker/offline-replay' },
-      { label: 'Bot Manual', route: '/broker/bot-manual' },
+      { label: 'Bot Manual', route: '/brokers/alpaca/manual' },
     ],
   },
   {
@@ -111,8 +111,8 @@ const NAV: NavGroup[] = [
     ],
   },
   {
-    id: 'strategy-lab',
-    title: 'Strategy Lab',
+    id: 'strategy-tools',
+    title: 'Strategy Tools',
     icon: 'pi pi-briefcase',
     items: [
       { label: 'Strategy Validation', route: '/strategy-validation' },

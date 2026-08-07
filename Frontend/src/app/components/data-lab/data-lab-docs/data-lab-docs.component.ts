@@ -146,7 +146,6 @@ export class DataLabDocsComponent {
 
   csvBaseColumns = [
     { column: 'unix_ts', type: 'int', description: 'Unix timestamp in milliseconds (UTC)' },
-    { column: 'iso_time', type: 'string', description: 'ISO 8601 datetime string (UTC)' },
     { column: 'open', type: 'float', description: 'Opening price of the minute bar' },
     { column: 'high', type: 'float', description: 'Highest price during the minute bar' },
     { column: 'low', type: 'float', description: 'Lowest price during the minute bar' },

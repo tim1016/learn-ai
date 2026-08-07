@@ -174,7 +174,7 @@ def _reference_sma_crossover(closes: list[float], short_window: int, long_window
     algorithmic intent even though the legacy module itself isn't importable
     in every environment (it pulls in pandas_ta, which isn't always available).
 
-    Rule (mirrors ``app/services/strategies/sma_crossover.py``):
+    Rule (mirrors the canonical ``SmaCrossoverAlgorithm``):
       * enter long on the bar where short SMA crosses **above** long SMA
       * exit on the bar where short SMA crosses **below** long SMA
       * final open position is closed at the last bar

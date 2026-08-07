@@ -885,7 +885,7 @@ class BrokerHealthCondition(BaseModel):
     """Backend-authored operator copy for the data-plane broker session.
 
     This is intentionally the data-plane altitude, not a per-bot runtime
-    verdict. Per-bot broker proof is authored by ``OperatorSurfaceBroker``.
+    verdict. Per-bot broker proof belongs to the canonical broker projection.
     """
 
     model_config = ConfigDict(frozen=True)

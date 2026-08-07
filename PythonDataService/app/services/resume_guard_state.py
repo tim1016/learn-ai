@@ -1,16 +1,9 @@
 """Shared Resume / Pause / Stop guard resolver (PRD #616).
 
 The canonical, pure-function resolver for the three Resume guards
-required by ADR-0010 §3 and ADR-0011 §6.  Consumed by:
-
-1. The capability projection (``operator_surface.actions.resume`` /
-   ``actions.pause`` / ``actions.stop``).
-2. The mutation endpoint
-   (``POST /api/live-instances/{sid}/desired-state``), which re-runs
-   the same resolution immediately before the durable write so a
-   stale snapshot cannot drive a write past the same gate.
-3. The CLI (``app.engine.live.run.cmd_resume``), which used to
-   implement two of the three guards with a ``--force`` bypass.
+required by ADR-0010 §3 and ADR-0011 §6. It is consumed by the account
+recovery CLI, which replaced ad-hoc artifact scans and the old ``--force``
+bypass.
 
 The three artifact readers are pure folds over file inputs:
 
@@ -164,12 +157,10 @@ class UncertainIntentArtifact:
 
 
 class ResumeGuardState(BaseModel):
-    """Single composed value consumed by every Resume entry point.
+    """Single composed value consumed by the retained Resume entry point.
 
     The resolver runs once per request; this object is passed to:
 
-    - ``evaluate_action`` for the capability projection.
-    - The desired-state mutation endpoint (re-validation).
     - The CLI ``cmd_resume`` (replacement for ad-hoc artifact scans).
 
     ``reason_codes`` carries the **full** list of applicable reason
@@ -275,34 +266,6 @@ def read_broker_safety_verdict(verdict_snapshot_path: Path) -> BrokerSafetyArtif
     return BrokerSafetyArtifact(state="UNKNOWN", verdict=None)
 
 
-def read_full_reconciliation_receipt(run_dir: Path | None):
-    """Return the full ``ReconciliationReceipt`` model when readable.
-
-    Distinct from ``read_reconciliation_receipt`` (which classifies a
-    receipt against ``relevant_after_ms`` and returns a small
-    ``ReconciliationArtifact`` for the Resume guard). The operator-surface
-    projection needs the full receipt to compose its ``state`` token (the
-    Resume guard's three-state ``PASSED/FAILED/STALE`` collapses
-    ``ADOPTED``/``CLEAN`` and drops ``IN_PROGRESS``/``adopted_intent_ids``).
-
-    Returns ``None`` when the receipt is absent OR unreadable — the
-    projection turns absence into ``NOT_AVAILABLE`` rather than raising.
-    """
-    from app.engine.live.reconciliation_receipt import RECEIPT_FILENAME
-    from app.schemas.live_runs import ReconciliationReceipt
-
-    if run_dir is None:
-        return None
-    receipt_path = run_dir / RECEIPT_FILENAME
-    if not receipt_path.exists():
-        return None
-    try:
-        raw = receipt_path.read_text(encoding="utf-8")
-        return ReconciliationReceipt.model_validate_json(raw)
-    except (OSError, ValueError):
-        return None
-
-
 def read_reconciliation_receipt(
     run_dir: Path | None,
     *,
@@ -312,9 +275,8 @@ def read_reconciliation_receipt(
 
     PRD #616 ships the *reader* only.  Receipt-writer wiring is
     downstream; until it lands, the honest state is ``NOT_AVAILABLE``.
-    The cockpit surfaces this honestly via the
-    ``RECONCILIATION_NOT_AVAILABLE`` reason code when a guard treats
-    it as blocking; it is otherwise informational.
+    The CLI surfaces ``RECONCILIATION_NOT_AVAILABLE`` when a guard treats
+    the missing receipt as blocking; it is otherwise informational.
 
     ``relevant_after_ms`` validates the receipt postdates the run /
     broker state of interest.  When the file's last_reconcile_ms <
@@ -546,9 +508,7 @@ def resolve_guard_state_from_paths(
 ) -> ResumeGuardState:
     """Production helper: read the four artifacts from disk + compose.
 
-    Used by the desired-state mutation endpoint and the CLI.  The
-    capability projection composes the same way against the status
-    pipeline's already-fetched paths.
+    Used by the account recovery CLI.
     """
     if verdict_snapshot_path is not None:
         broker_safety = read_broker_safety_verdict(verdict_snapshot_path)

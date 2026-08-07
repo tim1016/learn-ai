@@ -155,7 +155,7 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
 {
   const req = request({
     method: 'GET',
-    url: '/api/live-instances/bot-a/operator-surface/stream',
+    url: '/api/live-instances/fleet/stream',
     intent: null,
     queryIntent: DATA_PLANE_CONTROL_INTENT_VALUE,
   });

@@ -446,7 +446,7 @@ def compute_forward_return(
     df = df.sort_values("timestamp").reset_index(drop=True)
 
     if "date" not in df.columns:
-        df["date"] = pd.to_datetime(df["timestamp"], unit="ms").dt.date
+        df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.date
 
     close = df["close"].values
     dates = df["date"].values
@@ -509,10 +509,10 @@ def compute_indicator_reliability_with_oos(
     test_df = df.iloc[split_idx:].reset_index(drop=True)
 
     # Determine date ranges
-    train_start = str(pd.to_datetime(train_df["timestamp"].iloc[0], unit="ms").date())
-    train_end = str(pd.to_datetime(train_df["timestamp"].iloc[-1], unit="ms").date())
-    test_start = str(pd.to_datetime(test_df["timestamp"].iloc[0], unit="ms").date()) if len(test_df) > 0 else None
-    test_end = str(pd.to_datetime(test_df["timestamp"].iloc[-1], unit="ms").date()) if len(test_df) > 0 else None
+    train_start = str(pd.to_datetime(train_df["timestamp"].iloc[0], unit="ms", utc=True).date())
+    train_end = str(pd.to_datetime(train_df["timestamp"].iloc[-1], unit="ms", utc=True).date())
+    test_start = str(pd.to_datetime(test_df["timestamp"].iloc[0], unit="ms", utc=True).date()) if len(test_df) > 0 else None
+    test_end = str(pd.to_datetime(test_df["timestamp"].iloc[-1], unit="ms", utc=True).date()) if len(test_df) > 0 else None
 
     metadata = {
         "train_start": train_start,

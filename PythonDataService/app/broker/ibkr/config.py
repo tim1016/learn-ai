@@ -173,25 +173,6 @@ class IbkrSettings(BaseSettings):
         le=300.0,
     )
 
-    # Environment-specific operator command that starts the host service when
-    # it is UNREACHABLE. Sourced from trusted server configuration and rendered
-    # verbatim in the cockpit as a copyable remedy. Set per deployment topology:
-    # local macOS/Linux dev uses "./start-live-daemon.sh --background"; a
-    # Windows service deployment uses its approved service-start command;
-    # externally supervised or remote-host deployments leave this empty and
-    # surface a runbook remediation instead. Empty string means "no safe
-    # command can be authored" — the projection emits None and the cockpit
-    # falls back to a runbook (slice 1 of bot-cockpit-trader-language design;
-    # ADR 0013 amendment 2026-06-22).
-    live_runner_host_start_command: str = ""
-
-    # ADR-0008 §5 / PR 1 — TTL for cold-start reconciliation receipts. After
-    # this many ms past the receipt's ``last_reconcile_ms`` (when set), the
-    # operator-surface projection treats a passed receipt as ``STALE``. 24 h
-    # default is long enough to span a normal trading day + overnight; the
-    # cockpit's STALE banner asks the operator to re-reconcile.
-    reconciliation_receipt_ttl_ms: int = 24 * 3600 * 1000
-
     # #1021 atomic authority/rollback seam. Keep Account Truth authoritative
     # until the versioned Clerk-keyed shadow replay satisfies the promotion
     # gate. Changing this setting requires a process restart; there is no

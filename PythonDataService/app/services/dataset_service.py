@@ -10,6 +10,7 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from datetime import date as Date
+from numbers import Integral
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -22,6 +23,7 @@ from app.lean_sidecar.trading_calendar import (
     session_windows_ms_utc,
 )
 from app.services.polygon_client import PolygonClientService
+from app.utils.timestamps import now_ms_utc
 
 
 class RunCancelledError(Exception):
@@ -50,8 +52,17 @@ def assert_canonical_bar_stream(bars: list[dict[str, Any]], symbol: str) -> None
     eastern = ZoneInfo("America/New_York")
     prev_ts: int | None = None
     seen: set[int] = set()
-    for bar in bars:
-        ts = int(bar["timestamp"])
+    for index, bar in enumerate(bars):
+        raw_ts = bar.get("timestamp")
+        if isinstance(raw_ts, bool) or not isinstance(raw_ts, Integral):
+            raise CanonicalBarsError(
+                f"polygon_corrupt_timestamps: bar {index} for {symbol} must carry an int64-ms timestamp"
+            )
+        ts = int(raw_ts)
+        if not -(2**63) <= ts < 2**63:
+            raise CanonicalBarsError(
+                f"polygon_corrupt_timestamps: timestamp {ts} for {symbol} exceeds int64"
+            )
         if ts in seen:
             et_repr = datetime.fromtimestamp(ts / 1000, tz=utc).astimezone(eastern).isoformat()
             raise CanonicalBarsError(f"polygon_corrupt_timestamps: duplicate timestamp {ts} ({et_repr}) for {symbol}")
@@ -356,12 +367,11 @@ def fetch_bars_chunked(
     on_event: Callable[[dict[str, Any]], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch OHLCV bars for a long date range by splitting into chunks.
+    """Fetch a canonical OHLCV stream by splitting a long range into chunks.
 
-    ``sort`` and ``limit`` map to Polygon's aggregate query params but only
-    affect each per-chunk request — the final merged list is always
-    timestamp-sorted ascending (dedup-safe for overlapping chunk boundaries).
-    To surface ``desc`` output to the caller, we reverse after merge.
+    Finite ingestion is fail-fast: Polygon must return one strictly increasing,
+    duplicate-free stream. This function never reorders or deduplicates vendor
+    data because either repair would hide upstream corruption.
 
     When ``on_event`` is supplied, the chunker emits progress dicts:
         ``{type: "chunk_plan", total: int}``
@@ -373,6 +383,9 @@ def fetch_bars_chunked(
     early and raises ``RunCancelledError``. The caller should treat this as
     a cooperative abort, not an error.
     """
+    if sort != "asc":
+        raise ValueError("canonical bar ingestion requires sort='asc'")
+
     all_bars = fetch_bars_chunks_raw(
         polygon=polygon,
         ticker=ticker,
@@ -387,29 +400,9 @@ def fetch_bars_chunked(
         cancel_check=cancel_check,
     )
 
-    total_raw = len(all_bars)
-    seen: set[int] = set()
-    unique_bars: list[dict[str, Any]] = []
-    for bar in all_bars:
-        ts = bar["timestamp"]
-        if ts not in seen:
-            seen.add(ts)
-            unique_bars.append(bar)
-    unique_bars.sort(key=lambda b: b["timestamp"])
-
-    # Chunk boundary verification
-    chunk_overlaps = total_raw - len(unique_bars)
-    if chunk_overlaps > 0:
-        logger.info(f"[CHUNK MERGE] Removed {chunk_overlaps} overlapping bars at chunk boundaries")
-    if len(unique_bars) > 1:
-        timestamps = [b["timestamp"] for b in unique_bars]
-        non_mono = sum(1 for i in range(1, len(timestamps)) if timestamps[i] <= timestamps[i - 1])
-        if non_mono > 0:
-            logger.warning(f"[CHUNK MERGE] {non_mono} non-monotonic timestamps after dedup — re-sorting")
-            unique_bars.sort(key=lambda b: b["timestamp"])
-
-    logger.info(f"Total unique {multiplier}{timespan} bars: {len(unique_bars)}")
-    return unique_bars
+    assert_canonical_bar_stream(all_bars, ticker)
+    logger.info("Fetched %d canonical %d%s bars", len(all_bars), multiplier, timespan)
+    return all_bars
 
 
 _BAR_WINDOW_MINUTES_PER_UNIT: dict[str, int] = {
@@ -778,7 +771,7 @@ def preprocess_and_calculate(
     indicator_entries: list[dict[str, Any]],
     session: str = "extended",
     forward_fill: bool = False,
-    fail_on_gaps: bool = False,
+    fail_on_gaps: bool = True,
     trim_from_ts: int | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -787,16 +780,16 @@ def preprocess_and_calculate(
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """
     Shared preprocessing pipeline:
-      1. Sort and deduplicate bars
+      1. Reject duplicate or non-monotonic bars
       2. Session filter (RTH or extended)
       3. Tag session column (rth/pre/post) for CSV export
-      4. Gap check (optional, raises ValueError if fail_on_gaps=True and gaps exist)
+      4. Gap check (fail-fast by default)
       5. Forward-fill gaps (optional)
       6. Calculate dynamic indicators
       7. Trim warm-up rows (optional, by timestamp)
     """
+    assert_canonical_bar_stream(bars, "dataset")
     df = pd.DataFrame(bars)
-    df = df.sort_values("timestamp").reset_index(drop=True)
 
     df = filter_session(df, session, timespan=timespan, multiplier=multiplier)
 
@@ -811,7 +804,7 @@ def preprocess_and_calculate(
                 f"fail_on_gaps=True: {len(gaps)} intra-day gap(s) detected. "
                 f"First gap: date={gaps[0]['date']}, at_ms={gaps[0]['gap_at_ms']}, "
                 f"size_ms={gaps[0]['gap_size_ms']}. "
-                f"Set fail_on_gaps=False to allow forward-filling."
+                "Synthetic bars require the explicit forward_fill=True, fail_on_gaps=False opt-in."
             )
 
     if forward_fill:
@@ -965,16 +958,15 @@ def calculate_dynamic_indicators(
 
 
 def build_csv_bytes(df: pd.DataFrame, columns: list[str]) -> bytes:
-    """Serialize a DataFrame to CSV bytes with unix_ts and iso_time columns first."""
+    """Serialize a DataFrame with canonical ``unix_ts`` milliseconds first."""
     output = io.StringIO()
     writer = csv.writer(output)
-    header = ["unix_ts", "iso_time", *columns]
+    header = ["unix_ts", *columns]
     writer.writerow(header)
 
     for _, row in df.iterrows():
         ts = int(row["timestamp"])
-        iso = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-        values = [ts, iso] + [_fmt(row.get(col)) for col in columns]
+        values = [ts] + [_fmt(row.get(col)) for col in columns]
         writer.writerow(values)
     return output.getvalue().encode("utf-8")
 
@@ -987,7 +979,7 @@ def build_metadata_json(
     column_meta: list[dict[str, Any]],
     ohlcv_cols: list[str],
     session: str = "extended",
-    forward_fill: bool = True,
+    forward_fill: bool = False,
     raw_bar_count: int = 0,
     filled_bar_count: int = 0,
 ) -> bytes:
@@ -998,12 +990,6 @@ def build_metadata_json(
             "type": "int",
             "description": "Unix timestamp in milliseconds (UTC)",
             "source": "Polygon.io",
-        },
-        {
-            "column": "iso_time",
-            "type": "string",
-            "description": "ISO 8601 datetime (UTC)",
-            "source": "Derived from unix_ts",
         },
     ]
     for col in ohlcv_cols:
@@ -1061,7 +1047,7 @@ def build_metadata_json(
             "timespan": "minute",
             "multiplier": 1,
             "bar_count": bar_count,
-            "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00"),
+            "generated_at_ms": now_ms_utc(),
         },
         "data_source": {
             "provider": "Polygon.io",
@@ -1100,7 +1086,7 @@ def build_metadata_json(
             "All float values are rounded to 6 decimal places",
             "Empty cells indicate NaN (indicator warm-up period or insufficient data)",
             "Timestamps represent the start of each minute bar (bar-open convention)",
-            "Data is de-duplicated by timestamp and sorted chronologically",
+            "Input timestamps are accepted only when unique and strictly increasing",
             "VWAP is a daily rolling accumulation — not bounded by individual bar H/L",
         ],
     }
@@ -1180,7 +1166,6 @@ def build_metadata_csv(
 
     base = [
         ("unix_ts", "int", "Polygon.io", "", "", "Unix timestamp in milliseconds (UTC)"),
-        ("iso_time", "string", "Derived", "", "", "ISO 8601 datetime (UTC)"),
     ]
     desc_map = {
         "PC": "Previous close — the RTH close (16:00 ET) of the most recently completed "
@@ -1236,7 +1221,7 @@ def build_metadata_kv_csv(
     to_date: str,
     bar_count: int,
     session: str = "rth",
-    forward_fill: bool = True,
+    forward_fill: bool = False,
     timespan: str = "minute",
     multiplier: int = 1,
     raw_bar_count: int = 0,
@@ -1261,7 +1246,7 @@ def build_metadata_kv_csv(
         ("bar_count", str(bar_count)),
         ("raw_bars_from_polygon", str(raw_bar_count)),
         ("bars_after_processing", str(filled_bar_count or bar_count)),
-        ("generated_at", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
+        ("generated_at_ms", str(now_ms_utc())),
         ("data_source", "Polygon.io (Starter plan)"),
         ("calculation_engine", f"pandas-ta {getattr(ta, 'version', 'unknown')}"),
     ]
@@ -1287,7 +1272,7 @@ def build_zip_bytes(
     from_date: str,
     to_date: str,
     session: str = "rth",
-    forward_fill: bool = True,
+    forward_fill: bool = False,
     timespan: str = "minute",
     multiplier: int = 1,
     raw_bar_count: int = 0,

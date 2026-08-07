@@ -150,18 +150,16 @@ both the Clerk and a historic replay.
 | `engine/live/run.py` Clerk-generation providers, `owner_generation` callback fields, and `AccountOwnerSubmitResult` adaptation; `engine/live/live_engine.py`; `engine/live/live_portfolio.py`; `engine/live/reconciliation_orchestrator.py` | **CLERK-BACKED-LEGACY-NAME** | Normal strategy submit and namespace cancellation use Clerk RPC. These parameters retain the old vocabulary while carrying the active Clerk generation. Rename only with the compatibility model above. |
 | `broker/ibkr/orders.py`; `routers/broker.py`; `engine/live/account_owner_fence.py` | **CLERK-BACKED-LEGACY-NAME** | The grant/fence spelling is compatibility debt at the broker boundary. It remains fail-closed and is not evidence of a runner-owned normal submit path. A separate rename must preserve the existing fail-closed fence. |
 | `engine/live/account_artifacts.py` legacy `AccountOwnerGeneration` read/write model and `owner_generation.json`; `schemas/bot_events.py` | **LEGACY-READER** | These consume or preserve historic owner-keyed artifacts/events. They are not current write authority. Keep dual-read/history until a versioned artifact migration retires the historic record. |
-| `services/bot_lifecycle_projection.py` | **PYTHON-EVIDENCE-FOLD** | The active Python-owned lifecycle-evidence fold for the live-instance chart. It is not the retired Postgres read model and has no broker-write authority. Its historical `lifecycle_projection.*` template IDs remain opaque audit values. |
+| Retired `services/bot_lifecycle_projection.py` | **REMOVED** | The deprecated live-instance chart projection was deleted with the IBKR bot-control surface. Historic `lifecycle_projection.*` tokens remain opaque audit values. |
 | `services/bot_lifecycle_receipt_copy.py` historical receipt labels and `services/account_reconciliation.py`'s generic account-condition helper | **LEGACY-READER** / **not a runner owner** | Historic raw receipt tokens remain exact audit values. The account-condition helper's `owner` is ordinary domain ownership, not `AccountOwner` broker authority. Neither is renamed in this track. |
-| `routers/live_instances.py::_resolve_account_owner_surface`; `services/live_instance_surface_assembler.py`; `services/operator_surface.py`; `services/operator_trader_guidance.py`; `services/operator_blockage_ladder.py`; `services/bot_lifecycle_{chart,receipts}.py`; Frontend operator-surface types and fixtures | **LEGACY-READER — MIGRATED** | Done in Track B. The read-only response is now schema v2 `account_clerk`, sourced from the Clerk generation plus matching active lease. It no longer reads or returns the legacy owner artifact. Historic account-event tokens remain opaque audit data. |
+| Retired live-instance status/stream routes, surface assembler, operator-surface/lifecycle projections, and Frontend fixtures | **REMOVED** | Deleted on 2026-08-06. The Alpaca Broker V2 panel and SQLite Clerk projections are the canonical control/read surface. Historic account-event tokens remain opaque audit data. |
 | `engine/live/run.py::emergency_flatten` direct broker cancel/place calls, `read_account_owner_generation`, and `account_owner_write_grant` | **SAFETY-LANE** | Do not modify in Track B. This is the separately invoked emergency path, not the normal Clerk RPC path. Its direct IBKR session and lock/fence coordination require a dedicated design and regression suite. |
 | `engine/live/run.py` recovery fallback `account_owner.run_broker_write` | **SAFETY-LANE** | Do not delete under a caller-count heuristic. It participates in recovery handling and must be characterized with the emergency/recovery architecture before removal. |
 
-The Track B operator-surface migration is display-only: it feeds
-readiness/guidance/chart evidence and does not change Start, normal submit,
-`IBKR_ACCOUNT_GATE_AUTHORITY`, or a broker write boundary. A response is
-healthy only when the Clerk generation is `accepting` **and** its matching
-`RUNNING` lease is unexpired. The regression test writes a conflicting legacy
-owner artifact and proves the response returns only the active Clerk evidence.
+The later surface retirement does not change Start, normal submit,
+`IBKR_ACCOUNT_GATE_AUTHORITY`, or a broker write boundary. The canonical Alpaca
+Broker V2 panel reads Clerk/SQLite authority directly rather than rebuilding the
+removed IBKR operator surface.
 
 ### Emergency flatten decision proposal — not implemented
 

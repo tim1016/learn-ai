@@ -18,7 +18,6 @@ import type {
   LiveRunSummary,
   LogLine,
   QcAuditCopyListing,
-  ReconcileAckResponse,
   SizingPolicy,
   SpecStrategyFixture,
 } from '../api/live-runs.types';
@@ -26,18 +25,6 @@ import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type {
   FleetAccountSummary,
   FleetContamination,
-  BotLifecycleMutationResponse,
-  BotLifecycleRosterRequest,
-  BotCatalogPageResponse,
-  BotCatalogResponse,
-  BotDeleteRequest,
-  BotDeleteResponse,
-  BotRollCallResponse,
-  BotRetireReplaceRequest,
-  CrashRecoveryOverrideRequest,
-  CrashRecoveryOverrideResponse,
-  InstanceDesiredStateRequest,
-  LiveInstanceStatus,
   LiveInstanceSummary,
   SetInstanceDesiredStateResponse,
 } from '../api/live-instances.types';
@@ -162,171 +149,9 @@ export class LiveRunsService {
     );
   }
 
-  endDayNow(
-    instanceId: string,
-    request: HostRunnerStopRequest = { force: false },
-  ): Promise<SetInstanceDesiredStateResponse> {
-    return firstValueFrom(
-      this.http.post<SetInstanceDesiredStateResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/end-day-now`,
-        request,
-      ),
-    );
-  }
-
-  setBotLifecycleRoster(
-    instanceId: string,
-    request: BotLifecycleRosterRequest,
-  ): Promise<BotLifecycleMutationResponse> {
-    return firstValueFrom(
-      this.http.post<BotLifecycleMutationResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/lifecycle/roster`,
-        request,
-      ),
-    );
-  }
-
-  retireAndReplace(
-    instanceId: string,
-    request: BotRetireReplaceRequest,
-  ): Promise<BotLifecycleMutationResponse> {
-    return firstValueFrom(
-      this.http.post<BotLifecycleMutationResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/retire-and-replace`,
-        request,
-      ),
-    );
-  }
-
-  // --- Instance-addressed operator console (ADR 0004) ---
-
   /** Account fleet overview: every known strategy instance, live or not. */
   getInstances(): Promise<LiveInstanceSummary[]> {
     return firstValueFrom(this.http.get<LiveInstanceSummary[]>(this.instancesBase));
-  }
-
-  getBotCatalog(): Promise<BotCatalogResponse> {
-    return firstValueFrom(this.http.get<BotCatalogResponse>(`${this.instancesBase}/catalog`));
-  }
-
-  getBotCatalogPage(params: { limit: number; cursor?: string }): Promise<BotCatalogPageResponse> {
-    return firstValueFrom(
-      this.http.get<BotCatalogPageResponse>(`${this.instancesBase}/catalog/page`, { params }),
-    );
-  }
-
-  runRollCall(): Promise<BotRollCallResponse> {
-    return firstValueFrom(
-      this.http.post<BotRollCallResponse>(`${this.instancesBase}/roll-call`, {}),
-    );
-  }
-
-  deleteBot(instanceId: string, request: BotDeleteRequest = { mode: 'soft' }): Promise<BotDeleteResponse> {
-    return firstValueFrom(
-      this.http.delete<BotDeleteResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}`,
-        { body: request },
-      ),
-    );
-  }
-
-  /** Instance control-room status: live binding (registry) + evidence + intent. */
-  getInstanceStatus(instanceId: string): Promise<LiveInstanceStatus> {
-    return firstValueFrom(
-      this.http.get<LiveInstanceStatus>(`${this.instancesBase}/${encodeURIComponent(instanceId)}/status`),
-    );
-  }
-
-  recordCrashRecoveryOverride(
-    instanceId: string,
-    request: CrashRecoveryOverrideRequest,
-  ): Promise<CrashRecoveryOverrideResponse> {
-    return firstValueFrom(
-      this.http.post<CrashRecoveryOverrideResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/crash-recovery-override`,
-        request,
-      ),
-    );
-  }
-
-  /**
-   * The single operator intent knob (ADR 0004): writes durable desired-state
-   * and, if a live binding exists, actuates it on the bound run. PAUSED/RUNNING/
-   * STOPPED is liveness-independent — live actuation or gates the next start.
-   */
-  setInstanceDesiredState(
-    instanceId: string,
-    request: InstanceDesiredStateRequest,
-  ): Promise<SetInstanceDesiredStateResponse> {
-    return firstValueFrom(
-      this.http.post<SetInstanceDesiredStateResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/desired-state`,
-        request,
-      ),
-    );
-  }
-
-  /**
-   * Atomic flatten-and-pause (PRD #607 / Slice 3 / #610): wraps the
-   * Python ``POST /api/live-instances/{id}/flatten-and-pause`` endpoint
-   * which persists PAUSED durable intent FIRST then enqueues FLATTEN_NOW
-   * (VCR-0007 / ADR-0010).  Angular MUST NOT recompose this as
-   * ``issueCommand('FLATTEN') + setInstanceDesiredState``; doing so
-   * re-opens the bug VCR-0007 named.
-   *
-   * Returns the same shape as ``setInstanceDesiredState`` so the cockpit
-   * can reuse its post-dispatch ``actuation.actuated`` rendering.
-   */
-  flattenAndPause(
-    instanceId: string,
-    request?: InstanceDesiredStateRequest,
-  ): Promise<SetInstanceDesiredStateResponse> {
-    return firstValueFrom(
-      this.http.post<SetInstanceDesiredStateResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/flatten-and-pause`,
-        request ?? null,
-      ),
-    );
-  }
-
-  /** Unified one-shot command timeline for an instance's bound run (#397). */
-  getInstanceCommands(instanceId: string): Promise<CommandsSummary> {
-    return firstValueFrom(
-      this.http.get<CommandsSummary>(`${this.instancesBase}/${encodeURIComponent(instanceId)}/commands`),
-    );
-  }
-
-  /** Issue a one-shot command (FLATTEN/RECONCILE/MARK_POISONED) to the bound run (#397). */
-  issueInstanceCommand(instanceId: string, request: CommandWriteRequest): Promise<CommandWriteResponse> {
-    return firstValueFrom(
-      this.http.post<CommandWriteResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/commands`,
-        request,
-      ),
-    );
-  }
-
-  /**
-   * Reconciliation PR 2 — runtime "Reconcile now" verb. Enqueues a
-   * RECONCILE command on the instance's bound run; the engine flips the
-   * submit barrier synchronously and spawns the async control task that
-   * runs the orchestrator. The cockpit polls
-   * ``operator_surface.reconciliation`` to observe IN_PROGRESS →
-   * CLEAN/ADOPTED/FAILED transitions; this method just confirms the
-   * request was queued.
-   *
-   * 409 NO_LIVE_BINDING when no bot process is running for the
-   * instance — runtime reconciliation requires a live engine. The
-   * cockpit should only enable this button when ``reconciliation.state``
-   * is STALE or NOT_AVAILABLE for an instance with a live binding.
-   */
-  reconcileInstance(instanceId: string): Promise<ReconcileAckResponse> {
-    return firstValueFrom(
-      this.http.post<ReconcileAckResponse>(
-        `${this.instancesBase}/${encodeURIComponent(instanceId)}/reconcile`,
-        {},
-      ),
-    );
   }
 
   /** Account/fleet contamination: net vs Σ instance expecteds (ADR 0005, #399). */

@@ -75,7 +75,7 @@ class InvalidInstanceIdError(DeployError):
 class StrategyInstanceIdAlreadyUsedError(DeployError):
     """The bot name / strategy instance id has historical evidence already.
 
-    ``strategy_instance_id`` is the durable Bot Cockpit identity and broker
+    ``strategy_instance_id`` is the durable live-run identity and broker
     attribution namespace. A stopped or retired bot name cannot be reused for a
     new run because old paths and ``order_ref`` evidence remain authoritative.
     """

@@ -1,9 +1,8 @@
-"""Tests for live-runs control surface (PRD-A: UI-1, UI-3, UI-4).
+"""Tests for the read-only live-runs evidence surface.
 
 Uses httpx.AsyncClient + ASGITransport(app=app) per repo testing rules.
-Covers desired-state resolution (absent/PAUSED/STOPPED/corrupt/unknown),
-the durable write API (persist + version bump), and the command channel
-enqueue -> timeline readback.
+Covers desired-state resolution (absent/PAUSED/STOPPED/corrupt/unknown)
+and command-channel evidence.
 """
 
 from __future__ import annotations
@@ -157,74 +156,17 @@ async def test_status_includes_controls_fields(live_runs_root):
     assert body["command_summary"]["pending_count"] == 0
 
 
-# --- UI-3: retired run-addressed desired-state write API ---
-
-
-@pytest.mark.parametrize("action", ["pause", "resume", "stop"])
-async def test_set_desired_state_requires_signed_instance_intent(live_runs_root, action: str):
-    _make_run(live_runs_root, _RID, sid="inst-write")
-    async with _client() as client:
-        response = await client.post(f"/api/live-runs/{_RID}/desired-state", json={"action": action})
-
-    assert response.status_code == 410
-    assert response.json()["detail"]["reason_code"] == "INSTANCE_INTENT_ENDPOINT_REQUIRED"
-    assert DesiredStateRepo(stable_desired_state_path(_artifacts_root(live_runs_root), "inst-write")).read() is None
-
-
-# --- UI-4: per-run command-channel API ---
-
-
-async def test_enqueue_command_writes_pending_and_timeline_reads_it(live_runs_root):
-    run_dir = _make_run(live_runs_root, _RID, sid="inst-cmd")
-    async with _client() as client:
-        enq = await client.post(
-            f"/api/live-runs/{_RID}/commands", json={"verb": "FLATTEN"}
-        )
-        timeline = await client.get(f"/api/live-runs/{_RID}/commands")
-
-    assert enq.status_code == 200
-    assert enq.json()["verb"] == "FLATTEN"
-    assert isinstance(enq.json()["seq"], int)
-
-    files = list((run_dir / "commands").glob("command.*.pending.json"))
-    assert len(files) == 1
-
-    assert timeline.status_code == 200
-    tl = timeline.json()
-    assert "pending" not in tl and "acks" not in tl
-    assert tl["poll_interval_ms"] == 1000
-    assert len(tl["entries"]) == 1
-    assert tl["entries"][0]["verb"] == "FLATTEN"
-    assert tl["entries"][0]["seq"] == enq.json()["seq"]
-    assert tl["entries"][0]["status"] == "queued"
-
-
-async def test_enqueue_command_invalid_verb_rejected(live_runs_root):
-    _make_run(live_runs_root, _RID, sid="inst-cmd")
-    async with _client() as client:
-        resp = await client.post(f"/api/live-runs/{_RID}/commands", json={"verb": "NOPE"})
-    assert resp.status_code == 400
-
-
 async def test_command_summary_in_status(live_runs_root):
-    _make_run(live_runs_root, _RID, sid="inst-cmd")
+    from app.engine.live.command_channel import CommandChannel, CommandVerb
+
+    run_dir = _make_run(live_runs_root, _RID, sid="inst-cmd")
+    CommandChannel(run_dir / "commands").write_from_operator(CommandVerb.FLATTEN)
     async with _client() as client:
-        await client.post(f"/api/live-runs/{_RID}/commands", json={"verb": "FLATTEN"})
         resp = await client.get(f"/api/live-runs/{_RID}/status")
     cs = resp.json()["command_summary"]
     assert cs["pending_count"] == 1
     assert cs["acked_count"] == 0
     assert cs["latest_verb"] == "FLATTEN"
-
-
-@pytest.mark.parametrize("verb", ["PAUSE", "RESUME", "STOP", "CLOCK_OUT"])
-async def test_enqueue_command_rejects_legacy_durable_controls(live_runs_root, verb: str):
-    _make_run(live_runs_root, _RID, sid="inst-cmd")
-    async with _client() as client:
-        response = await client.post(f"/api/live-runs/{_RID}/commands", json={"verb": verb})
-
-    assert response.status_code == 410
-    assert response.json()["detail"]["reason_code"] == "DURABLE_INTENT_ENDPOINT_REQUIRED"
 
 
 async def test_command_timeline_reads_ack_files(live_runs_root):
@@ -284,12 +226,14 @@ async def test_status_cache_busts_on_desired_state_write(live_runs_root):
 
 async def test_status_cache_busts_on_command_write(live_runs_root):
     """Regression: an enqueued command must invalidate the cached /status."""
-    _make_run(live_runs_root, _RID, sid="inst-cache-cmd")
+    from app.engine.live.command_channel import CommandChannel, CommandVerb
+
+    run_dir = _make_run(live_runs_root, _RID, sid="inst-cache-cmd")
     async with _client() as client:
         before = await client.get(f"/api/live-runs/{_RID}/status")
         assert before.json()["command_summary"]["pending_count"] == 0
 
-        await client.post(f"/api/live-runs/{_RID}/commands", json={"verb": "FLATTEN"})
+        CommandChannel(run_dir / "commands").write_from_operator(CommandVerb.FLATTEN)
 
         after = await client.get(f"/api/live-runs/{_RID}/status")
     cs = after.json()["command_summary"]
@@ -297,9 +241,42 @@ async def test_status_cache_busts_on_command_write(live_runs_root):
     assert cs["latest_verb"] == "FLATTEN"
 
 
-async def test_path_traversal_run_id_rejected(live_runs_root):
-    """Boundary: traversal/separator run_ids are rejected (never 200)."""
+@pytest.mark.parametrize(
+    "endpoint",
+    (
+        "status",
+        "log-tail",
+        "trades",
+        "executions",
+        "failures",
+        "incidents",
+        "desired-state",
+        "commands",
+    ),
+)
+async def test_path_traversal_run_id_rejected(live_runs_root, endpoint):
+    """Boundary: no run-artifact endpoint accepts a path-like run ID."""
     async with _client() as client:
         for bad in ("..", "a%2Fb", "."):
-            resp = await client.get(f"/api/live-runs/{bad}/status")
+            resp = await client.get(f"/api/live-runs/{bad}/{endpoint}")
             assert resp.status_code in (400, 404)
+
+
+async def test_symlinked_run_directory_is_not_read(live_runs_root):
+    """Regression: a valid run ID cannot select artifacts outside the run root."""
+    run_id = "run-link-" + "z" * 55
+    outside = live_runs_root.parent / "outside"
+    outside.mkdir()
+    (outside / "run_ledger.json").write_text(
+        json.dumps(_ledger(run_id, sid="outside")), encoding="utf-8"
+    )
+    link = live_runs_root / run_id
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    async with _client() as client:
+        resp = await client.get(f"/api/live-runs/{run_id}/status")
+
+    assert resp.status_code == 404

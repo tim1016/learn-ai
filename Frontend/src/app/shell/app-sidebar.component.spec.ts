@@ -41,17 +41,17 @@ describe('AppSidebarComponent', () => {
 
     const links = navLinks(fixture);
     expect(links.get('Deploy')).toBe('/broker/deploy');
-    expect(links.get('Bots')).toBe('/broker/bots');
+    expect(links.get('Bots')).toBe('/brokers/alpaca/bots');
     expect(links.get('Offline Replay')).toBe('/broker/offline-replay');
-    expect(links.get('Bot Manual')).toBe('/broker/bot-manual');
+    expect(links.get('Bot Manual')).toBe('/brokers/alpaca/manual');
   });
 
   it('marks the most specific Interactive Broker route active when the URL has a manual fragment', async () => {
     const fixture = setup();
     const router = TestBed.inject(Router);
-    router.resetConfig([{ path: 'broker/bot-manual', component: AppSidebarComponent }]);
+    router.resetConfig([{ path: 'brokers/alpaca/manual', component: AppSidebarComponent }]);
 
-    await router.navigateByUrl('/broker/bot-manual#document-5-the-bot-lifecycle');
+    await router.navigateByUrl('/brokers/alpaca/manual#document-5-the-bot-lifecycle');
     fixture.detectChanges();
 
     const activeLabels = Array.from(
@@ -123,10 +123,10 @@ describe('AppSidebarComponent', () => {
     expect(labels).not.toContain('Options Surface (3D)');
   });
 
-  it('keeps validation and engine tooling under Strategy Lab', () => {
+  it('keeps validation and engine tooling under Strategy Tools', () => {
     const fixture = setup();
 
-    clickGroup(fixture, 'Strategy Lab');
+    clickGroup(fixture, 'Strategy Tools');
 
     const links = navLinks(fixture);
     expect(links.get('Strategy Validation')).toBe('/strategy-validation');

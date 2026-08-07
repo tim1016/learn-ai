@@ -136,7 +136,7 @@ def run_options_feature_research(
 
         # Align IV data and stock data by date
         stock_df = pd.DataFrame(stock_daily_bars).sort_values("timestamp").reset_index(drop=True)
-        stock_df["date"] = pd.to_datetime(stock_df["timestamp"], unit="ms").dt.strftime("%Y-%m-%d")
+        stock_df["date"] = pd.to_datetime(stock_df["timestamp"], unit="ms", utc=True).dt.strftime("%Y-%m-%d")
 
         iv_df["date"] = iv_df["date"].astype(str)
 

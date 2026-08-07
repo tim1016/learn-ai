@@ -8,7 +8,7 @@ import {
 } from '@angular/core';
 
 import type { ActionId, PanelAction, PanelActionTrigger } from '../lib/broker-v2-panel.types';
-import { TypedHaltConfirmComponent } from '../../bot-control/reused/typed-halt-confirm/typed-halt-confirm.component';
+import { TypedHaltConfirmComponent } from '../../shared/typed-halt-confirm/typed-halt-confirm.component';
 import { PanelActionCommentConfirmComponent } from './panel-action-comment-confirm.component';
 
 export type PanelActionTone = 'primary' | 'neutral' | 'warning' | 'danger';

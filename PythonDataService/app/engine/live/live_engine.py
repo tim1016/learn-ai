@@ -2659,13 +2659,13 @@ class LiveEngine:
                 #   - Poison: write poison evidence and halt/pause fail-closed.
                 #
                 # The dispatcher returns "accepted" + a request_id immediately
-                # so the cockpit can render IN_PROGRESS without waiting on the
+                # so evidence consumers can render IN_PROGRESS without waiting on the
                 # broker probe; the async reconcile task overwrites the ack
                 # with status="completed" + verdict=... when it lands via
                 # ``CommandChannel.ack_completion``.
                 #
                 # Concurrent RECONCILE returns ``already_running`` so the
-                # cockpit + operator-surface see exactly one in-flight task
+                # command evidence exposes exactly one in-flight task
                 # at a time (the receipt's ``in_progress`` sentinel reflects
                 # the original task; a second probe would corrupt the
                 # ordering).

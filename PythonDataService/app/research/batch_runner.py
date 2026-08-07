@@ -542,7 +542,7 @@ def _extract_daily_returns(stock_bars: list[dict[str, Any]]) -> pd.Series:
     df = pd.DataFrame(stock_bars).sort_values("timestamp").reset_index(drop=True)
     if "close" not in df.columns or "timestamp" not in df.columns:
         return pd.Series(dtype=float)
-    df["date"] = pd.to_datetime(df["timestamp"], unit="ms").dt.strftime("%Y-%m-%d")
+    df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.strftime("%Y-%m-%d")
     df["ret"] = df["close"].astype(float).pct_change()
     return pd.Series(df["ret"].values, index=df["date"].values).dropna()
 

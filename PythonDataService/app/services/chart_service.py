@@ -25,6 +25,7 @@ import pandas as pd
 from app.lean_sidecar.trading_calendar import session_window_for_date, session_windows_ms_utc
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
+    assert_canonical_bar_stream,
     calculate_dynamic_indicators,
     compute_warmup_start_date,
     estimate_max_lookback,
@@ -338,12 +339,10 @@ def _preprocess_minute_bars(
 ) -> tuple[pd.DataFrame, QualityReport]:
     """
     Preprocess raw 1-minute bars:
-    1. Sort by timestamp
-    2. Drop duplicates (keep last)
-    3. Validate monotonic index
-    4. Session-mask using NYSE calendar
-    5. Optionally forward-fill gaps
-    6. Compute quality metrics
+    1. Reject duplicate or non-monotonic timestamps
+    2. Session-mask using NYSE calendar
+    3. Optionally forward-fill gaps
+    4. Compute quality metrics
     """
     quality = QualityReport(raw_bar_count=len(bars))
 
@@ -351,15 +350,7 @@ def _preprocess_minute_bars(
     if df.empty:
         return df, quality
 
-    # Detect out-of-order before sorting
-    raw_ts = df["timestamp"]
-    quality.out_of_order_fixed = int((raw_ts.diff().dropna() < 0).sum())
-
-    # Sort + dedup
-    df = df.sort_values("timestamp").reset_index(drop=True)
-    before_dedup = len(df)
-    df = df.drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
-    quality.duplicates_removed = before_dedup - len(df)
+    assert_canonical_bar_stream(bars, "chart")
 
     # Detect flat bars and OHLC violations (count only, don't remove)
     if not df.empty:

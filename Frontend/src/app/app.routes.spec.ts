@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { AccountMonitorRedirectComponent } from './components/broker/account-monitor-redirect/account-monitor-redirect.component';
-import { BotOperatorManualPageComponent } from './components/broker/bot-operator-manual/bot-operator-manual-page.component';
 import { BrokerDeployPageComponent } from './components/broker/broker-deploy-page/broker-deploy-page.component';
 import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
 import { routes } from './app.routes';
@@ -39,11 +38,19 @@ describe('routes', () => {
     expect(route).toMatchObject({ redirectTo: 'broker/accounts', pathMatch: 'full' });
   });
 
-  it('lazy-loads the bot operator manual beside the bot fleet', async () => {
-    const route = routes.find((candidate) => candidate.path === 'broker/bot-manual');
-    if (route?.loadComponent === undefined) throw new Error('Bot manual route is missing.');
+  it.each(['broker/bots', 'broker/bots/:id', 'broker/instances', 'broker/instances/:id'])(
+    'redirects the deprecated %s surface to Alpaca Broker V2',
+    (path) => {
+      const route = routes.find((candidate) => candidate.path === path);
 
-    expect(await route.loadComponent()).toBe(BotOperatorManualPageComponent);
+      expect(route).toMatchObject({ redirectTo: 'brokers/alpaca/bots', pathMatch: 'full' });
+    },
+  );
+
+  it('redirects the deprecated bot manual to the Broker V2 manual', () => {
+    const route = routes.find((candidate) => candidate.path === 'broker/bot-manual');
+
+    expect(route).toMatchObject({ redirectTo: 'brokers/alpaca/manual', pathMatch: 'full' });
   });
 
   it('keeps the Clerk diagnostic gallery unlinked beneath the examples route', async () => {

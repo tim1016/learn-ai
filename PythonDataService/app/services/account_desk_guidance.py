@@ -169,7 +169,7 @@ def _guidance_spec_for_condition(
             move_label="Open bot controls",
             move_action=NavigateAction(
                 kind="navigate",
-                route=f"/broker/bots/{condition.owner.owner_id}",
+                route="/brokers/alpaca/bots",
             ),
         )
     spec = _CURE_ACTION_GUIDANCE[condition.cure_action]

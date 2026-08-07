@@ -1,6 +1,6 @@
 # ADR 0013 — Operator-surface boundary: operational judgment versus evidence
 
-**Status:** Accepted 2026-06-20. Drafted during the 2026-06-20 Bot Control redesign grilling session and locked in PRD #616.
+**Status:** Superseded 2026-08-06 by the removal of the IBKR Bot Control operator surface. Retained as a historical decision record; new bot-control work targets Alpaca Broker V2.
 **Decision drivers:** The 2026-06-20 grilling session against the revised bot control plan surfaced a structural pattern in the existing bot control: Angular-derived synthetic verdicts that compose independent server-authored facts into a single "bot status." ADR-0005 forbade this for readiness; ADR-0010 forbade it for actions; ADR-0011 forbade it for broker safety. None of the three named the bot control page-wide rule: **what belongs on `operator_surface` and what does not**. Without that rule, every new field is debated case-by-case and the synthetic-verdict pattern keeps creeping back. PRD #617's atomic UI cutover is the moment to lock the boundary so future contributors cannot drift back to a derived `botStatus()`.
 **Related:** ADR 0005 (engine-authored readiness, two altitudes), ADR 0010 (operator-action contract — five canonical actions, canonical render-site rule), ADR 0011 (broker safety verdict — reactive, fail-closed), PRD #616 (backend authority + operator_surface contract completion), PRD #617 (atomic UI replacement).
 

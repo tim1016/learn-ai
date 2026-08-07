@@ -3821,46 +3821,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/live-instances/catalog": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Bot Catalog
-         * @description Server-authored bot catalog cards for the frontend DataView.
-         */
-        get: operations["list_bot_catalog_api_live_instances_catalog_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/catalog/page": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Bot Catalog Page
-         * @description Return one broker-free catalog page for post-first-paint loading.
-         */
-        get: operations["list_bot_catalog_page_api_live_instances_catalog_page_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/live-instances/daemon-diagnose": {
         parameters: {
             query?: never;
@@ -4039,26 +3999,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/live-instances/roll-call": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Roll Call
-         * @description Persist offers projected from cached account truth and durable state.
-         */
-        post: operations["run_roll_call_api_live_instances_roll_call_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/live-instances/runs/{run_id}/start": {
         parameters: {
             query?: never;
@@ -4093,82 +4033,6 @@ export interface paths {
          * @description Retire direct daemon Stop in favour of durable, instance-scoped intent.
          */
         post: operations["stop_run_api_live_instances_runs__run_id__stop_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete Instance
-         * @description Soft-delete a stopped bot from operator catalog/control surfaces.
-         *
-         *     The deletion marker is durable and run-id scoped. It hides every run that
-         *     currently belongs to the instance while preserving the artifacts for audit.
-         *     A later redeploy with a new run id is visible again.
-         */
-        delete: operations["delete_instance_api_live_instances__strategy_instance_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/active-dates": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Active Dates
-         * @description All dates the operator can pick for this instance (Slice 6).
-         *
-         *     Returns the union of:
-         *       * dates with at least one run touching them (from the run-dir scan)
-         *       * dates with persisted bars under the BarPersistence root
-         *     so a date that has bars but no run-dir (rare; future seed-bar import)
-         *     still appears, and a date the instance ran on but pre-dates
-         *     persistence appears with ``has_bars=False``.
-         */
-        get: operations["get_active_dates_api_live_instances__strategy_instance_id__active_dates_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/activity": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Instance Activity
-         * @description Materialized Activity-tab projection for one exchange/session date.
-         *
-         *     This is the canonical source for the Activity tab. The chart markers,
-         *     Orders Today blotter, Broker Activity ledger, and attached raw IBKR
-         *     endpoint evidence all come from this one response so the frontend cannot
-         *     render a broker fill on the chart that is absent from the activity table.
-         */
-        get: operations["get_instance_activity_api_live_instances__strategy_instance_id__activity_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4212,86 +4076,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/live-instances/{strategy_instance_id}/chart-snapshot": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Chart Snapshot
-         * @description Aggregated chart payload for one (instance, date, resolution) — Slice 5.
-         *
-         *     Replaces the chart card's prior split between ``/bars/snapshot``,
-         *     per-run ``/trades`` and per-run ``/executions`` calls. Returns the
-         *     day's bars + every run of the instance that touched the day so the
-         *     frontend renders per-run trade markers and inactive-interval shading
-         *     without knowing how many runs exist.
-         *
-         *     ``date`` defaults to today (UTC). A past date stops polling on the
-         *     frontend; the absence of ``has_bars`` lets the UI surface a "bars
-         *     unavailable" badge for pre-persistence dates (Slice 6).
-         */
-        get: operations["get_chart_snapshot_api_live_instances__strategy_instance_id__chart_snapshot_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/commands": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Instance Commands
-         * @description Unified one-shot command timeline for the instance's bound run (#397).
-         *
-         *     Commands route to the live binding only, so the timeline is empty when no
-         *     live binding is visible.
-         */
-        get: operations["get_instance_commands_api_live_instances__strategy_instance_id__commands_get"];
-        put?: never;
-        /**
-         * Issue Instance Command
-         * @description Enqueue a one-shot command on the instance's bound run (#397).
-         *
-         *     Reserved to FLATTEN / RECONCILE / MARK_POISONED — PAUSE/RESUME/STOP are the
-         *     durable intent knob, not commands. Requires a live binding.
-         */
-        post: operations["issue_instance_command_api_live_instances__strategy_instance_id__commands_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/crash-recovery-override": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record Crash Recovery Override
-         * @description Record audited evidence allowing a crash-retired runner to restart.
-         */
-        post: operations["record_crash_recovery_override_api_live_instances__strategy_instance_id__crash_recovery_override_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/live-instances/{strategy_instance_id}/daemon-diagnose": {
         parameters: {
             query?: never;
@@ -4304,233 +4088,6 @@ export interface paths {
          * @description Project the daemon diagnostics report to one strategy instance.
          */
         get: operations["get_instance_daemon_diagnostics_api_live_instances__strategy_instance_id__daemon_diagnose_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/desired-state": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Instance Desired State
-         * @description Persist operator intent and separately report any observed runtime effect.
-         */
-        post: operations["set_instance_desired_state_api_live_instances__strategy_instance_id__desired_state_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/end-day-now": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * End Day Now
-         * @description Persist a safe clock-out intent before attempting a live command.
-         */
-        post: operations["end_day_now_api_live_instances__strategy_instance_id__end_day_now_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/flatten-and-pause": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Flatten And Pause Instance
-         * @description Persist signed Pause first, then best-effort enqueue Flatten.
-         */
-        post: operations["flatten_and_pause_instance_api_live_instances__strategy_instance_id__flatten_and_pause_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/lifecycle/roster": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Lifecycle Roster
-         * @description Add/remove a bot from the duty roster.
-         */
-        post: operations["set_lifecycle_roster_api_live_instances__strategy_instance_id__lifecycle_roster_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/operator-surface/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Latest-wins SSE stream of complete Bot Cockpit snapshots
-         * @description Emit the current full snapshot and every later semantic version.
-         */
-        get: operations["stream_instance_operator_surface_api_live_instances__strategy_instance_id__operator_surface_stream_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reconcile Instance
-         * @description Enqueue a RECONCILE command for the instance's live binding.
-         *
-         *     Reconciliation PR 2 (runtime async). The data plane resolves the live
-         *     binding through the daemon, writes a RECONCILE command into the run's
-         *     ``commands/`` directory, and returns the ack envelope so the cockpit
-         *     can render IN_PROGRESS while the engine's async control task probes
-         *     the broker, runs the orchestrator, and overwrites the command ack
-         *     with its verdict (Continue / Adopt / Adopt+Pause / Poison).
-         *
-         *     The cockpit then polls ``operator_surface.reconciliation`` to observe
-         *     IN_PROGRESS → CLEAN / ADOPTED / FAILED transitions. The receipt
-         *     projection is the source of truth for state changes; this envelope
-         *     just confirms the request was queued.
-         *
-         *     Failure modes:
-         *
-         *     - 409 NO_LIVE_BINDING when no bot process is running for the
-         *       instance. Runtime reconciliation requires a live engine to acquire
-         *       the submit lock and probe the broker — a durable-only enqueue
-         *       would never be acted on.
-         *     - 404 when the daemon reports a live binding but the bound run dir
-         *       is not visible under this service's live_runs_root (root mismatch
-         *       / missing artifacts).
-         */
-        post: operations["reconcile_instance_api_live_instances__strategy_instance_id__reconcile_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/reconcile-mutation": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reconcile Instance Mutation
-         * @description PRD #619-D3 — Reconcile the latest mutation_attempt for the instance.
-         *
-         *     Read-only inspection that joins:
-         *
-         *     - The latest persisted ``MutationAttempt`` (D1 repo).
-         *     - Current daemon process state + binding (live snapshot, observed
-         *       now — not the snapshot the original mutation acted on).
-         *     - Child ``engine_runtime.json`` ``command_loop.state`` if present.
-         *     - Durable ``desired_state`` sidecar.
-         *     - Broker view's owned-positions emptiness.
-         *
-         *     Calls the pure ``reconcile_mutation_effect`` classifier on the
-         *     assembled evidence, advances the attempt to the resulting
-         *     terminal state via ``transition_attempt``, persists, and returns
-         *     the outcome.
-         *
-         *     **The endpoint never replays the original mutation.** If the
-         *     operator wants to retry, the matrix surfaces the next allowed
-         *     action through ``operator_surface.actions``; that is a separate
-         *     UI step.
-         *
-         *     Returns 404 when no mutation has been persisted for the instance.
-         *     Returns 409 when the attempt is in a state that cannot be
-         *     Reconciled (``PREPARED`` / ``DISPATCHING`` — still in flight)
-         *     or when it is already terminal (the prior outcome is available
-         *     via the status projection's mutation evidence).
-         */
-        post: operations["reconcile_instance_mutation_api_live_instances__strategy_instance_id__reconcile_mutation_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/retire-and-replace": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Retire And Replace
-         * @description Retire this bot's machinery before the UI continues to replacement deploy.
-         */
-        post: operations["retire_and_replace_api_live_instances__strategy_instance_id__retire_and_replace_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/live-instances/{strategy_instance_id}/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Instance Status
-         * @description Return the snapshot stored by this bot's producer-owned hub.
-         */
-        get: operations["get_instance_status_api_live_instances__strategy_instance_id__status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4616,16 +4173,7 @@ export interface paths {
          */
         get: operations["get_command_timeline_api_live_runs__run_id__commands_get"];
         put?: never;
-        /**
-         * Enqueue Command
-         * @deprecated
-         * @description DEPRECATED (#400 cutover): superseded by the instance-addressed one-shot
-         *     command ``POST /api/live-instances/{id}/commands`` (reserved to
-         *     FLATTEN/RECONCILE/MARK_POISONED). Run-addressed routes are evidence-only.
-         *     Kept temporarily for back-compat — slated for removal once the cutover is
-         *     signed off.
-         */
-        post: operations["enqueue_command_api_live_runs__run_id__commands_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4645,12 +4193,7 @@ export interface paths {
          */
         get: operations["get_desired_state_api_live_runs__run_id__desired_state_get"];
         put?: never;
-        /**
-         * Set Desired State
-         * @deprecated
-         * @description Retire unsigned run-addressed writes in favour of signed instance intent.
-         */
-        post: operations["set_desired_state_api_live_runs__run_id__desired_state_post"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7946,41 +7489,6 @@ export interface components {
             schema_version?: 2;
         };
         /**
-         * ActionCapability
-         * @description Per-action capability emitted by the shared capability evaluator
-         *     (#608, extended by PRD #616).
-         *
-         *     Used both by the status projection (``operator_surface.actions.*``)
-         *     and by mutation endpoints which re-evaluate eligibility server-side
-         *     before executing — a stale snapshot must not be exploitable, so the
-         *     same function is the authority on both sides.
-         *
-         *     The ``effect`` discriminator distinguishes durable-intent writes
-         *     (always succeed, gate the next host start) from live actuation
-         *     (requires a bound runner).
-         *
-         *     ``disabled_reason_code`` carries the **highest-priority** code for
-         *     the single-line tooltip; ``disabled_reasons`` carries the full
-         *     priority-ordered list so the cockpit's expanded view shows every
-         *     applicable reason.  When ``enabled is True`` both are ``None`` /
-         *     ``[]``.
-         */
-        ActionCapability: {
-            /** Disabled Reason Code */
-            disabled_reason_code?: string | null;
-            /** Disabled Reasons */
-            disabled_reasons?: string[];
-            /**
-             * Effect
-             * @enum {string}
-             */
-            effect: "DURABLE_ONLY" | "LIVE_ACTUATION";
-            /** Enabled */
-            enabled: boolean;
-            /** Gate Results */
-            gate_results?: components["schemas"]["GateResult"][];
-        };
-        /**
          * ActionPlan
          * @description Operator-declared instrument plan, hashed into ``run_id``.
          *
@@ -8021,302 +7529,6 @@ export interface components {
         ActionPlanPreviewResponse: {
             /** Warnings */
             warnings: components["schemas"]["ParityWarning"][];
-        };
-        /**
-         * ActiveDateEntry
-         * @description Slice 6 — one date the operator can select on the chart.
-         *
-         *     ``has_bars`` distinguishes dates with persisted OHLCV (Slice 4
-         *     onwards) from dates that pre-date persistence. The latter still
-         *     appear in the picker because the instance ran on that date, but the
-         *     chart renders a "bars unavailable" badge alongside whatever trade
-         *     markers the per-run parquets carry.
-         */
-        ActiveDateEntry: {
-            /**
-             * Date
-             * @description YYYY-MM-DD UTC date.
-             */
-            date: string;
-            /**
-             * Has Bars
-             * @description True when persisted bars exist for the date.
-             */
-            has_bars: boolean;
-            /**
-             * Run Count
-             * @description Number of runs touching the date.
-             */
-            run_count: number;
-        };
-        /**
-         * ActivityBrokerCategorySummary
-         * @description Grouped broker-tail category rendered before row-level drill-down.
-         */
-        ActivityBrokerCategorySummary: {
-            /** Category Id */
-            category_id: string;
-            /** Event Count */
-            event_count: number;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "order" | "heartbeat" | "evidence";
-            /** Label */
-            label: string;
-            /** Last Event Ts Ms */
-            last_event_ts_ms?: number | null;
-            /** Row Ids */
-            row_ids?: string[];
-        };
-        /**
-         * ActivityBrokerEventRow
-         * @description Normalized broker event ledger row for the selected session date.
-         */
-        ActivityBrokerEventRow: {
-            /** Child Evidence Ids */
-            child_evidence_ids?: string[];
-            /** Cluster Key */
-            cluster_key?: string | null;
-            /** Cluster Label */
-            cluster_label?: string | null;
-            /** Constituent Fill Ids */
-            constituent_fill_ids?: string[];
-            /** Display Type */
-            display_type?: string | null;
-            /** Evidence */
-            evidence?: components["schemas"]["ActivityEvidenceRef"][];
-            /**
-             * Fold Count
-             * @default 1
-             */
-            fold_count?: number;
-            /** Fold Key */
-            fold_key?: string | null;
-            /** Id */
-            id: string;
-            /** Price */
-            price?: number | null;
-            /** Quantity */
-            quantity?: number | null;
-            /**
-             * Replay Count
-             * @default 1
-             */
-            replay_count?: number;
-            /** Row Type */
-            row_type: string;
-            /** Side */
-            side?: ("BUY" | "SELL") | null;
-            /** Source */
-            source: string;
-            /** Source Label */
-            source_label?: string | null;
-            /** Status */
-            status?: string | null;
-            /** Summary */
-            summary: string;
-            /** Symbol */
-            symbol?: string | null;
-            /** Ts Ms */
-            ts_ms: number;
-            /** Verdict */
-            verdict: string;
-            /** Visible Row Id */
-            visible_row_id?: string | null;
-        };
-        /**
-         * ActivityEvidenceRef
-         * @description Reference to a captured IBKR API request/callback observation.
-         *
-         *     The Activity projection is operator-facing and normalized, but every
-         *     row that comes from broker evidence can link back to the raw request /
-         *     response snapshot captured by the full broker API diagnostics recorder.
-         */
-        ActivityEvidenceRef: {
-            /** Exec Id */
-            exec_id?: string | null;
-            /** Order Id */
-            order_id?: number | null;
-            /** Order Ref */
-            order_ref?: string | null;
-            /** Perm Id */
-            perm_id?: number | null;
-            /** Request Call */
-            request_call: string;
-            /** Response Callback */
-            response_callback?: string | null;
-            /** Seq */
-            seq: number;
-            /** Source */
-            source: string;
-            /** Symbol */
-            symbol?: string | null;
-            /** Ts Ms */
-            ts_ms: number;
-        };
-        /**
-         * ActivityFillMarker
-         * @description One broker-confirmed fill marker rendered on the price chart.
-         */
-        ActivityFillMarker: {
-            /** Chart Ts Ms */
-            chart_ts_ms: number;
-            /** Evidence */
-            evidence?: components["schemas"]["ActivityEvidenceRef"][];
-            /** Exec Ts Ms */
-            exec_ts_ms: number;
-            /** Id */
-            id: string;
-            /** Order Key */
-            order_key: string;
-            /** Position Effect */
-            position_effect: string;
-            /** Price */
-            price: number;
-            /** Quantity */
-            quantity: number;
-            /**
-             * Replay Count
-             * @default 1
-             */
-            replay_count?: number;
-            /** Row Seq */
-            row_seq: number;
-            /**
-             * Side
-             * @enum {string}
-             */
-            side: "BUY" | "SELL";
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * ActivityOrderOverlay
-         * @description Optional chart overlay for a working order with a meaningful price.
-         */
-        ActivityOrderOverlay: {
-            /** Id */
-            id: string;
-            /** Order Key */
-            order_key: string;
-            /** Price */
-            price: number;
-            /** Quantity */
-            quantity: number;
-            /**
-             * Side
-             * @enum {string}
-             */
-            side: "BUY" | "SELL";
-            /** Status */
-            status: string;
-            /** Symbol */
-            symbol: string;
-            /** Ts Ms */
-            ts_ms: number;
-        };
-        /**
-         * ActivityOrderRow
-         * @description Same-day order blotter row for the Activity tab's Orders Today panel.
-         */
-        ActivityOrderRow: {
-            /** Avg Fill Price */
-            avg_fill_price?: number | null;
-            /** Chart Ts Ms */
-            chart_ts_ms: number;
-            /** Evidence */
-            evidence?: components["schemas"]["ActivityEvidenceRef"][];
-            /**
-             * Filled Quantity
-             * @default 0
-             */
-            filled_quantity?: number;
-            /**
-             * Group
-             * @enum {string}
-             */
-            group: "active" | "resolved" | "engine_pending";
-            /** Last Update Ts Ms */
-            last_update_ts_ms: number;
-            /** Order Key */
-            order_key: string;
-            /** Order Type */
-            order_type: string;
-            /** Position Effect */
-            position_effect?: string | null;
-            /** Quantity */
-            quantity: number;
-            /**
-             * Replay Count
-             * @default 1
-             */
-            replay_count?: number;
-            /**
-             * Side
-             * @enum {string}
-             */
-            side: "BUY" | "SELL";
-            /** Status */
-            status: string;
-            /** Submitted Ts Ms */
-            submitted_ts_ms: number;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * ActivityPositionAnnotation
-         * @description Position lifecycle label derived from the broker-confirmed fills.
-         */
-        ActivityPositionAnnotation: {
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /** Net Position */
-            net_position: number;
-            /** Reason */
-            reason?: string | null;
-            /** Symbol */
-            symbol: string;
-            /** Ts Ms */
-            ts_ms: number;
-            /**
-             * Uncertain
-             * @default false
-             */
-            uncertain?: boolean;
-        };
-        /**
-         * ActivityPositionSnapshot
-         * @description Present-tense broker position snapshot carried by the projection.
-         */
-        ActivityPositionSnapshot: {
-            /** As Of Ms */
-            as_of_ms?: number | null;
-            /** Quantity */
-            quantity: number;
-            /**
-             * Source
-             * @default broker_snapshot
-             * @enum {string}
-             */
-            source?: "broker_snapshot" | "unavailable";
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * ActivityReconciliationWarning
-         * @description Fail-honest warning when lifecycle derivation cannot be trusted.
-         */
-        ActivityReconciliationWarning: {
-            /** Code */
-            code: string;
-            /** Message */
-            message: string;
-            /** Row Ids */
-            row_ids?: string[];
         };
         /**
          * AggregateBar
@@ -9298,156 +8510,6 @@ export interface components {
             tv_csv: string;
         };
         /**
-         * BotAttendanceCell
-         * @description One per-session attendance marker rendered on the bot catalog.
-         */
-        BotAttendanceCell: {
-            /** Label */
-            label: string;
-            /** Receipt Ref */
-            receipt_ref?: string | null;
-            /** Session Date */
-            session_date: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "clean" | "rested" | "sick" | "retired";
-        };
-        /**
-         * BotCatalogMetrics
-         * @description Metrics rendered by the bot catalog card.
-         *
-         *     Financial and execution counts are authored server-side so Angular does
-         *     not infer operational or numerical facts from low-level cockpit evidence.
-         */
-        BotCatalogMetrics: {
-            /** Current Exposure */
-            current_exposure: string;
-            /** Error Count */
-            error_count: number;
-            /** Open Positions */
-            open_positions?: number | null;
-            pnl?: components["schemas"]["BotCatalogPnl"];
-            /** Trade Count */
-            trade_count?: number | null;
-        };
-        /**
-         * BotCatalogPageResponse
-         * @description A bounded, broker-free page of bot catalog cards.
-         *
-         *     The page intentionally carries no fleet roll-call or account-triage
-         *     summary. Those aggregate views require resolving the entire fleet and are
-         *     therefore not suitable for the Bots page's initial render.
-         */
-        BotCatalogPageResponse: {
-            /** Bots */
-            bots: components["schemas"]["BotCatalogRow"][];
-            /** Next Cursor */
-            next_cursor: string | null;
-            /** Observed At Ms */
-            observed_at_ms: number;
-            /** Total Count */
-            total_count: number;
-        };
-        /**
-         * BotCatalogPnl
-         * @description Backend-authored P&L fields for the bot catalog card.
-         *
-         *     ``None`` is the honest value when the current data sources cannot provide
-         *     a component; the frontend renders absence rather than recomputing money.
-         */
-        BotCatalogPnl: {
-            /** Realized */
-            realized?: number | null;
-            /** Total */
-            total?: number | null;
-            /** Unrealized */
-            unrealized?: number | null;
-        };
-        /**
-         * BotCatalogResponse
-         * @description Fleet-wide bot catalog projection.
-         */
-        BotCatalogResponse: {
-            /** Bots */
-            bots?: components["schemas"]["BotCatalogRow"][];
-            evening_report?: components["schemas"]["BotEveningReport"] | null;
-            roll_call?: components["schemas"]["BotRollCallSummary"];
-        };
-        /**
-         * BotCatalogRow
-         * @description One server-composed bot catalog card.
-         *
-         *     This is the DataView/listing counterpart to ``LiveInstanceStatus``: it
-         *     carries only display/filter fields the catalog needs, already composed in
-         *     operator language by the backend.
-         */
-        BotCatalogRow: {
-            /** Attendance */
-            attendance?: components["schemas"]["BotAttendanceCell"][];
-            /** Created At Ms */
-            created_at_ms?: number | null;
-            daily_lifecycle: components["schemas"]["BotDailyLifecycleProjection"];
-            /** Description */
-            description?: string | null;
-            /** Desired State */
-            desired_state?: string | null;
-            /** Engine */
-            engine?: string | null;
-            /** Engine Asset Class */
-            engine_asset_class?: string | null;
-            /** Last Run At Ms */
-            last_run_at_ms?: number | null;
-            /** Last Run Detail */
-            last_run_detail?: string | null;
-            /** Last Run Label */
-            last_run_label: string;
-            /** Last Run Result */
-            last_run_result: string;
-            metrics: components["schemas"]["BotCatalogMetrics"];
-            /** Name */
-            name: string;
-            /** Needs Attention */
-            needs_attention: boolean;
-            /**
-             * Only Fresh Run Available
-             * @default false
-             */
-            only_fresh_run_available?: boolean;
-            /** Process State */
-            process_state: string;
-            /**
-             * Readiness Verdict
-             * @default UNKNOWN
-             * @enum {string}
-             */
-            readiness_verdict?: "READY" | "BLOCKED" | "DEGRADED" | "UNKNOWN";
-            start_request?: components["schemas"]["HostRunnerStartRequest-Output"] | null;
-            /** Status Detail */
-            status_detail?: string | null;
-            /** Status Label */
-            status_label: string;
-            /**
-             * Status Tone
-             * @default neutral
-             * @enum {string}
-             */
-            status_tone?: "positive" | "warning" | "danger" | "neutral";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Symbols */
-            symbols?: string[];
-            /**
-             * Trading Mode
-             * @default unknown
-             * @enum {string}
-             */
-            trading_mode?: "paper" | "live" | "unknown";
-            /** Updated At Ms */
-            updated_at_ms?: number | null;
-        };
-        /**
          * BotCatalogView
          * @description One roster row: bot status + slice-0 rollups (§5).
          *
@@ -9513,112 +8575,6 @@ export interface components {
             process: components["schemas"]["BotProcessFact"];
         };
         /**
-         * BotDailyLifecycleProjection
-         * @description Rev-3 daily lifecycle projection for one bot.
-         *
-         *     ``phase`` tracks presence only. Health is derived by the evaluator from
-         *     receipts and open conditions; the display status is the closed vocabulary the
-         *     UI renders.
-         */
-        BotDailyLifecycleProjection: {
-            /** Active Run Id */
-            active_run_id?: string | null;
-            /** Ambient Actions */
-            ambient_actions?: components["schemas"]["BotLifecycleAction"][];
-            /** Attention Badge */
-            attention_badge?: ("Sick bay" | "Ready" | "Off roster") | null;
-            /**
-             * Carryover Policy
-             * @default FORBID
-             * @constant
-             */
-            carryover_policy?: "FORBID";
-            /** Conditions */
-            conditions?: components["schemas"]["BotLifecycleCondition"][];
-            /**
-             * Display Status
-             * @enum {string}
-             */
-            display_status: "Off duty" | "Ready" | "On duty" | "Clocking out" | "Sick bay" | "Off roster" | "Retired";
-            /**
-             * Drift Detected
-             * @default false
-             */
-            drift_detected?: boolean;
-            duty_outcome?: components["schemas"]["BotDutyOutcomeView"] | null;
-            /** Latest Run Id */
-            latest_run_id?: string | null;
-            /**
-             * On Roster
-             * @default true
-             */
-            on_roster?: boolean;
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
-            /**
-             * Presence Label
-             * @enum {string}
-             */
-            presence_label: "Off duty" | "On duty" | "Retired";
-            primary_action?: components["schemas"]["BotLifecycleAction"] | null;
-            /** Reason */
-            reason?: string | null;
-        };
-        /**
-         * BotDeleteRequest
-         * @description Operator request to remove a bot from active catalog/control surfaces.
-         */
-        BotDeleteRequest: {
-            /**
-             * Deleted By
-             * @default operator
-             */
-            deleted_by?: string;
-            /**
-             * Mode
-             * @default soft
-             * @constant
-             */
-            mode?: "soft";
-            /** Reason */
-            reason?: string | null;
-        };
-        /**
-         * BotDeleteResponse
-         * @description Result of a bot soft delete.
-         *
-         *     ``deleted_run_ids`` are hidden from live-instance catalog/list/status
-         *     projections. The underlying run artifacts stay on disk for audit.
-         */
-        BotDeleteResponse: {
-            /** Deleted At Ms */
-            deleted_at_ms: number;
-            /** Deleted By */
-            deleted_by: string;
-            /** Deleted Run Ids */
-            deleted_run_ids?: string[];
-            /**
-             * Hidden From Catalog
-             * @default true
-             */
-            hidden_from_catalog?: boolean;
-            /** Marker Path */
-            marker_path: string;
-            /**
-             * Mode
-             * @default soft
-             * @constant
-             */
-            mode?: "soft";
-            /** Reason */
-            reason?: string | null;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
          * BotDutyOutcomeView
          * @description Durable terminal duty evidence rendered by the operator surface.
          */
@@ -9634,54 +8590,6 @@ export interface components {
             recorded_at_ms: number;
             /** Run Id */
             run_id?: string | null;
-        };
-        /**
-         * BotEveningReport
-         * @description Backend-authored day report for the fleet page.
-         */
-        BotEveningReport: {
-            /**
-             * Clean Exits
-             * @default 0
-             */
-            clean_exits?: number;
-            /** Generated At Ms */
-            generated_at_ms: number;
-            /**
-             * Rested
-             * @default 0
-             */
-            rested?: number;
-            /**
-             * Retired
-             * @default 0
-             */
-            retired?: number;
-            /** Rows */
-            rows?: components["schemas"]["BotEveningReportRow"][];
-            /** Session Date */
-            session_date: string;
-            /**
-             * Sick
-             * @default 0
-             */
-            sick?: number;
-            /** Summary */
-            summary: string;
-        };
-        /** BotEveningReportRow */
-        BotEveningReportRow: {
-            /** Label */
-            label: string;
-            /** Receipt Ref */
-            receipt_ref?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "clean" | "rested" | "sick" | "retired";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
         };
         /**
          * BotEventIdentity
@@ -9811,111 +8719,6 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
-         * BotLifecycleAction
-         * @description One rendered lifecycle action.
-         *
-         *     The Button Rule relies on actions being a closed vocabulary. A disabled
-         *     action is not a graveyard button; it exists only when the backend must carry
-         *     a refusal reason for the single primary action.
-         */
-        BotLifecycleAction: {
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled?: boolean;
-            /** Expires At Ms */
-            expires_at_ms?: number | null;
-            /**
-             * Id
-             * @enum {string}
-             */
-            id: "confirm_start" | "end_day_now" | "retire_replace" | "add_to_roster" | "take_off_roster";
-            /** Label */
-            label: string;
-            /** Offer Id */
-            offer_id?: string | null;
-            /** Reason */
-            reason?: string | null;
-        };
-        /**
-         * BotLifecycleChartView
-         * @description Backend-authored lifecycle overview for the bot control Overview tab.
-         */
-        BotLifecycleChartView: {
-            /** Actions */
-            actions?: components["schemas"]["LifecycleChartAction"][];
-            /** Chart Id */
-            chart_id: string;
-            global_graph: components["schemas"]["LifecycleChartGraph"];
-            /**
-             * Only Fresh Run Available
-             * @default false
-             */
-            only_fresh_run_available?: boolean;
-            /** Selected Bot Id */
-            selected_bot_id: string;
-            /** Subgraphs */
-            subgraphs?: {
-                [key: string]: components["schemas"]["LifecycleChartGraph"];
-            };
-            /** Title */
-            title: string;
-        };
-        /**
-         * BotLifecycleCondition
-         * @description One open condition explaining why daily lifecycle shows Sick bay.
-         */
-        BotLifecycleCondition: {
-            /**
-             * Cure Action
-             * @enum {string}
-             */
-            cure_action: "resolve_exposure" | "clear_freeze" | "reconcile_now" | "prove_evidence" | "retire_replace";
-            /** Cure Label */
-            cure_label: string;
-            /** Detail */
-            detail: string;
-            /** Owner Label */
-            owner_label: string;
-            /**
-             * Scope
-             * @enum {string}
-             */
-            scope: "account" | "bot";
-            /**
-             * Severity
-             * @enum {string}
-             */
-            severity: "warning" | "critical";
-            /** Title */
-            title: string;
-        };
-        /**
-         * BotLifecycleMutationResponse
-         * @description Response returned after a lifecycle write persist point.
-         */
-        BotLifecycleMutationResponse: {
-            lifecycle: components["schemas"]["BotDailyLifecycleProjection"];
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
-         * BotLifecycleRosterRequest
-         * @description Operator roster mutation for the next roll call.
-         */
-        BotLifecycleRosterRequest: {
-            /** On Roster */
-            on_roster: boolean;
-            /** Reason */
-            reason?: string | null;
-            /**
-             * Updated By
-             * @default operator
-             */
-            updated_by?: string;
-        };
-        /**
          * BotPanelLiveSnapshot
          * @description Versioned complete state document used by REST bootstrap and SSE.
          */
@@ -10016,101 +8819,6 @@ export interface components {
             state: "RUNNING" | "STOPPING" | "EXITED" | "UNKNOWN";
             /** Strategy Instance Id */
             strategy_instance_id: string;
-        };
-        /**
-         * BotRetireReplaceRequest
-         * @description Retire & Replace attestation.
-         *
-         *     Replacement is default-on: the endpoint retires this instance and the UI
-         *     immediately continues to the deploy form with existing lineage defaults.
-         */
-        BotRetireReplaceRequest: {
-            /** Confirm Account Flat */
-            confirm_account_flat: boolean;
-            /**
-             * Reason
-             * @default Retire & Replace
-             */
-            reason?: string;
-            /**
-             * Replacement Requested
-             * @default true
-             */
-            replacement_requested?: boolean;
-            /**
-             * Updated By
-             * @default operator
-             */
-            updated_by?: string;
-        };
-        /**
-         * BotRollCallOffer
-         * @description One persisted roll-call start offer returned from the tick endpoint.
-         */
-        BotRollCallOffer: {
-            /** Expires At Ms */
-            expires_at_ms: number;
-            /** Issued At Ms */
-            issued_at_ms: number;
-            /** Offer Id */
-            offer_id: string;
-            /** Run Id */
-            run_id: string;
-            /** Session Date */
-            session_date: string;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
-         * BotRollCallResponse
-         * @description Response for the operator/scheduler roll-call tick.
-         */
-        BotRollCallResponse: {
-            /** Offers */
-            offers?: components["schemas"]["BotRollCallOffer"][];
-            summary: components["schemas"]["BotRollCallSummary"];
-        };
-        /**
-         * BotRollCallSummary
-         * @description Fleet-level counts for the morning roll-call sheet.
-         */
-        BotRollCallSummary: {
-            /** Effective Stop Ms */
-            effective_stop_ms?: number | null;
-            /** Generated At Ms */
-            generated_at_ms?: number | null;
-            /**
-             * Off Duty
-             * @default 0
-             */
-            off_duty?: number;
-            /**
-             * Off Roster
-             * @default 0
-             */
-            off_roster?: number;
-            /**
-             * On Duty
-             * @default 0
-             */
-            on_duty?: number;
-            /**
-             * Ready
-             * @default 0
-             */
-            ready?: number;
-            /**
-             * Retired
-             * @default 0
-             */
-            retired?: number;
-            /** Session Date Ms */
-            session_date_ms?: number | null;
-            /**
-             * Sick Bay
-             * @default 0
-             */
-            sick_bay?: number;
         };
         /**
          * BotRunHistoryPage
@@ -10253,7 +8961,7 @@ export interface components {
              */
             phase: "OFF_DUTY" | "ON_DUTY" | "RETIRED";
             /** Quantity */
-            quantity: number;
+            quantity: number | null;
             /** Running */
             running: boolean;
             /** Strategy Instance Id */
@@ -10351,54 +9059,6 @@ export interface components {
             side: string | null;
             /** Symbol */
             symbol: string | null;
-        };
-        /**
-         * BrokerActivityHealth
-         * @description PR 5 — broker-activity publisher health surface.
-         *
-         *     A single typed verdict (``state``) plus an optional operator-facing
-         *     notice (``headline``) and a list of all active notices (``notices``).
-         *     ``facts`` carries the raw diagnostics; the cockpit never derives
-         *     state from them.
-         *
-         *     States:
-         *     - ``ready``       — publisher registered + running + emitting rows (or
-         *                         still within the silent-boot window).
-         *     - ``starting``    — publisher registered but not yet running; within
-         *                         the starting-timeout window.
-         *     - ``degraded``    — publisher registered + running but no rows recently.
-         *     - ``unavailable`` — publisher not registered or timed out while starting.
-         */
-        BrokerActivityHealth: {
-            facts: components["schemas"]["BrokerActivityHealthFacts"];
-            headline?: components["schemas"]["OperatorNotice"] | null;
-            /** Notices */
-            notices?: components["schemas"]["OperatorNotice"][];
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "ready" | "starting" | "degraded" | "unavailable";
-        };
-        /**
-         * BrokerActivityHealthFacts
-         * @description Raw diagnostic facts behind the broker-activity health verdict.
-         *
-         *     Frontend renders these in the forensic-detail panel only; it must
-         *     not derive state from them.  State comes exclusively from
-         *     ``BrokerActivityHealth.state``.
-         */
-        BrokerActivityHealthFacts: {
-            /** Latest Row Seq */
-            latest_row_seq: number | null;
-            /** Publisher Registered */
-            publisher_registered: boolean;
-            /** Publisher Running */
-            publisher_running: boolean;
-            /** Seconds Since Last Row */
-            seconds_since_last_row: number | null;
-            /** Seconds Since Registered */
-            seconds_since_registered: number | null;
         };
         /**
          * BrokerActivityPage
@@ -10566,7 +9226,7 @@ export interface components {
          * @description Backend-authored operator copy for the data-plane broker session.
          *
          *     This is intentionally the data-plane altitude, not a per-bot runtime
-         *     verdict. Per-bot broker proof is authored by ``OperatorSurfaceBroker``.
+         *     verdict. Per-bot broker proof belongs to the canonical broker projection.
          */
         BrokerHealthCondition: {
             /**
@@ -10585,47 +9245,6 @@ export interface components {
             summary: string;
             /** Title */
             title: string;
-        };
-        /**
-         * BrokerObservationConsistency
-         * @description PRD #619-D4 — server-authored divergence verdict for the operator.
-         *
-         *     The data plane and the live-engine child each observe the IBKR
-         *     broker connection independently.  ADR-0011 makes the *child*'s
-         *     observation authoritative for the bound instance; the singleton
-         *     is advisory.  When the two disagree, the operator must see the
-         *     divergence prominently — *without* the child's posture being
-         *     silently overwritten.
-         *
-         *     ``verdict`` rules (computed by
-         *     ``services.broker_observation_consistency.evaluate_broker_observation_consistency``):
-         *
-         *     - ``CONSISTENT`` — both report the same non-empty account.
-         *     - ``CONFLICTING`` — both report non-empty accounts that differ.
-         *     - ``UNKNOWN`` — one observation is missing or stale (no child
-         *       runtime yet, singleton disabled / disconnected, account
-         *       empty).
-         *     - ``NOT_COMPARABLE`` — the two are configured for different
-         *       modes (paper vs live) and the comparison is not apples-to-
-         *       apples; comparing accounts would mislead.
-         *
-         *     Carried as an optional field on ``OperatorSurface``.  ``None``
-         *     is the cockpit's signal to hide the card.
-         */
-        BrokerObservationConsistency: {
-            /** Child Account */
-            child_account?: string | null;
-            /** Compared At Ms */
-            compared_at_ms: number;
-            /** Data Plane Account */
-            data_plane_account?: string | null;
-            /** Reason Codes */
-            reason_codes?: string[];
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "CONSISTENT" | "CONFLICTING" | "UNKNOWN" | "NOT_COMPARABLE";
         };
         /**
          * BrokerOrder
@@ -11525,24 +10144,6 @@ export interface components {
             trading_date_open_ms: number;
         };
         /**
-         * ChartOverlayNotice
-         * @description Non-persistent market-data overlay warning for the chart window.
-         */
-        ChartOverlayNotice: {
-            /** Code */
-            code: string;
-            /** Message */
-            message: string;
-            /** Session Date */
-            session_date?: string | null;
-            /**
-             * Source
-             * @default polygon
-             * @constant
-             */
-            source?: "polygon";
-        };
-        /**
          * ChartOverlayNoticeView
          * @description An honest chip explaining a fallback overlay (§8).
          */
@@ -11556,82 +10157,6 @@ export interface components {
              * @constant
              */
             source: "polygon";
-        };
-        /**
-         * ChartSnapshotResponse
-         * @description Aggregated chart payload for one (instance, date, resolution).
-         *
-         *     Replaces the prior split of ``/bars/snapshot`` + per-run
-         *     ``/trades`` + per-run ``/executions`` calls on the chart card —
-         *     returns the day's bars and every run for that instance in a single
-         *     envelope so the frontend doesn't have to know how many runs exist.
-         */
-        ChartSnapshotResponse: {
-            /** Bars */
-            bars?: components["schemas"]["IbkrMinuteBar"][];
-            /**
-             * Date
-             * @description YYYY-MM-DD UTC date the snapshot covers.
-             */
-            date: string;
-            /** From Ms */
-            from_ms?: number | null;
-            /** Has Bars */
-            has_bars: boolean;
-            /**
-             * Is Streaming
-             * @default false
-             */
-            is_streaming?: boolean;
-            /** Now Ms */
-            now_ms: number;
-            /** Overlay Notices */
-            overlay_notices?: components["schemas"]["ChartOverlayNotice"][];
-            /** Resolution */
-            resolution: string;
-            /** Runs */
-            runs?: components["schemas"]["ChartSnapshotRun"][];
-            /** Symbol */
-            symbol: string;
-            /**
-             * Timeframe
-             * @default 1m
-             */
-            timeframe?: string;
-            /** To Ms */
-            to_ms?: number | null;
-        };
-        /**
-         * ChartSnapshotRun
-         * @description One run's contribution to a chart snapshot (Slice 5).
-         *
-         *     ``started_at_ms`` / ``ended_at_ms`` come from ``run_status.json`` and
-         *     drive the chart's inactive-interval shading; ``is_current`` is true for
-         *     the run that owns the live binding so the chart can scope the active-
-         *     entry line to it. ``color_index`` is a small integer the frontend maps
-         *     to a stable per-run color tag for the trade markers.
-         */
-        ChartSnapshotRun: {
-            /**
-             * Color Index
-             * @default 0
-             */
-            color_index?: number;
-            /** Ended At Ms */
-            ended_at_ms?: number | null;
-            /** Executions */
-            executions?: Record<string, never>[];
-            /**
-             * Is Current
-             * @default false
-             */
-            is_current?: boolean;
-            /** Run Id */
-            run_id: string;
-            /** Started At Ms */
-            started_at_ms?: number | null;
-            /** Trades */
-            trades?: Record<string, never>[];
         };
         /**
          * ClearHoldRequest
@@ -12221,23 +10746,6 @@ export interface components {
             verb: string;
         };
         /**
-         * CommandView
-         * @description A single pending command in the timeline.
-         */
-        CommandView: {
-            /** Mutation Attempt Id */
-            mutation_attempt_id?: string | null;
-            /** Mutation Dispatch State */
-            mutation_dispatch_state?: ("PREPARED" | "DISPATCHING" | "RESPONSE_CONFIRMED" | "OUTCOME_UNKNOWN" | "EFFECT_CONFIRMED" | "EFFECT_NOT_OBSERVED" | "NOT_PROVABLE" | "EVIDENCE_CONFLICT") | null;
-            rung_receipt?: components["schemas"]["MutationRungReceipt"] | null;
-            /** Rung Receipt Warnings */
-            rung_receipt_warnings?: components["schemas"]["MutationRungReceipt"][];
-            /** Seq */
-            seq: number;
-            /** Verb */
-            verb: string;
-        };
-        /**
          * CommandsTimeline
          * @description Canonical unified command timeline: one entry per command, newest first,
          *     with the dispatcher's poll cadence so the client's staleness threshold is
@@ -12347,59 +10855,6 @@ export interface components {
              * @default false
              */
             viable_at_assumption?: boolean;
-        };
-        /**
-         * CrashRecoveryOverrideRequest
-         * @description Operator attestation for a crash-retired host runner restart.
-         */
-        CrashRecoveryOverrideRequest: {
-            /**
-             * Approved By
-             * @default operator
-             */
-            approved_by?: string;
-            /**
-             * Confirm Account Flat
-             * @constant
-             */
-            confirm_account_flat: true;
-            /** Reason */
-            reason?: string | null;
-        };
-        /**
-         * CrashRecoveryOverrideResponse
-         * @description Audit handle returned after recording restart recovery evidence.
-         */
-        CrashRecoveryOverrideResponse: {
-            /**
-             * Accepted
-             * @default true
-             * @constant
-             */
-            accepted?: true;
-            /** Account Id */
-            account_id: string;
-            /** Blocking Recorded At Ms */
-            blocking_recorded_at_ms: number;
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /**
-             * Event Type
-             * @default account_audited_override_recorded
-             * @constant
-             */
-            event_type?: "account_audited_override_recorded";
-            /** Override Id */
-            override_id: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id: string;
-            rung_receipt?: components["schemas"]["MutationRungReceipt"] | null;
-            /** Rung Receipt Warnings */
-            rung_receipt_warnings?: components["schemas"]["MutationRungReceipt"][];
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
         };
         /** CrossAssetBars */
         CrossAssetBars: {
@@ -13203,14 +11658,14 @@ export interface components {
             adjusted?: boolean;
             /**
              * Fail On Gaps
-             * @description Raise an error if intra-day bar gaps are detected instead of forward-filling. Strict mode; use when gap-free data is required.
-             * @default false
+             * @description Reject intra-day gaps. Disable only together with explicit forward_fill=True.
+             * @default true
              */
             fail_on_gaps?: boolean;
             /**
              * Forward Fill
-             * @description Fill missing minute bars with previous close (volume=0) for continuous indicator calculation
-             * @default true
+             * @description Explicitly synthesize missing minute bars from the previous close (volume=0)
+             * @default false
              */
             forward_fill?: boolean;
             /**
@@ -13379,28 +11834,6 @@ export interface components {
             p_value: number;
         };
         /**
-         * DecisionColumnDescriptor
-         * @description Operator-facing descriptor for one strategy-specific decision column (#396).
-         *
-         *     Derived from the strategy spec so the console renders any strategy's
-         *     indicators generically. ``format`` is decimal|integer|boolean|text.
-         */
-        DecisionColumnDescriptor: {
-            /** Format */
-            format: string;
-            /** Label */
-            label: string;
-            /** Name */
-            name: string;
-            /**
-             * Semantic
-             * @default
-             */
-            semantic?: string;
-            /** Type */
-            type: string;
-        };
-        /**
          * DecisionColumnSpec
          * @description One strategy-specific column in ``decisions.parquet`` (PRD-A §16.1
          *     Resolution 5).
@@ -13519,12 +11952,6 @@ export interface components {
             ready: boolean;
         };
         /**
-         * DesiredStateAction
-         * @description Operator actions mapped to durable desired-state (UI-3).
-         * @enum {string}
-         */
-        DesiredStateAction: "pause" | "resume" | "stop";
-        /**
          * DesiredStatePathStatus
          * @description How the desired-state sidecar resolved for a run (UI-1).
          * @enum {string}
@@ -13532,7 +11959,7 @@ export interface components {
         DesiredStatePathStatus: "ok" | "absent" | "corrupt" | "unknown_no_ledger_binding";
         /**
          * DesiredStateRecordResponse
-         * @description Persisted desired-state record returned after a write.
+         * @description Persisted lifecycle intent returned by retained mutation receipts.
          */
         DesiredStateRecordResponse: {
             /** Reason */
@@ -13842,29 +12269,6 @@ export interface components {
             idempotency_key: string;
         };
         /**
-         * EndDayIntentResponse
-         * @description End-day receipt with durable PAUSED intent and a separate clock-out effect.
-         */
-        EndDayIntentResponse: {
-            actuation: components["schemas"]["IntentActuation"];
-            /** Command Id */
-            command_id?: string | null;
-            durable: components["schemas"]["DesiredStateRecordResponse"];
-            /** Mutation Attempt Id */
-            mutation_attempt_id: string;
-            /**
-             * Mutation Dispatch State
-             * @enum {string}
-             */
-            mutation_dispatch_state: "PREPARED" | "DISPATCHING" | "RESPONSE_CONFIRMED" | "OUTCOME_UNKNOWN" | "EFFECT_CONFIRMED" | "EFFECT_NOT_OBSERVED" | "NOT_PROVABLE" | "EVIDENCE_CONFLICT";
-            process: components["schemas"]["InstanceProcessView"];
-            rung_receipt: components["schemas"]["MutationRungReceipt"];
-            /** Rung Receipt Warnings */
-            rung_receipt_warnings?: components["schemas"]["MutationRungReceipt"][];
-            /** Stop Outcome */
-            stop_outcome: string;
-        };
-        /**
          * EngineBacktestJobRequest
          * @description Body of POST /api/jobs-internal/engine-backtest.
          *
@@ -14115,17 +12519,6 @@ export interface components {
             /** Timing Cells */
             timing_cells?: components["schemas"]["TimingCellResponse"][];
         };
-        /**
-         * EnqueueCommandRequest
-         * @description Body for POST /api/live-runs/{run_id}/commands.
-         */
-        EnqueueCommandRequest: {
-            /**
-             * Verb
-             * @description PAUSE | RESUME | STOP | FLATTEN | MARK_POISONED | RECONCILE.
-             */
-            verb: string;
-        };
         /** EntryBlock */
         "EntryBlock-Input": {
             /** Conditions */
@@ -14193,27 +12586,6 @@ export interface components {
              * @enum {string}
              */
             kind: "EQUITY_LONG";
-        };
-        /**
-         * EvidenceBinding
-         * @description The instance's latest run by ledger — evidence only, never live.
-         *
-         *     Rendered as stale/completed-run evidence when no process is bound. Never a
-         *     command-routing authority.
-         */
-        EvidenceBinding: {
-            /**
-             * Is Live
-             * @default false
-             */
-            is_live?: boolean;
-            /** Run Id */
-            run_id: string;
-            /**
-             * State
-             * @default latest_run_by_ledger
-             */
-            state?: string;
         };
         /**
          * EvidenceEntry
@@ -14359,12 +12731,6 @@ export interface components {
              */
             logic: "AND" | "OR";
         };
-        /**
-         * ExitReason
-         * @description Reason why a live run exited.
-         * @enum {string}
-         */
-        ExitReason: "normal" | "force_flat_complete" | "keyboard_interrupt" | "signal" | "max_orders_exceeded" | "fatal_halt" | "recovery_flatten" | "exception" | "poisoned";
         /**
          * ExposureCoherenceConfirmation
          * @description Operator confirmation for starting despite inherited exposure evidence.
@@ -14787,7 +13153,7 @@ export interface components {
          *
          *     Server-authored single source of truth for the account row: it
          *     separates account identity from position contamination so the
-         *     cockpit renders one DTO without an Angular-side merge.
+         *     client renders one DTO without an Angular-side merge.
          *
          *     ``account_identity == 'CONSISTENT'`` iff every managed instance
          *     agrees on ``account_id`` AND (when known) that id matches the
@@ -14858,28 +13224,6 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
-         * FocusAction
-         * @description Suggested action: navigate to a tab and focus a specific
-         *     affordance.  Destructive actions reach the operator only this way.
-         */
-        FocusAction: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "flatten_and_pause" | "stop" | "mark_poisoned";
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "focus_action";
-            /**
-             * Tab
-             * @enum {string}
-             */
-            tab: "status" | "activity" | "audit" | "configuration";
-        };
-        /**
          * FoldResult
          * @description One fold's contribution to a walk-forward run.
          *
@@ -14942,7 +13286,7 @@ export interface components {
          * GateResult
          * @description Canonical lifecycle gate result row.
          *
-         *     A gate result is the enforcement-backed predicate the cockpit can
+         *     A gate result is the enforcement-backed predicate clients can
          *     render and diagnose. Older readiness rows still expose their
          *     ``name`` / ``status`` / ``severity`` / ``detail`` fields for
          *     compatibility; ``GateResult`` is the normalized contract newer
@@ -15387,35 +13731,12 @@ export interface components {
             strength_label?: "Noise" | "Weak" | "Moderate" | "Strong";
         };
         /**
-         * HostProcessStartCapability
-         * @description Server-authored per-instance Start-bot-process affordance
-         *     (ADR-0006 §1 / ADR-0007 / ADR 0013 amendment 2026-06-22).
-         *
-         *     Drives the cockpit's "Start bot process" button. The data-plane proxy
-         *     re-runs the same enable check before forwarding the POST to the
-         *     authenticated daemon endpoint, so a stale ``enabled=True`` cannot
-         *     bypass the gate. When enabled, ``run_id`` and ``request`` together
-         *     carry the exact POST the cockpit will fire — Angular never composes
-         *     the body (design "Architectural permission for Start bot process").
-         */
-        HostProcessStartCapability: {
-            /** Disabled Reason Code */
-            disabled_reason_code?: ("ALREADY_RUNNING" | "STOPPING" | "HOST_SERVICE_OFFLINE" | "STOPPED_REQUIRES_RESUME" | "STOPPED_REQUIRES_REDEPLOY" | "START_SETTINGS_INCOMPLETE" | "ACCOUNT_FROZEN" | "ACCOUNT_EVIDENCE_STALE" | "CRASH_RECOVERY_REQUIRED") | null;
-            /** Enabled */
-            enabled: boolean;
-            /** Gate Results */
-            gate_results?: components["schemas"]["GateResult"][];
-            request?: components["schemas"]["HostRunnerStartRequest-Output"] | null;
-            /** Run Id */
-            run_id?: string | null;
-        };
-        /**
          * HostRunnerActionResponse
          * @description Response for daemon start/stop actions.
          *
          *     VCR-0018-B / Phase 6B — ``accepted`` historically conflated
          *     "signal accepted by the OS" with "process actually exited". The Stop
-         *     path now distinguishes the two so the cockpit can render them as
+         *     path now distinguishes the two so clients can render them as
          *     separate stages:
          *
          *     - ``command_id`` is a stable per-stop identifier returned immediately
@@ -15558,44 +13879,7 @@ export interface components {
          * HostRunnerStartRequest
          * @description Request body for starting one existing run from the host daemon.
          */
-        "HostRunnerStartRequest-Input": {
-            /**
-             * Hydrate Policy
-             * @default require
-             * @enum {string}
-             */
-            hydrate_policy?: "require" | "optional" | "disabled";
-            /**
-             * Ibkr Host
-             * @default 127.0.0.1
-             */
-            ibkr_host?: string;
-            /** Idempotency Key */
-            idempotency_key?: string | null;
-            /**
-             * Max Orders Per Day
-             * @default 2000
-             */
-            max_orders_per_day?: number;
-            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
-            /**
-             * Readonly
-             * @default true
-             */
-            readonly?: boolean;
-            /** Roll Call Offer Id */
-            roll_call_offer_id?: string | null;
-            /**
-             * Strategy
-             * @default spy_ema_crossover
-             */
-            strategy?: string;
-        };
-        /**
-         * HostRunnerStartRequest
-         * @description Request body for starting one existing run from the host daemon.
-         */
-        "HostRunnerStartRequest-Output": {
+        HostRunnerStartRequest: {
             /**
              * Hydrate Policy
              * @default require
@@ -16398,7 +14682,7 @@ export interface components {
          * IncidentRecord
          * @description One WARNING/ERROR/CRITICAL block parsed from live.log, with a
          *     backend-classified ``incident_category`` the frontend keys its copy
-         *     map on plus an ``incident_source`` for the cockpit's BROKER / APP /
+         *     map on plus an ``incident_source`` for the evidence view's BROKER / APP /
          *     INFRA / OPERATOR badge + filter (codex 2026-06-24 D2 / D8).
          *
          *     Mirrors :class:`app.services.live_log_failures.IncidentRow` as the wire
@@ -16950,235 +15234,6 @@ export interface components {
             ticker: string;
         };
         /**
-         * InstanceBrokerView
-         * @description The instance's namespace-attributed broker slice (ADR 0005, #398).
-         *
-         *     Engine-authored, from the live-state sidecar: ownership is keyed on
-         *     ``bot_order_namespace``; ``owned_positions`` is the engine's running tally of
-         *     its own namespace fills (``expected_position_by_symbol``) — never decomposed
-         *     from the raw net account snapshot. The instance broker gate is
-         *     self-consistency only.
-         */
-        InstanceBrokerView: {
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Owned Positions */
-            owned_positions?: {
-                [key: string]: number;
-            };
-            /**
-             * Pending Order Count
-             * @default 0
-             */
-            pending_order_count?: number;
-            /** Unrealized Pnl */
-            unrealized_pnl?: number | null;
-        };
-        /**
-         * InstanceLastExit
-         * @description Why the instance's most recent run ended.
-         *
-         *     Composed from the run's ``run_status.json`` (exit code/reason) and, when
-         *     present, the indicator-state hydration receipt. Surfaced on a terminated
-         *     run so the console can explain *why* an instance is STOPPED — e.g. a cold
-         *     start that failed under ``hydrate_policy=require`` shows
-         *     ``hydration_failure_reason="missing"``, which the UI turns into seed-day
-         *     guidance.
-         */
-        InstanceLastExit: {
-            /** Ended At Ms */
-            ended_at_ms?: number | null;
-            /** Exit Code */
-            exit_code?: number | null;
-            /** Exit Error Code */
-            exit_error_code?: string | null;
-            /** Exit Error Detail */
-            exit_error_detail?: Record<string, never>;
-            /** Exit Error Message */
-            exit_error_message?: string | null;
-            exit_reason?: components["schemas"]["ExitReason"] | null;
-            /** Halt At Ms */
-            halt_at_ms?: number | null;
-            /** Halt Detail */
-            halt_detail?: Record<string, never> | null;
-            /** Halt Trigger */
-            halt_trigger?: string | null;
-            /** Hydration Accepted */
-            hydration_accepted?: boolean | null;
-            /** Hydration Failure Reason */
-            hydration_failure_reason?: string | null;
-            /** Run Id */
-            run_id: string;
-        };
-        /**
-         * InstanceProcessView
-         * @description Live process snapshot for a strategy instance, from the host-daemon
-         *     registry (the live-binding authority). ``state`` is ``unreachable`` when
-         *     the daemon could not be queried — distinct from ``idle`` (daemon reachable,
-         *     nothing running).
-         */
-        InstanceProcessView: {
-            /** Bound Run Id */
-            bound_run_id?: string | null;
-            /** Ibkr Client Id */
-            ibkr_client_id?: number | null;
-            /** Pid */
-            pid?: number | null;
-            /** Started At Ms */
-            started_at_ms?: number | null;
-            /** State */
-            state: string;
-        };
-        /**
-         * InstanceProvenance
-         * @description What a run's content-addressed identity attests to (ADR 0006).
-         *
-         *     The ``run_id`` is ``sha256`` over a clean-tree git commit, the strategy spec
-         *     + its SHA, the QC audit copy + its SHA, the QC backtest id, the account, and
-         *     the start date — so identical inputs always yield the same id. Surfacing the
-         *     inputs lets the console explain *what each fingerprint proves* (e.g. "the
-         *     running algorithm is byte-identical to backtest X") instead of showing a bare
-         *     hash. Sourced from the bound/evidence run's ledger; fields are empty/legacy
-         *     ledgers contribute what they have.
-         */
-        InstanceProvenance: {
-            /**
-             * Account Id
-             * @default
-             */
-            account_id?: string;
-            /**
-             * Code Sha
-             * @default
-             */
-            code_sha?: string;
-            /** Created At Ms */
-            created_at_ms?: number | null;
-            /** Live Config */
-            live_config?: Record<string, never>;
-            /**
-             * Qc Audit Copy Path
-             * @default
-             */
-            qc_audit_copy_path?: string;
-            /**
-             * Qc Audit Copy Sha256
-             * @default
-             */
-            qc_audit_copy_sha256?: string;
-            /**
-             * Qc Cloud Backtest Id
-             * @default
-             */
-            qc_cloud_backtest_id?: string;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Schema Version
-             * @default
-             */
-            schema_version?: string;
-            /** Start Date Ms */
-            start_date_ms?: number | null;
-            /**
-             * Strategy Spec Path
-             * @default
-             */
-            strategy_spec_path?: string;
-            /**
-             * Strategy Spec Sha256
-             * @default
-             */
-            strategy_spec_sha256?: string;
-        };
-        /**
-         * InstanceSizing
-         * @description ADR 0009 — sizing surface for the instance console's Sizing card.
-         *
-         *     Surfaces the resolved policy from the bound (or latest evidence) run's
-         *     ``live_config.sizing`` plus the two engine-derived ledger stamps. ``policy``
-         *     is ``None`` for a **legacy/pre-policy run** (the ledger has no ``sizing``
-         *     key); the Sizing card renders the degraded "Pre-policy run" badge variant
-         *     in that case (ADR 0009 § 14).
-         */
-        InstanceSizing: {
-            /**
-             * Governed By
-             * @enum {string}
-             */
-            governed_by: "live_config" | "strategy_explicit";
-            /** Per Trade Audit */
-            per_trade_audit?: components["schemas"]["SizingAuditRow"][];
-            /** Policy */
-            policy?: Record<string, never> | null;
-            /** Preset */
-            preset?: ("safe_canary" | "reference_parity" | "custom" | "explicit") | null;
-            /**
-             * Sizing Provenance
-             * @enum {string}
-             */
-            sizing_provenance: "reference_native" | "live_override" | "spec_default";
-        };
-        /**
-         * InstanceStartDefaults
-         * @description Pre-filled Start-card values for the console (#416).
-         *
-         *     The five ``run start`` knobs, defaulted so the operator never starts from a
-         *     blank form. ``strategy`` is sourced from the run's ledger ``strategy_key``
-         *     (the algorithm module the ledger is reconciled to) when present — empty
-         *     string means a legacy ledger with no recorded key, so the field is
-         *     operator-supplied. New ledgers may persist these from deploy-time
-         *     ``start_options`` so a later cockpit start uses the same operator choices.
-         */
-        InstanceStartDefaults: {
-            /**
-             * Account Id
-             * @default
-             */
-            account_id?: string;
-            /**
-             * Hydrate Policy
-             * @default require
-             * @enum {string}
-             */
-            hydrate_policy?: "require" | "optional" | "disabled";
-            /**
-             * Ibkr Host
-             * @default 127.0.0.1
-             */
-            ibkr_host?: string;
-            /**
-             * Max Orders Per Day
-             * @default 2000
-             */
-            max_orders_per_day?: number;
-            /**
-             * Qc Audit Copy Path
-             * @default
-             */
-            qc_audit_copy_path?: string;
-            /**
-             * Qc Cloud Backtest Id
-             * @default
-             */
-            qc_cloud_backtest_id?: string;
-            /**
-             * Readonly
-             * @default true
-             */
-            readonly?: boolean;
-            /**
-             * Strategy
-             * @default
-             */
-            strategy?: string;
-            /**
-             * Strategy Spec Path
-             * @default
-             */
-            strategy_spec_path?: string;
-        };
-        /**
          * IntentActuation
          * @description Result of actuating durable intent against the live binding (ADR 0004).
          *
@@ -17203,55 +15258,6 @@ export interface components {
             effect_state?: "QUEUED" | "PENDING";
             /** Run Id */
             run_id?: string | null;
-        };
-        /**
-         * InvokeCapabilityAction
-         * @description Suggested action: invoke a non-destructive capability inline.
-         *
-         *     Permitted capabilities are non-destructive only — destructive
-         *     actions (Stop, Mark Poisoned, Flatten-and-pause) never appear via
-         *     ``invoke_capability``; they reach the operator only through
-         *     ``focus_action`` so they keep their canonical render site.
-         */
-        InvokeCapabilityAction: {
-            /**
-             * Capability
-             * @enum {string}
-             */
-            capability: "resume" | "pause";
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "invoke_capability";
-        };
-        /**
-         * InvokeEndpointAction
-         * @description Suggested action: invoke an existing backend endpoint by stable name.
-         */
-        InvokeEndpointAction: {
-            /**
-             * Endpoint
-             * @constant
-             */
-            endpoint: "reconcile_instance";
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "invoke_endpoint";
-            /**
-             * Method
-             * @default POST
-             * @constant
-             */
-            method?: "POST";
-            /**
-             * Path Template
-             * @default /api/live-instances/{strategy_instance_id}/reconcile
-             * @constant
-             */
-            path_template?: "/api/live-instances/{strategy_instance_id}/reconcile";
         };
         /** Iv30LiveRequest */
         Iv30LiveRequest: {
@@ -18183,184 +16189,6 @@ export interface components {
             symbol: string;
         };
         /**
-         * LifecycleChartAction
-         * @description An action affordance associated with the current chart state.
-         */
-        LifecycleChartAction: {
-            /** Enabled */
-            enabled: boolean;
-            /**
-             * Id
-             * @enum {string}
-             */
-            id: "start_process" | "resume" | "pause" | "flatten_and_pause" | "stop" | "mark_poisoned" | "redeploy";
-            /** Label */
-            label: string;
-            /** Reason Code */
-            reason_code?: string | null;
-            /** Reason Detail */
-            reason_detail: string;
-            /** Reason Headline */
-            reason_headline: string;
-            /** Target Node Id */
-            target_node_id?: string | null;
-            /**
-             * Tone
-             * @default secondary
-             * @enum {string}
-             */
-            tone?: "primary" | "secondary" | "danger";
-        };
-        /**
-         * LifecycleChartEdge
-         * @description One backend-authored transition in the bot lifecycle chart.
-         */
-        LifecycleChartEdge: {
-            /**
-             * Animated
-             * @default false
-             */
-            animated?: boolean;
-            /** Id */
-            id: string;
-            /** Label */
-            label?: string | null;
-            /** Source */
-            source: string;
-            /** Source Handle */
-            source_handle?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "passed" | "active" | "blocked" | "poison" | "freeze" | "inactive" | "unknown";
-            /** Target */
-            target: string;
-            /** Target Handle */
-            target_handle?: string | null;
-        };
-        /**
-         * LifecycleChartGraph
-         * @description A lifecycle graph. The global graph may link to focused subgraphs.
-         */
-        LifecycleChartGraph: {
-            /** Edges */
-            edges: components["schemas"]["LifecycleChartEdge"][];
-            /** Graph Id */
-            graph_id: string;
-            /** Nodes */
-            nodes: components["schemas"]["LifecycleChartNode"][];
-            /** Primary Node Id */
-            primary_node_id: string;
-            /** Title */
-            title: string;
-        };
-        /**
-         * LifecycleChartNode
-         * @description One backend-authored node in the bot lifecycle overview chart.
-         *
-         *     The frontend may choose layout and styling, but it must not infer node
-         *     truth from raw status fields. ``status`` and ``evidence_summary`` are the
-         *     operator-facing facts authored by the backend.
-         */
-        LifecycleChartNode: {
-            /** Evidence Summary */
-            evidence_summary?: string | null;
-            /**
-             * Expandable
-             * @default false
-             */
-            expandable?: boolean;
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /**
-             * Lane
-             * @enum {string}
-             */
-            lane: "bot" | "account" | "broker" | "recovery";
-            /**
-             * Operator Actionability
-             * @default operator-actionable
-             * @enum {string}
-             */
-            operator_actionability?: "operator-actionable" | "system-only" | "no-action-needed";
-            /** Operator Next Step */
-            operator_next_step?: string | null;
-            /** Receipts */
-            receipts?: components["schemas"]["LifecycleChartReceipt"][];
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "passed" | "active" | "blocked" | "poison" | "freeze" | "inactive" | "unknown";
-            /** Status Label */
-            status_label: string;
-            /** Subgraph Id */
-            subgraph_id?: string | null;
-            /** Summary */
-            summary?: string | null;
-            /** Technical Label */
-            technical_label?: string | null;
-            /** Ts Ms */
-            ts_ms?: number | null;
-            /**
-             * Ts Ms Resolved
-             * @default false
-             */
-            ts_ms_resolved?: boolean;
-            /** Why */
-            why?: string | null;
-        };
-        /**
-         * LifecycleChartReceipt
-         * @description One structured receipt behind a lifecycle node.
-         *
-         *     Receipts are evidence display rows only. They do not add authority beyond
-         *     the canonical artifacts and operator-surface facts that authored them.
-         */
-        LifecycleChartReceipt: {
-            /** Detail */
-            detail?: string | null;
-            /** Gate Id */
-            gate_id?: string | null;
-            /** Headline */
-            headline?: string | null;
-            /** Label */
-            label: string;
-            /** Source */
-            source?: string | null;
-            /** Ts Ms */
-            ts_ms?: number | null;
-            /**
-             * Ts Ms Resolved
-             * @default false
-             */
-            ts_ms_resolved?: boolean;
-            /** Unit */
-            unit?: string | null;
-            /** Value */
-            value: string;
-        };
-        /**
-         * LiveBinding
-         * @description The run an instance is writing to *right now* (registry-sourced).
-         *
-         *     Present only when a process is live. Commands route here and nowhere else.
-         */
-        LiveBinding: {
-            /** Run Dir */
-            run_dir?: string | null;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Source
-             * @default registry
-             */
-            source?: string;
-        };
-        /**
          * LiveGreeksRequest
          * @description Convenience request for the common 'live Greeks at current state' case.
          *
@@ -18383,59 +16211,6 @@ export interface components {
             risk_free_rate?: number;
             /** Spot Price */
             spot_price: number;
-        };
-        /**
-         * LiveInstanceActivityProjection
-         * @description Backend-materialized Activity tab view for one exchange/session date.
-         *
-         *     Broker-confirmed chart markers, the Orders Today panel, Broker Activity
-         *     table, and raw evidence drill-downs all read this one contract so no
-         *     activity marker can exist without a matching ledger row. Chart bars are
-         *     resolved by ``/chart-snapshot``.
-         */
-        LiveInstanceActivityProjection: {
-            /** Bars */
-            bars?: Record<string, never>[];
-            /** Broker Activity Rows */
-            broker_activity_rows?: components["schemas"]["ActivityBrokerEventRow"][];
-            /** Broker Activity Summary */
-            broker_activity_summary?: components["schemas"]["ActivityBrokerCategorySummary"][];
-            /** Evidence */
-            evidence?: components["schemas"]["ActivityEvidenceRef"][];
-            /** Fill Markers */
-            fill_markers?: components["schemas"]["ActivityFillMarker"][];
-            /** Has Bars */
-            has_bars: boolean;
-            /** Now Ms */
-            now_ms: number;
-            /** Order Overlays */
-            order_overlays?: components["schemas"]["ActivityOrderOverlay"][];
-            /** Orders Today */
-            orders_today?: components["schemas"]["ActivityOrderRow"][];
-            /** Position Annotations */
-            position_annotations?: components["schemas"]["ActivityPositionAnnotation"][];
-            /** Position Snapshot */
-            position_snapshot?: components["schemas"]["ActivityPositionSnapshot"][];
-            /** Reconciliation Warnings */
-            reconciliation_warnings?: components["schemas"]["ActivityReconciliationWarning"][];
-            /** Resolution */
-            resolution: string;
-            /**
-             * Schema Version
-             * @default 1
-             */
-            schema_version?: number;
-            /** Session Date */
-            session_date: string;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Symbol */
-            symbol: string;
-            /**
-             * Timezone
-             * @default America/New_York
-             */
-            timezone?: string;
         };
         /**
          * LiveInstanceDeployRequest
@@ -18485,7 +16260,7 @@ export interface components {
             start?: boolean;
             /** Start Date Ms */
             start_date_ms: number;
-            start_options?: components["schemas"]["HostRunnerStartRequest-Input"];
+            start_options?: components["schemas"]["HostRunnerStartRequest"];
             /**
              * Strategy Instance Id
              * @default
@@ -18502,65 +16277,11 @@ export interface components {
             [key: string]: unknown;
         };
         /**
-         * LiveInstanceStatus
-         * @description Instance-addressed status: the operator's control-room subject (ADR 0004).
-         *
-         *     The current run is attached as evidence; the ``live_binding`` is the only
-         *     thing commands may target.
-         */
-        LiveInstanceStatus: {
-            /** Action Plan */
-            action_plan?: Record<string, never> | null;
-            broker?: components["schemas"]["InstanceBrokerView"] | null;
-            daily_lifecycle: components["schemas"]["BotDailyLifecycleProjection"];
-            /** Decision Columns */
-            decision_columns?: components["schemas"]["DecisionColumnDescriptor"][];
-            desired_state?: components["schemas"]["DesiredStateView"] | null;
-            evidence_binding?: components["schemas"]["EvidenceBinding"] | null;
-            /** Fetched At Ms */
-            fetched_at_ms: number;
-            /** Instrument Surface */
-            instrument_surface?: ("policy" | "explicit") | null;
-            last_exit?: components["schemas"]["InstanceLastExit"] | null;
-            /** Latest Decision */
-            latest_decision?: Record<string, never> | null;
-            latest_mutation?: components["schemas"]["MutationAttemptView"] | null;
-            /**
-             * Latest Signal Tone
-             * @default neutral
-             * @enum {string}
-             */
-            latest_signal_tone?: "ok" | "warn" | "neutral";
-            lifecycle_chart: components["schemas"]["BotLifecycleChartView"];
-            lineage?: components["schemas"]["RedeployLineage"] | null;
-            live_binding?: components["schemas"]["LiveBinding"] | null;
-            operator_surface: components["schemas"]["OperatorSurface"];
-            process: components["schemas"]["InstanceProcessView"];
-            provenance?: components["schemas"]["InstanceProvenance"] | null;
-            readiness?: components["schemas"]["ReadinessVector"] | null;
-            sizing?: components["schemas"]["InstanceSizing"] | null;
-            start_defaults?: components["schemas"]["InstanceStartDefaults"] | null;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /**
-             * Stream Epoch
-             * @default
-             */
-            stream_epoch?: string;
-            /**
-             * Surface Version
-             * @default 0
-             */
-            surface_version?: number;
-            /** Symbol */
-            symbol?: string | null;
-        };
-        /**
          * LiveInstanceSummary
          * @description One row in the account fleet overview.
          *
          *     PRD #616 added ``readiness_verdict`` and ``readiness_as_of_ms`` so
-         *     the cockpit can render an honest outer-tab badge
+         *     the fleet roster can render an honest status badge
          *     (``dep_val_smoke_001 · IDLE · BLOCKED``) for background instances
          *     without an N+1 fetch of every instance's full status.  Backend
          *     authors these from the same readiness source as the per-instance
@@ -19280,46 +17001,6 @@ export interface components {
             raw_nw_p_value?: number;
         };
         /**
-         * MutationAttemptView
-         * @description Latest durable mutation receipt carried by the state snapshot.
-         */
-        MutationAttemptView: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "start" | "stop" | "flatten" | "resume" | "pause";
-            /**
-             * Creation Order
-             * @default 0
-             */
-            creation_order?: number;
-            /**
-             * Dispatch State
-             * @enum {string}
-             */
-            dispatch_state: "PREPARED" | "DISPATCHING" | "RESPONSE_CONFIRMED" | "OUTCOME_UNKNOWN" | "EFFECT_CONFIRMED" | "EFFECT_NOT_OBSERVED" | "NOT_PROVABLE" | "EVIDENCE_CONFLICT";
-            /** Evidence */
-            evidence?: Record<string, never> | null;
-            /** Instance Id */
-            instance_id: string;
-            /** Last Transition At Ms */
-            last_transition_at_ms: number;
-            /** Mutation Attempt Id */
-            mutation_attempt_id: string;
-            /** Outcome */
-            outcome?: Record<string, never> | null;
-            /** Requested At Ms */
-            requested_at_ms: number;
-            /** Run Id */
-            run_id?: string | null;
-            /**
-             * Schema Version
-             * @default 1
-             */
-            schema_version?: number;
-        };
-        /**
          * MutationRungReceipt
          * @description Notice-shaped post-mutation receipt authored from the fresh ladder.
          *
@@ -19385,19 +17066,6 @@ export interface components {
              * @enum {string}
              */
             selector: "nearest_weekly";
-        };
-        /**
-         * NoPrimaryRemediationAction
-         * @description No primary remediation is appropriate for the current healthy state.
-         */
-        NoPrimaryRemediationAction: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "none";
-            /** Reason */
-            reason: string;
         };
         /**
          * NullDistribution
@@ -19643,6 +17311,19 @@ export interface components {
             volume: number;
         };
         /**
+         * OpenRunbookAction
+         * @description Move: open an operator runbook by backend-authored slug.
+         */
+        OpenRunbookAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            kind: "open_runbook";
+            /** Slug */
+            slug: string;
+        };
+        /**
          * OperatorBlocker
          * @description Host-scoped, backend-authored guidance for one operator condition.
          *
@@ -19780,39 +17461,10 @@ export interface components {
             /** Scope Cards */
             scope_cards: components["schemas"]["AuthoredValue"][];
         };
-        /**
-         * OperatorGate
-         * @description Operator-facing projection of an engine readiness gate (PRD #616).
-         *
-         *     The engine's ``ReadinessGate`` carries name / status / severity /
-         *     detail.  ``OperatorGate`` adds a canonical ``GateResult`` plus
-         *     server-authored remediation metadata so the cockpit never infers a
-         *     "fix" from the gate name.
-         *
-         *     Either ``suggested_action`` is present (a structured, closed-union
-         *     descriptor), or it is ``None`` AND
-         *     ``suggested_action_unavailable_reason`` is populated with a stable
-         *     rationale code (so ``None`` is never ambiguous).
-         */
-        OperatorGate: {
-            /** Detail */
-            detail: string;
-            gate_result: components["schemas"]["GateResult"];
-            /** Name */
-            name: string;
-            /** Severity */
-            severity: string;
-            /** Status */
-            status: string;
-            /** Suggested Action */
-            suggested_action?: (components["schemas"]["InvokeCapabilityAction"] | components["schemas"]["FocusAction"] | components["schemas"]["RedeployAction"] | components["schemas"]["app__schemas__live_runs__OpenRunbookAction"]) | null;
-            /** Suggested Action Unavailable Reason */
-            suggested_action_unavailable_reason?: string | null;
-        };
         /** OperatorMove */
         OperatorMove: {
             /** Action */
-            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["app__schemas__operator_blocker__OpenRunbookAction"] | components["schemas"]["RetireReplaceAction"] | components["schemas"]["RemoveAction"];
+            action: components["schemas"]["NavigateAction"] | components["schemas"]["ConfirmInFormAction"] | components["schemas"]["OpenRunbookAction"] | components["schemas"]["RetireReplaceAction"] | components["schemas"]["RemoveAction"];
             confirmation?: components["schemas"]["OperatorConfirmationCopy"] | null;
             /** Label */
             label: string;
@@ -19887,722 +17539,6 @@ export interface components {
             intent: components["schemas"]["AccountOwnerSubmitIntent-Input"];
             /** Request Provenance */
             request_provenance: string;
-        };
-        /**
-         * OperatorSurface
-         * @description Operator-facing projection of run state for the Terminal Cockpit
-         *     (PRD #607 / Slice 1 / #608, extended by PRD #616).
-         *
-         *     Single source of truth for operational verdicts, risk posture,
-         *     structured daily-cap usage, action-plan consumption, broker safety
-         *     verdict, prior-run classification, host-process state, per-action
-         *     capability + reason codes, and the per-gate operator-facing
-         *     remediation metadata.  Frontend renders these fields; it does not
-         *     derive verdicts from raw fields.
-         *
-         *     PRD #616 added ``readiness_gates`` (the ``OperatorGate``
-         *     projection with structured ``suggested_action`` / unavailable
-         *     reason) and ``actions.stop`` to the contract.  Both are additive;
-         *     ``schema_version`` does NOT bump for additive fields (per the
-         *     existing rule).
-         */
-        OperatorSurface: {
-            account_clerk?: components["schemas"]["OperatorSurfaceAccountClerk"] | null;
-            account_observation?: components["schemas"]["OperatorSurfaceAccountObservation"] | null;
-            action_plan: components["schemas"]["OperatorSurfaceActionPlan"];
-            actions: components["schemas"]["OperatorSurfaceActions"];
-            blockage_ladder: components["schemas"]["OperatorSurfaceBlockageLadder"];
-            /** Blockers */
-            blockers?: components["schemas"]["OperatorBlocker"][];
-            broker: components["schemas"]["OperatorSurfaceBroker"];
-            broker_activity_health?: components["schemas"]["BrokerActivityHealth"] | null;
-            broker_observation_consistency?: components["schemas"]["BrokerObservationConsistency"] | null;
-            configuration: components["schemas"]["OperatorSurfaceConfiguration"];
-            confirmations: components["schemas"]["OperatorSurfaceConfirmations"];
-            control_plane?: components["schemas"]["OperatorSurfaceControlPlane"] | null;
-            current_risk: components["schemas"]["OperatorSurfaceCurrentRisk"];
-            daily_order_cap: components["schemas"]["OperatorSurfaceDailyOrderCap"];
-            execution?: components["schemas"]["OperatorSurfaceExecution"] | null;
-            host_process: components["schemas"]["OperatorSurfaceHostProcess"];
-            incident_headline?: components["schemas"]["OperatorNotice"] | null;
-            notice_placement?: components["schemas"]["OperatorSurfaceNoticePlacement"];
-            prior_run: components["schemas"]["OperatorSurfacePriorRun"];
-            /** Readiness Gates */
-            readiness_gates?: components["schemas"]["OperatorGate"][];
-            reconciliation?: components["schemas"]["OperatorSurfaceReconciliation"] | null;
-            run_signal: components["schemas"]["OperatorSurfaceRunSignal"];
-            runtime_freshness?: components["schemas"]["OperatorSurfaceRuntimeFreshness"] | null;
-            /**
-             * Schema Version
-             * @default 2
-             */
-            schema_version?: number;
-            submit_readiness: components["schemas"]["OperatorSurfaceSubmitReadiness"];
-            trader_guidance: components["schemas"]["OperatorSurfaceTraderGuidance"];
-            trading_session: components["schemas"]["OperatorSurfaceTradingSession"];
-        };
-        /**
-         * OperatorSurfaceAccountClerk
-         * @description Account Clerk generation and lease health from canonical account artifacts.
-         *
-         *     ``phase=unknown`` or ``lease_active=False`` means the account exists but
-         *     Clerk write authority is not proven. The cockpit renders either as missing
-         *     proof, not as healthy.
-         */
-        OperatorSurfaceAccountClerk: {
-            /** Account Id */
-            account_id: string;
-            /** Generation */
-            generation?: number | null;
-            /**
-             * Lease Active
-             * @default false
-             */
-            lease_active?: boolean;
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "accepting" | "reconnecting" | "draining" | "frozen" | "unknown";
-            /** Recorded At Ms */
-            recorded_at_ms?: number | null;
-            /** Source */
-            source?: string | null;
-        };
-        /**
-         * OperatorSurfaceAccountObservation
-         * @description Backend-authored freshness proof for one broker account observation.
-         */
-        OperatorSurfaceAccountObservation: {
-            /** Observed At Ms */
-            observed_at_ms?: number | null;
-            /** Reason Line */
-            reason_line: string;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "VERIFIED" | "REVOKED" | "EXPIRED" | "ABSENT";
-            /** Valid Until Ms */
-            valid_until_ms?: number | null;
-        };
-        /**
-         * OperatorSurfaceActionPlan
-         * @description Server-authored action-plan consumption + anomaly verdict (#608).
-         *
-         *     ``consumption`` is ``ACTIVE`` when the stored action plan belongs to
-         *     deployment-validation and matches the stock-only shape that live runner
-         *     currently consumes (one long stock leg). Other present action plans remain
-         *     ``DECLARATIVE_ONLY`` until their resolver/runtime path ships.
-         *     ``anomaly_verdict`` is ``READY`` whenever an action plan is present
-         *     because no detector exists yet. When the run's stored ``action_plan``
-         *     is ``None``, both fields are ``UNKNOWN`` — a missing plan is evidence
-         *     of nothing, not evidence of health.
-         */
-        OperatorSurfaceActionPlan: {
-            /**
-             * Anomaly Verdict
-             * @enum {string}
-             */
-            anomaly_verdict: "READY" | "ATTENTION" | "UNKNOWN";
-            /**
-             * Consumption
-             * @enum {string}
-             */
-            consumption: "ACTIVE" | "DECLARATIVE_ONLY" | "UNKNOWN";
-        };
-        /**
-         * OperatorSurfaceActions
-         * @description The five canonical cockpit actions (ADR-0010 / PRD #616).
-         *
-         *     Resume, Pause, and Stop are durable-intent writes guarded by the
-         *     shared ``ResumeGuardState`` resolver (broker safety verdict,
-         *     reconciliation receipt, uncertain-intent WAL).  Flatten-and-pause
-         *     requires a live binding plus owned positions.  Mark-poisoned
-         *     requires a live binding (the canonical render site is the Audit
-         *     tab; PRD #617).
-         *
-         *     Frontend renders each affordance's enabled state and tooltip from
-         *     these capabilities.  ``disabled_reasons`` carries the full
-         *     priority-ordered list of applicable codes; the single-line
-         *     tooltip renders ``disabled_reasons[0]`` (or
-         *     ``disabled_reason_code`` as a back-compat shorthand for the
-         *     head).
-         */
-        OperatorSurfaceActions: {
-            flatten_and_pause: components["schemas"]["ActionCapability"];
-            mark_poisoned: components["schemas"]["ActionCapability"];
-            pause: components["schemas"]["ActionCapability"];
-            resume: components["schemas"]["ActionCapability"];
-            stop: components["schemas"]["ActionCapability"];
-        };
-        /**
-         * OperatorSurfaceAttentionGroup
-         * @description One independent fact that must remain visible alongside the summary.
-         */
-        OperatorSurfaceAttentionGroup: {
-            /** Code */
-            code: string;
-            /** Explanation */
-            explanation: string;
-            /** Headline */
-            headline: string;
-            /** Operator Next Step */
-            operator_next_step: string;
-            /** Remediation */
-            remediation: components["schemas"]["InvokeCapabilityAction"] | components["schemas"]["FocusAction"] | components["schemas"]["RedeployAction"] | components["schemas"]["app__schemas__live_runs__OpenRunbookAction"] | components["schemas"]["InvokeEndpointAction"] | components["schemas"]["NoPrimaryRemediationAction"];
-            /**
-             * Severity
-             * @enum {string}
-             */
-            severity: "info" | "warning" | "critical";
-        };
-        /**
-         * OperatorSurfaceBlockageLadder
-         * @description Backend-authored lifecycle/blockage overview for the About pane.
-         */
-        OperatorSurfaceBlockageLadder: {
-            /** Current Stage Id */
-            current_stage_id?: ("control_plane" | "host_process" | "broker" | "account_safety" | "account_clerk" | "reconciliation" | "preflight" | "trading_session" | "runtime_freshness") | null;
-            /** Headline */
-            headline: string;
-            /** Stages */
-            stages?: components["schemas"]["OperatorSurfaceBlockageStage"][];
-            /** Summary */
-            summary: string;
-        };
-        /**
-         * OperatorSurfaceBlockageStage
-         * @description One backend-authored rung in the current blockage ladder.
-         *
-         *     The ladder is the compact answer to "what is blocking the bot now?"
-         *     It deliberately uses the same coarse severities as named conditions while
-         *     keeping trader-facing title/summary copy server-authored.
-         */
-        OperatorSurfaceBlockageStage: {
-            /**
-             * Current
-             * @default false
-             */
-            current?: boolean;
-            /**
-             * Id
-             * @enum {string}
-             */
-            id: "control_plane" | "host_process" | "broker" | "account_safety" | "account_clerk" | "reconciliation" | "preflight" | "trading_session" | "runtime_freshness";
-            /** Label */
-            label: string;
-            /** Next Step */
-            next_step?: string | null;
-            /** Reason Codes */
-            reason_codes?: string[];
-            /**
-             * Severity
-             * @enum {string}
-             */
-            severity: "ok" | "info" | "warning" | "critical" | "neutral";
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "clear" | "info" | "warning" | "danger" | "unknown";
-            /** Summary */
-            summary: string;
-            /** Title */
-            title: string;
-        };
-        /**
-         * OperatorSurfaceBroker
-         * @description Server-authored broker block — two independent enums for the
-         *     banner SAFETY pill and the tagline's "Broker: CONNECTED" half
-         *     (PRD #607 / cockpit revision 2026-06-21).
-         *
-         *     ``safety_verdict`` is whether the cockpit is allowed to trade
-         *     against this account (ADR-0011: paper-only vs unsafe vs unknown).
-         *     ``connection`` is whether the broker session is up.  They are
-         *     independent: a paper-only account whose IBKR session is reconnecting
-         *     is ``safety_verdict=PAPER_ONLY`` AND ``connection=DEGRADED``;
-         *     composing them into a single enum collapses two facts the operator
-         *     needs to read separately.
-         */
-        OperatorSurfaceBroker: {
-            /**
-             * Connection
-             * @enum {string}
-             */
-            connection: "CONNECTED" | "DISCONNECTED" | "DEGRADED" | "UNKNOWN";
-            connection_condition: components["schemas"]["OperatorSurfaceNamedCondition"];
-            /**
-             * Safety Verdict
-             * @enum {string}
-             */
-            safety_verdict: "PAPER_ONLY" | "UNSAFE" | "UNKNOWN";
-        };
-        /**
-         * OperatorSurfaceConfiguration
-         * @description Server-authored configuration completeness verdict (#608).
-         *
-         *     ``verdict`` is ``ATTENTION`` when any of the named configuration
-         *     rules fail, ``READY`` when none fail, ``UNKNOWN`` when the inputs
-         *     needed to evaluate any rule are themselves missing.
-         *     ``reason_codes`` lists the failing rules in a stable
-         *     ``ALL_CAPS_SNAKE`` vocabulary.
-         */
-        OperatorSurfaceConfiguration: {
-            /** Reason Codes */
-            reason_codes?: string[];
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "READY" | "ATTENTION" | "UNKNOWN";
-        };
-        /**
-         * OperatorSurfaceConfirmations
-         * @description Backend-authored confirmation copy for Bot Cockpit safety actions.
-         */
-        OperatorSurfaceConfirmations: {
-            crash_recovery_override: components["schemas"]["OperatorConfirmationCopy"];
-            mark_poisoned: components["schemas"]["OperatorConfirmationCopy"];
-            remove_bot: components["schemas"]["OperatorConfirmationCopy"];
-            retire_replace: components["schemas"]["OperatorConfirmationCopy"];
-        };
-        /**
-         * OperatorSurfaceControlPlane
-         * @description Server-authored control-plane (host-daemon) connectivity surface
-         *     (PRD #619 §C).
-         *
-         *     The control plane is the data plane's typed HTTP transport to the
-         *     host live-runner daemon. This block surfaces the outcome of the most
-         *     recent daemon poll plus the context an operator needs to diagnose a
-         *     connectivity incident. It is intentionally distinct from
-         *     ``broker.connection`` (the daemon→broker session) and ``host_process``
-         *     (the host runner process the daemon supervises). Composing them
-         *     collapses three independent facts the operator must read separately.
-         *
-         *     Authority pattern matches the rest of ``OperatorSurface``: the
-         *     backend authors every field including the operator-language
-         *     ``notice`` and the ``runbook_slug``. Angular renders the strings
-         *     verbatim and MUST NOT compose them from the enum.
-         *
-         *     Fields:
-         *
-         *     - ``state`` is the ``DaemonResultKind`` produced by the connectivity
-         *       monitor (619-C2). Closed set: ``CONNECTED`` / ``RETRYING`` /
-         *       ``UNREACHABLE`` / ``AUTH_FAILED`` / ``PROTOCOL_ERROR`` /
-         *       ``INCOMPATIBLE_CONTRACT``.
-         *     - ``last_transition_ms`` — ``int64 ms UTC`` of the last ``state``
-         *       change, or ``None`` if the monitor has not yet observed a
-         *       transition.
-         *     - ``last_success_ms`` — ``int64 ms UTC`` of the most recent
-         *       ``CONNECTED`` probe, or ``None`` if no successful poll yet.
-         *     - ``attempt`` — retry-budget counter from the monitor: incremented
-         *       on each failure within the budget window, ``0`` on success, pinned
-         *       at the budget once exhausted.
-         *     - ``daemon_boot_id`` — daemon ``boot_id`` observed on the most
-         *       recent ``CONNECTED`` poll, ``None`` until the first successful
-         *       poll or when the daemon does not declare one.
-         *     - ``notice`` — operator-language prose authored server-side when
-         *       ``state != CONNECTED``. ``None`` when the channel is healthy.
-         *     - ``runbook_slug`` — stable short slug (e.g. ``"daemon-unreachable"``)
-         *       keyed in the operator runbook. ``None`` when no runbook applies.
-         */
-        OperatorSurfaceControlPlane: {
-            /**
-             * Attempt
-             * @default 0
-             */
-            attempt?: number;
-            /** Daemon Boot Id */
-            daemon_boot_id?: string | null;
-            /** Last Success Ms */
-            last_success_ms?: number | null;
-            /** Last Transition Ms */
-            last_transition_ms?: number | null;
-            /** Notice */
-            notice?: string | null;
-            /** Runbook Slug */
-            runbook_slug?: string | null;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "CONNECTED" | "RETRYING" | "UNREACHABLE" | "AUTH_FAILED" | "PROTOCOL_ERROR" | "INCOMPATIBLE_CONTRACT";
-        };
-        /**
-         * OperatorSurfaceCurrentRisk
-         * @description Server-authored risk posture for the Current Risk card and the
-         *     Configuration card's pinned risk-chip (#608 + #611).
-         *
-         *     Replaces the Angular derivation in
-         *     ``current-risk-card.component.ts`` that read ``owned_positions``
-         *     directly.
-         */
-        OperatorSurfaceCurrentRisk: {
-            /** Owned Positions */
-            owned_positions?: {
-                [key: string]: number;
-            };
-            /** Pending Order Count */
-            pending_order_count: number | null;
-            /**
-             * Posture
-             * @enum {string}
-             */
-            posture: "FLAT" | "LONG" | "SHORT" | "MIXED" | "UNKNOWN";
-            /** Unrealized Pnl */
-            unrealized_pnl?: number | null;
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "READY" | "ATTENTION" | "UNKNOWN";
-        };
-        /**
-         * OperatorSurfaceDailyOrderCap
-         * @description Structured daily-order-cap usage for the Configuration card body
-         *     (#608 + #611 + Slice 1 sidecar contract).
-         *
-         *     The engine readiness sidecar emits ``orders_used`` / ``orders_cap``
-         *     as structured fields alongside the existing gate ``detail`` prose;
-         *     the projection consumes the structured values.  Either field is
-         *     ``None`` when not configured / unavailable.
-         */
-        OperatorSurfaceDailyOrderCap: {
-            /** Limit */
-            limit: number | null;
-            /** Used */
-            used: number | null;
-        };
-        /**
-         * OperatorSurfaceDomainFreshness
-         * @description One backend-authored runtime domain freshness verdict.
-         */
-        OperatorSurfaceDomainFreshness: {
-            /** Age Ms */
-            age_ms?: number | null;
-            /** Stale Reason Codes */
-            stale_reason_codes?: ("ENGINE_RUNTIME_MISSING" | "ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE" | "COMMAND_LOOP_STALE" | "BROKER_PROBE_STALE" | "BROKER_PROBE_MISSING" | "BAR_LOOP_HEARTBEAT_STALE" | "BAR_LOOP_FIRST_BAR_TIMEOUT" | "BAR_LOOP_SOURCE_MISSING" | "BAR_LOOP_LATEST_BAR_STALE" | "BAR_LOOP_SESSION_CLOSED" | "BAR_LOOP_SESSION_HALTED" | "CONTROL_PLANE_LEASE_STALE" | "CONTROL_PLANE_BOOT_ID_MISMATCH")[];
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "FRESH" | "STALE" | "NOT_APPLICABLE" | "UNKNOWN" | "DEGRADED";
-        };
-        /**
-         * OperatorSurfaceEvidenceFact
-         * @description Raw fact rendered in the right pane's Advanced evidence drawer.
-         */
-        OperatorSurfaceEvidenceFact: {
-            /** Gate Id */
-            gate_id?: string | null;
-            /** Label */
-            label: string;
-            /** Source */
-            source?: string | null;
-            /** Ts Ms */
-            ts_ms?: number | null;
-            /**
-             * Ts Ms Resolved
-             * @default false
-             */
-            ts_ms_resolved?: boolean;
-            /** Value */
-            value: string;
-        };
-        /**
-         * OperatorSurfaceExecution
-         * @description Backend-authored execution posture for trader-facing chips.
-         *
-         *     This is an authored translation of the engine runtime's
-         *     ``effective_posture``. Angular must render this field when present;
-         *     it must not infer execution posture from broker safety, readonly
-         *     flags, action effects, or host state.
-         */
-        OperatorSurfaceExecution: {
-            /**
-             * Posture
-             * @enum {string}
-             */
-            posture: "PAPER_EXECUTION" | "READ_ONLY" | "UNSAFE" | "UNKNOWN";
-        };
-        /**
-         * OperatorSurfaceHostProcess
-         * @description Server-authored host-process surface (ADR-0003 / ADR-0006 / ADR-0007).
-         *
-         *     The host *service* is operator-owned: the trader runs a deployment
-         *     command to start it when it is UNREACHABLE.  The host-managed per-bot
-         *     *subprocesses* are different — the cockpit launches them through the
-         *     authenticated ``POST /runs/{run_id}/start`` path defined by ADR-0006
-         *     and secured by ADR-0007 (surfaced as ``start_capability``).  This
-         *     block exists so the cockpit can render an honest "bot is not running"
-         *     notice, a per-instance Start affordance, and (for UNREACHABLE only) a
-         *     copyable host-service start command — without Angular ever
-         *     constructing the command or the start request itself.
-         */
-        OperatorSurfaceHostProcess: {
-            /** Copyable Command */
-            copyable_command?: string | null;
-            /** Last Exit Error Code */
-            last_exit_error_code?: string | null;
-            /** Last Exit Error Detail */
-            last_exit_error_detail?: Record<string, never>;
-            /** Last Exit Error Message */
-            last_exit_error_message?: string | null;
-            /** Notice */
-            notice?: string | null;
-            start_capability: components["schemas"]["HostProcessStartCapability"];
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "RUNNING" | "STOPPING" | "EXITED" | "IDLE" | "WAITING_FOR_HOST" | "UNREACHABLE";
-        };
-        /**
-         * OperatorSurfaceNamedCondition
-         * @description Backend-authored condition copy for an operator-facing status fact.
-         *
-         *     The coarse enum remains available for compatibility and broad gating;
-         *     this condition carries the exact trader-facing meaning so Angular does
-         *     not reverse-map raw transport states into safety copy.
-         */
-        OperatorSurfaceNamedCondition: {
-            /**
-             * Code
-             * @enum {string}
-             */
-            code: "BROKER_CONNECTED" | "BROKER_DISCONNECTED" | "BROKER_DISABLED" | "BROKER_LINK_SOFT_LOST" | "BROKER_SUBSCRIPTIONS_STALE" | "BROKER_DATA_FARM_DEGRADED" | "BROKER_RECONNECTING" | "BROKER_RECOVERING" | "BROKER_HARD_DOWN" | "BROKER_RUNTIME_UNBOUND" | "BROKER_CONNECTION_UNKNOWN";
-            /** Remediation */
-            remediation?: string | null;
-            /**
-             * Severity
-             * @enum {string}
-             */
-            severity: "ok" | "info" | "warning" | "critical" | "neutral";
-            /** Summary */
-            summary: string;
-            /** Title */
-            title: string;
-        };
-        /**
-         * OperatorSurfaceNoticePlacement
-         * @description Backend-authored placement for operator notices.
-         *
-         *     The cockpit renders these lists directly. It must not re-run dominance or
-         *     tier/actionability placement rules locally.
-         */
-        OperatorSurfaceNoticePlacement: {
-            /** Attention */
-            attention?: components["schemas"]["OperatorNotice"][];
-            banner?: components["schemas"]["OperatorNotice"] | null;
-            /**
-             * Banner Fold Count
-             * @default 0
-             */
-            banner_fold_count?: number;
-            /** Banner Folded */
-            banner_folded?: components["schemas"]["OperatorNotice"][];
-            /** Quiet Status */
-            quiet_status?: components["schemas"]["OperatorNotice"][];
-        };
-        /**
-         * OperatorSurfacePriorRun
-         * @description Server-authored classification of the instance's last terminated
-         *     run (#608).
-         *
-         *     Replaces the Angular logic in ``broker-instances.component.ts`` and
-         *     ``sticky-control-bar.component.ts`` that interprets ``exit_code``,
-         *     ``exit_reason``, and ``halt_trigger`` to drive the LAST RUN banner
-         *     pill.  Mapping rules are documented in #608 and pinned by the unit
-         *     tests under ``tests/services/test_operator_surface.py``.
-         */
-        OperatorSurfacePriorRun: {
-            /**
-             * Classification
-             * @enum {string}
-             */
-            classification: "CLEAN" | "HALT_TRIGGERED" | "EXITED_WITH_ERROR" | "UNKNOWN";
-        };
-        /**
-         * OperatorSurfaceProofLine
-         * @description Backend-authored read-only proof line for the operator UI.
-         */
-        OperatorSurfaceProofLine: {
-            /** Detail */
-            detail: string;
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /** Message */
-            message: string;
-            /**
-             * Tone
-             * @enum {string}
-             */
-            tone: "neutral" | "ok" | "attention";
-        };
-        /**
-         * OperatorSurfaceReconciliation
-         * @description Per-run cold-start reconciliation projection for the cockpit.
-         *
-         *     The cockpit renders this verbatim — it does NOT derive verdicts from
-         *     raw receipt fields. ``NOT_AVAILABLE`` is the post-orchestrator state
-         *     when no receipt has landed yet (a fresh run before its first attempt
-         *     completes, or a legacy run from before this PR shipped).
-         */
-        OperatorSurfaceReconciliation: {
-            /**
-             * Adopted Intent Ids
-             * @default []
-             */
-            adopted_intent_ids?: string[];
-            /** Broker Observed At Ms */
-            broker_observed_at_ms?: number | null;
-            /** Failure Reason */
-            failure_reason?: string | null;
-            /** Last Reconcile Ms */
-            last_reconcile_ms?: number | null;
-            /** Sidecar Wal Seq */
-            sidecar_wal_seq?: number | null;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "NOT_AVAILABLE" | "IN_PROGRESS" | "CLEAN" | "ADOPTED" | "STALE" | "FAILED";
-        };
-        /**
-         * OperatorSurfaceRunSignal
-         * @description Backend-authored compact run-state signal for Bot Control.
-         *
-         *     This is the one-line answer to "is this bot process on?"  The
-         *     title/detail fields are operator-facing prose and must remain
-         *     backend-authored; the cockpit renders them without deriving copy from
-         *     raw process enums.
-         */
-        OperatorSurfaceRunSignal: {
-            /** Detail */
-            detail: string;
-            /** State Label */
-            state_label: string;
-            /** Title */
-            title: string;
-            /**
-             * Tone
-             * @enum {string}
-             */
-            tone: "on" | "off" | "transition" | "attention";
-        };
-        /**
-         * OperatorSurfaceRuntimeFreshness
-         * @description Child runtime freshness rendered verbatim by the cockpit.
-         */
-        OperatorSurfaceRuntimeFreshness: {
-            /** Additional Reasons */
-            additional_reasons?: components["schemas"]["OperatorNotice"][];
-            bar_loop: components["schemas"]["OperatorSurfaceDomainFreshness"];
-            broker: components["schemas"]["OperatorSurfaceDomainFreshness"];
-            command_loop: components["schemas"]["OperatorSurfaceDomainFreshness"];
-            control_plane: components["schemas"]["OperatorSurfaceDomainFreshness"];
-            headline?: components["schemas"]["OperatorNotice"] | null;
-            /** Posture Demoted */
-            posture_demoted: boolean;
-            /** Stale Reason Codes */
-            stale_reason_codes?: ("ENGINE_RUNTIME_MISSING" | "ENGINE_RUNTIME_INVALID_OR_INCOMPATIBLE" | "COMMAND_LOOP_STALE" | "BROKER_PROBE_STALE" | "BROKER_PROBE_MISSING" | "BAR_LOOP_HEARTBEAT_STALE" | "BAR_LOOP_FIRST_BAR_TIMEOUT" | "BAR_LOOP_SOURCE_MISSING" | "BAR_LOOP_LATEST_BAR_STALE" | "BAR_LOOP_SESSION_CLOSED" | "BAR_LOOP_SESSION_HALTED" | "CONTROL_PLANE_LEASE_STALE" | "CONTROL_PLANE_BOOT_ID_MISMATCH")[];
-        };
-        /**
-         * OperatorSurfaceSubmitReadiness
-         * @description Backend-authored answer to "Can this bot submit an order now?".
-         */
-        OperatorSurfaceSubmitReadiness: {
-            /** Blocking Reason Codes */
-            blocking_reason_codes?: string[];
-            /** Can Submit */
-            can_submit: boolean;
-            /**
-             * Code
-             * @enum {string}
-             */
-            code: "safe_to_submit" | "safe_to_monitor" | "blocked_before_submit" | "broker_state_unproven" | "account_frozen" | "waiting_for_clerk_generation" | "submit_outcome_uncertain";
-            /** Explanation */
-            explanation: string;
-            /** Label */
-            label: string;
-            /** Template Id */
-            template_id: string;
-            /**
-             * Template Version
-             * @default 1
-             */
-            template_version?: number;
-        };
-        /**
-         * OperatorSurfaceTraderGuidance
-         * @description Backend-authored trader semantics for the Overview right pane.
-         */
-        OperatorSurfaceTraderGuidance: {
-            /** Additional Attention Groups */
-            additional_attention_groups?: components["schemas"]["OperatorSurfaceAttentionGroup"][];
-            /** Advanced Evidence */
-            advanced_evidence?: components["schemas"]["OperatorSurfaceEvidenceFact"][];
-            /** Explanation */
-            explanation: string;
-            /** Headline */
-            headline: string;
-            /** Primary Remediation */
-            primary_remediation: components["schemas"]["InvokeCapabilityAction"] | components["schemas"]["FocusAction"] | components["schemas"]["RedeployAction"] | components["schemas"]["app__schemas__live_runs__OpenRunbookAction"] | components["schemas"]["InvokeEndpointAction"] | components["schemas"]["NoPrimaryRemediationAction"];
-            /** Proof Lines */
-            proof_lines: components["schemas"]["OperatorSurfaceProofLine"][];
-            /** Risk Explanation */
-            risk_explanation: string;
-            /** Risk Headline */
-            risk_headline: string;
-            /**
-             * Situation Code
-             * @enum {string}
-             */
-            situation_code: "ready_to_submit" | "monitor_only" | "submission_blocked" | "broker_state_unproven" | "account_frozen" | "waiting_for_clerk_generation" | "submit_outcome_uncertain" | "attention_required" | "unknown";
-            /** Template Id */
-            template_id: string;
-            /**
-             * Template Version
-             * @default 1
-             */
-            template_version?: number;
-        };
-        /**
-         * OperatorSurfaceTradingSession
-         * @description Server-authored trading-session projection
-         *     (PRD #607 / cockpit revision 2026-06-21).
-         *
-         *     The server owns session boundaries (the strategy's configured
-         *     session policy, exchange-aligned bar starts, etc.); Angular only
-         *     advances and formats the visible HH:MM:SS clock from its local
-         *     wall-clock.  Hard-coding RTH in Angular is forbidden because
-         *     every future strategy may declare different hours.
-         *
-         *     ``permits_strategy_activity`` is the boolean the cockpit reads to
-         *     decide whether the clock pill should read calm-green vs muted; it
-         *     is server-derived from the phase + the strategy's session policy
-         *     rather than the cockpit deriving it from the phase enum.
-         */
-        OperatorSurfaceTradingSession: {
-            /** As Of Ms */
-            as_of_ms: number;
-            /** Next Transition Ms */
-            next_transition_ms?: number | null;
-            /** Permits Strategy Activity */
-            permits_strategy_activity?: boolean | null;
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "PRE" | "RTH" | "POST" | "OVERNIGHT" | "CLOSED" | "UNKNOWN";
-            /**
-             * Timezone
-             * @default America/New_York
-             */
-            timezone?: string;
         };
         /**
          * OptionEntryLeg
@@ -22210,51 +19146,6 @@ export interface components {
              */
             scope: "bot" | "account" | "broker";
         };
-        /**
-         * ReadinessGate
-         * @description One named input to the "can this strategy act on the next bar?" verdict
-         *     (ADR 0005). ``status`` is pass|fail|unknown; ``severity`` is hard|soft.
-         */
-        ReadinessGate: {
-            /** Detail */
-            detail: string;
-            gate_result?: components["schemas"]["GateResult"] | null;
-            /** Name */
-            name: string;
-            /** Severity */
-            severity: string;
-            /** Status */
-            status: string;
-        };
-        /**
-         * ReadinessVector
-         * @description Structured readiness verdict (ADR 0005).
-         *
-         *     ``kind``/``source``: ``live_readiness``/``engine`` when authored by the
-         *     running engine; ``start_readiness``/``backend_derived`` when computed for a
-         *     dead instance from durable artifacts. ``verdict`` is READY|BLOCKED|DEGRADED|
-         *     UNKNOWN. ``live_readiness_available`` is set only on start_readiness.
-         */
-        ReadinessVector: {
-            /** As Of Ms */
-            as_of_ms: number;
-            /** Gates */
-            gates?: components["schemas"]["ReadinessGate"][];
-            /** Kind */
-            kind: string;
-            /** Live Readiness Available */
-            live_readiness_available?: boolean | null;
-            /** Orders Cap */
-            orders_cap?: number | null;
-            /** Orders Used */
-            orders_used?: number | null;
-            /** Source */
-            source: string;
-            /** Summary */
-            summary: string;
-            /** Verdict */
-            verdict: string;
-        };
         /** RealizedVsIvSeriesRequest */
         RealizedVsIvSeriesRequest: {
             /**
@@ -22396,69 +19287,6 @@ export interface components {
             simulated?: boolean;
             /** Symbol */
             symbol: string;
-        };
-        /**
-         * ReconcileAckResponse
-         * @description Acknowledgement envelope for runtime ``POST .../reconcile``.
-         *
-         *     Reconciliation PR 2. The data plane enqueues a RECONCILE command on
-         *     the bound run; the engine flips the submit barrier synchronously,
-         *     spawns the async control task, and overwrites the command ack with
-         *     its completion outcome when the orchestrator lands. The cockpit
-         *     polls ``operator_surface.reconciliation`` to observe IN_PROGRESS →
-         *     CLEAN/ADOPTED/FAILED transitions; this envelope just confirms the
-         *     request was queued and the engine recognised it.
-         *
-         *     ``request_id`` is opaque — it is generated by the data plane for
-         *     operator correlation; the engine mints its own internal id (visible
-         *     on the command ack file) and the receipt projection is the source
-         *     of truth for state changes.
-         */
-        ReconcileAckResponse: {
-            /** Accepted At Ms */
-            accepted_at_ms: number;
-            /** Request Id */
-            request_id: string;
-            rung_receipt: components["schemas"]["MutationRungReceipt"];
-            /** Rung Receipt Warnings */
-            rung_receipt_warnings?: components["schemas"]["MutationRungReceipt"][];
-        };
-        /**
-         * ReconcileMutationResponse
-         * @description PRD #619-D3 — typed response for the Reconcile action.
-         *
-         *     Reconcile is **read-only** — it never replays the mutation. The
-         *     response describes the *outcome* the pure classifier returned and
-         *     the *terminal dispatch_state* the persisted attempt has been
-         *     advanced to; the cockpit reads both and renders the operator
-         *     runbook copy per code (D5).
-         *
-         *     ``evidence`` mirrors the snapshot the classifier consumed; the
-         *     operator's audit trail wants to know which facts drove the
-         *     classification, separately from the outcome name.
-         */
-        ReconcileMutationResponse: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "start" | "stop" | "flatten" | "resume" | "pause";
-            /**
-             * Dispatch State
-             * @enum {string}
-             */
-            dispatch_state: "EFFECT_CONFIRMED" | "EFFECT_NOT_OBSERVED" | "EVIDENCE_CONFLICT" | "NOT_PROVABLE";
-            /** Evidence */
-            evidence: Record<string, never>;
-            /** Mutation Attempt Id */
-            mutation_attempt_id: string;
-            /**
-             * Outcome
-             * @enum {string}
-             */
-            outcome: "EFFECT_CONFIRMED" | "EFFECT_NOT_OBSERVED" | "EVIDENCE_CONFLICT" | "NOT_PROVABLE";
-            /** Reconciled At Ms */
-            reconciled_at_ms: number;
         };
         /**
          * ReconcileSummary
@@ -22653,36 +19481,6 @@ export interface components {
             observed_at_ms: number | null;
             /** Reference */
             reference: string;
-        };
-        /**
-         * RedeployAction
-         * @description Suggested action: navigate to the Configuration tab and start a
-         *     Redeploy (the only path that revives a STOPPED instance — ADR-0010
-         *     §4).
-         */
-        RedeployAction: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "redeploy";
-        };
-        /**
-         * RedeployLineage
-         * @description PRD #593 Slice 1E (#598) / ADR 0012 §7 — unhashed redeploy
-         *     lineage. Persisted in the ledger's ``lineage`` block alongside
-         *     ``code_sha`` and ``sizing_provenance`` (NOT inside ``live_config``),
-         *     so the fields stay out of the content hash that produces ``run_id``.
-         *
-         *     Wire-shape mirror of the TypeScript ``ActionPlanLineage`` interface.
-         */
-        RedeployLineage: {
-            /** Parent Run Id */
-            parent_run_id?: string | null;
-            /** Redeploy Reason */
-            redeploy_reason?: string | null;
-            /** Redeployed At Ms */
-            redeployed_at_ms?: number | null;
         };
         /**
          * RegimeBucketResponse
@@ -24048,24 +20846,6 @@ export interface components {
             /** Time Zone Id */
             time_zone_id: string;
         };
-        /**
-         * SetDesiredStateRequest
-         * @description Body for POST /api/live-runs/{run_id}/desired-state.
-         */
-        SetDesiredStateRequest: {
-            action: components["schemas"]["DesiredStateAction"];
-            presented_action?: components["schemas"]["PresentedOperatorActionInvocation"] | null;
-            /**
-             * Reason
-             * @default
-             */
-            reason?: string;
-            /**
-             * Updated By
-             * @default operator
-             */
-            updated_by?: string;
-        };
         /** SetHoldings */
         SetHoldings: {
             /** Fraction */
@@ -24323,51 +21103,6 @@ export interface components {
             ts: number[];
             /** Vrp Z */
             vrp_z: (number | null)[];
-        };
-        /**
-         * SizingAuditRow
-         * @description ADR 0009 § 11 — one row of the per-trade audit list.
-         *
-         *     ``sizing_provenance_at_resolve_time`` (VCR-0003 last-mile): the
-         *     provenance stamp the engine mints at policy-resolution time per
-         *     ADR 0009 § 11 — one of ``{reference_native, live_override,
-         *     spec_default}``. Surfaced through the WAL fold so the per-trade
-         *     audit can attribute each fill to the policy that produced it.
-         *     ``None`` for legacy rows (SIZING_RESOLVED events authored before
-         *     the field landed) and for skip rows (sizing_skip.jsonl predates
-         *     this column; future revision may add it). Frontend renders an
-         *     "unknown" badge when ``None``.
-         *
-         *     ``reference_price`` is ``None`` when the sizing policy can resolve without
-         *     a bar price, e.g. FixedShares. Consumers must render absence rather than
-         *     inventing a price.
-         *
-         *     ``skipped`` / ``skip_reason`` (Phase 8 / VCR-0003): present on
-         *     rows folded from ``sizing_skip.jsonl``; absent for WAL rows.
-         *     The Sizing card branch on ``skipped`` to render the "skipped"
-         *     variant.
-         */
-        SizingAuditRow: {
-            /** Intended Qty */
-            intended_qty: number;
-            /** Policy Kind */
-            policy_kind: string;
-            /** Policy Value */
-            policy_value: string;
-            /** Reference Price */
-            reference_price?: string | null;
-            /** Sized Via */
-            sized_via: string;
-            /** Sizing Provenance At Resolve Time */
-            sizing_provenance_at_resolve_time?: string | null;
-            /** Skip Reason */
-            skip_reason?: string | null;
-            /** Skipped */
-            skipped?: boolean | null;
-            /** Symbol */
-            symbol: string;
-            /** Ts Ms */
-            ts_ms: number;
         };
         /**
          * SizingProvenance
@@ -27294,32 +24029,6 @@ export interface components {
             signal_reason: string;
             /** Trade Number */
             trade_number: number;
-        };
-        /**
-         * OpenRunbookAction
-         * @description Suggested action: open an operator runbook (server-authored slug).
-         */
-        app__schemas__live_runs__OpenRunbookAction: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "open_runbook";
-            /** Slug */
-            slug: string;
-        };
-        /**
-         * OpenRunbookAction
-         * @description Move: open an operator runbook by backend-authored slug.
-         */
-        app__schemas__operator_blocker__OpenRunbookAction: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "open_runbook";
-            /** Slug */
-            slug: string;
         };
     };
     responses: never;
@@ -33483,71 +30192,6 @@ export interface operations {
             };
         };
     };
-    list_bot_catalog_api_live_instances_catalog_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotCatalogResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_bot_catalog_page_api_live_instances_catalog_page_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                cursor?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotCatalogPageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_daemon_diagnostics_api_live_instances_daemon_diagnose_get: {
         parameters: {
             query?: never;
@@ -33774,37 +30418,6 @@ export interface operations {
             };
         };
     };
-    run_roll_call_api_live_instances_roll_call_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRollCallResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     start_run_api_live_instances_runs__run_id__start_post: {
         parameters: {
             query?: never;
@@ -33818,7 +30431,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["HostRunnerStartRequest-Input"];
+                "application/json": components["schemas"]["HostRunnerStartRequest"];
             };
         };
         responses: {
@@ -33866,114 +30479,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetInstanceDesiredStateResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_instance_api_live_instances__strategy_instance_id__delete: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["BotDeleteRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotDeleteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_active_dates_api_live_instances__strategy_instance_id__active_dates_get: {
-        parameters: {
-            query?: {
-                resolution?: string;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ActiveDateEntry"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_instance_activity_api_live_instances__strategy_instance_id__activity_get: {
-        parameters: {
-            query?: {
-                session_date?: string | null;
-                resolution?: string;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiveInstanceActivityProjection"];
                 };
             };
             /** @description Validation Error */
@@ -34064,152 +30569,6 @@ export interface operations {
             };
         };
     };
-    get_chart_snapshot_api_live_instances__strategy_instance_id__chart_snapshot_get: {
-        parameters: {
-            query?: {
-                date?: string | null;
-                resolution?: string;
-                timeframe?: string | null;
-                from_ms?: number | null;
-                to_ms?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartSnapshotResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_instance_commands_api_live_instances__strategy_instance_id__commands_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommandsTimeline"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    issue_instance_command_api_live_instances__strategy_instance_id__commands_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EnqueueCommandRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommandView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_crash_recovery_override_api_live_instances__strategy_instance_id__crash_recovery_override_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CrashRecoveryOverrideRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CrashRecoveryOverrideResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_instance_daemon_diagnostics_api_live_instances__strategy_instance_id__daemon_diagnose_get: {
         parameters: {
             query?: never;
@@ -34230,326 +30589,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DaemonDiagnosticReport"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_instance_desired_state_api_live_instances__strategy_instance_id__desired_state_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SetDesiredStateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SetInstanceDesiredStateResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    end_day_now_api_live_instances__strategy_instance_id__end_day_now_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["HostRunnerStopRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EndDayIntentResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    flatten_and_pause_instance_api_live_instances__strategy_instance_id__flatten_and_pause_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["SetDesiredStateRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SetInstanceDesiredStateResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_lifecycle_roster_api_live_instances__strategy_instance_id__lifecycle_roster_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BotLifecycleRosterRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotLifecycleMutationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stream_instance_operator_surface_api_live_instances__strategy_instance_id__operator_surface_stream_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "Last-Event-ID"?: string | null;
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reconcile_instance_api_live_instances__strategy_instance_id__reconcile_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReconcileAckResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reconcile_instance_mutation_api_live_instances__strategy_instance_id__reconcile_mutation_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReconcileMutationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    retire_and_replace_api_live_instances__strategy_instance_id__retire_and_replace_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BotRetireReplaceRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotLifecycleMutationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_instance_status_api_live_instances__strategy_instance_id__status_get: {
-        parameters: {
-            query?: {
-                refresh?: boolean;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiveInstanceStatus"];
                 };
             };
             /** @description Validation Error */
@@ -34715,43 +30754,6 @@ export interface operations {
             };
         };
     };
-    enqueue_command_api_live_runs__run_id__commands_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EnqueueCommandRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommandView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_desired_state_api_live_runs__run_id__desired_state_get: {
         parameters: {
             query?: never;
@@ -34772,39 +30774,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DesiredStateView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_desired_state_api_live_runs__run_id__desired_state_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            410: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": null;
                 };
             };
             /** @description Validation Error */

@@ -194,7 +194,7 @@ export class BrokerSessionMirrorComponent {
 
   async openBot(row: BrokerSessionRosterRow): Promise<void> {
     if (!row.strategy_instance_id) return;
-    await this.router.navigate(['/broker/bots', row.strategy_instance_id]);
+    await this.router.navigate(['/brokers/alpaca/bots']);
   }
 
   selectPurgeTarget(target: PurgeTarget): void {

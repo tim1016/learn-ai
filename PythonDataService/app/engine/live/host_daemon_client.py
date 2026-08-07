@@ -14,8 +14,8 @@ additive context for log/UX surfacing and for the connectivity monitor
 (``fetch_health``) to fold into a running state.
 
 Write path: POST helpers continue to raise ``HostDaemonError`` for now. The
-typed mutation classification (619-C5) is a separate refactor that ties
-``outcome_ambiguous=True`` to operator-surface ``OUTCOME_UNKNOWN``.
+Typed mutation classification ties ``outcome_ambiguous=True`` to the
+``OUTCOME_UNKNOWN`` conflict response.
 """
 
 from __future__ import annotations

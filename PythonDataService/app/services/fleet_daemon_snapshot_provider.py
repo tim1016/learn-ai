@@ -1,4 +1,4 @@
-"""Fleet-owned daemon observations for Bot Cockpit producers (ADR-0028)."""
+"""Fleet-owned daemon observations for roster and diagnostic consumers."""
 
 from __future__ import annotations
 

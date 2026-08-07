@@ -52,7 +52,7 @@ def run_iv_diagnostics(iv_data_df: pd.DataFrame) -> IvDiagnosticsReport:
         report.warnings.append("Column 'date' not found in IV data")
         return report
 
-    dates = pd.to_datetime(iv_data_df["date"], errors="coerce")
+    dates = pd.to_datetime(iv_data_df["date"], errors="coerce", utc=True)
     valid_dates = dates.dropna()
     if len(valid_dates) == 0:
         report.warnings.append("No valid dates in IV data")

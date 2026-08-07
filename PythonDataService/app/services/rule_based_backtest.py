@@ -106,10 +106,12 @@ def run_rule_based_backtest(
         return result
 
     df = pd.DataFrame(bars)
-    df = df.drop_duplicates(subset=["timestamp"], keep="last")
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    duplicate_mask = df["timestamp"].duplicated(keep=False)
+    if duplicate_mask.any():
+        result.error = f"Input bars contain duplicate timestamp {int(df.loc[duplicate_mask, 'timestamp'].iloc[0])}"
+        return result
     if not df["timestamp"].is_monotonic_increasing:
-        result.error = "Input bars are not monotonic in timestamp after dedup"
+        result.error = "Input bars are not strictly increasing in timestamp"
         return result
     result.bars_processed = len(df)
 

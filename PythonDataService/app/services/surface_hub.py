@@ -1,4 +1,4 @@
-"""Per-bot ownership of versioned Bot Cockpit state snapshots."""
+"""Ownership of versioned fleet and Broker V2 panel snapshots."""
 
 from __future__ import annotations
 
@@ -32,12 +32,6 @@ _TRANSPORT_ONLY_PATHS = frozenset(
         ("panel", "readiness_checks", "evaluated_at_ms"),
         ("live_chart", "as_of_ms"),
         ("readiness", "as_of_ms"),
-        ("operator_surface", "trading_session", "as_of_ms"),
-        (
-            "operator_surface",
-            "broker_observation_consistency",
-            "compared_at_ms",
-        ),
     }
 )
 _DERIVED_AGE_FIELDS = frozenset({"age_ms", "age_ms_at_generation", "now_ms"})

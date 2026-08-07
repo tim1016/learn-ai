@@ -1,12 +1,24 @@
 # Numerical authority migration plan
 
-**Status:** Active — Phase 0/1/2 shipped; Phase 3 and Phase 4 reformulated (see § Status as of 2026-04-27); Phase 5 live-sizing authority (ADR 0009) shipped 2026-06-13 (see § Phase 5 below). PortfolioValuationService entry-Greek cleanup tracked separately as VCR-0005 / remediation Phase 9.
+**Status:** Active — Phases 0/1/2/3/5 shipped; Phase 4 remains a separately designed compatibility migration. Phase 3 closeout on 2026-08-06 removed the .NET backtest service, Strategy Lab, and the duplicate Python strategy package.
 **Owner:** Inkant (single-developer migration)
 **Started:** 2026-04-26
 **Target window:** 2-3 weeks of focused work
 **Calibration:** localhost research project, math rigor first, no operational ceremony beyond what improves reproducibility
 
-## Status as of 2026-04-27
+## Current status (updated 2026-08-06)
+
+**Phase 3 complete.** Engine Lab is the sole interactive stock-backtest product.
+The `runBacktest` GraphQL mutation, in-process `.NET` strategies and statistics,
+`Frontend/src/app/components/strategy-lab/`, and
+`PythonDataService/app/services/strategies/` have been removed. The two
+reference-backed Python algorithms retained their parity tests under the
+canonical engine. Momentum RSI/Stochastic and RSI Reversal were dropped rather
+than silently promoted because neither had reference provenance or a canonical
+consumer.
+
+The 2026-04-27 notes below are retained as the historical constraints that
+shaped the migration; they no longer describe the on-disk Phase 3 state.
 
 **Shipped:**
 - Phase 0 — governance (commit `e52e7c3`): vendored LEAN refs, registry rows added, engine-authority-map.md, this plan, AGENTS.md update.
@@ -25,11 +37,11 @@ Both callers produce exploratory feedback, not numbers users compare against ano
 
 **Phase 5 shipped (2026-06-13).** Live-sizing authority (ADR 0009). The canonical live sizing authority is now `live_config.sizing` (a Pydantic discriminated union: `SetHoldings | FixedShares | FixedNotional | StrategyExplicit`), resolved in `app/engine/execution/order_sizer.py` (thin policy adapter). The percent path (`SetHoldings`) delegates to the existing `LeanSetHoldingsSizing` quantity-math authority (buffered, fee-aware LEAN-faithful share counts). This retired `SimpleFloorSizing` from the live path with a pinned regression test documenting the intentional share-count shift. Subsequent VCR remediation Phase 1 (#494) made `live_config.sizing` mandatory at the deploy boundary, closing the empty-`live_config` bypass that re-introduced `SimpleFloorSizing`. See `docs/architecture/adrs/0009-live-sizing-authority-and-provenance.md` for the full 7-PR sequence (Safe canary / LEAN cutover / Reference parity / Custom / coexistence guard / per-trade audit / explicit-surface disable).
 
-**Phase 3 deferred — structural blocker.** Phase 3 as originally written assumed `runBacktest` becomes a passthrough to `/api/engine/backtest`. Investigation on 2026-04-27 found:
+**Historical Phase 3 deferral — resolved 2026-08-06.** Phase 3 as originally written assumed `runBacktest` becomes a passthrough to `/api/engine/backtest`. Investigation on 2026-04-27 found:
 1. Python's newer engine (`app/engine/strategy/algorithms/`) ports only 2 of the 4 strategies the .NET path runs (sma_crossover, rsi_mean_reversion). `RunMomentumRsiStochastic` and `RunRsiReversal` exist only in .NET and in the older `app/services/strategies/` (function-based, pandas-ta) registry — the older registry is not exposed via `/api/engine/backtest`.
 2. The `runBacktest` mutation has two consumers: Strategy Lab (deprecated UI) AND `lean-engine` (its eventual replacement). `lean-engine` currently re-imports `ReplayChartComponent`, `ReplayControlsComponent`, `LeanStatisticsComponent` from inside `strategy-lab/`, and calls `marketData.runBacktest(...)` itself. So lean-engine is **not yet self-sufficient** to replace strategy-lab.
 
-The cleanest end state — confirmed by user 2026-04-27 — is **lean-engine fully replaces strategy-lab**, at which point the four .NET strategies + Strategy Lab UI + the older `app/services/strategies/` strategy files all delete together. The current state is intermediate. Phase 3 is deferred until `lean-engine` reaches feature parity with Strategy Lab; Phase 3.0 (the deprecation comment in `BacktestService.cs`) remains the only Phase 3 work shipped on this branch.
+That end state is now complete: Engine Lab replaced Strategy Lab, and the .NET and older Python strategy implementations were deleted together.
 
 **Phase 4 needs reformulation.** Phase 4 as originally written said "thin adapter to `app/engine/strategy/algorithms/*.py`" for `rule_based_backtest.py`. Investigation on 2026-04-27 found that `rule_based_backtest.py` is **not a strategy implementation** — it is a **configurable rule engine** (271 lines): composable entry conditions (EMA crossover, RSI band, ADX filter, gap filter), multiple exit modes (fixed-bar, indicator-based), parameterized via JSON. The newer engine has only **fixed strategies** (each algorithm is a `Strategy` subclass with hardcoded rules — `SpyEmaCrossoverAlgorithm`, etc.), so there is no equivalent "configurable rule engine" to delegate to. Reformulated options:
 - Build a new `RuleBasedAlgorithm(Strategy)` subclass that takes config and dispatches — meaningful new code, not an adapter conversion.
@@ -186,27 +198,27 @@ After 2.2, the entry-Greek shock-propagation helpers in the .NET services have n
 
 `math-sources-of-truth.md` rows for portfolio valuation, scenario analysis, and live Greeks move from `pending-migration` to `canonical` (Python) with the .NET path listed under `Legacy / duplicates` as `removed`.
 
-## Phase 3 — Retire `.NET BacktestService` math (~3 days)
+## Phase 3 — Retire `.NET BacktestService` math — COMPLETE 2026-08-06
 
 Closeout migration. Engine Lab is already canonical, Strategy Lab UI is already deprecated, the authority map (Phase 0) and registry already say so.
 
-### 3.1 Passthrough `runBacktest` mutation
+### 3.1 Retire `runBacktest` mutation — complete
 
-`Backend/GraphQL/Mutation.cs:98` currently calls `BacktestService.RunBacktestAsync` which dispatches into in-process C# strategies. Make it call the Python `/api/engine/backtest` endpoint and return the response with `decimal`-preserving shape.
+The duplicate mutation and its Strategy Lab consumer were removed. Interactive backtests call the Python Engine Lab API directly.
 
 **Exit criteria:** `runBacktest` produces the same response shape as before, but the numbers come from Python.
 
-### 3.2 Delete in-process strategies
+### 3.2 Delete in-process strategies — complete
 
-`BacktestService.cs:39` dispatch table and the `RunSmaCrossover` / `RunRsiMeanReversion` / `RunMomentumRsiStochastic` / `RunRsiReversal` implementations have no callers after 3.1. Remove them.
+`BacktestService.cs` and its dispatch table are deleted.
 
-### 3.3 Delete local statistic helpers
+### 3.3 Delete local statistic helpers — complete
 
-`CalculateMaxDrawdown` / `CalculateSharpeRatio` in `BacktestService.cs` are no longer reachable. Remove them.
+The local drawdown and Sharpe helpers were deleted with the service.
 
 **Exit criteria:** `BacktestService.cs` is either deleted entirely or reduced to ~30 lines of HTTP passthrough plus persistence.
 
-### 3.4 Update registry
+### 3.4 Update registry — complete
 
 `math-sources-of-truth.md` rows for max drawdown, Sharpe ratio, SPY EMA Crossover (.NET row), RSI Mean Reversion (.NET row), SMA Crossover (.NET row) move from `pending-migration` to `canonical`. The .NET entries move to a `Removed` note or are deleted from the row entirely.
 
@@ -271,7 +283,7 @@ After all phases:
 | 1 (days 1-2) | Phase 0 — governance | Inkant | **shipped 2026-04-26** (`e52e7c3`) |
 | 1 (days 3-7) | Phase 1 — options math cutover | Inkant | **shipped** — 1.1/1.2 (`451394d`), 1.3 (header `legacy-ok` for pricing-lab + strategy-builder, see § Status as of 2026-04-27), 1.4 (`451394d` + fix `69d2bfe`) |
 | 2 | Phase 2 — portfolio scenario / live-Greeks | Inkant | **shipped** — 2.1/2.2 (`d9738a5`), 2.3 (`334d419` **PortfolioRiskService only**; PortfolioValuationService entry-Greek cleanup tracked as VCR-0005 / remediation Phase 9) |
-| 3 (days 1-3) | Phase 3 — retire BacktestService math | Inkant | **deferred** — blocked on lean-engine reaching feature parity with Strategy Lab. Phase 3.0 deprecation comment shipped (`d3c3c18`). See § Status as of 2026-04-27. |
+| 3 (days 1-3) | Phase 3 — retire BacktestService math | Inkant | **shipped 2026-08-06** — .NET service, Strategy Lab, and duplicate Python strategy package removed. |
 | 3 (days 4-5) | Phase 4 — `rule_based_backtest.py` adapter | Inkant | **deferred** — original "thin adapter" plan doesn't fit the actual code shape; needs reformulation. See § Status as of 2026-04-27. |
 | (separate stream) | Phase 5 — live-sizing authority (ADR 0009) | Inkant | **shipped 2026-06-13** — 7 sub-PRs Safe canary / LEAN cutover / Reference parity / Custom / coexistence guard / per-trade audit / explicit-surface disable; see § Phase 5 above |
 | (separate control-plane stream) | Alpaca SQLite Clerk attributed-position authority (ADR 0035) | Inkant | **implemented and qualification-passed 2026-08-06; activation-gated** — the selector uses SQLite only after a valid account/generation/database-bound activation fence. JSONL stays canonical for unactivated accounts; human activation is #1383. |

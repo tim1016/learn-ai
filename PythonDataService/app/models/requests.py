@@ -301,12 +301,12 @@ class DatasetGenerationRequest(BaseModel):
         description="'rth' for regular trading hours only (09:30-16:00 ET), 'extended' for all hours",
     )
     forward_fill: bool = Field(
-        True,
-        description="Fill missing minute bars with previous close (volume=0) for continuous indicator calculation",
+        False,
+        description="Explicitly synthesize missing minute bars from the previous close (volume=0)",
     )
     fail_on_gaps: bool = Field(
-        False,
-        description="Raise an error if intra-day bar gaps are detected instead of forward-filling. Strict mode; use when gap-free data is required.",
+        True,
+        description="Reject intra-day gaps. Disable only together with explicit forward_fill=True.",
     )
     warmup: bool = Field(
         True,

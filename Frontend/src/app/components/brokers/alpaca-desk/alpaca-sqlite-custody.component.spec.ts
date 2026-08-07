@@ -11,7 +11,7 @@ import type {
   SqliteTimelinePage,
 } from '../../../api/alpaca.types';
 import { BrokersService } from '../../../services/brokers.service';
-import { TypedHaltConfirmComponent } from '../../broker/bot-control/reused/typed-halt-confirm/typed-halt-confirm.component';
+import { TypedHaltConfirmComponent } from '../../broker/shared/typed-halt-confirm/typed-halt-confirm.component';
 import { AlpacaSqliteCustodyComponent } from './alpaca-sqlite-custody.component';
 
 const NOW = 1_700_000_000_000;
