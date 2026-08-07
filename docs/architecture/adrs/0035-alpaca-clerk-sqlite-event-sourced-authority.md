@@ -1,13 +1,50 @@
 # ADR 0035: Alpaca Account Clerk — event-sourced SQLite authority (append-only log + folded state), no Postgres in scope
 
 - **Date:** 2026-08-04
-- **Status:** Proposed (Alpaca paper generation 1 is active; supervised multi-session qualification and human acceptance remain in #1383)
+- **Status:** Proposed. Alpaca paper generation 1 is active (#1383 Phase 1
+  complete). Acceptance is gated on #1383 Phase 2 — supervised paper
+  qualification across multiple market sessions with an operator present,
+  covering the full required scenario set (ENTER acknowledgement/partial
+  fill/duplicate evidence, lost-submit and lost-cancel recovery, trade-update
+  gap plus REST reconciliation, restart with accepted/unknown work, verified
+  backup/restore/mirror-rebuild rehearsal, and stable advancing/unchanged SSE
+  revisions) — plus publication of the closure package. Live-money trading
+  remains disabled throughout and is out of scope for this ADR (Alpaca paper
+  only, this ADR does not gate or enable live-money).
 - **Context:** Alpaca Account Clerk control-plane; the SQLite control-plane PRD
   (`docs/prds/alpaca-account-clerk-sqlite-control-plane.md`); an architecture
   grilling session on 2026-08-04.
-- **Supersedes (on acceptance, for the Alpaca clerk only):** the
-  JSONL-as-canonical-authority portions of ADRs 0001, 0008, 0030, and 0033.
-  IBKR is unchanged; those ADRs remain in force everywhere else.
+- **Supersedes (on acceptance, for the Alpaca clerk only):**
+  - **ADR 0001** — the JSON/Parquet control-plane *substrate* choice, as
+    instantiated by the Alpaca clerk's two JSONL files (`order_inbox.jsonl`,
+    `order_journal.jsonl`). For the Alpaca clerk the substrate becomes the
+    SQLite append-only command/transition log plus folded current-state
+    projections. ADR 0001's substrate choice is unchanged for IBKR and every
+    other control-plane consumer.
+  - **ADR 0008** — the run-scoped WAL / durable-submit-record *mechanics*
+    (the JSONL-backed uncertain-ack bookkeeping and order-identity-recovery
+    implementation) are replaced by the SQLite command log's own
+    durable-submit and idempotency machinery for the Alpaca clerk. ADR 0008's
+    ownership-ladder and uncertain-ack *semantics* are inherited, not
+    overturned — only their JSONL-file implementation is replaced.
+  - **ADR 0030** — specifically decision 7 ("journal-canonical ledger"): for
+    the Alpaca clerk, "canonical" moves from the JSONL journal to the SQLite
+    hash-chained transition log with folded projections. Decision 2
+    (account-rooted authority) and decision 8 (identity-scoped
+    fencing/retirement) are preserved unchanged — the SQLite authority is
+    still exactly one per account and still identity-fenced; only the
+    JSONL-as-canonical-ledger mechanic is replaced.
+  - **ADR 0033** — only its JSONL-specific plumbing (the A0–A3 custody
+    clocks computed by folding the JSONL journal) is superseded, replaced by
+    SQLite-native transition folds. ADR 0033's governing *principle* — one
+    append-only authority, custody is not an economic claim, the A0/A1/A2/A3
+    clock model itself — is **not** overturned; ADR 0035 is explicitly
+    designed to honor it (see "Context" and "Decision" below). This is an
+    implementation-substrate supersession, not a philosophy reversal.
+
+  IBKR is unchanged; all four ADRs remain in force everywhere else in the
+  repository. None of the above supersession takes effect until this ADR's
+  Status changes to Accepted.
 
 ## Context
 

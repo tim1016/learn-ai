@@ -111,6 +111,197 @@ A non-production clone then passed both recovery paths:
 
 Production authority was not replaced by either rehearsal.
 
+## Feed-stall regression and incident note — 2026-08-07 addendum
+
+This addendum records the synthetic (non-live) half of the "Diagnose the feed
+stall" step above. The live read-only reproduction against IB Gateway
+(farm/session state, request identity, disconnect/error callbacks) is **not**
+performed here — it requires a host-process data plane with a live IBKR
+connection during market hours (the containerized data plane cannot drive
+live IBKR; see `PythonDataService/CLAUDE.md`). That capture remains an
+operator hand-off for the next available market session.
+
+**Root-cause characterization.** `IbkrMarketDataFeed.health()`
+(`app/marketdata/ibkr_feed.py`) already computes `stale` from bar-advancement
+age, not from IBKR's `subscriptions_stale` flag — the 2026-08-07 canary's
+socket never raised that flag, so a connection-only health check would have
+misread the stall as healthy. The advancement-based check exists, but PR
+review (2026-08-07) traced the exact `app/broker/ibkr/bars.py::stream_minute_bars`
+/ `aggregate_realtime_bar` aggregation and found the check almost certainly
+**never engaged at all** in the literal incident:
+
+`aggregate_realtime_bar` only emits a closed minute bar when a *later*
+5-second print rolls the accumulator over into a new minute — the first
+5-second print of any minute always returns `emitted=None`. The canary
+received exactly one 5-second print and no follow-up, so
+`stream_minute_bars` never yielded, `IbkrMarketDataFeed.stream_bars`'s loop
+body never ran, and `_last_bar_wall_ms` stayed at its `None` default for the
+whole stall. `health()`'s staleness branch is `elif self._last_bar_wall_ms is
+not None:` — with that guard never true, `stale` stayed `False` and would
+have stayed `False` indefinitely, not just for a bounded window. The
+operator's manual stop, not the staleness check, is what actually prevented
+exposure that morning.
+
+This reframes the gap from "the check has a grace window" to three known
+blind windows, ordered by severity:
+
+- **H3 — never advanced (most severe, unbounded).** A feed that has never
+  completed a single closed bar reports `stale=False` forever, regardless of
+  elapsed time, as long as `_last_bar_wall_ms` stays `None`. This is the
+  literal 2026-08-07 shape. No threshold ever resolves it.
+- **H1 — grace window (bounded).** Once at least one bar has completed,
+  `stale` only flips `True` after `age_ms` exceeds the 3-minute default
+  threshold (`_STALE_THRESHOLD_MS`). A feed that dies immediately after a
+  completed bar reads as healthy for up to 3 minutes — roughly 36 missed
+  bars for a 5-second-bar strategy.
+- **H2 — idle / no active subscription.** The admission translation
+  (`market_data_admission_fact`, `app/services/bot_start_admission.py`) only
+  treats a stale feed as blocking when `active_subscription_count > 0`. A
+  stale feed with no attached consumer reads as idle/`AVAILABLE` rather than
+  `STALE`, so a feed that went stale *between* runs offers no positive proof
+  of liveness before the next Start.
+
+**Operator decision (2026-08-07):** pin all three as characterization
+regressions and record them as tracked, deferred limitations rather than
+changing the threshold, the idle-subscription rule, or adding a
+never-advanced guard today. No new GitHub defect issue was opened for the
+stall; this note plus #1407 are the durable record per that decision. A
+bar-interval-aware stale threshold, and a positive-liveness requirement
+before a feed with zero completed bars can authorize exposure, remain
+proposed follow-ups — the H3 finding raises the priority of the latter,
+since it is unbounded rather than a 3-minute window.
+
+**Regression added:** `PythonDataService/tests/services/test_bot_start_admission.py`
+— the previously-untested `FeedHealth -> MarketDataAdmissionFact` translation
+seam (`market_data_admission_fact`). Neither `tests/services/test_run_admission.py`
+(injects the fact directly) nor `tests/broker/v2panel/test_market_pulse.py`
+(monkeypatches the function) exercised this seam before.
+
+- `test_connected_nonadvancing_feed_during_rth_is_stale_and_blocks_start` —
+  headline regression: a `FeedHealth` shaped like a feed that went stale
+  *after* completing bars (connected, stale past threshold, active
+  subscription, RTH) resolves to `STALE` and, chained through
+  `evaluate_run_admission`, blocks Start with `MARKET_DATA_STALE`. Verified
+  to fail if the admission translation is reverted to always return
+  `AVAILABLE`.
+- `test_market_data_admission_fact_unavailable_when_disconnected`,
+  `test_market_data_admission_fact_unknown_when_health_probe_raises` (fails
+  closed to `UNKNOWN`, chained to `MARKET_DATA_UNKNOWN`),
+  `test_market_data_admission_fact_available_when_advancing` — the remaining
+  state matrix.
+- `test_grace_window_is_a_known_limitation` (H1) — drives the *real*
+  `IbkrMarketDataFeed.health()` threshold computation (not an injected
+  `FeedHealth`), so it actually detects a changed threshold or a boundary
+  regression, then chains that real health through
+  `market_data_admission_fact`.
+- `test_never_advanced_feed_is_an_unbounded_known_limitation` (H3) — the
+  literal incident replica: a real `IbkrMarketDataFeed` that never completed
+  a bar, checked an hour later to prove the blind window is unbounded.
+  Chains through both `evaluate_run_admission` (Start is admitted) and the
+  dual-health submission gate (`market_data_channel_health` — also fooled),
+  proving both authorization paths are exposed, not just Start.
+- `test_stale_feed_with_no_active_subscription_is_idle_available` (H2).
+
+All three characterization tests pin today's behavior deliberately, so a
+future threshold, idle-subscription, or never-advanced-guard change trips
+them on purpose rather than silently.
+
+This closes the synthetic half of "Diagnose the feed stall" in the Closure
+sequence below. The live read-only reproduction, the repeated canary, and the
+full Phase 2 scenario set remain outstanding and require an operator-present
+market session.
+
+## No legacy writer in the activated scope — proof
+
+Phase 3 of #1383 requires confirming "no legacy JSONL control writer, file
+idempotency ledger, or Clerk Postgres projection" remains in the production
+cutover scope. This is a **scoping** proof — the legacy code still exists in
+the tree for the (unactivated) legacy-authority path and for one-time cutover
+inventory — not a deletion claim.
+
+- **JSONL journal writer** (`app/broker/alpaca/clerk/journal.py`,
+  `order_inbox.jsonl` / `order_journal.jsonl`). Constructed only inside the
+  legacy `AlpacaClerk` path. `app/main.py` gates it explicitly:
+  `if alpaca_clerk_runtime.authority_kind == "legacy":` before touching the
+  legacy clerk or its journal (`app/main.py:210-221`). An activated SQLite
+  account resolves `authority_kind == "sqlite"` and never enters this branch.
+- **File idempotency ledger** (`CustodyResolutionStore`,
+  `app/broker/alpaca/clerk/custody_resolution.py:191`). Constructed lazily
+  only by the legacy `AlpacaClerk._resolution_store`, which is only reachable
+  through the legacy clerk instance — never constructed by the SQLite runtime
+  (`app/broker/alpaca/clerk/sqlite/`).
+- **Clerk Postgres projector** (`app/services/clerk_transaction_projection.py`,
+  `project_alpaca_journal_best_effort`). Gated the same way at
+  `app/main.py:211-221`, and additionally defaults off via
+  `CLERK_TRANSACTION_PROJECTION_ENABLED: bool = False`
+  (`app/config.py:105`).
+- **One legitimate reference from the SQLite path**: `sqlite/cutover.py`
+  imports `INBOX_FILENAME`/`JOURNAL_FILENAME` from `journal.py` and references
+  the literal `custody_resolution_receipts.json` filename — but only as
+  known legacy-artifact names to *identify and quarantine* during the one-time
+  cutover ceremony. It never constructs `OrderJournal` or
+  `CustodyResolutionStore`, and never writes through either.
+
+Net: an activated SQLite account constructs and drives none of the three
+named legacy components at runtime. The legacy components remain in the tree
+because the legacy-authority path (accounts without a valid activation fence)
+still depends on them, by design, per ADR 0035's cutover note.
+
+## Adversarial / 1M-row / performance evidence review
+
+Reviewed `docs/audits/alpaca-sqlite-clerk-qualification-full.{json,md}` against
+the PRD §14 budgets (`docs/prds/alpaca-account-clerk-sqlite-control-plane.md:773-797`).
+
+**Adversarial campaign.** The markdown's "2 selected path(s)/node(s)" is 2
+collection roots (`tests/broker/alpaca/clerk/sqlite`,
+`tests/broker/alpaca/test_trade_updates.py`), which the JSON shows expand to
+**341 tests, all passed**, `return_code: 0`, broker dependency `NONE`
+(deterministic fake broker). This covers the named atomicity/idempotency,
+corrupt-DB/WAL, tampered-mirror, disk-full, restart, and cutover-refusal
+scenarios enumerated in `app/broker/alpaca/clerk/sqlite/qualification.py`.
+
+**Performance budgets.** `PERFORMANCE_BUDGETS_MS` in `qualification.py` maps
+exactly to the three PRD §14 latency budgets:
+
+| PRD budget | Measured field | 1M-row / 100-bot p95 | Margin | Verdict |
+|---|---|---:|---:|---|
+| warm catalog server p95 < 100 ms | `account_snapshot` | 0.213 ms | ~470x | PASS |
+| warm panel server p95 < 75 ms | `bot_snapshot` | 0.155 ms | ~484x | PASS |
+| bounded custody page p95 < 100 ms | `timeline_page` | 49.323 ms | ~2x | PASS — tightest margin of the three |
+
+`performance_budget.status` is `PASSED` with zero recorded violations.
+
+Capture-before-contact write latency (`synchronous=FULL` — confirmed as
+SQLite pragma `synchronous=2` in every scale's recorded pragmas) is measured,
+not traded away, per PRD requirement:
+
+| Scale | p50 ms | p95 ms | max ms | n |
+|---|---:|---:|---:|---:|
+| 1 bot / 10k rows | 0.428 | 0.428 | 0.428 | 1 |
+| 10 bots / 100k rows | 0.2165 | 0.316 | 0.316 | 10 |
+| 100 bots / 1M rows | 0.22 | 0.3947 | 0.663 | 100 |
+
+**Database/WAL/mirror growth** at the 1M-row fixture: DB 372.6 MiB, WAL 0
+bytes (checkpointed), mirror 1013.6 MiB. The PRD requires growth "remain
+bounded" without stating a numeric ceiling; growth looks roughly proportional
+to bot/row count across the three scales, but there is no explicit MiB or
+bytes-per-row budget to grade against. Reported as measured evidence per the
+PRD's "do not encode unmeasured claims" instruction — **needs operator
+confirmation** if an implicit ceiling exists outside this PRD section.
+
+**Query plans**, recorded at every scale, show the hot reads
+(`account_commands`, `bot_operations`, `bot_timeline`) all resolve through
+covering indexes (`ix_commands_updated_at`,
+`ix_effect_operations_strategy_updated_at`,
+`ix_custody_transitions_strategy_sequence`) with no full-table scans,
+consistent with the "zero full history replay on an unchanged warm read"
+budget.
+
+**Overall: both the adversarial and performance budgets PASS at the 1M-row /
+100-bot scale.** The bounded-custody-page (`timeline_page`) budget carries
+the least headroom (~2x) of the three latency budgets — worth watching if
+per-bot transition counts grow materially beyond this fixture in production.
+
 ## Closure sequence
 
 ### Today: close #1403
@@ -127,9 +318,12 @@ Production authority was not replaced by either rehearsal.
 1. Reproduce the SPY `reqRealTimeBars` stall with a read-only subscription before any
    bot starts. Capture IB Gateway farm/session state, request identity, raw bar count,
    and disconnect/error callbacks.
-2. If the read-only probe stalls again, open a focused market-data defect with the
-   reproduction. Fix it with a regression that fails a stream which remains connected
-   but stops advancing; do not classify connection-only health as usable market data.
+2. The advancement-based regression proving a connected-but-nonadvancing stream cannot
+   authorize exposure is already in place (see the addendum above,
+   `tests/services/test_bot_start_admission.py`). If the read-only probe reproduces the
+   stall again, record the farm/session state and callbacks in this incident note (per
+   the 2026-08-07 operator decision, no new GitHub defect issue unless a genuinely new
+   failure mode appears); do not reclassify connection-only health as usable market data.
 3. Re-run the same one-share canary only after two consecutive closed minute bars and a
    fresh flat/no-open-orders proof. Abort on every #1383 condition.
 4. Exercise and record ENTER acknowledgement, partial fill/duplicate evidence,
