@@ -1,8 +1,6 @@
-// PRD #607 / Slice 2 (#609) — Playwright config for the cockpit E2E
-// suite.  The suite intercepts `/api/live-instances/{id}/status` via
-// ``page.route()`` and injects Slice-1 contract-test snapshots; no
-// external services required.  The CI job builds the Frontend
-// container, starts it on localhost:4200, and runs ``npm run e2e``.
+// Playwright config for retained end-to-end migration coverage. Tests stub
+// their API boundaries with ``page.route()`` and require no external services.
+// CI builds the Frontend, serves it on localhost:4200, and runs ``npm run e2e``.
 
 import { defineConfig, devices } from '@playwright/test';
 

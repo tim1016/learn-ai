@@ -16,13 +16,9 @@ import os
 import re
 from pathlib import Path
 
-# Canonical single-segment id pattern. Kept byte-identical to
-# ``live_instances._INSTANCE_ID_RE`` (the operate-endpoint guard that keeps the
-# value off the CodeQL path-injection taint chain); a parity test pins the two
-# in lockstep. Enforcing it here is what makes a name that ``status``/``start``/
-# ``stop`` would later reject (e.g. one containing a space) fail closed at
-# *creation* time — via the CLI and the deploy seam — instead of producing an
-# instance that exists but can never be operated on.
+# Canonical single-segment id pattern for every live-runtime path boundary.
+# Enforcing it here makes unsafe instance names fail closed at creation time
+# and gives all surviving deploy, daemon, and artifact paths one validator.
 INSTANCE_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
 _INSTANCE_ID_RE = re.compile(INSTANCE_ID_PATTERN)
 
