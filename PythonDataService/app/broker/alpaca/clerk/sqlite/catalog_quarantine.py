@@ -33,6 +33,11 @@ from app.broker.alpaca.clerk.sqlite.operational_files import (
 )
 from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME
 from app.broker.alpaca.paths import fsync_directory, fsync_directory_chain
+from app.engine.live.account_artifacts import AccountArtifactError
+from app.engine.live.account_registry import (
+    index_account_instance_bindings,
+    read_account_instance_registry,
+)
 from app.services.bot_binding_repository import (
     BINDING_FILENAME,
     STRATEGY_INSTANCE_FILENAME,
@@ -105,8 +110,13 @@ def plan_catalog_quarantine(
     """Inventory the exact disposable catalog set and mint a short-lived token."""
     _validate_limits(max_candidates, max_total_bytes, confirmation_ttl_ms)
     active = _read_active_registry(artifacts_root, account_id)
+    account_strategy_instance_ids = _read_account_strategy_instance_ids(
+        runner_artifacts_root,
+        account_id,
+    )
     candidates = _catalog_candidates(
         runner_artifacts_root,
+        account_strategy_instance_ids=account_strategy_instance_ids,
         registered_ids=frozenset(active.strategy_instance_ids),
         max_candidates=max_candidates,
         max_total_bytes=max_total_bytes,
@@ -142,11 +152,24 @@ def apply_catalog_quarantine(
 ) -> CatalogQuarantineReceipt:
     """Recheck a plan, then move only its exact candidates into quarantine."""
     _validate_plan(plan, confirmation_token)
-    quarantine_dir = runner_artifacts_root / QUARANTINE_DIRECTORY / plan.plan_id
+    quarantine_root = runner_artifacts_root / QUARANTINE_DIRECTORY
+    quarantine_dir = quarantine_root / plan.plan_id
     prepared_manifest = quarantine_dir / MANIFEST_FILENAME
     receipt_path = quarantine_dir / RECEIPT_FILENAME
+    _require_safe_quarantine_paths(
+        runner_artifacts_root=runner_artifacts_root,
+        quarantine_root=quarantine_root,
+        quarantine_dir=quarantine_dir,
+        prepared_manifest=prepared_manifest,
+        receipt_path=receipt_path,
+        candidates=plan.candidates,
+    )
     resuming = prepared_manifest.is_file() and not receipt_path.exists()
-    if now_ms_utc() > plan.expires_at_ms and not resuming:
+    durable_recovery_required = resuming and _has_durably_moved_candidate(
+        quarantine_dir,
+        plan.candidates,
+    )
+    if now_ms_utc() > plan.expires_at_ms and not durable_recovery_required:
         raise CatalogQuarantineRefused("catalog quarantine plan expired")
 
     active = _read_active_registry(artifacts_root, plan.account_id)
@@ -154,8 +177,13 @@ def apply_catalog_quarantine(
         raise CatalogQuarantineRefused("SQLite authority changed after catalog quarantine planning")
     if active.strategy_instance_ids != plan.registered_strategy_instance_ids:
         raise CatalogQuarantineRefused("SQLite strategy registry changed after catalog quarantine planning")
+    account_strategy_instance_ids = _read_account_strategy_instance_ids(
+        runner_artifacts_root,
+        plan.account_id,
+    )
     current = _catalog_candidates(
         runner_artifacts_root,
+        account_strategy_instance_ids=account_strategy_instance_ids,
         registered_ids=frozenset(active.strategy_instance_ids),
         max_candidates=plan.max_candidates,
         max_total_bytes=plan.max_total_bytes,
@@ -188,6 +216,10 @@ def apply_catalog_quarantine(
         for artifact in plan.candidates:
             source = confined_relative_path(runner_artifacts_root, artifact.relative_path)
             destination = quarantine_dir / artifact.strategy_instance_id
+            if destination.is_symlink():
+                raise CatalogQuarantineRefused(
+                    "catalog quarantine destination must not be a symbolic link"
+                )
             if destination.is_dir() and not source.exists():
                 if tree_sha256(destination) != artifact.sha256:
                     raise CatalogQuarantineRefused("resumed quarantine artifact hash mismatch")
@@ -202,6 +234,11 @@ def apply_catalog_quarantine(
             fsync_directory(destination.parent)
     except Exception:
         _rollback_moves(moved)
+        if not _has_durably_moved_candidate(quarantine_dir, plan.candidates):
+            _remove_prepared_manifest_after_rollback(
+                prepared_manifest,
+                expected=manifest_payload,
+            )
         raise
 
     manifest_payload["state"] = "applied"
@@ -258,9 +295,25 @@ def _read_active_registry(artifacts_root: Path, account_id: str) -> _ActiveRegis
     )
 
 
+def _read_account_strategy_instance_ids(
+    runner_artifacts_root: Path,
+    account_id: str,
+) -> frozenset[str]:
+    """Return only runner identities durably bound to the selected account."""
+    try:
+        bindings = read_account_instance_registry(runner_artifacts_root, account_id)
+        indexed = index_account_instance_bindings(bindings, account_id=account_id)
+    except (AccountArtifactError, OSError, ValidationError, ValueError) as exc:
+        raise CatalogQuarantineRefused(
+            f"runner account registry for {account_id!r} is unreadable: {exc}"
+        ) from exc
+    return frozenset(indexed.latest_by_instance)
+
+
 def _catalog_candidates(
     runner_artifacts_root: Path,
     *,
+    account_strategy_instance_ids: frozenset[str],
     registered_ids: frozenset[str],
     max_candidates: int,
     max_total_bytes: int,
@@ -277,7 +330,12 @@ def _catalog_candidates(
         if not instance_dir.is_dir():
             continue
         identity = _binding_identity(instance_dir)
-        if identity is None or identity[1] != "alpaca" or identity[0] in registered_ids:
+        if (
+            identity is None
+            or identity[1] != "alpaca"
+            or identity[0] not in account_strategy_instance_ids
+            or identity[0] in registered_ids
+        ):
             continue
         if identity[0] != instance_dir.name:
             raise CatalogQuarantineRefused("runner binding identity does not match its directory")
@@ -294,12 +352,18 @@ def _catalog_candidates(
         if len(evidence) > max_candidates or total_bytes > max_total_bytes:
             raise CatalogQuarantineRefused("legacy catalog exceeds the operator-declared bounds")
     if quarantine_dir is not None:
+        if quarantine_dir.is_symlink() or not quarantine_dir.is_dir():
+            raise CatalogQuarantineRefused("quarantine directory is missing or unsafe")
         by_sid = {item.strategy_instance_id: item for item in evidence}
         for destination in sorted(quarantine_dir.iterdir(), key=lambda path: path.name):
             if destination.name in {MANIFEST_FILENAME, RECEIPT_FILENAME}:
                 continue
             if destination.is_symlink() or not destination.is_dir():
                 raise CatalogQuarantineRefused("quarantine contains an unsafe entry")
+            if destination.name not in account_strategy_instance_ids:
+                raise CatalogQuarantineRefused(
+                    "quarantine contains an artifact outside the selected account"
+                )
             size_bytes = _tree_size(destination)
             item = CatalogArtifactEvidence(
                 strategy_instance_id=destination.name,
@@ -398,6 +462,68 @@ def _require_manifest(path: Path, expected: dict[str, object]) -> None:
     applied = {**expected, "state": "applied"}
     if observed not in (expected, applied):
         raise CatalogQuarantineRefused("prepared quarantine manifest does not match the plan")
+
+
+def _require_safe_quarantine_paths(
+    *,
+    runner_artifacts_root: Path,
+    quarantine_root: Path,
+    quarantine_dir: Path,
+    prepared_manifest: Path,
+    receipt_path: Path,
+    candidates: tuple[CatalogArtifactEvidence, ...],
+) -> None:
+    if runner_artifacts_root.is_symlink() or not runner_artifacts_root.is_dir():
+        raise CatalogQuarantineRefused("runner artifacts root is missing or unsafe")
+    for path, label in (
+        (quarantine_root, "quarantine root"),
+        (quarantine_dir, "quarantine directory"),
+    ):
+        if path.is_symlink():
+            raise CatalogQuarantineRefused(f"{label} must not be a symbolic link")
+        if path.exists() and not path.is_dir():
+            raise CatalogQuarantineRefused(f"{label} must be a directory")
+    for path, label in (
+        (prepared_manifest, "quarantine manifest"),
+        (receipt_path, "quarantine receipt"),
+    ):
+        if path.is_symlink():
+            raise CatalogQuarantineRefused(f"{label} must not be a symbolic link")
+    for artifact in candidates:
+        destination = quarantine_dir / artifact.strategy_instance_id
+        if destination.is_symlink():
+            raise CatalogQuarantineRefused(
+                "catalog quarantine destination must not be a symbolic link"
+            )
+
+
+def _remove_prepared_manifest_after_rollback(
+    path: Path,
+    *,
+    expected: dict[str, object],
+) -> None:
+    try:
+        observed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise CatalogQuarantineRefused(
+            "rolled-back quarantine manifest cannot be safely removed"
+        ) from exc
+    if observed != expected:
+        raise CatalogQuarantineRefused(
+            "rolled-back quarantine manifest no longer matches the prepared plan"
+        )
+    path.unlink()
+    fsync_directory(path.parent)
+
+
+def _has_durably_moved_candidate(
+    quarantine_dir: Path,
+    candidates: tuple[CatalogArtifactEvidence, ...],
+) -> bool:
+    return any(
+        (quarantine_dir / artifact.strategy_instance_id).is_dir()
+        for artifact in candidates
+    )
 
 
 def _require_stopped_authority(account_dir: Path) -> None:

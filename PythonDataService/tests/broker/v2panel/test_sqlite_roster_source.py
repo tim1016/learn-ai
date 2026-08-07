@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -92,7 +91,7 @@ async def test_catalog_does_not_scan_runner_bindings_after_sqlite_activation(
 
 
 @pytest.mark.asyncio
-async def test_activated_catalog_latency_is_independent_of_large_legacy_set(
+async def test_activated_catalog_never_scans_large_legacy_set(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -104,7 +103,11 @@ async def test_activated_catalog_latency_is_independent_of_large_legacy_set(
     for index in range(200):
         (legacy_root / f"disposable-{index:05d}").mkdir()
 
-    def scan_large_legacy_set(_broker: str):
+    scan_calls = 0
+
+    def scan_large_legacy_set(_broker: str) -> list[Path]:
+        nonlocal scan_calls
+        scan_calls += 1
         return list(legacy_root.iterdir())
 
     monkeypatch.setattr(panel_data_source, "_validate_account", _resolved_account)
@@ -121,13 +124,11 @@ async def test_activated_catalog_latency_is_independent_of_large_legacy_set(
         lambda _broker: SimpleNamespace(account_id="paper-account", repository=_Repository()),
     )
 
-    started = time.perf_counter()
     for _ in range(20):
         result = await panel_data_source.get_catalog("alpaca", "paper-account")
-    elapsed_ms = (time.perf_counter() - started) * 1_000
 
     assert [row.strategy_instance_id for row in result] == ["active-spy", "retired-qqq"]
-    assert elapsed_ms < 75.0
+    assert scan_calls == 0
 
 
 async def _resolved_account(_broker: str, account_id: str) -> str:

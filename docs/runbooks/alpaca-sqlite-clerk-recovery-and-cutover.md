@@ -241,8 +241,9 @@ This separate offline ceremony removes post-activation list latency without dele
 evidence. It applies only after SQLite is activated and the stop boundary at the top of
 this runbook is proven. The plan reads the verified activation/database identity and the
 SQLite strategy registry, then inventories only valid file-backed Alpaca bindings under
-the runner `live_state/` tree that are absent from that registry. Registered SQLite
-instances, other-broker bindings, and unbound forensic directories are left in place.
+the runner `live_state/` tree that are durably bound to the selected account and absent
+from that registry. Bindings for another account, registered SQLite instances,
+other-broker bindings, and unbound forensic directories are left in place.
 
 The operator must declare both a maximum candidate count and a maximum total byte size.
 Planning refuses rather than widening either bound:
@@ -275,9 +276,9 @@ hash before moving anything:
 The command moves the exact directories beneath
 `legacy-catalog-quarantine/<plan-id>/`, writes a prepared/applied manifest plus a durable
 receipt, and never deletes them. An in-process failure rolls back newly moved directories;
-an interrupted apply can resume only from the matching prepared manifest and hashes. A
-changed SQLite revision/registry, changed runner artifact, symlink, wrong token, expired
-fresh plan, or out-of-bound candidate set refuses the operation.
+an interrupted apply can resume from a matching prepared or applied manifest when every
+hash still matches. A changed SQLite revision/registry, changed runner artifact, symlink,
+wrong token, expired fresh plan, or out-of-bound candidate set refuses the operation.
 
 ## Qualification evidence
 

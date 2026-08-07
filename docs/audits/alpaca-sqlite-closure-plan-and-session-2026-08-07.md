@@ -59,9 +59,9 @@ focused patch completes #1403's acceptance surface:
    execution lease, a stopped/checkpointed authority, short-lived confirmation, operator
    count/byte bounds, and unchanged tree hashes. It moves artifacts into quarantine and
    never deletes them.
-3. Regression coverage proves activated catalog reads never call the legacy scanner and
-   remain bounded with 200 disposable directories, eight times the observed production
-   cleanup set.
+3. Regression coverage proves activated catalog reads never call the legacy scanner,
+   including twenty repeated reads with 200 disposable directories (eight times the
+   observed production cleanup set) present in the runner tree.
 
 The live quarantine plan selected 25 disposable Alpaca bindings totaling 65,884 bytes,
 within declared bounds of 64 entries and 10 MiB. It preserved all three SQLite-registered
@@ -87,7 +87,7 @@ the disposable file catalog was absent. Point measurements were:
 Local validation:
 
 - Project-scope Python lint: passed
-- Focused SQLite, panel, live-projection, and live-instance suite: 54 passed in 0.79 s
+- Focused SQLite, panel, live-projection, and live-instance suite: 60 passed in 0.85 s
 - First repository-wide failure: an inherited test import collision in
   `test_runtime.py`/`test_exit.py` (`tests/scripts/conftest.py` shadows `_clock_at`),
   after 304 tests passed. This matches PR #1405's documented suite-order limitation and
@@ -117,7 +117,7 @@ Production authority was not replaced by either rehearsal.
 
 1. Put the focused #1403 patch on a fresh branch from merged `master` so it does not
    reuse PR #1405's already-merged branch.
-2. Run project-scope lint, the 54-test focused suite, and CI. Preserve the quarantine
+2. Run project-scope lint, the 60-test focused suite, and CI. Preserve the quarantine
    receipt and this audit in the PR; exclude the untracked `.cutover/` evidence tree.
 3. Merge only after the action-response, no-scan, quarantine, and latency checks pass.
 4. Post the merged PR and live measurements to #1403, then close it.

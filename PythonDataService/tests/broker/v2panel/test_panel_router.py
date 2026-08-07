@@ -161,6 +161,9 @@ class _FakeClerk:
         return await self.status()
 
 
+_ApiFixture = tuple[FastAPI, _FakeClerk, BotTaskRegistry]
+
+
 @pytest.fixture
 def api(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ALPACA_CLERK_DIR", str(tmp_path / "alpaca_clerk"))
@@ -411,7 +414,7 @@ async def test_action_reconcile_now_applies(api) -> None:
 
 
 async def test_action_returns_durable_receipt_without_waiting_for_panel_refresh(
-    api,
+    api: _ApiFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, _clerk, registry = api

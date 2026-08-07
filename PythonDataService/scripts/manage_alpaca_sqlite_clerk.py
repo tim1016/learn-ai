@@ -272,6 +272,78 @@ def _read_catalog_quarantine_plan(path: Path) -> CatalogQuarantinePlan:
     }
     if set(payload) != required or payload.get("schema_version") != 1:
         raise ValueError("catalog quarantine plan fields do not match schema version 1")
+    _require_scalar_fields(
+        payload,
+        {
+            "schema_version": int,
+            "plan_id": str,
+            "confirmation_token": str,
+            "account_id": str,
+            "created_at_ms": int,
+            "expires_at_ms": int,
+            "max_candidates": int,
+            "max_total_bytes": int,
+        },
+        label="catalog quarantine plan",
+    )
+    database_payload = _require_exact_object(
+        payload["database"],
+        {
+            "account_id",
+            "authority_generation",
+            "db_identity_token",
+            "schema_version",
+            "control_revision",
+            "transition_count",
+            "last_sequence",
+            "last_row_hash",
+        },
+        label="catalog quarantine database",
+    )
+    _require_scalar_fields(
+        database_payload,
+        {
+            "account_id": str,
+            "authority_generation": int,
+            "db_identity_token": str,
+            "schema_version": int,
+            "control_revision": int,
+            "transition_count": int,
+            "last_sequence": int,
+            "last_row_hash": str,
+        },
+        label="catalog quarantine database",
+    )
+    if database_payload["account_id"] != payload["account_id"]:
+        raise ValueError("catalog quarantine database belongs to another account")
+    registered_ids = payload["registered_strategy_instance_ids"]
+    if not isinstance(registered_ids, list) or not all(
+        isinstance(item, str) and item for item in registered_ids
+    ):
+        raise ValueError(
+            "catalog quarantine registered_strategy_instance_ids must be a list of strings"
+        )
+    candidate_payloads = payload["candidates"]
+    if not isinstance(candidate_payloads, list):
+        raise ValueError("catalog quarantine candidates must be a list")
+    candidates: list[CatalogArtifactEvidence] = []
+    for index, item in enumerate(candidate_payloads):
+        candidate_payload = _require_exact_object(
+            item,
+            {"strategy_instance_id", "relative_path", "sha256", "size_bytes"},
+            label=f"catalog quarantine candidate {index}",
+        )
+        _require_scalar_fields(
+            candidate_payload,
+            {
+                "strategy_instance_id": str,
+                "relative_path": str,
+                "sha256": str,
+                "size_bytes": int,
+            },
+            label=f"catalog quarantine candidate {index}",
+        )
+        candidates.append(CatalogArtifactEvidence(**candidate_payload))
     return CatalogQuarantinePlan(
         schema_version=payload["schema_version"],
         plan_id=payload["plan_id"],
@@ -281,12 +353,40 @@ def _read_catalog_quarantine_plan(path: Path) -> CatalogQuarantinePlan:
         expires_at_ms=payload["expires_at_ms"],
         max_candidates=payload["max_candidates"],
         max_total_bytes=payload["max_total_bytes"],
-        database=DatabaseVerification(**payload["database"]),
-        registered_strategy_instance_ids=tuple(payload["registered_strategy_instance_ids"]),
-        candidates=tuple(
-            CatalogArtifactEvidence(**item) for item in payload["candidates"]
-        ),
+        database=DatabaseVerification(**database_payload),
+        registered_strategy_instance_ids=tuple(registered_ids),
+        candidates=tuple(candidates),
     )
+
+
+def _require_exact_object(
+    value: Any,
+    required: set[str],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != required:
+        raise ValueError(f"{label} fields do not match the required schema")
+    return value
+
+
+def _require_scalar_fields(
+    payload: dict[str, Any],
+    required_types: dict[str, type],
+    *,
+    label: str,
+) -> None:
+    for field, required_type in required_types.items():
+        value = payload.get(field)
+        valid = (
+            type(value) is int
+            if required_type is int
+            else isinstance(value, required_type)
+        )
+        if not valid or (required_type is str and not value):
+            raise ValueError(
+                f"{label} field {field!r} must be a non-empty {required_type.__name__}"
+            )
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
