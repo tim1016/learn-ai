@@ -21,7 +21,7 @@ import io
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -290,7 +290,7 @@ def _columns_for(config: OptionsCompanionConfig) -> list[str]:
     column. Per-row identity columns (contract_ticker, strike, expiration)
     let the user reconstruct the contract that filled this slot at each bar.
     """
-    cols: list[str] = ["unix_ts", "iso_time"]
+    cols: list[str] = ["unix_ts"]
     if config.include_discontinuity:
         cols.append("discontinuity")
     cols += ["contract_ticker", "strike", "expiration"]
@@ -415,11 +415,8 @@ def _process_contract(
         # Use the canonical underlying timestamp so option rows and the
         # underlying ticker's rows share unix_ts bit-for-bit.
         ts = aligned_key
-        iso_time = datetime.fromtimestamp(ts / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%S+00:00")
-
         row: dict[str, Any] = {
             "unix_ts": ts,
-            "iso_time": iso_time,
             "contract_ticker": contract.ticker,
             "expiration": iso_expiration,
             "strike": contract.strike,

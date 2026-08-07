@@ -113,8 +113,7 @@ def derive_broker_safety_verdict(
     # ADR-0011 amendment (PRD #619-A): readonly_flag is carried verbatim on
     # the wire as diagnostic detail but no longer contributes to the
     # identity derivation. Submission capability is a separate fact derived
-    # from durable child/run evidence; see ``operator_surface`` and the
-    # 619-A Resume composition.
+    # from durable child/run evidence; see the 619-A Resume composition.
 
     port_class = classify_port(port)
     if port_class == "live_port":

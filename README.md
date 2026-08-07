@@ -3,7 +3,7 @@
 A full-stack quantitative trading research platform for US equity and options markets. Built for systematic alpha research, options analytics, strategy backtesting, and ML-based forecasting — all powered by Polygon.io market data.
 
 > [!CAUTION]
-> **The legacy Interactive Brokers bot list (`/broker/bots`) and bot control panel (`/broker/bots/:id`) are deprecated. Do not build, extend, optimize, or base new research on those surfaces. All bot-control product work belongs to the Alpaca Broker V2 list and panel under `/brokers/alpaca/...`. IBKR work should be limited to removal, decommissioning, or migration unless explicitly requested otherwise.**
+> **The legacy Interactive Brokers bot list (`/broker/bots`) and bot control panel (`/broker/bots/:id`) have been removed; those URLs redirect to the Alpaca Broker V2 list. All bot-control product work belongs under `/brokers/alpaca/...`. Historical IBKR reports remain audit evidence, not an implementation model.**
 
 ## Architecture
 
@@ -39,9 +39,9 @@ A full-stack quantitative trading research platform for US equity and options ma
 
 End-to-end IBKR paper-trading runtime with safety-first design. Three coordinated surfaces (operator UI, live engine, reconciliation) make a single paper run reproducible, observable, and reversible.
 
-**Broker surface** (`/broker/*`) — Operator UIs for live runs:
+**Broker surfaces** — Operator UIs for broker workflows:
 
-- **Bots** (`/broker/bots`) — Catalog of paper/live bots with links into each bot's control panel (`/broker/bots/:id`) for run state, readiness, controls, activity, audit evidence, and reconciliation receipts
+- **Alpaca Broker V2** (`/brokers/alpaca`) — Canonical bot roster and per-bot control panel
 - **Account Monitor** (`/broker/account-monitor`) — Live account balances and active positions
 - **Orders** (`/broker/orders`) — Order ledger with status, fills, and exchange round-trip detail
 - **Reconciliation** (`/broker/reconciliation`) — Daily three-way reconcile (decisions ⨯ fills ⨯ broker state) with category breakdown
@@ -390,7 +390,7 @@ proxy configuration.
 1. Navigate to **Market Data**
 2. Enter a ticker (e.g. `AAPL`), pick a date range, choose "Daily", and click **Fetch Data**
 3. Explore the candlestick chart, volume bars, and data table
-4. Try **Stock Analysis** for bulk minute-level fetching, or **Strategy Lab** to run a backtest
+4. Try **Stock Analysis** for bulk minute-level fetching, or **Engine Lab** to run a backtest
 
 ### Endpoints
 
@@ -537,7 +537,7 @@ learn-ai/
       Portfolio/                    Account, Order, PortfolioTrade, Position, PositionLot, OptionContract, RiskRule, etc.
       DTOs/                         Data transfer objects (ResearchReportDto, SignalModels...)
     Services/
-      Implementation/               MarketDataService, PolygonService, BacktestService, ResearchService, LstmService,
+      Implementation/               MarketDataService, PolygonService, ResearchService,
                                     PositionEngine, PortfolioService, PortfolioValuationService, SnapshotService,
                                     PortfolioRiskService, PortfolioReconciliationService, StrategyAttributionService,
                                     PortfolioValidationService
@@ -557,7 +557,7 @@ learn-ai/
         technical-analysis/         SMA, EMA, RSI indicator overlays
         options-chain-v2/           TradingView-style options chain (dark theme)
         options-strategy-lab/       Multi-leg strategy payoff analysis
-        strategy-lab/               Backtesting engine + replay mode
+        engine-lab/                 Canonical backtesting engine and run reports
         strategy-builder/           Visual strategy construction
         research-lab/               Feature research + signal engine pipeline
           signal-report-page/         Walk-forward, graduation, backtesting grid

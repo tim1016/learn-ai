@@ -17,6 +17,8 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     StaleRecoveryTokenError,
     build_recovery_catalog,
 )
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
     BotPanelView,
     PanelAction,
@@ -40,6 +42,59 @@ class SqlitePanelBotNotFound(ValueError):
 
 def sqlite_authority_active(broker: str) -> bool:
     return active_sqlite_facade(broker) is not None
+
+
+def read_sqlite_roster_statuses(broker: str) -> list[BotStatusView] | None:
+    """Read the activated bot roster without consulting runner artifacts.
+
+    SQLite activation makes ``strategy_instances`` and ``runs`` the durable
+    roster/lifecycle authority.  The legacy binding tree is disposable process
+    evidence and must not be walked by routine catalog refreshes.
+
+    Phase-1 SQLite custody is trade-only and predates persistence of the
+    display-only strategy key and quantity. Those fields remain explicitly
+    unknown instead of being reconstructed from disposable runner artifacts.
+    """
+    facade = active_sqlite_facade(broker)
+    if facade is None:
+        return None
+    return [
+        _sqlite_roster_status(broker, registration, facade.repository)
+        for registration in facade.repository.strategy_instances()
+    ]
+
+
+def _sqlite_roster_status(
+    broker: str,
+    registration: dict[str, object],
+    repository: ClerkSqliteRepository,
+) -> BotStatusView:
+    strategy_instance_id = str(registration["strategy_instance_id"])
+    active_run = repository.active_run(strategy_instance_id)
+    retired_at_ms = registration.get("retired_at_ms")
+    running = active_run is not None
+    return BotStatusView(
+        strategy_instance_id=strategy_instance_id,
+        strategy_key="unknown",
+        broker=broker,
+        symbol=str(registration["symbol"]),
+        mode="trade",
+        quantity=None,
+        carryover_policy="FORBID",
+        running=running,
+        phase=("RETIRED" if retired_at_ms is not None else "ON_DUTY" if running else "OFF_DUTY"),
+        desired_state="RUNNING" if running else "STOPPED",
+        active_run_id=(str(active_run.lifecycle_run_id) if active_run is not None else None),
+        duty_outcome=None,
+        binding_created_at_ms=int(registration["created_at_ms"]),
+        last_transition_at_ms=(
+            int(retired_at_ms)
+            if retired_at_ms is not None
+            else int(active_run.started_at_ms)
+            if active_run is not None
+            else None
+        ),
+    )
 
 
 async def read_sqlite_clerk_status(broker: str = "alpaca") -> ClerkStatus | None:
@@ -203,5 +258,6 @@ __all__ = [
     "read_sqlite_bot_projection",
     "read_sqlite_catalog_projections",
     "read_sqlite_clerk_status",
+    "read_sqlite_roster_statuses",
     "sqlite_authority_active",
 ]

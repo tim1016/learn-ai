@@ -243,7 +243,7 @@ class BotStatusView(BaseModel):
     broker: str
     symbol: str
     mode: Literal["log_only", "dry_run", "trade"]
-    quantity: int
+    quantity: int | None
     carryover_policy: Literal["FORBID", "ALLOW"] = "FORBID"
     carryover_account_policy_enabled: bool = False
     carryover_checkpoint_exposure: dict[str, float] = Field(default_factory=dict)

@@ -19,8 +19,8 @@ import type {
   SqliteSafeFlattenPlan,
   SqliteTimelineEntry,
 } from '../../../api/alpaca.types';
-import { SafeFlattenPlanComponent } from '../../broker/bot-control/reused/safe-flatten-plan/safe-flatten-plan.component';
-import { TypedHaltConfirmComponent } from '../../broker/bot-control/reused/typed-halt-confirm/typed-halt-confirm.component';
+import { SafeFlattenPlanComponent } from '../../broker/shared/safe-flatten-plan/safe-flatten-plan.component';
+import { TypedHaltConfirmComponent } from '../../broker/shared/typed-halt-confirm/typed-halt-confirm.component';
 import {
   type ActionReceiptView,
   PanelActionReceiptComponent,

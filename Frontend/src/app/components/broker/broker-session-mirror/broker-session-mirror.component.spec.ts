@@ -423,7 +423,7 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('Verify the client session in IBKR');
   });
 
-  it('navigates to the Bot Cockpit for attributed bot rows', async () => {
+  it('navigates to Broker V2 for attributed bot rows', async () => {
     const { fixture, router } = await setup(snapshot({ rows: [botSocket()] }));
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
@@ -434,7 +434,7 @@ describe('BrokerSessionMirrorComponent', () => {
     button?.click();
     await settle(fixture);
 
-    expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'PrajiTSLADemo']);
+    expect(navigate).toHaveBeenCalledWith(['/brokers/alpaca/bots']);
   });
 
   it('purges diagnostic events with typed confirmation and refreshes authored row events', async () => {

@@ -6,10 +6,6 @@ reconciliation receipt, WAL uncertain-intent scan).
 Layer 2: composed ``ResumeGuardState`` resolver over each
 artifact-state combination from the shared ``GUARD_CASES`` table.
 
-Layer 3: capability projection (``evaluate_action``) reading the
-composed resolver — including the intent-state-pair and poisoned
-overlays that layer above the artifact guards.
-
 Tests exercise the resolver as a black box: artifact selection and
 freshness validation live inside the resolver, and consumers never
 poke at the resolver's internal state.
@@ -22,8 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from app.schemas.live_runs import DesiredStateView, InstanceProcessView, LiveBinding
-from app.services.operator_capability import evaluate_action
 from app.services.resume_guard_state import (
     RESUME_REASON_CODES,
     BrokerSafetyArtifact,
@@ -231,127 +225,6 @@ def test_empty_guard_state_permits_resume() -> None:
     assert state.reason_codes == []
 
 
-# ---------------------------------------------------------------------------
-# Layer 3 — capability projection consumes the resolver
-# ---------------------------------------------------------------------------
-
-
-def _proc() -> InstanceProcessView:
-    return InstanceProcessView(state="idle")
-
-
-def _desired(state: str | None) -> DesiredStateView | None:
-    if state is None:
-        return None
-    return DesiredStateView(state=state, path_status="ok")
-
-
-@pytest.mark.parametrize("case", GUARD_CASES, ids=lambda c: c.name)
-def test_evaluate_action_resume_matches_table(case: GuardCase) -> None:
-    guard_state = resolve_guard_state(
-        broker_safety=case.broker_safety,
-        submission_capability=case.submission_capability,
-        reconciliation=case.reconciliation,
-        uncertain_intent=case.uncertain_intent,
-    )
-    capability = evaluate_action(
-        "resume",
-        process=_proc(),
-        live_binding=None,
-        poisoned=case.poisoned,
-        desired_state=_desired(case.current_intent),
-        guard_state=guard_state,
-    )
-    assert capability.enabled is case.expected_resume_enabled, case.name
-    assert tuple(capability.disabled_reasons) == case.expected_resume_codes, case.name
-
-
-@pytest.mark.parametrize("case", GUARD_CASES, ids=lambda c: c.name)
-def test_evaluate_action_pause_matches_table(case: GuardCase) -> None:
-    guard_state = resolve_guard_state(
-        broker_safety=case.broker_safety,
-        submission_capability=case.submission_capability,
-        reconciliation=case.reconciliation,
-        uncertain_intent=case.uncertain_intent,
-    )
-    capability = evaluate_action(
-        "pause",
-        process=_proc(),
-        live_binding=None,
-        poisoned=case.poisoned,
-        desired_state=_desired(case.current_intent),
-        guard_state=guard_state,
-    )
-    assert capability.enabled is case.expected_pause_enabled, case.name
-    assert tuple(capability.disabled_reasons) == case.expected_pause_codes, case.name
-
-
-@pytest.mark.parametrize("case", GUARD_CASES, ids=lambda c: c.name)
-def test_evaluate_action_stop_matches_table(case: GuardCase) -> None:
-    guard_state = resolve_guard_state(
-        broker_safety=case.broker_safety,
-        submission_capability=case.submission_capability,
-        reconciliation=case.reconciliation,
-        uncertain_intent=case.uncertain_intent,
-    )
-    capability = evaluate_action(
-        "stop",
-        process=_proc(),
-        live_binding=None,
-        poisoned=case.poisoned,
-        desired_state=_desired(case.current_intent),
-        guard_state=guard_state,
-    )
-    assert capability.enabled is case.expected_stop_enabled, case.name
-    assert tuple(capability.disabled_reasons) == case.expected_stop_codes, case.name
-
-
-def test_evaluate_action_resume_returns_priority_ordered_codes() -> None:
-    from app.services.resume_guard_state import SubmissionCapabilityArtifact
-
-    state = resolve_guard_state(
-        broker_safety=BrokerSafetyArtifact(state="UNSAFE", verdict="unsafe"),
-        submission_capability=SubmissionCapabilityArtifact(
-            state="SATISFIED",
-            declared_submit_mode="live_paper",
-            readonly_at_start=False,
-        ),
-        reconciliation=ReconciliationArtifact(state="FAILED", detail=""),
-        uncertain_intent=UncertainIntentArtifact(state="PRESENT", unresolved_intent_ids=("x",)),
-    )
-    capability = evaluate_action(
-        "resume",
-        process=_proc(),
-        live_binding=None,
-        desired_state=_desired("PAUSED"),
-        guard_state=state,
-    )
-    # The single-line tooltip renders disabled_reason_code; the full
-    # list is in disabled_reasons.  Priority order is documented in
-    # resume_guard_state._REASON_PRIORITY.
-    assert capability.disabled_reason_code == "BROKER_SAFETY_UNSAFE"
-    assert capability.disabled_reasons == [
-        "BROKER_SAFETY_UNSAFE",
-        "UNRESOLVED_UNCERTAIN_INTENT",
-        "RECONCILIATION_FAILED",
-    ]
-
-
-def test_reason_codes_vocabulary_is_closed_and_aligned() -> None:
-    # Sanity: every code emitted by the shared table is in the closed
-    # vocabulary.  Drives the "Frontend lookup is exhaustive and
-    # unknown codes fail closed" promise.
-    seen: set[str] = set()
-    for case in GUARD_CASES:
-        seen.update(case.expected_reason_codes)
-        seen.update(case.expected_resume_codes)
-        seen.update(case.expected_pause_codes)
-        seen.update(case.expected_stop_codes)
-    from app.services.operator_capability import REASON_CODES
-
-    assert seen <= REASON_CODES, sorted(seen - REASON_CODES)
-
-
 def test_sort_reason_codes_preserves_priority_for_unknown_codes_last() -> None:
     sorted_codes = sort_reason_codes(["RECONCILIATION_FAILED", "BROKER_SAFETY_UNSAFE", "WAT_UNKNOWN_CODE"])
     # Documented codes come first in priority order, unknowns trail.
@@ -388,44 +261,6 @@ def test_resume_reason_codes_vocabulary_pinned() -> None:
     )
 
 
-def test_evaluate_action_stop_requires_live_binding_for_actuation_effect() -> None:
-    # Stop is durable-only when no live binding; LIVE_ACTUATION when bound + running.
-    cap = evaluate_action(
-        "stop",
-        process=InstanceProcessView(state="idle"),
-        live_binding=None,
-        desired_state=_desired("PAUSED"),
-        guard_state=empty_guard_state(),
-    )
-    assert cap.enabled is True
-    assert cap.effect == "DURABLE_ONLY"
-
-    cap_live = evaluate_action(
-        "stop",
-        process=InstanceProcessView(state="running"),
-        live_binding=LiveBinding(run_id="run-1"),
-        desired_state=_desired("PAUSED"),
-        guard_state=empty_guard_state(),
-    )
-    assert cap_live.enabled is True
-    assert cap_live.effect == "LIVE_ACTUATION"
-
-
-def test_evaluate_action_unknown_intent_does_not_block() -> None:
-    # Intent of None (sidecar absent / never deployed) is treated as
-    # effective-RUNNING so Pause is permitted; resume gets
-    # DESIRED_STATE_DEFAULT_RUNNING.
-    cap_resume = evaluate_action(
-        "resume",
-        process=InstanceProcessView(state="idle"),
-        live_binding=None,
-        desired_state=None,
-        guard_state=empty_guard_state(),
-    )
-    assert cap_resume.enabled is False
-    assert cap_resume.disabled_reasons == ["DESIRED_STATE_DEFAULT_RUNNING"]
-
-
 def test_resume_guard_state_carries_artifact_diagnostics() -> None:
     from app.services.resume_guard_state import SubmissionCapabilityArtifact
 
@@ -439,8 +274,7 @@ def test_resume_guard_state_carries_artifact_diagnostics() -> None:
         reconciliation=ReconciliationArtifact(state="FAILED", detail="residual SPY +1", receipt_path="/x"),
         uncertain_intent=UncertainIntentArtifact(state="PRESENT", unresolved_intent_ids=("intent-x",)),
     )
-    # Diagnostics fields are preserved so the cockpit's expanded view
-    # can render the underlying artifact state without re-querying.
+    # Diagnostics remain available to the CLI without re-reading artifacts.
     assert state.broker_safety.verdict == "unsafe"
     assert state.reconciliation.detail == "residual SPY +1"
     assert state.uncertain_intent.unresolved_intent_ids == ("intent-x",)

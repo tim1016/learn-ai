@@ -4,8 +4,7 @@ Spec §13 / decision register #7, #10, #18, #19. This module is the **Python
 authority** for the ~25-code closed vocabulary the panel renders: phases,
 duty-outcome kinds, hold reasons, reconciliation verdicts, channel states,
 station ids, station states, and action ids. It is the source of truth the
-snapshot/TS-parity mechanism pins (the same discipline as
-``operator_capability.REASON_CODES`` — see
+snapshot/TS-parity mechanism pins (see
 ``scripts/regenerate_broker_v2_vocabulary_snapshot.py``).
 
 Two invariants this file enforces and the contract tests pin:

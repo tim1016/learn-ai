@@ -2,7 +2,7 @@
 
 Mirrors ``test_sma_crossover_parity`` in approach:
 
-The legacy strategy (``app/services/strategies/rsi_mean_reversion.py``) is a
+The retired function-based strategy was a
 plain pandas loop — RSI via ``pandas_ta.rsi``, long entry when RSI < oversold,
 exit when RSI > overbought, forced close at end. The new-engine port routes
 minute bars through a consolidator and fills through a fill model, so entry
@@ -172,7 +172,7 @@ def _reference_rsi_mean_reversion(
 ) -> list[_ReferenceTrade]:
     """Inline reimplementation of the legacy rsi_mean_reversion rule.
 
-    Rule (mirrors ``app/services/strategies/rsi_mean_reversion.py``):
+    Rule (mirrors the canonical ``RsiMeanReversionAlgorithm``):
       * enter long on the bar where RSI drops strictly below ``oversold``
       * exit on the bar where RSI rises strictly above ``overbought``
       * any open position is closed at the last bar

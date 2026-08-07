@@ -230,7 +230,7 @@ def _compute_rolling_ic(
 
         rolling_ics.append(float(corr))
         mid_ts = int(window["timestamp"].iloc[rolling_window // 2])
-        rolling_dates.append(str(pd.to_datetime(mid_ts, unit="ms").date()))
+        rolling_dates.append(str(pd.to_datetime(mid_ts, unit="ms", utc=True).date()))
 
     if len(rolling_ics) < 2:
         logger.warning(
@@ -326,7 +326,7 @@ def compute_information_coefficient(
         {
             "feature": feature_values.values,
             "target": target_returns.values,
-            "date": pd.to_datetime(timestamps_ms, unit="ms").dt.date,
+            "date": pd.to_datetime(timestamps_ms, unit="ms", utc=True).dt.date,
         }
     )
 

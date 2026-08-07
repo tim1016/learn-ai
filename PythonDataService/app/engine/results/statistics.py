@@ -2,7 +2,7 @@
 
 Formula: Sharpe = mean(daily_returns)/stddev(daily_returns) · √252; MaxDrawdown = max_t(running_peak_t - equity_t); per-trade win rate, profit factor, expected value, average winning/losing trade duration. All annualized with TRADING_DAYS_PER_YEAR=252.
 Reference: Sharpe (1994) "The Sharpe Ratio", Journal of Portfolio Management 21(1) §IV; Bacon, *Practical Portfolio Performance Measurement* (2e), §8.2 for max drawdown; standard portfolio statistics.
-Canonical implementation: this file. The .NET duplicates `Backend/Services/Implementation/BacktestService.cs::CalculateSharpeRatio` and `CalculateMaxDrawdown` are pending-migration (Phase 3.2). The .NET `SnapshotService.cs::ComputeMetrics` is legacy-ok-pending-parity (live-portfolio path; finding F-0011).
+Canonical implementation: this file. The former .NET backtest duplicates were removed in Phase 3. The .NET `SnapshotService.cs::ComputeMetrics` is legacy-ok-pending-parity for the separate live-portfolio path (finding F-0011).
 Validated against: `PythonDataService/tests/test_statistics.py::TestMaxDrawdown` and
 `PythonDataService/tests/fixtures/test_engine_stats_extended_fixtures.py::TestENG002MaxDrawdown`.
 

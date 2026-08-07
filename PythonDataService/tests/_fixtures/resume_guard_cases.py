@@ -4,15 +4,12 @@
 Consumed by:
 
 - ``tests/services/test_resume_guards.py`` — composed-resolver layer.
-- ``tests/services/test_operator_surface.py`` — capability projection.
-- ``tests/integration/test_resume_guard_entrypoints.py`` — entry-point
-  consistency assertion (capability projection, mutation endpoint, CLI
-  ``cmd_resume``).
+- ``tests/integration/test_resume_guard_entrypoints.py`` — CLI ``cmd_resume``.
 
 The table is the single source of truth for *which artifact-state
 combinations produce which decision + reason codes*; each consumer
-exercises its surface against every row so a future refactor cannot
-drift behaviour between entry points.
+exercises the resolver and CLI against every row so a future refactor cannot
+drift their guard behavior.
 """
 
 from __future__ import annotations

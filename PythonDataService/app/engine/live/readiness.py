@@ -317,8 +317,7 @@ def _build_live_readiness_projection(
     gates = _with_gate_results(gates, source="engine", as_of_ms=as_of_ms)
     # PRD #607 / Slice 1 (#608) — emit ``orders_used`` / ``orders_cap``
     # as structured top-level fields alongside the existing
-    # ``orders_cap`` gate ``detail`` prose.  The cockpit's
-    # ``operator_surface.daily_order_cap`` projection consumes the
+    # ``orders_cap`` gate ``detail`` prose. Readiness consumers use the
     # structured fields; the gate prose stays for human readability.
     vector = {
         "kind": "live_readiness",

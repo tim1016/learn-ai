@@ -45,7 +45,9 @@ from app.engine.engine import BacktestEngine
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.order import FillMode
 from app.engine.results.equity_downsample import from_engine_curve
+from app.engine.results.lean_statistics import compute_lean_statistics
 from app.engine.results.statistics import summarize
+from app.engine.results.trade_record import TradeRecord
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration
 from app.models.responses import (
@@ -65,8 +67,6 @@ from app.services.engine_validation_analytics import (
 )
 from app.services.parity_companion import dispatch_parity_companion, new_parity_group_id
 from app.services.run_verdict_service import compute_run_verdict
-from app.services.strategies.common import TradeRecord
-from app.services.strategies.lean_statistics import compute_lean_statistics
 from app.utils.timestamps import now_ms_utc, to_ms_utc
 
 router = APIRouter()

@@ -1,4 +1,4 @@
-import type { OperatorSurfaceConditionSeverity } from '../../api/live-instances.types';
+import type { OperatorSurfaceConditionSeverity } from '../../api/operator-observability.types';
 
 export type OperatorDisplaySeverity = OperatorSurfaceConditionSeverity;
 export type PrimeTagSeverity = 'success' | 'info' | 'warn' | 'danger' | 'secondary';

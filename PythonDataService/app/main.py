@@ -383,8 +383,8 @@ async def lifespan(app: FastAPI):
     # ── PRD #619-C2 — daemon connectivity monitor ──────────────────
     # The host live-runner daemon is independent of the IBKR broker:
     # start the connectivity monitor regardless of broker_enabled, so
-    # operator-surface composers always have a typed connectivity state
-    # to read.
+    # fleet and diagnostic consumers always have a typed connectivity
+    # state to read.
     from app.engine.live.daemon_connectivity_monitor import (
         DaemonConnectivityMonitor,
     )
@@ -465,10 +465,8 @@ async def lifespan(app: FastAPI):
             alpaca_clerk_runtime.authority_kind,
         )
 
-    # ADR-0028 Stage 2 — each visible bot gets one producer-owned status
-    # snapshot before the API begins serving normal reads. The producer owns
-    # broker-activity bootstrap and periodic assembly; status GET only reads
-    # its stored document.
+    # Start the shared fleet snapshot before serving its REST/SSE readers.
+    # Per-bot state is owned by the Alpaca Broker V2 projection runtime above.
     await live_instances_router.start_surface_hubs()
 
     try:

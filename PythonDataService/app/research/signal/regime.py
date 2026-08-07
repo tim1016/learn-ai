@@ -24,7 +24,7 @@ def compute_daily_regime_labels(
     Returns DataFrame with columns: date, vol_regime, trend_regime.
     """
     bar_df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
-    bar_df["date"] = pd.to_datetime(bar_df["timestamp"], unit="ms").dt.date
+    bar_df["date"] = pd.to_datetime(bar_df["timestamp"], unit="ms", utc=True).dt.date
     bar_df["log_return"] = np.log(bar_df["close"] / bar_df["close"].shift(1))
 
     daily = bar_df.groupby("date").agg(close=("close", "last"), realized_vol=("log_return", "std")).reset_index()
@@ -62,7 +62,7 @@ def compute_bar_regime_gate(
     """Return per-bar boolean mask: 1 if Low Vol AND Sideways, else 0."""
     daily_regimes = compute_daily_regime_labels(bars)
 
-    bar_dates = pd.to_datetime(timestamps, unit="ms").dt.date
+    bar_dates = pd.to_datetime(timestamps, unit="ms", utc=True).dt.date
     date_to_active = {}
     for _, row in daily_regimes.iterrows():
         is_active = row["vol_regime"] == "Low Vol" and row["trend_regime"] == "Sideways"

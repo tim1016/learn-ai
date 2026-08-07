@@ -50,11 +50,9 @@ from app.schemas.live_runs import (
     CommandsTimeline,
     CommandSummary,
     CommandTimelineEntry,
-    CommandView,
     DecisionsSummary,
     DesiredStatePathStatus,
     DesiredStateView,
-    EnqueueCommandRequest,
     ExecutionsSummary,
     FailureRecord,
     FlagsSummary,
@@ -1118,54 +1116,6 @@ async def get_desired_state(run_id: str) -> DesiredStateView:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
     ledger = _ledger_or_404(run_dir, run_id)
     return _resolve_desired_state(root, ledger.strategy_instance_id)
-
-
-@router.post("/{run_id}/desired-state", deprecated=True, status_code=status.HTTP_410_GONE)
-async def set_desired_state(run_id: str) -> None:
-    """Retire unsigned run-addressed writes in favour of signed instance intent."""
-    raise HTTPException(
-        status.HTTP_410_GONE,
-        detail={
-            "reason_code": "INSTANCE_INTENT_ENDPOINT_REQUIRED",
-            "message": "Use the signed instance desired-state control instead.",
-        },
-    )
-
-
-@router.post("/{run_id}/commands", response_model=CommandView, deprecated=True)
-async def enqueue_command(run_id: str, body: EnqueueCommandRequest) -> CommandView:
-    """DEPRECATED (#400 cutover): superseded by the instance-addressed one-shot
-    command ``POST /api/live-instances/{id}/commands`` (reserved to
-    FLATTEN/RECONCILE/MARK_POISONED). Run-addressed routes are evidence-only.
-    Kept temporarily for back-compat — slated for removal once the cutover is
-    signed off."""
-    root = Path(get_settings().live_runs_root)
-    try:
-        run_dir = _validate_run_id(run_id, root)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
-    try:
-        verb = CommandVerb(body.verb)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid command verb") from exc
-    if verb in {
-        CommandVerb.PAUSE,
-        CommandVerb.RESUME,
-        CommandVerb.STOP,
-        CommandVerb.CLOCK_OUT,
-    }:
-        raise HTTPException(
-            status.HTTP_410_GONE,
-            detail={
-                "reason_code": "DURABLE_INTENT_ENDPOINT_REQUIRED",
-                "message": "Use the instance desired-state control for Pause, Resume, Stop, or Clock out.",
-            },
-        )
-    channel = CommandChannel(run_dir / "commands")
-    command = channel.write_from_operator(verb)
-    return CommandView(seq=command.seq, verb=command.verb.value)
 
 
 # The bot polls the command dir at ~1s, independent of the bar loop

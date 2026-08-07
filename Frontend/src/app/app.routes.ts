@@ -1,6 +1,5 @@
 import { ChangeDetectionStrategy, Component } from "@angular/core";
 import { Routes } from "@angular/router";
-import { BotSurfaceStore } from "./components/broker/bot-control/bot-surface-store.service";
 import { AccountDeskHoldingsStore } from "./components/broker/account-desk/account-desk-holdings-store.service";
 import { AccountDeskEventsStore } from "./components/broker/account-desk/account-desk-events-store.service";
 import { AccountDeskDirectoryStore } from "./components/broker/account-desk/account-desk-directory-store.service";
@@ -9,10 +8,6 @@ import { AccountDeskGuidanceStore } from "./components/broker/account-desk/accou
 import { AccountDeskRecoveryStore } from "./components/broker/account-desk/account-desk-recovery-store.service";
 import { AccountDeskSurfaceStore } from "./components/broker/account-desk/account-desk-surface-store.service";
 import { AccountDeskTransactionHistoryStore } from "./components/broker/account-desk/account-desk-transaction-history-store.service";
-import {
-  botExistsGuard,
-  botSurfaceResolver,
-} from "./components/broker/bot-control/bot-surface-routing";
 import { brokerBotsRedirectGuard } from "./components/broker/v2-panel/lib/broker-bots-redirect.guard";
 
 // Nominal component target for the brokerBotsRedirectGuard route.
@@ -315,20 +310,18 @@ export const routes: Routes = [
   },
   {
     path: "broker/paper-run",
-    redirectTo: "broker/bots",
+    redirectTo: "brokers/alpaca/bots",
     pathMatch: "full",
   },
   {
     path: "broker/instances",
-    redirectTo: "broker/bots",
+    redirectTo: "brokers/alpaca/bots",
     pathMatch: "full",
   },
   {
     path: "broker/bots",
-    loadComponent: () =>
-      import("./components/broker/bots/bots-page.component").then(
-        (m) => m.BotsPageComponent
-      ),
+    redirectTo: "brokers/alpaca/bots",
+    pathMatch: "full",
   },
   {
     path: "broker/offline-replay",
@@ -339,10 +332,8 @@ export const routes: Routes = [
   },
   {
     path: "broker/bot-manual",
-    loadComponent: () =>
-      import(
-        "./components/broker/bot-operator-manual/bot-operator-manual-page.component"
-      ).then((m) => m.BotOperatorManualPageComponent),
+    redirectTo: "brokers/alpaca/manual",
+    pathMatch: "full",
   },
   {
     path: "broker/desert-oasis",
@@ -360,17 +351,12 @@ export const routes: Routes = [
   },
   {
     path: "broker/bots/:id",
-    providers: [BotSurfaceStore],
-    canActivate: [botExistsGuard],
-    resolve: { botSurface: botSurfaceResolver },
-    loadComponent: () =>
-      import(
-        "./components/broker/bot-control/bot-control-page.component"
-      ).then((m) => m.BotControlPageComponent),
+    redirectTo: "brokers/alpaca/bots",
+    pathMatch: "full",
   },
   {
     path: "broker/instances/:id",
-    redirectTo: "broker/bots/:id",
+    redirectTo: "brokers/alpaca/bots",
     pathMatch: "full",
   },
   {

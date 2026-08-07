@@ -1,11 +1,15 @@
 # PRD: Operator Notice Contract and Trader-Readable Failures
 
-**Status**: Draft — ready for implementation
+**Status**: Historical — retired with the IBKR Bot Control surface on 2026-08-06; do not implement
 **Owner**: Inkant
 **Created**: 2026-06-23
 **Closes**: #656 (watchdog silent exit), #657 (raw freshness enum strings in bot control), #658 (Activity tab stuck loading)
 **Architectural anchor**: ADR-0015 (Operator Notice Contract) — ships in PR 1 of this initiative
 **Related ADRs**: ADR-0013 (operator surface: judgment vs evidence), ADR-0014 (broker-authored operator view: backend-rendered narratives)
+
+> This PRD is retained as design provenance only. Its Bot Control UI and
+> per-instance operator-surface contract have been removed. New bot-control
+> work targets Alpaca Broker V2 under `/brokers/alpaca/...`.
 
 ---
 

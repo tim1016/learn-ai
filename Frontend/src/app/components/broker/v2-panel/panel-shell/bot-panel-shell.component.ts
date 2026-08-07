@@ -15,7 +15,7 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { MessageService } from 'primeng/api';
 
 import type { SqliteSafeFlattenPlan } from '../../../../api/alpaca.types';
-import { SafeFlattenPlanComponent } from '../../bot-control/reused/safe-flatten-plan/safe-flatten-plan.component';
+import { SafeFlattenPlanComponent } from '../../shared/safe-flatten-plan/safe-flatten-plan.component';
 import type {
   ChartHistoryPreset,
   ChartLiveResolution,

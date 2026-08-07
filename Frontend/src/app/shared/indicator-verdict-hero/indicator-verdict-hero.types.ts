@@ -67,7 +67,7 @@ export interface VerdictAnalysis {
  * Tiers (renamed in v2 review).
  *
  * - ``pre_flight`` (was ``trade``): all 5 statistical screens pass and
- *   no hard demotions fire. Eligible for the Strategy Lab pre-flight
+ *   no hard demotions fire. Eligible for the strategy-validation pre-flight
  *   pipeline; **not** eligible for live trading on this signal alone.
  * - ``investigate``: at least 3 of 5 screens pass, OR all 5 pass but a
  *   hard demotion fired (single-asset only / negative Sharpe proxy /

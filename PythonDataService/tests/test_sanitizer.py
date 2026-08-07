@@ -109,7 +109,7 @@ class TestSanitizeAggregates:
         assert isinstance(ts, (int, float)), f"Expected int64 ms, got {type(ts)}: {ts}"
         assert int(ts) == 1704067200000, f"Timestamp should round-trip exactly, got {ts}"
 
-    def test_data_sorted_by_timestamp(self):
+    def test_out_of_order_timestamps_raise_error(self):
         raw = [
             {
                 "timestamp": 1704153600000,
@@ -129,11 +129,8 @@ class TestSanitizeAggregates:
             },
         ]
 
-        result = DataSanitizer.sanitize_aggregates(raw)
-        data = result["data"]
-
-        assert len(data) == 2
-        assert data[0]["timestamp"] < data[1]["timestamp"]
+        with pytest.raises(ValueError, match="strictly increasing"):
+            DataSanitizer.sanitize_aggregates(raw)
 
     def test_summary_has_removal_percentage(self):
         raw = [

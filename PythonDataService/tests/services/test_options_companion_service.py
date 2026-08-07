@@ -101,9 +101,9 @@ class TestColumnsFor:
             include_discontinuity=False,
         )
         cols = _columns_for(cfg)
-        assert cols == ["unix_ts", "iso_time", "contract_ticker", "strike", "expiration"]
+        assert cols == ["unix_ts", "contract_ticker", "strike", "expiration"]
 
-    def test_discontinuity_inserts_after_iso_time(self):
+    def test_discontinuity_inserts_after_timestamp(self):
         cfg = OptionsCompanionConfig(
             enabled=True,
             include_ohlcv=False,
@@ -119,7 +119,7 @@ class TestColumnsFor:
             include_discontinuity=True,
         )
         cols = _columns_for(cfg)
-        assert cols[:5] == ["unix_ts", "iso_time", "discontinuity", "contract_ticker", "strike"]
+        assert cols[:4] == ["unix_ts", "discontinuity", "contract_ticker", "strike"]
 
     def test_greeks_each_toggle_adds_own_column(self):
         cfg = OptionsCompanionConfig(

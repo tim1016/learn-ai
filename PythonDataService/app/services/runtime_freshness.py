@@ -2,7 +2,7 @@
 
 Pure function. Given the latest ``EngineRuntimeSnapshot`` + ``now_ms`` +
 a ``RuntimeFreshnessConfig``, returns a per-domain ``RuntimeFreshness``
-the operator-surface composer can consume verbatim. No I/O, no
+that notice and safety consumers can use verbatim. No I/O, no
 calendar lookups inside this module — when session-awareness lands as
 a follow-up, the caller injects a ``SessionState`` provider.
 
@@ -18,9 +18,9 @@ Per PRD §B:
   session-aware overlay is wired by passing a non-None
   ``session_state`` (``RTH_OPEN`` | ``CLOSED`` | ``HALTED``).
 - **control_plane** stale (no lease, expired, or boot_id mismatch
-  observed before this evaluation) → operator action surface
-  demotes; this module reports the freshness of the last observation
-  but never decides the action-matrix (that lives in operator_surface).
+  observed before this evaluation) → control actions demote; this module
+  reports the freshness of the last observation but never decides an
+  action matrix.
 
 Thresholds are server config with validated defaults — Angular never
 authors them.
@@ -79,7 +79,7 @@ class DomainFreshness:
 
 @dataclass(frozen=True)
 class RuntimeFreshness:
-    """Composed runtime-freshness verdict the operator surface consumes.
+    """Composed runtime-freshness verdict consumed by notices and safety checks.
 
     ``posture_demoted`` is True iff the data plane should fall back to
     "last-known" rendering for the instance. The triggers per PRD §B

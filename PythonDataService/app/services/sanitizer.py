@@ -6,15 +6,24 @@ Canonical implementation: app/services/sanitizer.py
 Validated against: PythonDataService/tests/test_sanitizer.py
 """
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from app.config import settings
-
 logger = logging.getLogger(__name__)
+
+
+def _require_strict_timestamp_order(timestamps: pd.Series, *, record_label: str) -> None:
+    """Reject finite input that would otherwise be silently reordered."""
+    if timestamps.duplicated(keep=False).any():
+        duplicate = timestamps[timestamps.duplicated(keep=False)].iloc[0]
+        raise ValueError(f"Duplicate timestamps detected in {record_label} input: {duplicate}")
+    if (timestamps.diff().dropna() <= pd.Timedelta(0)).any():
+        raise ValueError(f"{record_label} timestamps must be strictly increasing")
 
 
 def _clean_numeric(df: pd.DataFrame, quantile: float = 0.99) -> pd.DataFrame:
@@ -65,18 +74,7 @@ class DataSanitizer:
             # Convert timestamp from ms to datetime for processing.
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
 
-            # Fail-fast on duplicates — they indicate upstream corruption.
-            if settings.REMOVE_DUPLICATES:
-                dup_mask = df["timestamp"].duplicated(keep=False)
-                if dup_mask.any():
-                    dup_ts = df.loc[dup_mask, "timestamp"].unique()[:3].tolist()
-                    raise ValueError(
-                        f"Duplicate timestamps detected ({dup_mask.sum()} rows): {dup_ts}. "
-                        "Callers must deduplicate before sanitizing."
-                    )
-
-            # Sort by timestamp
-            df = df.sort_values("timestamp").reset_index(drop=True)
+            _require_strict_timestamp_order(df["timestamp"], record_label="aggregate")
 
             # Clean numeric columns (median fill + quantile clip)
             numeric_cols = ["open", "high", "low", "close", "volume"]
@@ -140,18 +138,7 @@ class DataSanitizer:
             # Convert timestamp (nanoseconds for trades).
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ns", utc=True)
 
-            # Fail-fast on duplicates — they indicate upstream corruption.
-            if settings.REMOVE_DUPLICATES:
-                subset = ["timestamp", "trade_id"] if "trade_id" in df.columns else ["timestamp"]
-                dup_mask = df.duplicated(subset=subset, keep=False)
-                if dup_mask.any():
-                    dup_ts = df.loc[dup_mask, "timestamp"].unique()[:3].tolist()
-                    raise ValueError(
-                        f"Duplicate trade records detected ({dup_mask.sum()} rows): {dup_ts}. "
-                        "Callers must deduplicate before sanitizing."
-                    )
-
-            df = df.sort_values("timestamp").reset_index(drop=True)
+            _require_strict_timestamp_order(df["timestamp"], record_label="trade")
 
             # Clean numeric trade columns
             timestamps = df["timestamp"]

@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
 
 from app.services.broker_v2_panel import live_projection
-from app.services.live_instance_surface_assembler import VisibleRunsSnapshotCache
 from app.services.surface_hub import (
     SnapshotUnavailableError,
     SurfaceHub,
@@ -555,29 +553,6 @@ async def test_subscribe_after_stop_is_terminal_and_not_retained() -> None:
 
     assert await queue.get() is None
     assert queue not in hub._watchers
-
-
-@pytest.mark.asyncio
-async def test_visible_runs_cache_coalesces_fleet_scan_and_invalidates(
-    tmp_path: Path,
-) -> None:
-    cache = VisibleRunsSnapshotCache(ttl_seconds=60)
-    calls = 0
-
-    def load(_root: Path) -> dict[str, list[dict]]:
-        nonlocal calls
-        calls += 1
-        return {"bot-a": [{"run_id": "run-a"}]}
-
-    snapshots = await asyncio.gather(*(cache.get(tmp_path, load) for _ in range(5)))
-
-    assert calls == 1
-    assert all(snapshot == snapshots[0] for snapshot in snapshots)
-
-    await cache.invalidate(tmp_path)
-    await cache.get(tmp_path, load)
-
-    assert calls == 2
 
 
 @pytest.mark.asyncio

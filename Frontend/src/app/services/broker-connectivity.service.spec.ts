@@ -167,10 +167,10 @@ describe('BrokerConnectivityService fleet state', () => {
                 audience: 'operator',
                 disposition: 'fix_elsewhere',
                 headline: 'blocked-bot is blocked',
-                detail: 'Open the bot cockpit.',
+                detail: 'Open Broker V2.',
                 primary_move: {
-                  label: 'Open bot cockpit',
-                  action: { kind: 'navigate', route: '/broker/bots/blocked-bot', fragment: null },
+                  label: 'Open Broker V2',
+                  action: { kind: 'navigate', route: '/brokers/alpaca/bots', fragment: null },
                   target: null,
                 },
                 secondary_moves: [],

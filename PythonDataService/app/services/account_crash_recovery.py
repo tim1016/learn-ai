@@ -46,7 +46,7 @@ def crash_recovery_gate_for_instance(
     account_id: str | None,
     strategy_instance_id: str,
 ) -> GateResult | None:
-    """Project the crash-recovery gate for the read-only operator surface.
+    """Project the crash-recovery gate for read-only safety consumers.
 
     Observability reads degrade on corrupt account artifacts instead of
     failing the whole status projection; the start-mutation path stays

@@ -1,14 +1,13 @@
 # Bot Control & Account Clerk — Operator Manual
 
-> # AUTHORITY STATUS: CANONICAL — SOLE CURRENT AUTHORITY
+> # AUTHORITY STATUS: HISTORICAL — RETIRED IBKR SURFACE
 >
-> **Canonical file:** `docs/bot-control-operator-manual.md`.
+> **Current replacement:** `docs/broker-v2-operator-manual.md`.
 >
-> This is the sole current operating and implementation-reference document for Bot
-> Control and Account Clerk behavior. Humans, coding agents, reviewers, and UI
-> maintainers must use this document instead of older plans, runbooks, audits,
-> handoffs, or implementation snapshots. The in-app page at `/broker/bot-manual`
-> renders the synchronized copy of this file.
+> The IBKR bot list, detail panel, rendered manual, and legacy catalog endpoints
+> described here were retired on 2026-08-06. Their former URLs redirect to the
+> Alpaca Broker V2 product. Keep this file only as operational provenance; do not
+> implement from it or treat its routes and projections as current contracts.
 >
 > **Verified against:** `bcbfe935a07139023f045aae277078058368857c` (HEAD),
 > 2026-07-29. **Audience:** traders, operators, reviewers, and coding agents.
@@ -37,12 +36,12 @@ bite in practice.
 
 ---
 
-## 0. Authority and implementation snapshot (2026-07-29)
+## 0. Historical implementation snapshot (2026-07-29)
 
-This is the sole current operating manual. The **Trader** view is not a
-separate, competing manual: it renders the same backend-authored lifecycle,
-account, and action facts that this manual describes. Angular does not derive a
-trading verdict from raw data.
+The remainder of this document records the retired implementation as it stood
+on 2026-07-29. It is not a current operating manual or implementation contract.
+Use `docs/broker-v2-operator-manual.md` for the canonical Alpaca Broker V2
+product.
 
 | Concern | Current authority | Implementation boundary |
 |---|---|---|

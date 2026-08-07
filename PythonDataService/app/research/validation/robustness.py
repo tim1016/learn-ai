@@ -186,7 +186,7 @@ def compute_monthly_ic_breakdown(
     df = pd.DataFrame(
         {
             "ic": daily_ic_values,
-            "date": pd.to_datetime(daily_ic_dates),
+            "date": pd.to_datetime(daily_ic_dates, utc=True),
         }
     )
     df["month"] = df["date"].dt.to_period("M").astype(str)
@@ -289,7 +289,7 @@ def compute_regime_analysis(
         return [], []
 
     bar_df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
-    bar_df["date"] = pd.to_datetime(bar_df["timestamp"], unit="ms").dt.date
+    bar_df["date"] = pd.to_datetime(bar_df["timestamp"], unit="ms", utc=True).dt.date
     bar_df["log_return"] = np.log(bar_df["close"] / bar_df["close"].shift(1))
 
     # Build daily summary from intraday bars
@@ -512,7 +512,7 @@ def compute_structural_breaks(
     df = pd.DataFrame(
         {
             "ic": daily_ic_values,
-            "date": pd.to_datetime(daily_ic_dates),
+            "date": pd.to_datetime(daily_ic_dates, utc=True),
         }
     )
     df["month"] = df["date"].dt.to_period("M")

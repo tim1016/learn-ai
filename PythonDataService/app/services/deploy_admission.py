@@ -17,10 +17,6 @@ from app.schemas.live_runs import (
     InstanceBrokerView,
     LiveInstanceDeployRequest,
 )
-from app.services.operator_surface import (
-    compose_exposure_coherence_facts,
-    normalize_exposure_positions,
-)
 
 
 @dataclass(frozen=True)
@@ -33,6 +29,53 @@ class SymbolResolution:
 class DeployAdmissionBlock:
     status_code: int
     detail: dict[str, object]
+
+
+def normalize_exposure_positions(owned_positions: Mapping[str, object]) -> dict[str, int]:
+    normalized: dict[str, int] = {}
+    for symbol, quantity in owned_positions.items():
+        name = str(symbol).strip().upper()
+        if not name:
+            continue
+        qty = int(quantity)
+        if qty != 0:
+            normalized[name] = normalized.get(name, 0) + qty
+    return {symbol: qty for symbol, qty in sorted(normalized.items()) if qty != 0}
+
+
+def _derive_posture(owned_positions: Mapping[str, int]) -> str:
+    non_zero = {symbol: quantity for symbol, quantity in owned_positions.items() if quantity != 0}
+    if not non_zero:
+        return "FLAT"
+    sides = {"LONG" if quantity > 0 else "SHORT" for quantity in non_zero.values()}
+    return "MIXED" if len(sides) > 1 else next(iter(sides))
+
+
+def compose_exposure_coherence_facts(
+    broker: InstanceBrokerView | None,
+    *,
+    source: str,
+    strategy_instance_id: str | None = None,
+    run_id: str | None = None,
+) -> ExposureCoherenceFacts:
+    if broker is None:
+        return ExposureCoherenceFacts(
+            posture="UNKNOWN",
+            pending_order_count=None,
+            owned_positions={},
+            source=source,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
+        )
+    owned_positions = normalize_exposure_positions(broker.owned_positions)
+    return ExposureCoherenceFacts(
+        posture=_derive_posture(owned_positions),  # type: ignore[arg-type]
+        pending_order_count=broker.pending_order_count,
+        owned_positions=owned_positions,
+        source=source,
+        strategy_instance_id=strategy_instance_id,
+        run_id=run_id,
+    )
 
 
 def resolve_symbol_from_ledger(

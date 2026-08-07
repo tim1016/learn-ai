@@ -77,8 +77,8 @@ from app.services.broker_v2_panel.paper_deploy_service import (
 )
 from app.services.broker_v2_panel.presented_actions import build_roster_action
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
-    adapt_sqlite_catalog,
     adapt_sqlite_panel,
+    build_sqlite_catalog,
 )
 from app.services.broker_v2_panel.sqlite_panel_source import (
     SqlitePanelBotNotFound,
@@ -86,6 +86,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_bot_projection,
     read_sqlite_catalog_projections,
     read_sqlite_clerk_status,
+    read_sqlite_roster_statuses,
     sqlite_authority_active,
 )
 from app.services.live_chart_window import (
@@ -484,6 +485,17 @@ def _require_alpaca_deploy_request(
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     """Build the bots-list catalog for one account (§5)."""
     resolved = await _validate_account(broker, account_id)
+    statuses = read_sqlite_roster_statuses(broker)
+    if statuses is not None:
+        sids = [status.strategy_instance_id for status in statuses]
+        projections = await read_sqlite_catalog_projections(broker, resolved, sids)
+        if projections is None:
+            raise PanelUnavailableError(
+                "The activated SQLite bot roster could not be projected.",
+                detail="Refresh after the active Clerk runtime is restored.",
+            )
+        return build_sqlite_catalog(statuses, projections, account_id=resolved)
+
     statuses = _bot_statuses(broker)
     entries = _read_order_journal(broker, resolved)
     sids = [status.strategy_instance_id for status in statuses]
@@ -491,14 +503,6 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     owner = get_or_create_owner(resolved, broker)
     owner.sync(entries, sids, decisions=decisions)
     rows = owner.snapshot_catalog(statuses)
-    sqlite_projections = await read_sqlite_catalog_projections(
-        broker,
-        resolved,
-        sids,
-    )
-    if sqlite_projections is not None:
-        return adapt_sqlite_catalog(rows, sqlite_projections)
-
     now_ms = now_ms_utc()
     try:
         clerk_status = await _clerk_status()

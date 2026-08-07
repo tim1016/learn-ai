@@ -110,7 +110,7 @@ def run_walk_forward(
 ) -> WalkForwardResult:
     """Run walk-forward validation with rolling train/test windows."""
     df = pd.DataFrame(bars).sort_values("timestamp").reset_index(drop=True)
-    df["date"] = pd.to_datetime(df["timestamp"], unit="ms").dt.date
+    df["date"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.date
 
     # Build month boundaries
     unique_dates = sorted(df["date"].unique())

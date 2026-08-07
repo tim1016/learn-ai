@@ -6,12 +6,12 @@
 
 **2026-07-04 prune.** ~150 point-in-time working docs — completed implementation plans (`docs/superpowers/`, `docs/architecture/phases/`), session handoffs (`docs/handoffs/`), shipped-feature PRDs, and closed audit findings (`docs/audits/auto-research/findings/`, `docs/audits/vibe-coded-app-research/`) — were **hard-deleted to git history** rather than archived. Git history is their provenance record. Open defects lifted out of the deleted audit findings live in `docs/known-gaps.md`.
 
-**2026-07-29 Bot Control authority reconciliation.** The old AccountOwner implementation
+**2026-07-29 Bot Control authority reconciliation (superseded 2026-08-06).** The old AccountOwner implementation
 snapshot, former "single canonical" operator runbook, cockpit/cohort plans, obsolete
 runbooks, dated audits, and the five-bot handoff moved to `docs/archive/` with status
-banners. `docs/bot-control-operator-manual.md` is the **sole current operating and
-implementation-reference authority** for Bot Control and Account Clerk behavior,
-rendered in-app at `/broker/bot-manual`. It supersedes all older operating manuals,
+banners. `docs/bot-control-operator-manual.md` is now historical IBKR provenance;
+`docs/broker-v2-operator-manual.md` is the **current operating authority** for Alpaca Broker V2,
+rendered in-app at `/brokers/alpaca/manual`. It supersedes all older operating manuals,
 quick procedures, runbooks, controller/cockpit plans, AccountOwner snapshots, and
 point-in-time audits as behavior instructions. ADRs remain decision authority; code,
 contracts, and focused tests remain implementation evidence.
@@ -88,8 +88,8 @@ have their decision preserved here.
 | Doc | Domain | Replaces / supersedes | Last reviewed |
 |---|---|---|---|
 | `docs/architecture/options-math-authorities.md` | Options math | `docs/architecture/options-routes-research.md` (cleanup record) | 2026-04-29 |
-| `docs/bot-control-operator-manual.md` | **Sole current** Bot Control + Account Clerk operating and implementation-reference authority; source rendered at `/broker/bot-manual` | Former operator runbooks/quick procedures, AccountOwner snapshots, cockpit/cohort guides, controller plans, and point-in-time audits | 2026-07-29 |
-| `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by the sole Bot Control manual; no independent policy authority | — | 2026-08-06 |
+| `docs/broker-v2-operator-manual.md` | **Current** Alpaca Broker V2 operating authority | Legacy IBKR bot-control manual and point-in-time implementation plans | 2026-08-06 |
+| `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by the Broker V2 manual; no independent policy authority | — | 2026-08-06 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR — design rationale ("why") | — | — |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
 | `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
@@ -107,6 +107,7 @@ have their decision preserved here.
 | Doc | Domain | Notes |
 |---|---|---|
 | `docs/arch-overview.md` | System architecture overview | Review on next arch change |
+| `docs/bot-control-operator-manual.md` | Historical IBKR operator record | The UI, rendered manual, and catalog/control projections it describes are retired; use the Broker V2 manual for current behavior. |
 | `docs/architecture/backtesting-engine-grounding-2026-04-26.md` | Engine diagnostic | Cited by `numerical-authority-migration-plan.md` |
 | `docs/architecture/build-alpha-style-features-1-8-research-spec.md` | Alpha-style features | Features 6-8 may be unshipped — keep for traceability |
 | `docs/architecture/edge-feature-design.md` | Edge feature engineering spec | Actionable engineering spec |
@@ -122,10 +123,10 @@ have their decision preserved here.
 | `docs/audits/computational-fidelity-2026-04-22-addendum.md` | Timestamp ban motivation | Addendum cited by same rule |
 | `docs/audits/structural-integrity-2026-04-22.md` | Known violation baseline | Historical context |
 | `docs/audits/bot-control-8bot-call-graph-audit-2026-07-28.md` | Eight-bot call-graph evidence | Supporting investigation only; its open findings are tracked in `docs/known-gaps.md`, and it is never an operator procedure |
-| `docs/audits/{three-bot-lifecycle-2026-07-23,2026-07-23-findings-corrected,eight-bot-deploy-ui-2026-07-27,deployment-validation-connectivity-incident-2026-07-27}.md` | Bot-control validation and incident provenance | Historical evidence only; use the Bot Control manual and `known-gaps.md` for current truth |
+| `docs/audits/{three-bot-lifecycle-2026-07-23,2026-07-23-findings-corrected,eight-bot-deploy-ui-2026-07-27,deployment-validation-connectivity-incident-2026-07-27}.md` | Retired IBKR Bot Control validation and incident provenance | Historical evidence only; use the Broker V2 manual and `known-gaps.md` for current truth |
 | `docs/bars-open-attribute-fix.md` | IBKR bar handling | Surgical bug-fix note for `ib_async.RealTimeBar.open_` |
 | `docs/codex-phase-1-4-audit.md` | IBKR Phases 1-4 code audit | "Most recent code audit" per `ibkr-integration-authority.md` |
-| `docs/engine-phase-1-2-refined-plan.md` | Strategy Lab deprecation lineage | Keep until Strategy Lab is fully removed |
+| `docs/engine-phase-1-2-refined-plan.md` | Strategy Lab deprecation lineage | Historical completion evidence; Strategy Lab is removed. |
 | `docs/indicator-reliability-methodology.md` | Indicator reliability details | Backs `indicator-reliability-authority.md` |
 | `docs/lean-engine-phase1-verification-report.md` | Engine correctness evidence | Evidential artifact |
 | `docs/references/alpaca-sqlite-clerk-invariant-traceability.md` | ADR 0035 invariant-to-code/test evidence | Supports ADR 0035 and issue #1395 review |

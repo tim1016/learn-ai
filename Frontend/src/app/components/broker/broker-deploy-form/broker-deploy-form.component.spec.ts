@@ -549,9 +549,9 @@ describe('BrokerDeployFormComponent', () => {
     });
     expect(fixture.nativeElement.textContent).toContain('Deployment created');
     expect(fixture.nativeElement.textContent).toContain('run-new');
-    expect(fixture.nativeElement.querySelector('.back')?.getAttribute('href')).toBe('/broker/bots');
+    expect(fixture.nativeElement.querySelector('.back')?.getAttribute('href')).toBe('/brokers/alpaca/bots');
     expect(fixture.nativeElement.querySelector('.goto')?.getAttribute('href')).toBe(
-      '/broker/bots/deployment-validation-paper',
+      '/brokers/alpaca/bots',
     );
   });
 

@@ -518,9 +518,9 @@ class DaemonConnectivityMonitor:
 # Process-wide singleton — installed by the FastAPI lifespan.
 # ---------------------------------------------------------------------------
 #
-# Mirrors ``app.broker.ibkr.auto_reconnect_monitor.{get,set}_monitor``: the
-# operator-surface composer (619-C3) and the cockpit poll endpoints consult
-# this to read the latest connectivity state without dependency injection.
+# Mirrors ``app.broker.ibkr.auto_reconnect_monitor.{get,set}_monitor``: fleet
+# and diagnostic consumers consult this to read the latest connectivity state
+# without dependency injection.
 # Consumers must guard with ``if monitor is not None`` so unit tests and
 # broker-disabled deployments stay clean.
 

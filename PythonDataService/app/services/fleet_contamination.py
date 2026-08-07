@@ -91,7 +91,7 @@ def instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
     Reference: ADR 0030; docs/architecture/engine-authority-map.md,
       "Live account contamination verdict".
     Canonical implementation: journal_exposure.py::project_journal_exposure;
-      this function is an operator-surface consumer.
+      this function is a fleet-safety consumer.
     Validated against:
       tests/services/test_fleet_contamination.py::
       test_instance_broker_uses_clerk_positions_not_stale_sidecar.

@@ -44,7 +44,7 @@ interface ResetPayload {
   readonly durable_stream_id: string;
 }
 
-/** Typed composite-cursor client shared by every replayable Bot Cockpit feed. */
+/** Typed composite-cursor client shared by replayable broker event feeds. */
 export function durableEventFeed<Row>(
   options: DurableEventFeedOptions<Row>,
 ): DurableEventFeed<Row> {

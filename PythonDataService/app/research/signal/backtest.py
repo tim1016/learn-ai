@@ -104,7 +104,7 @@ def run_backtest(
 
     if include_series and timestamps is not None:
         ts = timestamps[mask]
-        result.dates = [str(pd.to_datetime(t, unit="ms").date()) for t in ts.values]
+        result.dates = [str(pd.to_datetime(t, unit="ms", utc=True).date()) for t in ts.values]
         cum = np.cumsum(net_returns)
         result.cumulative_returns = cum.tolist()
         result.positions = positions.tolist()

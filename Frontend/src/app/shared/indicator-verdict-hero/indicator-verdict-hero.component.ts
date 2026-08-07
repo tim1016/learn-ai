@@ -34,7 +34,7 @@ export type VerdictCta =
  * - Replaced 0-100 "confidence" scalar with screens-passed count (5/5).
  *   The framework explicitly rejects a single reliability score.
  * - Renamed tier "trade" → "pre_flight" since this page does not
- *   validate live trading; the right gate is the Strategy Lab
+ *   validate live trading; the right gate is the strategy-validation
  *   pre-flight pipeline.
  * - "Economically meaningful" pill renamed to "|IC| > 0.10 magnitude"
  *   since the page tests statistical magnitude, not cost-net economics.
@@ -46,7 +46,7 @@ export type VerdictCta =
  * The hero does not fetch anything — the host component passes in a
  * pre-computed ``VerdictAnalysis`` bundle. That keeps the Research Lab
  * page the single owner of the analysis response shape and lets this
- * component be reused elsewhere (e.g. Strategy Lab pre-flight).
+ * component be reused elsewhere (e.g. strategy-validation pre-flight).
  */
 @Component({
   selector: "app-indicator-verdict-hero",
