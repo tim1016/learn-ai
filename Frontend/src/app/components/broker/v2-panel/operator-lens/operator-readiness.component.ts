@@ -38,6 +38,7 @@ const OPERATOR_ACTION_TONES: Partial<Record<ActionId, PanelActionTone>> = {
   pause: 'warning',
   continue: 'primary',
   stop: 'danger',
+  stop_bot_decisions: 'danger',
   flatten_stop: 'danger',
   reconcile_now: 'neutral',
   prepare_safe_flatten: 'neutral',

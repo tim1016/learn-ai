@@ -2,6 +2,20 @@
 
 A scientific platform for porting and validating trading logic. Reference implementations (LEAN, open-source backtesters, academic papers) are mined for math, then ported into this repo with strict numerical equivalence and vanishing external dependency.
 
+## STOP: legacy IBKR bot control is deprecated
+
+The Interactive Brokers bot list and bot control panel are deprecated:
+
+- Legacy UI routes: `/broker/bots` and `/broker/bots/:id`
+- Legacy Angular areas: `Frontend/src/app/components/broker/bots/` and `Frontend/src/app/components/broker/bot-control/`
+- Legacy Python surface: the IBKR bot catalog/control projections under `PythonDataService/app/routers/live_instances.py` and their supporting surface-assembly services
+
+**Do not build, extend, optimize, or conduct product/architecture research on these IBKR bot-control surfaces. Do not use them as the model for new bot-control work.** The canonical bot-control product is the Alpaca Broker V2 list and panel under `/brokers/alpaca/...` and `Frontend/src/app/components/broker/v2-panel/`.
+
+Work in the deprecated IBKR areas is allowed only when the task explicitly concerns removal, decommissioning, migration away from IBKR, or the user explicitly overrides this rule.
+
+The README's auto-generated Features inventory (the `AUTO-UPDATED:FEATURES` block managed by `auto-readme-tick`) still *documents* the IBKR paper-trading surfaces because that code physically exists. That inventory is descriptive, not an endorsement: this rule and the README's top-of-file deprecation banner govern what to build on. New bot-control work targets Alpaca Broker V2 (`/brokers/alpaca/...`) regardless of what the generated feature list enumerates.
+
 ## Guiding philosophy
 
 1. **Math rigor before stack hygiene.** This repo's primary job is porting mathematical logic from reference sources and proving numerical equivalence. Stack conventions matter but never override math correctness.

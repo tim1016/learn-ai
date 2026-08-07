@@ -57,7 +57,7 @@
         <app-panel-action-button
           [action]="action"
           [pending]="actionPending()"
-          [tone]="action.action_id === 'stop' ? 'danger' : 'primary'"
+          [tone]="primaryActionTone()"
           (triggered)="actionRequested.emit($event)"
         />
       }

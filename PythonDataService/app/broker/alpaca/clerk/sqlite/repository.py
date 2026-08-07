@@ -183,14 +183,28 @@ class ClerkSqliteRepository:
     def clock(self) -> Clock:
         return self._clock
 
+    @property
+    def lease_ttl_ms(self) -> int:
+        """Return the configured execution-lease lifetime for heartbeats."""
+        return self._lease_ttl_ms
+
     def close(self) -> None:
-        """Release the execution lease and close the connection."""
-        self._conn.execute(
-            "UPDATE control_meta SET execution_lease_owner = NULL, "
-            "execution_lease_expires_at_ms = NULL WHERE id = 1"
-        )
-        self._conn.commit()
-        self._conn.close()
+        """Release the execution lease and close the connection.
+
+        Acquire the same write coordinator every mutation uses so a
+        shutdown cannot close the connection out from under an in-flight
+        lease heartbeat: cancelling the ``asyncio.to_thread`` renewal
+        wrapper does not stop the worker thread already inside
+        :meth:`renew_execution_lease`, so ``close`` waits for that worker to
+        release the lock before touching the connection.
+        """
+        with self._write_lock:
+            self._conn.execute(
+                "UPDATE control_meta SET execution_lease_owner = NULL, "
+                "execution_lease_expires_at_ms = NULL WHERE id = 1"
+            )
+            self._conn.commit()
+            self._conn.close()
 
     # ------------------------------------------------------------------
     # Construction
@@ -276,6 +290,17 @@ class ClerkSqliteRepository:
                 f"account {self._account_id!r} execution lease was lost or expired; "
                 "this handle can no longer write"
             )
+
+    def renew_execution_lease(self) -> None:
+        """Keep an idle live writer's lease current without mutating custody.
+
+        The same write coordinator used by transitions prevents a heartbeat
+        from sharing this connection with another mutating call. Ownership
+        and expiry still use the strict compare-and-swap check above, so a
+        stale handle cannot resurrect itself after missing its deadline.
+        """
+        with self._write_lock:
+            self._renew_execution_lease()
 
     def _assert_not_poisoned(self) -> None:
         if self._poisoned:

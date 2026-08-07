@@ -432,6 +432,42 @@ describe('OperatorLensComponent', () => {
     expect(await screen.findByRole('button', { name: 'Flatten & Stop' })).toBeTruthy();
   });
 
+  it('renders the SQLite stop-decisions action in its readiness gate', async () => {
+    const fakeSvc = makeFakePanelService();
+    const stopAction: PanelAction = {
+      action_id: 'stop_bot_decisions',
+      label: 'Stop bot decisions',
+      explanation: 'Stop new decisions after the durable SQLite command.',
+      enabled: true,
+      blockers: [],
+      confirmation: null,
+      revision: 2,
+      concurrency_token: 'sqlite-stop-token',
+    };
+    const value: BotPanelView = {
+      ...makePanel(),
+      actions: [stopAction],
+      readiness_checks: [makeReadinessCheck(stopAction)],
+      readiness_ready_count: 1,
+    };
+
+    await render(OperatorLensComponent, {
+      inputs: {
+        panel: value,
+        profile: makeProfile(),
+        actionPending: false,
+        broker: 'alpaca',
+        accountId: 'acc-1',
+        sid: 'sid-1',
+      },
+      providers: [{ provide: BrokerV2PanelService, useValue: fakeSvc }],
+    });
+
+    expandReadiness('Stop bot decisions');
+    const stopButton = await screen.findByRole('button', { name: 'Stop bot decisions' });
+    expect(stopButton.classList.contains('panel-action__button--danger')).toBe(true);
+  });
+
   it('flatten-stop button is disabled when action is disabled', async () => {
     const fakeSvc = makeFakePanelService();
     const flattenAction: PanelAction = {

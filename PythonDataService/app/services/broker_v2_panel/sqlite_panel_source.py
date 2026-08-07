@@ -53,7 +53,10 @@ async def read_sqlite_clerk_status(broker: str = "alpaca") -> ClerkStatus | None
     )
     if projection is None:
         raise RuntimeError("The active SQLite Clerk projection is unavailable.")
-    return sqlite_clerk_status(projection)
+    return sqlite_clerk_status(
+        projection,
+        channel_healths=facade.channel_health_snapshot(),
+    )
 
 
 async def read_sqlite_bot_projection(

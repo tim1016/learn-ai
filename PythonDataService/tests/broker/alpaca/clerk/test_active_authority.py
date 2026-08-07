@@ -214,6 +214,51 @@ async def test_valid_activation_opens_and_recovers_only_sqlite(
     await runtime.close()
 
 
+async def test_lease_heartbeat_runs_before_startup_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The execution-lease heartbeat must be live during startup recovery.
+
+    A clean-account boot whose recovery only reads from the broker performs
+    no writes, so nothing renews the 30s lease. If the heartbeat only started
+    after boot recovery, a slow recovery could let the lease expire before the
+    sweep ever ran, stranding the authority read-only.
+    """
+    broker = _Broker()
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST",
+        artifacts_root=tmp_path,
+    )
+    heartbeat_live_during_recovery = False
+
+    async def _recover_observes_heartbeat(_self: object) -> None:
+        nonlocal heartbeat_live_during_recovery
+        heartbeat_live_during_recovery = any(
+            task.get_name() == "alpaca-sqlite-execution-lease-heartbeat"
+            and not task.done()
+            for task in asyncio.all_tasks()
+        )
+
+    monkeypatch.setattr(
+        "app.broker.alpaca.clerk.active_authority.SqliteAlpacaClerkFacade.recover",
+        _recover_observes_heartbeat,
+    )
+
+    runtime = await select_active_clerk_runtime(
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        activation_store=_ActivationStore(_activation()),
+        legacy_factory=_Legacy,
+        repository_opener=lambda _account_id, _root: repo,
+    )
+
+    assert heartbeat_live_during_recovery
+    assert runtime.authority_kind == "sqlite"
+    await runtime.close()
+
+
 async def test_activated_database_open_failure_never_constructs_legacy(
     tmp_path: Path,
 ) -> None:

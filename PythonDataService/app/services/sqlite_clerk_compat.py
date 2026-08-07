@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.diagnosis import CustodyDiagnosis
-from app.broker.alpaca.clerk.models import ClerkStatus
+from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
@@ -115,7 +117,11 @@ def failed_sqlite_projection(
     )
 
 
-def sqlite_clerk_status(projection: ClerkProjection) -> ClerkStatus:
+def sqlite_clerk_status(
+    projection: ClerkProjection,
+    *,
+    channel_healths: Sequence[ChannelHealth] | None = None,
+) -> ClerkStatus:
     hold = projection.holds[0] if projection.holds else None
     unresolved = sum(
         operation.state in {"accepted", "in_progress", "unknown"}
@@ -144,7 +150,9 @@ def sqlite_clerk_status(projection: ClerkProjection) -> ClerkStatus:
         ),
         outstanding_intents=unresolved,
         observed_at_ms=projection.generated_at_ms,
-        channel_healths=None,
+        channel_healths=(
+            list(channel_healths) if channel_healths is not None else None
+        ),
         authority_kind="sqlite",
         generic_hold_clear_available=False,
         generic_hold_clear_explanation=(

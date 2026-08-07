@@ -2,6 +2,9 @@
 
 A full-stack quantitative trading research platform for US equity and options markets. Built for systematic alpha research, options analytics, strategy backtesting, and ML-based forecasting — all powered by Polygon.io market data.
 
+> [!CAUTION]
+> **The legacy Interactive Brokers bot list (`/broker/bots`) and bot control panel (`/broker/bots/:id`) are deprecated. Do not build, extend, optimize, or base new research on those surfaces. All bot-control product work belongs to the Alpaca Broker V2 list and panel under `/brokers/alpaca/...`. IBKR work should be limited to removal, decommissioning, or migration unless explicitly requested otherwise.**
+
 ## Architecture
 
 ```
