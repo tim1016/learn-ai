@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     HashChainBroken,
     IntegrityCheckFailed,
     OperationClaimError,
+    RecoveryInProgress,
     RepositoryPoisoned,
     SchemaVersionMismatch,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "OperationClaim",
     "OperationClaimError",
     "OrderResource",
+    "RecoveryInProgress",
     "RepositoryPoisoned",
     "RunResource",
     "SchemaVersionMismatch",

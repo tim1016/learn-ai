@@ -21,6 +21,46 @@ masks `/app/artifacts/alpaca_clerk` with the VM-local `alpaca-clerk-data` named
 volume; it must not run from the parent macOS `virtiofs` bind mount. Startup refuses
 known remote/FUSE filesystem types before opening or creating `clerk.db`.
 
+The Compose volume is external and startup also requires the regular-file marker
+`/app/artifacts/alpaca_clerk/_compose_volume_ready`. This makes first use an explicit
+operator ceremony instead of allowing Compose to create an empty volume that masks a
+previous host authority tree.
+
+Before the first startup after adopting this layout:
+
+1. stop the data service and every Clerk writer;
+2. create the volume explicitly with
+   `podman volume create learn-ai-alpaca-clerk-data`;
+3. if `/app/alpaca_clerk_legacy` contains the prior host tree, copy that complete tree
+   into `/app/artifacts/alpaca_clerk` from a one-shot `python-service` container while
+   the service is stopped. Never copy only `clerk.db`; the registry, activation ledger,
+   mirror, WAL, and SHM are one authority set;
+4. for every established account, run `verify` below. If verification fails, leave the
+   marker absent and use `rebuild` or the documented cutover initialization with fresh
+   broker evidence; and
+5. only after every retained account agrees with its finalized mirror head, create
+   `_compose_volume_ready` inside the named volume. A deliberately empty first install
+   may create the marker only after confirming the separately mounted legacy tree is
+   empty. Discarding an existing tree requires the reset/cutover proof ceremony; an
+   empty marker is not deletion authority.
+
+```bash
+podman compose run --rm --no-deps python-service \
+  python -m scripts.manage_alpaca_sqlite_clerk \
+  --artifacts-root /app/artifacts/alpaca_clerk \
+  --account-id PA-EXAMPLE \
+  verify
+```
+
+The verified command returns the bound account, generation, database identity,
+transition count, and mirror-head hash. To seal the already-verified volume:
+
+```bash
+podman compose run --rm --no-deps --entrypoint /bin/sh python-service -c \
+  'test ! -L /app/artifacts/alpaca_clerk/_compose_volume_ready && \
+   : > /app/artifacts/alpaca_clerk/_compose_volume_ready'
+```
+
 Do not open or copy a live authority database, WAL, or SHM file from the macOS host.
 In the default compose layout, run the commands in this document inside a one-shot
 `python-service` container so recovery tooling and the service use the same Linux
@@ -72,12 +112,14 @@ command requires a fresh account-bound evidence file:
 {
   "account_id": "PA-EXAMPLE",
   "observed_at_ms": 1800000000000,
-  "proof_reference": "incident/2026-08-07/process-stop-proof.json"
+  "proof_reference": "PythonDataService/artifacts/incidents/2026-08-07/process-stop-proof.json"
 }
 ```
 
 Pass it to `restore`, `rebuild`, or `reset` as
-`--process-stop-evidence /absolute/process-stop-evidence.json`. The default freshness
+`--process-stop-evidence /app/artifacts/incidents/2026-08-07/process-stop-proof.json`.
+Store the host copy at
+`./PythonDataService/artifacts/incidents/2026-08-07/process-stop-proof.json`. The default freshness
 window is 120 seconds; a reviewed ceremony may tighten it with
 `--max-process-stop-evidence-age-ms`. The proof is consulted only when the authority
 lease cannot be read, and its reference is copied into the recovery receipt. A readable

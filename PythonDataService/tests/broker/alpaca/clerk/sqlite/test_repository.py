@@ -127,6 +127,23 @@ def test_initialize_refuses_virtiofs_for_wal_authority(
     assert not (tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db").exists()
 
 
+def test_initialize_refuses_fuseblk_for_wal_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        repository_lifecycle,
+        "_linux_filesystem_type",
+        lambda _path: "fuseblk",
+    )
+
+    with pytest.raises(UnsupportedWalFilesystem, match="fuseblk"):
+        ClerkSqliteRepository.initialize(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            clock=_clock_seq(),
+        )
+
+
 def test_open_refuses_existing_wal_authority_on_virtiofs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

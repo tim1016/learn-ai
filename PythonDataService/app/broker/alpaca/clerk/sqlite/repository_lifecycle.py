@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
 import secrets
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -37,6 +42,94 @@ _UNSUPPORTED_WAL_FILESYSTEMS = frozenset(
         "virtiofs",
     }
 )
+_RECOVERY_LOCK_DIRECTORY = "_recovery_locks"
+_RECOVERY_FENCE_DEPTH: ContextVar[int] = ContextVar(
+    "alpaca_clerk_recovery_fence_depth",
+    default=0,
+)
+
+
+def _recovery_lock_path(artifacts_root: Path, account_id: str) -> Path:
+    accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
+    lock_root = accounts_root / _RECOVERY_LOCK_DIRECTORY
+    if lock_root.is_symlink():
+        from app.broker.alpaca.clerk.sqlite.repository import RecoveryInProgress
+
+        raise RecoveryInProgress("recovery lock directory must not be a symbolic link")
+    lock_root.mkdir(parents=True, exist_ok=True)
+    fsync_directory_chain(lock_root, artifacts_root)
+    return lock_root / f"{account_dir.name}.lock"
+
+
+@contextmanager
+def _recovery_flock(
+    *,
+    artifacts_root: Path,
+    account_id: str,
+    operation: int,
+) -> Iterator[None]:
+    from app.broker.alpaca.clerk.sqlite.repository import RecoveryInProgress
+
+    lock_path = _recovery_lock_path(artifacts_root, account_id)
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise RecoveryInProgress(f"cannot open recovery fence {lock_path}: {exc}") from exc
+    try:
+        try:
+            fcntl.flock(descriptor, operation | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RecoveryInProgress(
+                f"account {account_id!r} startup/recovery fence is held by another process"
+            ) from exc
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+@contextmanager
+def startup_recovery_fence(
+    *,
+    artifacts_root: Path,
+    account_id: str,
+) -> Iterator[None]:
+    """Keep authority startup from crossing an offline recovery file swap."""
+    if _RECOVERY_FENCE_DEPTH.get() > 0:
+        yield
+        return
+    with _recovery_flock(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+        operation=fcntl.LOCK_SH,
+    ):
+        yield
+
+
+@contextmanager
+def exclusive_recovery_fence(
+    *,
+    artifacts_root: Path,
+    account_id: str,
+) -> Iterator[None]:
+    """Exclude startup until one destructive recovery publication completes."""
+    with _recovery_flock(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+        operation=fcntl.LOCK_EX,
+    ):
+        token = _RECOVERY_FENCE_DEPTH.set(_RECOVERY_FENCE_DEPTH.get() + 1)
+        try:
+            yield
+        finally:
+            _RECOVERY_FENCE_DEPTH.reset(token)
 
 
 def _decode_mountinfo_path(value: str) -> str:
@@ -85,7 +178,7 @@ def assert_wal_filesystem_supported(path: Path) -> None:
 
     filesystem_type = _linux_filesystem_type(path)
     unsupported = filesystem_type in _UNSUPPORTED_WAL_FILESYSTEMS or (
-        filesystem_type is not None and filesystem_type.startswith("fuse.")
+        filesystem_type is not None and filesystem_type.startswith("fuse")
     )
     if unsupported:
         raise UnsupportedWalFilesystem(
@@ -109,6 +202,35 @@ def initialize_repository(
     mirror_filename: str,
 ) -> ClerkSqliteRepository:
     """Create authority generation one for a never-established account."""
+    with startup_recovery_fence(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+    ):
+        return _initialize_repository_unfenced(
+            repository_type=repository_type,
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            clock=clock,
+            lease_owner=lease_owner,
+            lease_ttl_ms=lease_ttl_ms,
+            fold_registry=fold_registry,
+            db_filename=db_filename,
+            mirror_filename=mirror_filename,
+        )
+
+
+def _initialize_repository_unfenced(
+    *,
+    repository_type: type[ClerkSqliteRepository],
+    account_id: str,
+    artifacts_root: Path,
+    clock: Clock,
+    lease_owner: str | None,
+    lease_ttl_ms: int,
+    fold_registry: FoldRegistry,
+    db_filename: str,
+    mirror_filename: str,
+) -> ClerkSqliteRepository:
     from app.broker.alpaca.clerk.sqlite.repository import (
         AlreadyInitialized,
         DatabaseMissingAfterEstablishment,
@@ -353,6 +475,35 @@ def open_repository(
     mirror_filename: str,
 ) -> ClerkSqliteRepository:
     """Open authority only after all pinned startup checks succeed."""
+    with startup_recovery_fence(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+    ):
+        return _open_repository_unfenced(
+            repository_type=repository_type,
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            clock=clock,
+            lease_owner=lease_owner,
+            lease_ttl_ms=lease_ttl_ms,
+            fold_registry=fold_registry,
+            db_filename=db_filename,
+            mirror_filename=mirror_filename,
+        )
+
+
+def _open_repository_unfenced(
+    *,
+    repository_type: type[ClerkSqliteRepository],
+    account_id: str,
+    artifacts_root: Path,
+    clock: Clock,
+    lease_owner: str | None,
+    lease_ttl_ms: int,
+    fold_registry: FoldRegistry,
+    db_filename: str,
+    mirror_filename: str,
+) -> ClerkSqliteRepository:
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
     db_path = writes.confined_account_file(artifacts_root, account_id, db_filename)
     mirror_path = writes.confined_account_file(artifacts_root, account_id, mirror_filename)

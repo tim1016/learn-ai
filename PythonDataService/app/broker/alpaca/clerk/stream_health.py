@@ -132,15 +132,7 @@ def build_default_stream_health_gate() -> StreamHealthGate:
     """
     from app.utils.timestamps import now_ms_utc
 
-    def _market_data() -> ChannelHealth:
-        from app.marketdata.ibkr_feed import get_market_data_feed
-
-        feed = get_market_data_feed()
-        return market_data_channel_health(
-            feed.health() if feed is not None else None, now_ms=now_ms_utc()
-        )
-
-    def _market_data_for_symbol(symbol: str) -> ChannelHealth:
+    def _market_data_scoped(symbol: str | None) -> ChannelHealth:
         from app.marketdata.ibkr_feed import get_market_data_feed
 
         feed = get_market_data_feed()
@@ -148,6 +140,12 @@ def build_default_stream_health_gate() -> StreamHealthGate:
             feed.health(symbol) if feed is not None else None,
             now_ms=now_ms_utc(),
         )
+
+    def _market_data() -> ChannelHealth:
+        return _market_data_scoped(None)
+
+    def _market_data_for_symbol(symbol: str) -> ChannelHealth:
+        return _market_data_scoped(symbol)
 
     def _execution() -> ChannelHealth:
         from app.broker.alpaca.trade_updates import get_trade_updates_consumer

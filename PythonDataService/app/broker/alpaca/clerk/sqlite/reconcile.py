@@ -21,7 +21,6 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ReconciliationAttemptedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import (
-    POSITION_QTY_EPSILON,
     position_quantity_is_nonzero,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -114,8 +113,10 @@ def plan_account_reconciliation(
     mismatched_symbols = {
         symbol
         for symbol in symbols
-        if abs(broker_by_symbol.get(symbol, 0.0) - attributed_by_symbol.get(symbol, 0.0))
-        > POSITION_QTY_EPSILON
+        if position_quantity_is_nonzero(
+            broker_by_symbol.get(symbol, 0.0)
+            - attributed_by_symbol.get(symbol, 0.0)
+        )
     }
     drifted = tuple(
         sorted(symbol for symbol in mismatched_symbols if symbol not in in_flight_symbols)

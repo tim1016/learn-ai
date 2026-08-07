@@ -303,7 +303,9 @@ async def test_sqlite_evidence_filters_selected_effect_operation(
     assert response.status_code == 200
     body = response.json()
     assert body["total_entries"] > 0
-    assert {entry["operation_ref"] for entry in body["entries"]} != set()
+    assert {
+        entry["operation_ref"] for entry in body["entries"]
+    } == {accepted.effect_operation_id}
     repo.close()
 
 

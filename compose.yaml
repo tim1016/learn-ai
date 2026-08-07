@@ -123,6 +123,10 @@ services:
       # operator tooling runs in a one-shot python-service container against
       # this same volume (see the recovery/cutover runbook).
       - alpaca-clerk-data:/app/artifacts/alpaca_clerk
+      # Keep the pre-volume host tree separately visible for the explicit
+      # first-run migration ceremony. Normal runtime never reads authority
+      # from this path.
+      - ./PythonDataService/artifacts/alpaca_clerk:/app/alpaca_clerk_legacy:ro,z
       - ./PythonDataService/scripts:/app/scripts:ro,z
       # Data lake writer mount (Slice 1b). Default host path is ./data-lake-volume
       # (gitignored); override LEAN_DATA_VOLUME_HOST_PATH in .env for a different root.
@@ -214,6 +218,11 @@ services:
       - /bin/sh
       - -c
       - |
+        if [ ! -f /app/artifacts/alpaca_clerk/_compose_volume_ready ] || \
+           [ -L /app/artifacts/alpaca_clerk/_compose_volume_ready ]; then
+          printf '%s\n' 'Alpaca Clerk volume is not verified; follow the recovery/cutover runbook.' >&2
+          exit 78
+        fi
         case "$$(printf '%s' "$${UVICORN_RELOAD:-true}" | tr '[:upper:]' '[:lower:]')" in
           false|0|no|off)
             exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 10
@@ -363,6 +372,7 @@ volumes:
   pgdata:
   alpaca-clerk-data:
     name: learn-ai-alpaca-clerk-data
+    external: true
 
 networks:
   app-network:

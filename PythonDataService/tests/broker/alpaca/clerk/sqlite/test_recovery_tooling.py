@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
+from typing import Any
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite import recovery as recovery_module
 from app.broker.alpaca.clerk.sqlite import repository_lifecycle
 from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecord,
@@ -25,12 +29,14 @@ from app.broker.alpaca.clerk.sqlite.recovery import (
     preserve_and_rebuild_from_mirror,
     reset_authority,
     restore_verified_backup,
+    verify_authority_head,
     verify_backup_bundle,
 )
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     IntegrityCheckFailed,
+    RecoveryInProgress,
     UnsupportedWalFilesystem,
 )
 
@@ -160,6 +166,26 @@ def test_interrupted_backup_keeps_previous_verified_publication(tmp_path: Path) 
         bundle_path=first.bundle_path,
     ) == first
     assert any(path.name.startswith(".incomplete-") for path in first.bundle_path.parent.iterdir())
+
+
+def test_verify_authority_head_matches_database_and_finalized_mirror(
+    tmp_path: Path,
+) -> None:
+    repo = _initialized(tmp_path)
+    repo.register_strategy_instance(
+        strategy_instance_id="spy",
+        symbol="SPY",
+        config_hash="h1",
+    )
+    repo.close()
+
+    verification = verify_authority_head(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+    )
+
+    assert verification.account_id == ACCOUNT_ID
+    assert verification.transition_count == 1
 
 
 def test_backup_creation_rejects_a_symbolic_link_publication_root(tmp_path: Path) -> None:
@@ -369,6 +395,84 @@ def test_rebuild_refuses_to_move_a_database_with_a_live_execution_lease(
 
     assert repo.db_path.is_file()
     repo.close()
+
+
+@pytest.mark.parametrize("operation", ["restore", "rebuild", "reset"])
+def test_destructive_recovery_excludes_concurrent_authority_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    repo = _initialized(tmp_path)
+    repo.register_strategy_instance(
+        strategy_instance_id="spy",
+        symbol="SPY",
+        config_hash="h1",
+    )
+    repo.close()
+    backup = create_verified_backup(
+        account_id=ACCOUNT_ID,
+        artifacts_root=tmp_path,
+        clock=_clock,
+    )
+    preserve_name = (
+        "_preserve_generation_files" if operation == "reset" else "_preserve_database_files"
+    )
+    original_preserve = getattr(recovery_module, preserve_name)
+    recovery_entered = Event()
+    allow_recovery = Event()
+
+    def _pause_after_fence(*args: Any, **kwargs: Any) -> Any:
+        recovery_entered.set()
+        if not allow_recovery.wait(timeout=5):
+            raise TimeoutError("test did not release the recovery operation")
+        return original_preserve(*args, **kwargs)
+
+    monkeypatch.setattr(recovery_module, preserve_name, _pause_after_fence)
+
+    def _recover() -> object:
+        if operation == "restore":
+            return restore_verified_backup(
+                account_id=ACCOUNT_ID,
+                artifacts_root=tmp_path,
+                bundle_path=backup.bundle_path,
+                clock=_clock,
+            )
+        if operation == "rebuild":
+            return preserve_and_rebuild_from_mirror(
+                account_id=ACCOUNT_ID,
+                artifacts_root=tmp_path,
+                clock=_clock,
+            )
+        return reset_authority(
+            account_id=ACCOUNT_ID,
+            artifacts_root=tmp_path,
+            broker_proof=ResetBrokerProof(
+                account_id=ACCOUNT_ID,
+                observed_at_ms=NOW_MS,
+                proof_reference="fake-broker-proof",
+                positions={},
+                open_order_ids=(),
+            ),
+            stopped_strategy_instance_ids=("spy",),
+            expected_strategy_instance_ids=("spy",),
+            max_proof_age_ms=1_000,
+            clock=_clock,
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_recover)
+        assert recovery_entered.wait(timeout=5)
+        try:
+            with pytest.raises(RecoveryInProgress, match="fence"):
+                ClerkSqliteRepository.open(
+                    account_id=ACCOUNT_ID,
+                    artifacts_root=tmp_path,
+                    clock=_clock,
+                )
+        finally:
+            allow_recovery.set()
+        assert future.result(timeout=5) is not None
 
 
 def test_rebuild_refuses_an_unreadable_database_without_process_stop_proof(

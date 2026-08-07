@@ -472,6 +472,8 @@ def test_health_stale_after_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     state = feed._state_for("SPY")
     state.last_bar_wall_ms = fixed_now - 300_000
     state.last_bar_ms = 1_700_000_700_000
+    state.active_count = 1
+    state.first_bar_seen = True
 
     h = feed.health()
 
@@ -490,10 +492,29 @@ def test_health_not_stale_within_threshold(monkeypatch: pytest.MonkeyPatch) -> N
     state = feed._state_for("SPY")
     state.last_bar_wall_ms = fixed_now - 60_000  # 1 minute ago — within 3-min threshold
     state.last_bar_ms = 1_700_000_940_000
+    state.active_count = 1
+    state.first_bar_seen = True
 
     h = feed.health()
 
     assert h.stale is False
+
+
+def test_health_ignores_detached_symbol_watermarks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_now = 1_700_001_000_000
+    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: fixed_now)
+    client = _fake_connected_client(connected=True, connection_lost=False)
+    feed = IbkrMarketDataFeed(client, stale_threshold_ms=30_000)
+    detached = feed._state_for("AAPL")
+    detached.last_bar_wall_ms = fixed_now - 300_000
+    detached.last_bar_ms = fixed_now - 300_000
+
+    health = feed.health()
+
+    assert health.stale is False
+    assert health.active_subscription_count == 0
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -29,7 +30,7 @@ from app.broker.alpaca.clerk import (
     ClerkAdmissionSnapshotChangedError,
     set_alpaca_clerk,
 )
-from app.broker.alpaca.clerk.decision_journal import DecisionJournal
+from app.broker.alpaca.clerk.decision_journal import DecisionJournal, DecisionReceipt
 from app.broker.alpaca.clerk.models import (
     AccountFreezeState,
     ClerkCustodySnapshot,
@@ -2435,7 +2436,10 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
     _install_fake_clerk(monkeypatch, clerk)
     original = DecisionJournal.append_for_bar
 
-    def fail_enter_receipt(self: DecisionJournal, **fields):
+    def fail_enter_receipt(
+        self: DecisionJournal,
+        **fields: Any,
+    ) -> DecisionReceipt:
         if fields["outcome"] == "enter_intent":
             raise OSError("injected decision journal failure")
         return original(self, **fields)

@@ -50,7 +50,7 @@ from app.broker.ibkr.api_evidence import (
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
 from app.broker.ibkr.models import BarProvenance, IbkrMinuteBar
-from app.lean_sidecar.trading_calendar import session_window_for_date
+from app.services.session_authority import session_state_at_ms
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -441,20 +441,8 @@ def _minute_start_ms(ts_ms: int) -> int:
 
 
 def _session_phase_for_ms(ts_ms: int) -> Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]:
-    """Classify a bar timestamp into the exchange session used for provenance."""
-    now_ny = datetime.fromtimestamp(ts_ms / 1000, tz=UTC).astimezone(_NY_TZ)
-    minutes = now_ny.hour * 60 + now_ny.minute
-    if minutes < 4 * 60 or minutes >= 20 * 60:
-        return "OVERNIGHT"
-    try:
-        window = session_window_for_date(now_ny.date())
-    except LookupError:
-        return "CLOSED"
-    if ts_ms < window.open_ms_utc:
-        return "PRE"
-    if ts_ms < window.close_ms_utc:
-        return "RTH"
-    return "POST"
+    """Classify one instant through the canonical session authority."""
+    return session_state_at_ms(now_ms=ts_ms).phase
 
 
 def _bars_expected_now(use_rth: bool) -> bool:

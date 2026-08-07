@@ -253,6 +253,29 @@ def test_safe_flatten_prepares_versioned_exact_close_plan() -> None:
     ]
 
 
+def test_safe_flatten_uses_canonical_sub_epsilon_flat_boundary() -> None:
+    capability = next(
+        action
+        for action in build_recovery_catalog(
+            _context(
+                positions=(
+                    ProjectedPosition(
+                        strategy_instance_id="spy-bot",
+                        symbol="SPY",
+                        attributed_qty=0.0000000005,
+                        updated_at_ms=1_700_000_008_000,
+                    ),
+                ),
+            )
+        )
+        if action.action_id == "prepare_safe_flatten"
+    )
+
+    assert capability.available is False
+    assert capability.unavailable_reason_code == "NO_ATTRIBUTED_EXPOSURE"
+    assert capability.reduction_plan is None
+
+
 def test_safe_flatten_plan_token_rejects_newer_position_evidence() -> None:
     position = ProjectedPosition(
         strategy_instance_id="spy-bot",

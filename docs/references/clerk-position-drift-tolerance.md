@@ -12,7 +12,8 @@ The canonical fold is
 
 `delta(symbol) = broker_signed_quantity - clerk_attributed_quantity`
 
-A symbol is flagged `position_drift` only when `abs(delta) > POSITION_QTY_EPSILON`
+A symbol is flagged `position_drift` when
+`position_quantity_is_nonzero(delta)` (`abs(delta) >= POSITION_QTY_EPSILON`)
 (`1e-9`, `rtol=0`) **and** the symbol has no non-terminal in-flight order of
 ours — a working order legitimately explains a temporary mismatch (the fill
 hasn't landed/folded yet), so it is suppressed for that pass rather than
@@ -26,16 +27,12 @@ independent invention. The duplication is a migration artifact, not a
 permanent one: `exposure.py`'s JSONL-journal implementation is retired at the
 SQLite cutover (#1382), at which point this is the sole implementation.
 
-This duplication is explicitly exempt from a shared-corpus parity test under
-the numerical-concept guideline recorded in `docs/math-sources-of-truth.md`.
-`exposure.py::account_exposure_deltas` consumes the production JSONL journal,
-while `plan_account_reconciliation` consumes the replacement SQLite
-`positions` projection; those inputs cannot produce comparable outputs from a
-single corpus without first completing the authority cutover the comparison is
-meant to qualify. During migration, `plan_account_reconciliation` is the
-canonical implementation of the SQLite residual-drift calculation. The JSONL
-implementation remains production authority only until #1382 and is then
-retired, rather than retained as a second numerical authority.
+Both paths now call
+`sqlite/folds.py::position_quantity_is_nonzero` for the tolerance boundary.
+Parity is pinned by
+`test_legacy_exposure_delta_uses_canonical_sqlite_nonzero_boundary`; the JSONL
+and SQLite inputs remain different projections, but they can no longer drift on
+the shared exposure/flat threshold during migration.
 
 An absolute tolerance, not relative: share quantities are compared directly, so
 scaling the accepted error with position size would hide real drift on small
@@ -48,9 +45,8 @@ All SQLite custody paths call the canonical
 `folds.py::position_quantity_is_nonzero` predicate when deciding whether a
 position is exposure. It defines `abs(qty) >= epsilon` as nonzero, so exactly
 `1e-9` is never classified as both flat and nonzero by different workflows.
-Drift remains the separate strict comparison `abs(delta) > epsilon`: a drift
-delta compares two observations, while the nonzero predicate decides whether
-the authority may claim that an account or instance is flat.
+Residual drift and exposure/flat decisions use the same inclusive boundary, so
+exactly `1e-9` cannot be accepted as flat by one authority and nonzero by another.
 
 ## Validation
 
@@ -62,3 +58,5 @@ the authority may claim that an account or instance is flat.
   pins the in-flight suppression.
 - `test_plan_drift_tolerance_ignores_float_residue_within_epsilon` pins a
   `4e-13` residue as `clean`, not `position_drift`.
+- `test_plan_drift_uses_canonical_exact_epsilon_boundary` pins exact `1e-9`
+  as drift, matching the shared predicate.

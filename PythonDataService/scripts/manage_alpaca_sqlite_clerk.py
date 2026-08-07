@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.recovery import (
     preserve_and_rebuild_from_mirror,
     reset_authority,
     restore_verified_backup,
+    verify_authority_head,
 )
 
 
@@ -46,6 +47,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--account-id", required=True)
     subparsers = parser.add_subparsers(dest="operation", required=True)
     subparsers.add_parser("backup")
+    subparsers.add_parser("verify")
     restore = subparsers.add_parser("restore")
     restore.add_argument("--bundle", type=Path, required=True)
     _add_process_stop_evidence_arguments(restore)
@@ -109,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
     common = {"account_id": args.account_id, "artifacts_root": args.artifacts_root}
     if args.operation == "backup":
         result: Any = create_verified_backup(**common)
+    elif args.operation == "verify":
+        result = verify_authority_head(**common)
     elif args.operation == "restore":
         result = restore_verified_backup(
             **common,

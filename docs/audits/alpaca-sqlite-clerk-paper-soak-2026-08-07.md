@@ -70,9 +70,12 @@ the local working tree:
 - the epsilon predicate, duplicated subscription-stall block, `.cutover/` ignore rule,
   filesystem denylist, and suite-order-dependent test import were hardened.
 
-This disposition is code/test evidence only. It has not been committed, reviewed in a
-PR, passed CI, or exercised in a new supervised market session. The exact historical
-#1413 evidence-click-to-Resume sequence remains unreproduced, so the regression narrows
+At capture time, this disposition was code/test evidence only. It had not been
+committed, reviewed in a PR, passed CI, or exercised in a new supervised market
+session. The remediation was subsequently published as commit `f3436c38` in PR
+[#1414](https://github.com/tim1016/learn-ai/pull/1414), where automated review is in
+progress and CI remains a required merge gate. The exact historical #1413
+evidence-click-to-Resume sequence remains unreproduced, so the regression narrows
 the risk but does not close that incident.
 
 ## Session register
@@ -177,7 +180,7 @@ Ended at (ms UTC): 1786121303876
 Authority generation / DB identity / control revision: 1 / 03ed49bd38bb1f3a6462f81706e7dec2 / 298 before START, 300 after STOP, 301 after reconciliation
 Strategy instance / lifecycle run: sqlite-market-qual-0807 / 558d6e5f2dda4772a96a79f32c8ce851
 Command / effect operation / order ref / broker order / receipt: START cmd:PA3KWXU1C4C3:sqlite-market-qual-0807:558d6e5f2dda4772a96a79f32c8ce851:START:ACTIVE; STOP cmd:PA3KWXU1C4C3:sqlite-market-qual-0807:558d6e5f2dda4772a96a79f32c8ce851:STOP:STOPPED; no effect operation or order; reconciliation:301
-Broker source timestamp: first decision-consumer callback logged 2026-08-07T16:45:10.705Z; no later decision-consumer print arrived
+Broker source timestamp (ms UTC): first decision-consumer callback logged 1786121110705; no later decision-consumer print arrived
 Clerk observation timestamp: START 1786121106666; STOP 1786121283392; reconciliation attempted 1786121303876
 Durable record timestamp: START 1786121106666; STOP 1786121283392; reconciliation 1786121303876
 Expected state: continuously advancing IBKR bars; entry only after two consecutive green closed minutes; Clerk-owned ENTER then bounded EXIT
@@ -299,14 +302,14 @@ Verdict: PASS | SAFE FAILURE | ABORT
 
 ## Abort and incident record
 
-| Time (ms UTC) | Condition | Scope | Action | Final broker proof | Defect issue |
-| --- | --- | --- | --- | --- | --- |
-| 2026-08-07 initial canary | IBKR feed stopped after one 5-second print; the never-advanced liveness blind window was characterized as unbounded | Feed admission | Operator stopped the bot; no decision or order occurred | Flat; zero open orders; durable stopped-flat receipt | Existing incident record in the first-canary audit; no new defect per the recorded operator decision |
-| Before Qualification A broker contact | SQLite panel health said `Flat Resume ready`, but the presented action list omitted Resume | Broker V2 UI/action policy | Ceremony paused before broker contact; regression-first local fix; service restart and UI verification | Flat; zero working orders; `reconciliation:298` | [#1410](https://github.com/tim1016/learn-ai/issues/1410) |
-| 1786121106666–1786121303876 | Both live IBKR consumers delivered one print and stalled; Trader/Operator continued to present Live/Healthy while durable Bot health had no last bar or decision | Feed delivery and UI truth | Stop bot decisions at `1786121283392`; Reconcile now at `1786121303876`; do not resume | Flat; zero working/unresolved orders; clean `reconciliation:301` | [#1411](https://github.com/tim1016/learn-ai/issues/1411) |
-| 1786122826701–1786122842087 | After a valid round trip the panel reported flatten-required, one uncertain intent, empty selected-effect evidence, and no bar/decision | Broker V2 truth projection | Regression-first local fixes; no broadened exposure | Flat; zero open/working orders; clean `reconciliation:321` | [#1412](https://github.com/tim1016/learn-ai/issues/1412) |
-| 1786123676085–1786123725672 | Evidence-station interaction recorded an unintended Resume; projection then reported a malformed SQLite database | UI action routing and SQLite authority | Stop data service; preserve corrupt DB/WAL/SHM; verify current finalized mirror; await human confirmation | Independent Alpaca REST: paper account, no positions, no open orders; mirror ends in `RUN_STOPPED` | [#1413](https://github.com/tim1016/learn-ai/issues/1413) |
-| 1786124232857–1786124632009 | Operator-approved recovery of the preceding abort | SQLite authority and supervised paper runtime | Documented `REBUILD_FROM_MIRROR`; preserve corrupt files; verify identity/head; three-bar run; Stop; Reconcile; offline integrity/mirror check; restart idle | Independent Alpaca REST: no positions and no open orders; SQLite revision 326; clean reconciliation; mirror and database heads agree | [#1413](https://github.com/tim1016/learn-ai/issues/1413) |
+| Time (ms UTC) | Phase/date label (prose) | Condition | Scope | Action | Final broker proof | Defect issue |
+| --- | --- | --- | --- | --- | --- | --- |
+| — | Initial canary — 2026-08-07 | IBKR feed stopped after one 5-second print; the never-advanced liveness blind window was characterized as unbounded | Feed admission | Operator stopped the bot; no decision or order occurred | Flat; zero open orders; durable stopped-flat receipt | Existing incident record in the first-canary audit; no new defect per the recorded operator decision |
+| — | Before Qualification A broker contact | SQLite panel health said `Flat Resume ready`, but the presented action list omitted Resume | Broker V2 UI/action policy | Ceremony paused before broker contact; regression-first local fix; service restart and UI verification | Flat; zero working orders; `reconciliation:298` | [#1410](https://github.com/tim1016/learn-ai/issues/1410) |
+| 1786121106666–1786121303876 | Qualification A attempt 1 | Both live IBKR consumers delivered one print and stalled; Trader/Operator continued to present Live/Healthy while durable Bot health had no last bar or decision | Feed delivery and UI truth | Stop bot decisions at `1786121283392`; Reconcile now at `1786121303876`; do not resume | Flat; zero working/unresolved orders; clean `reconciliation:301` | [#1411](https://github.com/tim1016/learn-ai/issues/1411) |
+| 1786122826701–1786122842087 | Qualification A attempt 2 | After a valid round trip the panel reported flatten-required, one uncertain intent, empty selected-effect evidence, and no bar/decision | Broker V2 truth projection | Regression-first local fixes; no broadened exposure | Flat; zero open/working orders; clean `reconciliation:321` | [#1412](https://github.com/tim1016/learn-ai/issues/1412) |
+| 1786123676085–1786123725672 | Qualification A corruption abort | Evidence-station interaction recorded an unintended Resume; projection then reported a malformed SQLite database | UI action routing and SQLite authority | Stop data service; preserve corrupt DB/WAL/SHM; verify current finalized mirror; await human confirmation | Independent Alpaca REST: paper account, no positions, no open orders; mirror ends in `RUN_STOPPED` | [#1413](https://github.com/tim1016/learn-ai/issues/1413) |
+| 1786124232857–1786124632009 | Recovery and Qualification A attempt 3 | Operator-approved recovery of the preceding abort | SQLite authority and supervised paper runtime | Documented `REBUILD_FROM_MIRROR`; preserve corrupt files; verify identity/head; three-bar run; Stop; Reconcile; offline integrity/mirror check; restart idle | Independent Alpaca REST: no positions and no open orders; SQLite revision 326; clean reconciliation; mirror and database heads agree | [#1413](https://github.com/tim1016/learn-ai/issues/1413) |
 
 Any duplicate economic intent, broker mutation without finalized SQLite intent,
 mixed custody/lifecycle authority writer, unresolved account drift, regressed custody,
@@ -341,11 +344,12 @@ earlier blanket phrase "no mixed JSONL/SQLite writer" was imprecise.
   tested before this report was finalized.
 
 Residual non-blocking hardening risks remain documented rather than silently claimed
-away: trade-only real-time bars can cause safe but wasteful resubscription churn for a
-quiet symbol; mirror rebuild reconstructs control revision and does not preserve prior
-reset provenance; and filesystem-type detection remains a denylist that cannot enforce
-the Linux mount check on non-Linux hosts. Production remains constrained to the
-Linux/XFS named-volume topology.
+away: bounded source-stall detection depends on IBKR's documented
+`reqRealTimeBars` one-bar-per-five-seconds contract and has no independent
+per-request heartbeat if the vendor violates that contract; mirror rebuild reconstructs
+control revision and does not preserve prior reset provenance; and filesystem-type
+detection remains a denylist that cannot enforce the Linux mount check on non-Linux
+hosts. Production remains constrained to the Linux/XFS named-volume topology.
 
 ## Final governance (do not complete early)
 

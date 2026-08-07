@@ -267,8 +267,8 @@ def test_never_advanced_feed_fails_closed(
 
     feed = IbkrMarketDataFeed(_fake_connected_client())
     feed._state_for("SPY").active_count = 1  # a run is actively subscribed
-    # _last_bar_ms / _last_bar_wall_ms deliberately left at their None default:
-    # no bar was ever completed, exactly like the 2026-08-07 canary.
+    # last_bar_ms / last_bar_wall_ms deliberately remain None, and
+    # first_bar_seen remains False: no bar completed, as in the 2026-08-07 canary.
 
     health = feed.health()
     assert health.connected is True

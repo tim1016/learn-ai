@@ -92,6 +92,18 @@ def test_realtime_bar_provenance_stamped_on_emitted_minute() -> None:
     assert emitted.use_rth is False
 
 
+def test_extended_hours_liveness_respects_weekend_calendar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sunday_overnight_ms = int(
+        datetime(2026, 8, 9, 5, 0, tzinfo=UTC).timestamp() * 1000
+    )
+    monkeypatch.setattr(bars_mod, "now_ms_utc", lambda: sunday_overnight_ms)
+
+    assert bars_mod._session_phase_for_ms(sunday_overnight_ms) == "CLOSED"
+    assert bars_mod._bars_expected_now(use_rth=False) is False
+
+
 def test_new_minute_fires_previous_closed_bar() -> None:
     current = None
     last_ms = None

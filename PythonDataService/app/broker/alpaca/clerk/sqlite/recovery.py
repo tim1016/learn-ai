@@ -14,7 +14,8 @@ import secrets
 import shutil
 import sqlite3
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,8 @@ from app.broker.alpaca.clerk.sqlite.registry import (
 from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME, MIRROR_FILENAME, ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
     assert_wal_filesystem_supported,
+    exclusive_recovery_fence,
+    startup_recovery_fence,
 )
 from app.broker.alpaca.paths import fsync_directory, fsync_directory_chain
 from app.utils.timestamps import Clock, now_ms_utc
@@ -94,6 +97,27 @@ class ProcessStopProof:
     proof_reference: str
 
 
+@contextmanager
+def _atomic_recovery_fence(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+) -> Iterator[None]:
+    """Hold the stable account fence across every destructive file publication."""
+    from app.broker.alpaca.clerk.sqlite.repository import RecoveryInProgress
+
+    try:
+        with exclusive_recovery_fence(
+            artifacts_root=artifacts_root,
+            account_id=account_id,
+        ):
+            yield
+    except RecoveryInProgress as exc:
+        raise RecoveryRefused(
+            f"account {account_id!r} startup or recovery is already in progress"
+        ) from exc
+
+
 def create_verified_backup(
     *,
     account_id: str,
@@ -102,6 +126,25 @@ def create_verified_backup(
     progress: Callable[[int, int, int], None] | None = None,
 ) -> BackupPublication:
     """Publish a WAL-safe online-backup bundle after complete verification."""
+    with startup_recovery_fence(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+    ):
+        return _create_verified_backup_fenced(
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            clock=clock,
+            progress=progress,
+        )
+
+
+def _create_verified_backup_fenced(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    clock: Clock,
+    progress: Callable[[int, int, int], None] | None,
+) -> BackupPublication:
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
     established = _require_established(accounts_root, account_id)
     db_path = writes.confined_account_file(artifacts_root, account_id, DB_FILENAME)
@@ -236,6 +279,45 @@ def verify_backup_bundle(
     )
 
 
+def verify_authority_head(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+) -> DatabaseVerification:
+    """Verify one stopped authority database agrees with its finalized mirror head."""
+    with startup_recovery_fence(
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+    ):
+        return _verify_authority_head_fenced(
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+        )
+
+
+def _verify_authority_head_fenced(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+) -> DatabaseVerification:
+    accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
+    assert_wal_filesystem_supported(account_dir)
+    established = _require_established(accounts_root, account_id)
+    verification = verify_database(
+        account_dir / DB_FILENAME,
+        expected_account_id=account_id,
+        expected_generation=established.authority_generation,
+        expected_db_identity=established.db_identity_token,
+    )
+    _verify_snapshot_matches_mirror_head(
+        account_id=account_id,
+        account_dir=account_dir,
+        established=established,
+        verification=verification,
+    )
+    return verification
+
+
 def _resolve_published_backup_bundle(*, account_dir: Path, bundle_path: Path) -> Path:
     """Resolve one direct bundle child without following caller-controlled links."""
     backup_root = account_dir / BACKUP_DIRECTORY
@@ -267,6 +349,29 @@ def restore_verified_backup(
     clock: Clock = now_ms_utc,
 ) -> RecoveryReceipt:
     """Restore only a same-generation verified bundle and preserve old files."""
+    with _atomic_recovery_fence(
+        account_id=account_id,
+        artifacts_root=artifacts_root,
+    ):
+        return _restore_verified_backup_fenced(
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            bundle_path=bundle_path,
+            process_stop_proof=process_stop_proof,
+            max_process_stop_proof_age_ms=max_process_stop_proof_age_ms,
+            clock=clock,
+        )
+
+
+def _restore_verified_backup_fenced(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    bundle_path: Path,
+    process_stop_proof: ProcessStopProof | None,
+    max_process_stop_proof_age_ms: int,
+    clock: Clock,
+) -> RecoveryReceipt:
     publication = verify_backup_bundle(
         account_id=account_id,
         artifacts_root=artifacts_root,
@@ -334,6 +439,27 @@ def preserve_and_rebuild_from_mirror(
     clock: Clock = now_ms_utc,
 ) -> RecoveryReceipt:
     """Verify a bound contiguous mirror, preserve old DB files, then replay."""
+    with _atomic_recovery_fence(
+        account_id=account_id,
+        artifacts_root=artifacts_root,
+    ):
+        return _preserve_and_rebuild_from_mirror_fenced(
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            process_stop_proof=process_stop_proof,
+            max_process_stop_proof_age_ms=max_process_stop_proof_age_ms,
+            clock=clock,
+        )
+
+
+def _preserve_and_rebuild_from_mirror_fenced(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    process_stop_proof: ProcessStopProof | None,
+    max_process_stop_proof_age_ms: int,
+    clock: Clock,
+) -> RecoveryReceipt:
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
     assert_wal_filesystem_supported(account_dir)
     established = _require_established(accounts_root, account_id)
@@ -405,6 +531,35 @@ def reset_authority(
     clock: Clock = now_ms_utc,
 ) -> RecoveryReceipt:
     """Rotate to a fresh empty generation only from current flat broker proof."""
+    with _atomic_recovery_fence(
+        account_id=account_id,
+        artifacts_root=artifacts_root,
+    ):
+        return _reset_authority_fenced(
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            broker_proof=broker_proof,
+            stopped_strategy_instance_ids=stopped_strategy_instance_ids,
+            expected_strategy_instance_ids=expected_strategy_instance_ids,
+            max_proof_age_ms=max_proof_age_ms,
+            process_stop_proof=process_stop_proof,
+            max_process_stop_proof_age_ms=max_process_stop_proof_age_ms,
+            clock=clock,
+        )
+
+
+def _reset_authority_fenced(
+    *,
+    account_id: str,
+    artifacts_root: Path,
+    broker_proof: ResetBrokerProof,
+    stopped_strategy_instance_ids: Sequence[str],
+    expected_strategy_instance_ids: Sequence[str],
+    max_proof_age_ms: int,
+    process_stop_proof: ProcessStopProof | None,
+    max_process_stop_proof_age_ms: int,
+    clock: Clock,
+) -> RecoveryReceipt:
     now = clock()
     _validate_reset_proof(
         account_id=account_id,

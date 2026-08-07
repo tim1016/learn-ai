@@ -3,9 +3,10 @@ plus the clerk-method + endpoint seam tests (task 1.2)."""
 
 from __future__ import annotations
 
-from app.broker.alpaca.clerk import diagnosis
+from app.broker.alpaca.clerk import diagnosis, exposure
 from app.broker.alpaca.clerk.clerk import AlpacaClerk
 from app.broker.alpaca.clerk.models import ClerkEntryKind, OrderJournalEntry
+from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerOrderLeg
 from app.engine.live.account_clerk_journal_models import (
@@ -129,6 +130,23 @@ def test_exposure_delta_golden_cases_pin_aggregation_inflight_and_tolerance() ->
         positions=[_position(quantity=1.0)],
         namespaces=frozenset({"manual/ops/v1"}),
     ) == ()
+
+
+def test_legacy_exposure_delta_uses_canonical_sqlite_nonzero_boundary() -> None:
+    """Parity with sqlite/folds.py::position_quantity_is_nonzero."""
+    assert POSITION_QTY_EPSILON == 0.000000001
+
+    below = exposure.account_exposure_deltas(
+        [],
+        [_position(quantity=0.0000000005)],
+    )
+    at_boundary = exposure.account_exposure_deltas(
+        [],
+        [_position(quantity=0.000000001)],
+    )
+
+    assert below == {}
+    assert at_boundary == {"SPY": (0.0, 0.000000001)}
 
 
 def test_foreign_working_order_prevents_false_in_sync() -> None:

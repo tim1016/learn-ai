@@ -247,7 +247,9 @@ async def test_disabled_presented_action_cannot_bypass_guard_via_post(
     assert exc.value.detail == "Start the bot before Stop."
 
 
-async def test_sqlite_panel_resume_defers_to_lifecycle_executor(monkeypatch) -> None:
+async def test_sqlite_panel_resume_defers_to_lifecycle_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#1410: Resume is lifecycle work, not a SQLite recovery capability."""
     monkeypatch.setattr(
         "app.services.broker_v2_panel.sqlite_panel_source.active_sqlite_facade",

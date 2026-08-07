@@ -105,7 +105,9 @@ class IbkrMarketDataFeed:
 
         Raises ``MarketDataFeedError`` when the IBKR connection dies or the
         source violates a data invariant. A stalled request is replaced
-        transparently; ordinary bar gaps are non-fatal.
+        transparently. Closed-minute output gaps are non-fatal; source-heartbeat
+        silence is evaluated against IBKR's documented one-bar-per-five-seconds
+        ``reqRealTimeBars`` contract.
         """
         normalized_symbol = symbol.upper()
         state = self._state_for(normalized_symbol)
@@ -123,6 +125,7 @@ class IbkrMarketDataFeed:
             },
         )
         try:
+            replacements = 0
             while True:
                 try:
                     async for ibkr_bar in stream_minute_bars(
@@ -142,6 +145,7 @@ class IbkrMarketDataFeed:
                     break
                 except IBKRBarSubscriptionStalled as exc:
                     state.first_bar_seen = False
+                    replacements += 1
                     logger.warning(
                         "Replacing stalled IBKR real-time-bar subscription",
                         extra={
@@ -149,6 +153,7 @@ class IbkrMarketDataFeed:
                             "feed_id": self.feed_id,
                             "symbol": normalized_symbol,
                             "use_rth": use_rth,
+                            "replacement_count": replacements,
                             "reason": str(exc),
                         },
                     )
@@ -201,10 +206,9 @@ class IbkrMarketDataFeed:
                 "its first closed bar"
             )
         else:
-            freshness_states = active_states or present_states
             stale_ages = [
                 (name, now - freshness_wall_ms)
-                for name, state in freshness_states
+                for name, state in active_states
                 if (freshness_wall_ms := state.last_source_wall_ms or state.last_bar_wall_ms)
                 is not None
                 and now - freshness_wall_ms > self._stale_threshold_ms

@@ -102,6 +102,10 @@ class ExecutionLeaseLost(ClerkSqliteError):
     """§9a: this handle's lease expired or was reassigned; it can no longer write."""
 
 
+class RecoveryInProgress(ClerkSqliteError):
+    """Startup fence: an exclusive offline recovery currently owns the account."""
+
+
 class RepositoryPoisoned(ClerkSqliteError):
     """§9a: a transition committed but its mirror finalize was unconfirmed.
 

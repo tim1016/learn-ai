@@ -377,6 +377,33 @@ async def test_execute_for_instance_uses_its_symbols_market_data_health(
 
     assert receipt.state is EffectOperationState.SUBMITTED
     assert len(broker.submissions) == 1
+
+    aapl_binding = binding.model_copy(
+        update={
+            "strategy_instance_id": "aapl-bot",
+            "symbol": "AAPL",
+            "action_plan": alpaca_v1_action_plan("AAPL"),
+            "run_id": "run-aapl",
+        }
+    )
+    await facade.register_strategy_run(aapl_binding)
+    aapl_receipt = await facade.execute_for_instance(
+        strategy_instance_id=aapl_binding.strategy_instance_id,
+        run_id=aapl_binding.run_id,
+        decision_id="decision-aapl-stale",
+        purpose=EffectPurpose.ENTER,
+        action_plan=aapl_binding.action_plan,
+        quantity=aapl_binding.quantity,
+    )
+
+    assert aapl_receipt.state is EffectOperationState.REJECTED
+    assert len(broker.submissions) == 1
+    hold = repo.active_hold(
+        scope="ACCOUNT_CLERK",
+        reason_code=runtime_module.STREAM_HEALTH_REASON_CODE,
+    )
+    assert hold is not None
+    assert "AAPL is stale" in hold["evidence_refs_json"]
     repo.close()
 
 

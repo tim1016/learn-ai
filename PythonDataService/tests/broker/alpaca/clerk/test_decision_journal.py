@@ -207,6 +207,29 @@ def test_append_for_bar_is_idempotent_for_an_identical_immediate_replay(
     assert journal.next_seq() == 2
 
 
+def test_append_for_bar_is_idempotent_after_journal_reopen(tmp_path: Path) -> None:
+    initial = DecisionJournal(account_id="ACC1", sid="bot-123", root=tmp_path)
+    first = initial.append_for_bar(
+        ts_ms=1_000,
+        bar_ref="SPY@1000",
+        outcome="enter_intent",
+        reason_code="STRATEGY_ENTER",
+        intent_id="1000:ENTER",
+    )
+    reopened = DecisionJournal(account_id="ACC1", sid="bot-123", root=tmp_path)
+
+    replay = reopened.append_for_bar(
+        ts_ms=2_000,
+        bar_ref="SPY@1000",
+        outcome="enter_intent",
+        reason_code="STRATEGY_ENTER",
+        intent_id="1000:ENTER",
+    )
+
+    assert replay == first
+    assert reopened.next_seq() == 2
+
+
 def test_append_for_bar_rejects_a_conflicting_replay(
     journal: DecisionJournal,
 ) -> None:

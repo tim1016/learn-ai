@@ -298,6 +298,7 @@ async def test_activated_database_open_failure_never_constructs_legacy(
 
 async def test_activated_startup_waits_for_a_crashed_writers_lease(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An immediate restart recovers after the prior process lease expires."""
     broker = _Broker()
@@ -306,11 +307,22 @@ async def test_activated_startup_waits_for_a_crashed_writers_lease(
         artifacts_root=tmp_path,
     )
     attempts = 0
+    expiry_elapsed = False
+
+    async def _expire_after_retry_interval(delay_s: float) -> None:
+        nonlocal expiry_elapsed
+        assert delay_s == pytest.approx(0.01)
+        expiry_elapsed = True
+
+    monkeypatch.setattr(
+        "app.broker.alpaca.clerk.active_authority.asyncio.sleep",
+        _expire_after_retry_interval,
+    )
 
     def _open_after_expiry(_account_id: str, _root: Path) -> ClerkSqliteRepository:
         nonlocal attempts
         attempts += 1
-        if attempts == 1:
+        if not expiry_elapsed:
             raise ExecutionLeaseHeld("previous process lease has not expired")
         return repo
 
@@ -322,12 +334,40 @@ async def test_activated_startup_waits_for_a_crashed_writers_lease(
         legacy_factory=_Legacy,
         repository_opener=_open_after_expiry,
         execution_lease_wait_timeout_s=0.1,
-        execution_lease_retry_interval_s=0.001,
+        execution_lease_retry_interval_s=0.01,
     )
 
     assert attempts == 2
     assert runtime.authority_kind == "sqlite"
     await runtime.close()
+
+
+async def test_activated_startup_fails_closed_when_execution_lease_never_expires(
+    tmp_path: Path,
+) -> None:
+    broker = _Broker()
+    attempts = 0
+
+    def _lease_held(_account_id: str, _root: Path) -> ClerkSqliteRepository:
+        nonlocal attempts
+        attempts += 1
+        raise ExecutionLeaseHeld("previous process lease remains live")
+
+    runtime = await select_active_clerk_runtime(
+        read=broker,
+        trade=broker,
+        artifacts_root=tmp_path,
+        activation_store=_ActivationStore(_activation()),
+        legacy_factory=_Legacy,
+        repository_opener=_lease_held,
+        execution_lease_wait_timeout_s=0.003,
+        execution_lease_retry_interval_s=0.001,
+    )
+
+    assert attempts >= 2
+    assert runtime.authority_kind == "unavailable"
+    assert runtime.startup_failure is not None
+    assert runtime.startup_failure.reason_code == "SQLITE_CLERK_STARTUP_FAILED"
 
 
 async def test_activation_identity_mismatch_never_constructs_legacy(
