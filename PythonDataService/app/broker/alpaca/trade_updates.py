@@ -64,6 +64,7 @@ from app.broker.alpaca.clerk.trade_evidence import (
 )
 from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
 from app.broker.alpaca.fault_injection import (
+    FrameFaultKind,
     frame_for_fault,
     get_fault_injection_registry,
     injection_permitted,
@@ -811,6 +812,12 @@ async def _inject_frame_faults(
     def _drain() -> list[str]:
         frames: list[str] = []
         for fault in registry.drain_frame_faults():
+            if fault.kind == FrameFaultKind.DISCONNECT:
+                logger.warning(
+                    "fault injection: trade_updates connection dropped",
+                    extra={"action": "frame_fault_disconnect", "kind": fault.kind},
+                )
+                raise ConnectionError("injected trade_updates disconnect")
             frame = frame_for_fault(fault, last_frame=last_trade_update)
             if frame is None:
                 logger.warning(

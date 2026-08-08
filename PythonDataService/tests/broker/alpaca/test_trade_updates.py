@@ -1144,6 +1144,18 @@ async def test_inject_frame_faults_redelivers_last_trade_update(permit_frame_inj
     assert out == [fill, fill]
 
 
+async def test_injected_disconnect_enters_reconnect_path(permit_frame_injection) -> None:
+    from app.broker.alpaca.fault_injection import FrameFaultKind
+
+    real = json.dumps({"stream": "authorization", "data": {"status": "authorized"}})
+    permit_frame_injection.get_fault_injection_registry().arm(FrameFaultKind.DISCONNECT)
+    source = _inject_frame_faults(_frame_source([real])())
+
+    assert await anext(source) == real
+    with pytest.raises(ConnectionError, match="injected trade_updates disconnect"):
+        await anext(source)
+
+
 async def test_inject_frame_faults_redeliver_with_no_prior_frame_is_skipped(
     permit_frame_injection,
 ) -> None:

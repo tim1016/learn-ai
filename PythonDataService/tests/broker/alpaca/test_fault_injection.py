@@ -112,9 +112,7 @@ def test_status_reports_armed_faults(permit: None) -> None:
     status = registry.status()
 
     assert status["permitted"] is True
-    assert status["write"] == [
-        {"kind": "throttle_429", "target": "bot-a", "remaining": 3, "params": {}}
-    ]
+    assert status["write"] == [{"kind": "throttle_429", "target": "bot-a", "remaining": 3, "params": {}}]
     assert status["frame"] == []
 
 
@@ -172,6 +170,13 @@ def test_timeout_crafts_broker_unavailable_timed_out() -> None:
     assert "timed out" in error.message
 
 
+def test_post_sdk_timeout_crafts_landed_response_loss() -> None:
+    error = fi.craft_write_error(fi.WriteFaultKind.POST_SDK_TIMEOUT)
+
+    assert isinstance(error, BrokerUnavailable)
+    assert "landed" in (error.detail or "")
+
+
 # ── craft_frame: valid trade_updates frames ───────────────────────────────────
 
 
@@ -214,7 +219,11 @@ def test_craft_frame_partial_fill_carries_execution_slice() -> None:
         kind=fi.FrameFaultKind.PARTIAL_FILL,
         target="coid-1",
         remaining=1,
-        params={"qty": "3", "price": "135.80"},
+        params={
+            "broker_order_id": "broker-order-123",
+            "qty": "3",
+            "price": "135.80",
+        },
     )
 
     data = json.loads(fi.craft_frame(fault))["data"]
@@ -222,6 +231,7 @@ def test_craft_frame_partial_fill_carries_execution_slice() -> None:
     assert data["qty"] == "3"
     assert data["price"] == "135.80"
     assert data["execution_id"]
+    assert data["order"]["id"] == "broker-order-123"
 
 
 def test_craft_frame_rejects_redeliver_kind() -> None:

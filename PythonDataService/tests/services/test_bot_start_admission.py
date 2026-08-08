@@ -22,6 +22,7 @@ candidate-subscription policy for a stopped bot:
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -46,6 +47,10 @@ from app.schemas.run_admission import (
 )
 from app.services.bot_start_admission import market_data_admission_fact
 from app.services.run_admission import evaluate_run_admission
+from tests._helpers.ibkr_feed_adversarial import (
+    NeverFirstBarFeedFixture,
+    OnePrintThenSilenceFeedFixture,
+)
 
 _NOW = 1_700_000_010_000
 _SID = "alpaca-start-1"
@@ -69,7 +74,7 @@ class _RaisingFeed:
 
 
 def _fake_connected_client() -> MagicMock:
-    """A minimal IbkrClient double: connected, never lost."""
+    """A minimal client double for tests that do not open subscriptions."""
     client = MagicMock()
     client.is_connected.return_value = True
     client.connection_lost = False
@@ -233,60 +238,93 @@ def test_market_data_admission_fact_available_when_advancing(
 # ── bounded liveness regressions plus the one remaining candidate policy ──
 
 
-def test_source_stall_is_bounded_at_thirty_seconds(
+@pytest.mark.asyncio
+async def test_one_print_stall_blocks_admission_then_replaces_subscription(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1411 H1: raw source activity bounds liveness between closed minutes."""
-    fixed_now = _NOW - 1_000
-    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: fixed_now)
+    """#1415 H1: a one-print stall blocks at 30s and recovers at 60.001s."""
+    fixture = OnePrintThenSilenceFeedFixture()
+    fixture.install(monkeypatch)
     _session(monkeypatch, "RTH")
+    feed = IbkrMarketDataFeed(fixture.client)
+    stream = feed.stream_bars("SPY")
 
-    feed = IbkrMarketDataFeed(_fake_connected_client())
-    state = feed._state_for("SPY")
-    state.last_bar_wall_ms = fixed_now - 170_000
-    state.last_bar_ms = fixed_now - 170_000
-    state.last_source_wall_ms = fixed_now - 31_000
-    state.first_bar_seen = True
-    state.active_count = 1
+    first_bar = await anext(stream)
+    assert fixture.subscription_count == 1
+    assert feed.health("SPY").stale is False
+    last_source_observed_ms = fixture.clock.now_ms()
 
-    health = feed.health()
+    fixture.clock.advance_ms(30_000)
+
+    health = feed.health("SPY")
+    assert fixture.clock.now_ms() - last_source_observed_ms == 30_000
     assert health.stale is True
-
-    fact = market_data_admission_fact(feed, fixed_now, use_rth=True)
-
+    fact = market_data_admission_fact(
+        feed,
+        fixture.clock.now_ms(),
+        symbol="SPY",
+        use_rth=True,
+    )
     assert fact.state == "STALE"
+    decision = evaluate_run_admission(
+        _start_facts(fact, observed_at_ms=fixture.clock.now_ms()),
+        _clerk(observed_at_ms=fixture.clock.now_ms()),
+        evaluated_at_ms=fixture.clock.now_ms(),
+    )
+    assert decision.allowed is False
+
+    fixture.clock.advance_ms(30_001)
+    assert fixture.clock.now_ms() - last_source_observed_ms == 60_001
+    recovered_bar = await asyncio.wait_for(anext(stream), timeout=1)
+
+    assert recovered_bar.start_ms > first_bar.start_ms
+    assert fixture.subscription_count == 2
+    assert fixture.cancel_count == 1
+    assert feed.health("SPY").stale is False
+    await stream.aclose()
 
 
-def test_never_advanced_feed_fails_closed(
+@pytest.mark.asyncio
+async def test_never_advanced_feed_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#1411 H3: no completed bar means admission and submission are closed."""
-    far_future = _NOW + 60 * 60 * 1_000
-    monkeypatch.setattr("app.marketdata.ibkr_feed.now_ms_utc", lambda: far_future)
+    fixture = NeverFirstBarFeedFixture()
+    fixture.install(monkeypatch)
     _session(monkeypatch, "RTH")
+    feed = IbkrMarketDataFeed(fixture.client)
+    stream = feed.stream_bars("SPY")
+    pending_bar = asyncio.create_task(anext(stream))
+    await fixture.wait_until_subscribed()
 
-    feed = IbkrMarketDataFeed(_fake_connected_client())
-    feed._state_for("SPY").active_count = 1  # a run is actively subscribed
-    # last_bar_ms / last_bar_wall_ms deliberately remain None, and
-    # first_bar_seen remains False: no bar completed, as in the 2026-08-07 canary.
-
-    health = feed.health()
+    health = feed.health("SPY")
     assert health.connected is True
     assert health.stale is True
     assert health.last_bar_ms is None
 
-    fact = market_data_admission_fact(feed, far_future, use_rth=True)
+    fact = market_data_admission_fact(
+        feed,
+        fixture.clock.now_ms(),
+        symbol="SPY",
+        use_rth=True,
+    )
     assert fact.state == "STALE"
 
     decision = evaluate_run_admission(
-        _start_facts(fact, observed_at_ms=far_future),
-        _clerk(observed_at_ms=far_future),
-        evaluated_at_ms=far_future,
+        _start_facts(fact, observed_at_ms=fixture.clock.now_ms()),
+        _clerk(observed_at_ms=fixture.clock.now_ms()),
+        evaluated_at_ms=fixture.clock.now_ms(),
     )
     assert decision.allowed is False
 
-    channel_health = market_data_channel_health(health, now_ms=far_future)
+    channel_health = market_data_channel_health(
+        health,
+        now_ms=fixture.clock.now_ms(),
+    )
     assert channel_health.healthy is False
+    pending_bar.cancel()
+    await asyncio.gather(pending_bar, return_exceptions=True)
+    await stream.aclose()
 
 
 def test_admission_uses_the_requested_symbols_health(

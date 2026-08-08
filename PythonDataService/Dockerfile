@@ -20,7 +20,7 @@ COPY requirements-light.txt .
 RUN pip install -r requirements-light.txt
 
 # --- Runtime stage ---
-FROM python:3.12-slim
+FROM python:3.12-slim AS runtime
 
 ARG GIT_SHA=unknown
 ENV GIT_SHA="${GIT_SHA}"
@@ -70,3 +70,16 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "10"]
+
+# --- One-shot qualification stage ---
+# Keep pytest and developer tooling out of the always-on data-plane image. This
+# target is selected only by the Compose ``qualification`` profile, where the
+# test tree and authenticated fixture are mounted read-only.
+FROM runtime AS qualification
+
+COPY requirements-heavy.txt requirements-light.txt requirements-dev.txt ./
+RUN pip install -r requirements-dev.txt
+RUN mkdir -p \
+    /app/evidence \
+    /app/artifacts/alpaca_clerk/qualification \
+    /app/production-alpaca-clerk

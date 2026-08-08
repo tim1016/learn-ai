@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.mirror import MirrorChainBroken
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.clerk.sqlite.recovery import (
     ProcessStopProof,
+    RecoveryRefusalReason,
     RecoveryRefused,
     ResetBrokerProof,
     create_verified_backup,
@@ -196,12 +197,13 @@ def test_backup_creation_rejects_a_symbolic_link_publication_root(tmp_path: Path
     outside.mkdir()
     (account_dir / "verified-backups").symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(RecoveryRefused, match="must not be a symbolic link"):
+    with pytest.raises(RecoveryRefused, match="must not be a symbolic link") as captured:
         create_verified_backup(
             account_id=ACCOUNT_ID,
             artifacts_root=tmp_path,
             clock=_clock,
         )
+    assert captured.value.reason is RecoveryRefusalReason.OPERATIONAL_PREREQUISITE
 
 
 def test_backup_verification_rejects_outside_and_symbolic_link_bundles(
@@ -299,13 +301,17 @@ def test_restore_rejects_tampering_and_preserves_corrupt_database(tmp_path: Path
 
     original_snapshot = backup.snapshot_path.read_bytes()
     backup.snapshot_path.write_bytes(original_snapshot + b"tamper")
-    with pytest.raises(RecoveryRefused, match="SHA-256"):
+    with pytest.raises(RecoveryRefused, match="SHA-256") as captured:
         restore_verified_backup(
             account_id=ACCOUNT_ID,
             artifacts_root=tmp_path,
             bundle_path=backup.bundle_path,
             clock=_clock,
         )
+    assert (
+        captured.value.reason
+        is RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT
+    )
     backup.snapshot_path.write_bytes(original_snapshot)
 
     with db_path.open("r+b") as handle:
@@ -349,13 +355,17 @@ def test_restore_refuses_an_older_same_generation_snapshot(tmp_path: Path) -> No
     reopened.register_strategy_instance(strategy_instance_id="qqq", symbol="QQQ", config_hash="h2")
     reopened.close()
 
-    with pytest.raises(RecoveryRefused, match="mirror head"):
+    with pytest.raises(RecoveryRefused, match="mirror head") as captured:
         restore_verified_backup(
             account_id=ACCOUNT_ID,
             artifacts_root=tmp_path,
             bundle_path=backup.bundle_path,
             clock=_clock,
         )
+    assert (
+        captured.value.reason
+        is RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT
+    )
 
 
 def test_rebuild_rejects_a_valid_mirror_from_another_account(tmp_path: Path) -> None:

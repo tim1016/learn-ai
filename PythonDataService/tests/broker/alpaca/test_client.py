@@ -595,6 +595,20 @@ async def test_injected_timeout_marks_uncertain_and_skips_sdk(permit_write_injec
     assert client._submission_may_become_visible(_INJECT_ORDER["client_order_id"])
 
 
+async def test_injected_post_sdk_submit_hides_landed_response(permit_write_injection) -> None:
+    permit_write_injection.get_fault_injection_registry().arm(
+        permit_write_injection.WriteFaultKind.POST_SDK_TIMEOUT
+    )
+    fake = _FakeAlpaca()
+    client = _client(fake)
+
+    with pytest.raises(BrokerUnavailable, match="timed out"):
+        await client.submit_order(_INJECT_ORDER)
+
+    assert fake.post_call == ("/orders", _INJECT_ORDER)
+    assert client._submission_may_become_visible(_INJECT_ORDER["client_order_id"])
+
+
 async def test_injected_throttle_retries_then_lands_on_real_sdk(permit_write_injection) -> None:
     # A single injected 429 composes with the bounded rate-limit retry (CB3):
     # attempt 1 is throttled, attempt 2 hits the real SDK and lands.
@@ -634,6 +648,19 @@ async def test_injected_cancel_fault_short_circuits_delete(permit_write_injectio
         await client.cancel_order("order-xyz")
 
     assert fake.delete_call is None
+
+
+async def test_injected_post_sdk_cancel_hides_landed_response(permit_write_injection) -> None:
+    permit_write_injection.get_fault_injection_registry().arm(
+        permit_write_injection.WriteFaultKind.POST_SDK_TIMEOUT,
+        target="order-xyz",
+    )
+    fake = _FakeAlpaca()
+
+    with pytest.raises(BrokerUnavailable, match="timed out"):
+        await _client(fake).cancel_order("order-xyz")
+
+    assert fake.delete_call == ("/orders/order-xyz", None)
 
 
 async def test_seam_off_does_not_inject(monkeypatch: pytest.MonkeyPatch) -> None:
