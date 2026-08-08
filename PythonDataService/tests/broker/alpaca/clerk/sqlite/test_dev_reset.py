@@ -172,6 +172,30 @@ def test_reinitialize_refuses_a_tampered_developer_reset_manifest(tmp_path: Path
         )
 
 
+def test_reinitialize_fails_closed_when_reset_ledger_is_malformed(tmp_path: Path) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        clock=_clock,
+    )
+    repo.close()
+    _reset(clerk_root=clerk_root, runner_root=runner_root)
+    accounts_root = clerk_root / "accounts" / "alpaca"
+    DeveloperCleanSlateResetRegistry(accounts_root).path.write_text(
+        "[not an authorization record]\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DatabaseMissingAfterEstablishment):
+        ClerkSqliteRepository.initialize(
+            account_id=ACCOUNT_ID,
+            artifacts_root=clerk_root,
+            clock=lambda: NOW_MS + 1,
+        )
+
+
 def test_reset_resumes_authorization_after_every_artifact_was_moved(tmp_path: Path) -> None:
     clerk_root = tmp_path / "clerk"
     runner_root = tmp_path / "runner"
