@@ -20,14 +20,34 @@ from typing import Any, Literal
 from app.broker.alpaca.clerk.journal import INBOX_FILENAME, JOURNAL_FILENAME
 from app.broker.alpaca.clerk.sqlite import writes
 from app.broker.alpaca.clerk.sqlite.activation import ActivationRecord, ActivationStore
+from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
+    CutoverInitializationEvidence,
+    CutoverRefused,
+)
+from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
+    cutover_evidence_directory as _cutover_evidence_directory,
+)
+from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
+    initialization_intent_path as _initialization_intent_path,
+)
+from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
+    initialization_intent_payload as _initialization_intent_payload,
+)
+from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
+    require_or_publish_initialization_intent as _require_or_publish_initialization_intent,
+)
+from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
+    verify_empty_generation_mirror as _verify_empty_generation_mirror,
+)
+from app.broker.alpaca.clerk.sqlite.cutover_initialization import (
+    verify_inactive_generation as _verify_inactive_generation,
+)
 from app.broker.alpaca.clerk.sqlite.database_verification import (
     DatabaseVerification,
     verify_database,
 )
-from app.broker.alpaca.clerk.sqlite.mirror import (
-    MirrorChainBroken,
-    MirrorFile,
-    MirrorIdentity,
+from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
+    DeveloperCleanSlateResetRegistry,
 )
 from app.broker.alpaca.clerk.sqlite.operational_files import (
     atomic_write_json,
@@ -36,11 +56,9 @@ from app.broker.alpaca.clerk.sqlite.operational_files import (
     relative_reference,
     tree_sha256,
 )
-from app.broker.alpaca.clerk.sqlite.recovery import RecoveryRefused
 from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.clerk.sqlite.repository import (
     DB_FILENAME,
-    MIRROR_FILENAME,
     ClerkSqliteRepository,
 )
 from app.broker.alpaca.paths import (
@@ -68,8 +86,39 @@ LEGACY_ARTIFACT_NAMES: tuple[str, ...] = (
 LEGACY_UNSCOPED_BOT_DIRECTORY = "bots"
 
 
-class CutoverRefused(RecoveryRefused):
-    """The cutover plan is invalid, stale, or no longer matches reality."""
+def _require_no_unreset_activation(
+    *,
+    accounts_root: Path,
+    account_id: str,
+    artifacts_root: Path,
+) -> None:
+    """Allow only a verified developer-reset fence to replace an activation."""
+    if _developer_reset_replaces_activation(
+        accounts_root=accounts_root,
+        account_id=account_id,
+        artifacts_root=artifacts_root,
+    ):
+        return
+    if ActivationStore(accounts_root).latest(account_id) is None:
+        return
+    raise CutoverRefused("account already has an activation fence")
+
+
+def _developer_reset_replaces_activation(
+    *,
+    accounts_root: Path,
+    account_id: str,
+    artifacts_root: Path,
+) -> bool:
+    """Return whether the newest activation was explicitly moved aside."""
+    activation = ActivationStore(accounts_root).latest(account_id)
+    return activation is not None and DeveloperCleanSlateResetRegistry(
+        accounts_root
+    ).authorizes_reinitialize(
+        account_id=account_id,
+        prior_authority_generation=activation.authority_generation,
+        artifacts_root=artifacts_root,
+    )
 
 
 @dataclass(frozen=True)
@@ -104,15 +153,6 @@ class RunnerBotEvidence:
     terminal_kind: str
     terminal_reason_code: str
     terminal_recorded_at_ms: int
-
-
-@dataclass(frozen=True)
-class CutoverInitializationEvidence:
-    """Content-addressed proof that this database came from the reviewed prep."""
-
-    initialization_intent_id: str
-    receipt_sha256: str
-    mirror_sha256: str
 
 
 @dataclass(frozen=True)
@@ -198,6 +238,12 @@ def _initialize_cutover_authority_locked(
     now = clock()
     registry = EstablishedAccountsRegistry(accounts_root)
     established = registry.latest(account_id)
+    reset_registry = DeveloperCleanSlateResetRegistry(accounts_root)
+    reset_authorized = established is not None and reset_registry.authorizes_reinitialize(
+        account_id=account_id,
+        prior_authority_generation=established.authority_generation,
+        artifacts_root=artifacts_root,
+    )
     _validate_cutover_broker_state(
         account_id=account_id,
         broker_evidence=normalized_broker,
@@ -208,9 +254,16 @@ def _initialize_cutover_authority_locked(
             now_ms=now,
             max_broker_evidence_age_ms=max_broker_evidence_age_ms,
         )
-    if ActivationStore(accounts_root).latest(account_id) is not None:
-        raise CutoverRefused("account already has an activation fence")
-    legacy = _legacy_artifact_evidence(artifacts_root, account_id)
+    _require_no_unreset_activation(
+        accounts_root=accounts_root,
+        account_id=account_id,
+        artifacts_root=artifacts_root,
+    )
+    legacy = _legacy_artifact_evidence(
+        artifacts_root,
+        account_id,
+        allow_empty=reset_authorized,
+    )
     runner_roster = _runner_roster_evidence(
         runner_artifacts_root,
         account_id,
@@ -218,9 +271,18 @@ def _initialize_cutover_authority_locked(
             artifacts_root,
             account_id,
         ),
+        allow_empty=reset_authorized,
+    )
+    intended_generation = (
+        1
+        if established is None
+        else established.authority_generation + 1
+        if reset_authorized
+        else established.authority_generation
     )
     intent_payload, initialization_intent_id = _initialization_intent_payload(
         account_id=account_id,
+        authority_generation=intended_generation,
         broker_evidence=normalized_broker,
         runner_roster=runner_roster,
         legacy_artifacts=legacy,
@@ -228,9 +290,10 @@ def _initialize_cutover_authority_locked(
     _require_or_publish_initialization_intent(
         account_dir=account_dir,
         payload=intent_payload,
-        allow_create=established is None,
+        authority_generation=intended_generation,
+        allow_create=established is None or reset_authorized,
     )
-    if established is None:
+    if established is None or reset_authorized:
         repository = ClerkSqliteRepository.initialize(
             account_id=account_id,
             artifacts_root=artifacts_root,
@@ -240,7 +303,7 @@ def _initialize_cutover_authority_locked(
         established = registry.latest(account_id)
     if established is None:
         raise CutoverRefused("SQLite initialization did not publish its generation fence")
-    database = _verify_inactive_generation_one(
+    database = _verify_inactive_generation(
         account_id=account_id,
         account_dir=account_dir,
         authority_generation=established.authority_generation,
@@ -259,7 +322,7 @@ def _initialize_cutover_authority_locked(
     }
     receipt_path = (
         _cutover_evidence_directory(account_dir, create=False)
-        / f"initialization-g1-{established.db_identity_token}.json"
+        / f"initialization-g{established.authority_generation}-{established.db_identity_token}.json"
     )
     encoded_receipt = canonical_json_bytes(receipt_payload)
     if receipt_path.is_symlink() or (
@@ -284,145 +347,6 @@ def _initialize_cutover_authority_locked(
     )
 
 
-def _initialization_intent_payload(
-    *,
-    account_id: str,
-    broker_evidence: BrokerCutoverEvidence,
-    runner_roster: tuple[RunnerBotEvidence, ...],
-    legacy_artifacts: tuple[LegacyArtifactEvidence, ...],
-) -> tuple[dict[str, object], str]:
-    evidence = {
-        "schema_version": 1,
-        "operation": "CUTOVER_INITIALIZATION_INTENT",
-        "account_id": account_id,
-        "broker_evidence": asdict(broker_evidence),
-        "runner_roster": [asdict(item) for item in runner_roster],
-        "legacy_artifacts": [asdict(item) for item in legacy_artifacts],
-    }
-    intent_id = hashlib.sha256(canonical_json_bytes(evidence)).hexdigest()
-    return {**evidence, "initialization_intent_id": intent_id}, intent_id
-
-
-def _require_or_publish_initialization_intent(
-    *,
-    account_dir: Path,
-    payload: dict[str, object],
-    allow_create: bool,
-) -> None:
-    """Create the pre-init marker once, or require an exact retry match."""
-    intent_path = (
-        _cutover_evidence_directory(account_dir, create=allow_create)
-        / "initialization-intent.json"
-    )
-    encoded = canonical_json_bytes(payload)
-    if intent_path.is_symlink() or (
-        intent_path.exists() and not intent_path.is_file()
-    ):
-        raise CutoverRefused("cutover initialization intent has an unsafe type")
-    if intent_path.is_file():
-        if intent_path.read_bytes() != encoded:
-            raise CutoverRefused(
-                "cutover initialization retry evidence differs from its durable intent"
-            )
-        return
-    if not allow_create:
-        raise CutoverRefused(
-            "established SQLite authority has no durable cutover initialization intent"
-        )
-    atomic_write_json(intent_path, payload)
-
-
-def _cutover_evidence_directory(account_dir: Path, *, create: bool) -> Path:
-    """Return the confined evidence directory without following a link."""
-    evidence_dir = account_dir / "cutover-evidence"
-    if evidence_dir.is_symlink():
-        raise CutoverRefused(
-            "cutover-evidence directory must not be a symbolic link"
-        )
-    if evidence_dir.exists():
-        if not evidence_dir.is_dir():
-            raise CutoverRefused(
-                "cutover-evidence path must be a regular directory"
-            )
-    elif create:
-        evidence_dir.mkdir()
-        fsync_directory(account_dir)
-    else:
-        raise CutoverRefused(
-            "established SQLite authority has no durable cutover initialization "
-            "intent; cutover-evidence directory is missing"
-        )
-    resolved = resolve_contained_path(account_dir, "cutover-evidence")
-    if resolved != evidence_dir:
-        raise CutoverRefused("cutover-evidence directory is not confined")
-    return evidence_dir
-
-
-def _verify_inactive_generation_one(
-    *,
-    account_id: str,
-    account_dir: Path,
-    authority_generation: int,
-    db_identity_token: str,
-) -> DatabaseVerification:
-    """Verify the only established state that initialization may resume."""
-    if authority_generation != 1:
-        raise CutoverRefused(
-            "cutover initialization can resume only inactive authority generation one"
-        )
-    _require_checkpointed_database(account_dir)
-    database = verify_database(
-        account_dir / DB_FILENAME,
-        expected_account_id=account_id,
-        expected_generation=authority_generation,
-        expected_db_identity=db_identity_token,
-        immutable=True,
-    )
-    if database.control_revision != 0 or database.transition_count != 0:
-        raise CutoverRefused(
-            "cutover initialization can resume only an unused SQLite authority"
-        )
-    _verify_empty_generation_one_mirror(
-        account_id=account_id,
-        account_dir=account_dir,
-        authority_generation=authority_generation,
-        db_identity_token=db_identity_token,
-    )
-    return database
-
-
-def _verify_empty_generation_one_mirror(
-    *,
-    account_id: str,
-    account_dir: Path,
-    authority_generation: int,
-    db_identity_token: str,
-) -> str:
-    """Verify and hash the exact unused mirror bound to generation one."""
-    mirror_path = account_dir / MIRROR_FILENAME
-    if mirror_path.is_symlink() or not mirror_path.is_file():
-        raise CutoverRefused(
-            "cutover requires a regular non-symbolic-link generation-one mirror"
-        )
-    try:
-        mirror_rows = MirrorFile(
-            mirror_path,
-            expected_identity=MirrorIdentity(
-                account_id=account_id,
-                authority_generation=authority_generation,
-                db_identity_token=db_identity_token,
-            ),
-        ).rebuild()
-        encoded = mirror_path.read_bytes()
-    except (MirrorChainBroken, OSError, ValueError) as exc:
-        raise CutoverRefused(f"generation-one mirror does not verify: {exc}") from exc
-    if mirror_rows:
-        raise CutoverRefused(
-            "cutover requires an empty generation-one mirror"
-        )
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _require_completed_cutover_initialization(
     *,
     account_id: str,
@@ -432,7 +356,10 @@ def _require_completed_cutover_initialization(
     """Require a valid pre-init intent and its database-bound completion receipt."""
     evidence_dir = _cutover_evidence_directory(account_dir, create=False)
     intent = _read_initialization_record(
-        evidence_dir / "initialization-intent.json",
+        _initialization_intent_path(
+            evidence_dir,
+            authority_generation=database.authority_generation,
+        ),
         label="cutover initialization intent",
     )
     intent_id = intent.get("initialization_intent_id")
@@ -448,11 +375,15 @@ def _require_completed_cutover_initialization(
         intent.get("schema_version") != 1
         or intent.get("operation") != "CUTOVER_INITIALIZATION_INTENT"
         or intent.get("account_id") != account_id
+        or intent.get("authority_generation") != database.authority_generation
         or intent_id != expected_intent_id
     ):
         raise CutoverRefused("cutover initialization intent does not verify")
 
-    receipt_path = evidence_dir / f"initialization-g1-{database.db_identity_token}.json"
+    receipt_path = (
+        evidence_dir
+        / f"initialization-g{database.authority_generation}-{database.db_identity_token}.json"
+    )
     receipt = _read_initialization_record(
         receipt_path,
         label="cutover initialization receipt",
@@ -470,7 +401,7 @@ def _require_completed_cutover_initialization(
         raise CutoverRefused(
             "cutover initialization receipt does not match its intent and database"
         )
-    mirror_sha256 = _verify_empty_generation_one_mirror(
+    mirror_sha256 = _verify_empty_generation_mirror(
         account_id=account_id,
         account_dir=account_dir,
         authority_generation=database.authority_generation,
@@ -510,8 +441,11 @@ def plan_cutover(
     if type(confirmation_ttl_ms) is not int or not 1 <= confirmation_ttl_ms <= MAX_CONFIRMATION_TTL_MS:
         raise CutoverRefused("confirmation TTL must be within 1..300000 ms")
     accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
-    if ActivationStore(accounts_root).latest(account_id) is not None:
-        raise CutoverRefused("account already has an activation fence")
+    _require_no_unreset_activation(
+        accounts_root=accounts_root,
+        account_id=account_id,
+        artifacts_root=artifacts_root,
+    )
     established = EstablishedAccountsRegistry(accounts_root).latest(account_id)
     if established is None:
         raise CutoverRefused("account has no established SQLite authority")
@@ -535,13 +469,26 @@ def plan_cutover(
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
-    legacy = _legacy_artifact_evidence(artifacts_root, account_id)
+    legacy = _legacy_artifact_evidence(
+        artifacts_root,
+        account_id,
+        allow_empty=_developer_reset_replaces_activation(
+            accounts_root=accounts_root,
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+        ),
+    )
     runner_roster = _runner_roster_evidence(
         runner_artifacts_root,
         account_id,
         legacy_strategy_instance_ids=_legacy_strategy_instance_ids(
             artifacts_root,
             account_id,
+        ),
+        allow_empty=_developer_reset_replaces_activation(
+            accounts_root=accounts_root,
+            account_id=account_id,
+            artifacts_root=artifacts_root,
         ),
     )
     payload = {
@@ -587,8 +534,11 @@ def apply_cutover(
     if now > plan.expires_at_ms:
         raise CutoverRefused("cutover confirmation token has expired")
     accounts_root, account_dir = writes.account_paths(artifacts_root, plan.account_id)
-    if ActivationStore(accounts_root).latest(plan.account_id) is not None:
-        raise CutoverRefused("account already has an activation fence")
+    _require_no_unreset_activation(
+        accounts_root=accounts_root,
+        account_id=plan.account_id,
+        artifacts_root=artifacts_root,
+    )
     established = EstablishedAccountsRegistry(accounts_root).latest(plan.account_id)
     if established is None:
         raise CutoverRefused("account establishment evidence disappeared")
@@ -612,13 +562,26 @@ def apply_cutover(
         now_ms=now,
         max_broker_evidence_age_ms=max_broker_evidence_age_ms,
     )
-    current_legacy = _legacy_artifact_evidence(artifacts_root, plan.account_id)
+    current_legacy = _legacy_artifact_evidence(
+        artifacts_root,
+        plan.account_id,
+        allow_empty=_developer_reset_replaces_activation(
+            accounts_root=accounts_root,
+            account_id=plan.account_id,
+            artifacts_root=artifacts_root,
+        ),
+    )
     current_roster = _runner_roster_evidence(
         runner_artifacts_root,
         plan.account_id,
         legacy_strategy_instance_ids=_legacy_strategy_instance_ids(
             artifacts_root,
             plan.account_id,
+        ),
+        allow_empty=_developer_reset_replaces_activation(
+            accounts_root=accounts_root,
+            account_id=plan.account_id,
+            artifacts_root=artifacts_root,
         ),
     )
     if current_database != plan.database:
@@ -814,6 +777,7 @@ def _runner_roster_evidence(
     account_id: str,
     *,
     legacy_strategy_instance_ids: frozenset[str],
+    allow_empty: bool = False,
 ) -> tuple[RunnerBotEvidence, ...]:
     """Bind the runner-owned semantic snapshot to complete artifact hashes."""
     try:
@@ -823,6 +787,8 @@ def _runner_roster_evidence(
             legacy_strategy_instance_ids=legacy_strategy_instance_ids,
         )
     except CutoverRosterEvidenceError as exc:
+        if allow_empty and str(exc).startswith("runner evidence contains no Alpaca bots"):
+            return ()
         raise CutoverRefused(str(exc)) from exc
     evidence: list[RunnerBotEvidence] = []
     for bot in roster:
@@ -851,7 +817,10 @@ def _runner_roster_evidence(
 
 
 def _legacy_artifact_evidence(
-    artifacts_root: Path, account_id: str
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    allow_empty: bool = False,
 ) -> tuple[LegacyArtifactEvidence, ...]:
     _accounts_root, account_dir = writes.account_paths(artifacts_root, account_id)
     evidence: list[LegacyArtifactEvidence] = []
@@ -884,7 +853,7 @@ def _legacy_artifact_evidence(
                 sha256=tree_sha256(path),
             )
         )
-    if not evidence:
+    if not evidence and not allow_empty:
         raise CutoverRefused(
             "no legacy authority artifacts were found; verify the Clerk artifacts root"
         )

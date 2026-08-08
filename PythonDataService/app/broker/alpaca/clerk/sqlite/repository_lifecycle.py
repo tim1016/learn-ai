@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite import schema, writes
+from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
+    DeveloperCleanSlateResetRegistry,
+)
 from app.broker.alpaca.clerk.sqlite.folds import FoldRegistry
 from app.broker.alpaca.clerk.sqlite.hashchain import verify_chain
 from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, MirrorIdentity
@@ -207,7 +210,7 @@ def initialize_repository(
     db_filename: str,
     mirror_filename: str,
 ) -> ClerkSqliteRepository:
-    """Create authority generation one for a never-established account."""
+    """Create an initial authority or one authorized developer-reset successor."""
     with startup_recovery_fence(
         artifacts_root=artifacts_root,
         account_id=account_id,
@@ -248,12 +251,19 @@ def _initialize_repository_unfenced(
     mirror_path = writes.confined_account_file(artifacts_root, account_id, mirror_filename)
     if db_path.is_file():
         raise AlreadyInitialized(f"{db_path} already exists; use open()")
-    if registry.is_established(account_id):
+    established = registry.latest(account_id)
+    reset_registry = DeveloperCleanSlateResetRegistry(accounts_root)
+    if established is not None and not reset_registry.authorizes_reinitialize(
+        account_id=account_id,
+        prior_authority_generation=established.authority_generation,
+        artifacts_root=artifacts_root,
+    ):
         raise DatabaseMissingAfterEstablishment(
             f"account {account_id!r} was previously established but {db_path} is "
             "missing — this requires the explicit recovery/reset workflow, not a "
             "fresh initialize()"
         )
+    authority_generation = 1 if established is None else established.authority_generation + 1
 
     assert_wal_filesystem_supported(account_dir)
     account_dir.mkdir(parents=True, exist_ok=True)
@@ -271,7 +281,7 @@ def _initialize_repository_unfenced(
     registry.record(
         EstablishedGeneration(
             account_id=account_id,
-            authority_generation=1,
+            authority_generation=authority_generation,
             db_identity_token=db_identity_token,
             established_at_ms=now,
         )
@@ -283,11 +293,12 @@ def _initialize_repository_unfenced(
             "(id, schema_version, broker, account_id, db_identity_token, "
             "authority_generation, control_revision, created_at_ms, last_open_at_ms, "
             "reset_provenance_json, execution_lease_owner, execution_lease_expires_at_ms) "
-            "VALUES (1, ?, 'alpaca', ?, ?, 1, 0, ?, ?, NULL, ?, ?)",
+            "VALUES (1, ?, 'alpaca', ?, ?, ?, 0, ?, ?, NULL, ?, ?)",
             (
                 schema.SCHEMA_VERSION,
                 account_id,
                 db_identity_token,
+                authority_generation,
                 now,
                 now,
                 owner,
@@ -304,7 +315,7 @@ def _initialize_repository_unfenced(
         mirror_path,
         expected_identity=MirrorIdentity(
             account_id=account_id,
-            authority_generation=1,
+            authority_generation=authority_generation,
             db_identity_token=db_identity_token,
         ),
     )

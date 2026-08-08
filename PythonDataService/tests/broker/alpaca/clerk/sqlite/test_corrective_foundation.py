@@ -73,6 +73,20 @@ def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
         ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
 
+def test_future_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
+    clock = _clock_seq()
+    r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+    r._conn.execute(
+        "UPDATE control_meta SET schema_version = ? WHERE id = 1",
+        (schema.SCHEMA_VERSION + 1,),
+    )
+    r._conn.commit()
+    r.close()
+
+    with pytest.raises(SchemaVersionMismatch, match="schema_version"):
+        ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
+
+
 def test_v4_authority_upgrades_in_place_on_open(tmp_path: Path) -> None:
     """#1396 P2: the v4->v5 SCHEMA_VERSION bump added no upgrade path, so an
     account initialized on schema-4 could no longer be opened after

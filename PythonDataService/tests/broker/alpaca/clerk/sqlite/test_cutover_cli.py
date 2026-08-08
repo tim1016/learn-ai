@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import scripts.manage_alpaca_sqlite_clerk as recovery_cli_module
 from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
 from app.broker.alpaca.clerk.sqlite.catalog_quarantine import CatalogQuarantineRefused
 from app.broker.alpaca.clerk.sqlite.cutover import CutoverRefused
+from app.broker.alpaca.clerk.sqlite.dev_reset import DeveloperCleanSlateResetRefused
 from scripts.manage_alpaca_sqlite_clerk import (
     _read_catalog_quarantine_plan,
     _read_cutover_evidence,
@@ -231,6 +234,95 @@ def test_read_reset_and_cutover_evidence_use_distinct_models(
     assert not hasattr(reset, "account_mode")
     with pytest.raises(ValueError, match="cutover broker evidence"):
         _read_cutover_evidence(evidence_path, ACCOUNT_ID)
+
+
+def test_dev_reset_cli_moves_paper_legacy_authority_without_broker_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    journal = account_dir / "order_journal.jsonl"
+    journal.write_text("{}\n", encoding="utf-8")
+    journal_bytes = journal.read_bytes()
+    monkeypatch.setattr(
+        recovery_cli_module,
+        "get_alpaca_settings",
+        lambda: SimpleNamespace(mode="paper"),
+    )
+
+    assert recovery_cli(
+        [
+            "--artifacts-root",
+            str(clerk_root),
+            "--account-id",
+            ACCOUNT_ID,
+            "dev-reset",
+            "--runner-artifacts-root",
+            str(runner_root),
+        ]
+    ) == 0
+
+    assert not journal.exists()
+    quarantine_root = account_dir / "dev-reset-quarantine"
+    quarantines = tuple(quarantine_root.iterdir())
+    assert len(quarantines) == 1
+    quarantine = quarantines[0]
+    moved_journals = tuple(quarantine.rglob("order_journal.jsonl"))
+    assert len(moved_journals) == 1
+    assert moved_journals[0].read_bytes() == journal_bytes
+    manifest = json.loads((quarantine / "manifest.json").read_text(encoding="utf-8"))
+    receipt = json.loads((quarantine / "receipt.json").read_text(encoding="utf-8"))
+    assert any(
+        artifact["source_reference"] == "order_journal.jsonl"
+        for artifact in manifest["moved_artifacts"]
+    )
+    assert any(
+        artifact["source_reference"] == "order_journal.jsonl"
+        for artifact in receipt["moved_artifacts"]
+    )
+
+
+def test_dev_reset_cli_refuses_live_mode_without_moving_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    journal = account_dir / "order_journal.jsonl"
+    journal.write_text("{}\n", encoding="utf-8")
+    runner_registry = runner_root / "accounts" / ACCOUNT_ID / "instance_registry.jsonl"
+    runner_registry.parent.mkdir(parents=True)
+    runner_registry.write_text("{}\n", encoding="utf-8")
+    journal_bytes = journal.read_bytes()
+    runner_bytes = runner_registry.read_bytes()
+    monkeypatch.setattr(
+        recovery_cli_module,
+        "get_alpaca_settings",
+        lambda: SimpleNamespace(mode="live"),
+    )
+
+    with pytest.raises(DeveloperCleanSlateResetRefused, match="only for paper"):
+        recovery_cli(
+            [
+                "--artifacts-root",
+                str(clerk_root),
+                "--account-id",
+                ACCOUNT_ID,
+                "dev-reset",
+                "--runner-artifacts-root",
+                str(runner_root),
+            ]
+        )
+
+    assert journal.read_bytes() == journal_bytes
+    assert runner_registry.read_bytes() == runner_bytes
+    assert not (account_dir / "dev-reset-quarantine").exists()
+    assert not (runner_root / "dev-reset-quarantine").exists()
 
 
 def test_read_process_stop_evidence_requires_exact_account_bound_fields(

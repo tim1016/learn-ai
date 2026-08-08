@@ -21,6 +21,7 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
     initialize_cutover_authority,
     plan_cutover,
 )
+from app.broker.alpaca.clerk.sqlite.dev_reset import developer_clean_slate_reset
 from app.broker.alpaca.clerk.sqlite.repository import (
     MIRROR_FILENAME,
     ClerkSqliteRepository,
@@ -1173,6 +1174,66 @@ def test_apply_activates_sqlite_and_quarantines_exact_legacy_artifacts(tmp_path:
         / "spy"
         / "decision_journal.jsonl"
     ).is_file()
+
+
+def test_developer_reset_allows_a_successor_generation_to_reactivate(
+    tmp_path: Path,
+) -> None:
+    clerk_root, _account_dir, runner_root, evidence, clock = _setup(tmp_path)
+    initial_plan = plan_cutover(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=clock,
+    )
+    apply_cutover(
+        plan=initial_plan,
+        confirmation_token=initial_plan.confirmation_token,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=clock,
+    )
+
+    developer_clean_slate_reset(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        account_mode="paper",
+        clock=clock,
+    )
+    successor = initialize_cutover_authority(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=clock,
+    )
+    successor_plan = plan_cutover(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=clock,
+    )
+    receipt = apply_cutover(
+        plan=successor_plan,
+        confirmation_token=successor_plan.confirmation_token,
+        artifacts_root=clerk_root,
+        runner_artifacts_root=runner_root,
+        broker_evidence=evidence,
+        max_broker_evidence_age_ms=1_000,
+        clock=clock,
+    )
+
+    assert successor.database.authority_generation == 2
+    assert receipt.activation.authority_generation == 2
+    assert ActivationStore(clerk_root / "accounts" / "alpaca").latest(ACCOUNT_ID) == receipt.activation
 
 
 def test_apply_rolls_back_every_legacy_artifact_after_mid_quarantine_failure(
