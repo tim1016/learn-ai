@@ -48,13 +48,14 @@ from app.broker.alpaca.config import (
 )
 from app.broker.alpaca.errors import map_api_error, status_of
 from app.broker.alpaca.fault_injection import (
+    ArmedFault,
+    WriteFaultKind,
     craft_write_error,
     get_fault_injection_registry,
 )
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import (
     BrokerAuthError,
-    BrokerError,
     BrokerRateLimited,
     BrokerUnavailable,
 )
@@ -285,16 +286,14 @@ class AlpacaTradingClient:
         )
         await anyio.sleep(min(hint_s, _RATE_LIMIT_RETRY_CAP_S))
 
-    def _maybe_injected_write_fault(self, identifier: str) -> BrokerError | None:
-        """Return the contract error for an armed write fault, else ``None``.
+    def _take_injected_write_fault(self, identifier: str) -> ArmedFault | None:
+        """Consume and return an armed write fault, else ``None``.
 
         Inert unless the dev-only fault-injection seam is permitted (off by
-        default, paper-only). When a fault matches this mutation it short-circuits
-        BEFORE the SDK call, so no order reaches Alpaca — the seam can only
-        simulate the *vendor response*, never place a different order. Reject /
-        conflict / throttle are byte-identical to a genuine vendor failure
-        (crafted via the real ``map_api_error``); a throttle re-enters the
-        bounded retry below exactly like a real 429.
+        default, paper-only). All legacy kinds short-circuit before the SDK.
+        ``POST_SDK_TIMEOUT`` alone lets one normal paper mutation complete and
+        then hides its response, modeling the source semantics of a lost submit
+        or cancel response without changing the request.
         """
         fault = get_fault_injection_registry().consume_write_fault(identifier)
         if fault is None:
@@ -307,7 +306,7 @@ class AlpacaTradingClient:
                 "identifier": identifier,
             },
         )
-        return craft_write_error(fault.kind)
+        return fault
 
     async def _call_write(
         self,
@@ -331,10 +330,13 @@ class AlpacaTradingClient:
         attempt = 0
         while True:
             try:
-                injected = self._maybe_injected_write_fault(identifier)
-                if injected is not None:
-                    raise injected
-                return await self._call(fn, describe=describe, is_order_mutation=True)
+                fault = self._take_injected_write_fault(identifier)
+                if fault is not None and fault.kind != WriteFaultKind.POST_SDK_TIMEOUT:
+                    raise craft_write_error(fault.kind)
+                result = await self._call(fn, describe=describe, is_order_mutation=True)
+                if fault is not None:
+                    raise craft_write_error(fault.kind)
+                return result
             except BrokerRateLimited as exc:
                 if attempt >= _MAX_RATE_LIMIT_RETRIES:
                     logger.warning(

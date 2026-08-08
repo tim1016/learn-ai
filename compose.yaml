@@ -249,6 +249,73 @@ services:
     networks:
       - app-network
 
+  alpaca-clerk-qualification:
+    profiles: ["qualification"]
+    build:
+      context: ./PythonDataService
+      target: qualification
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+    restart: "no"
+    read_only: true
+    network_mode: none
+    environment:
+      - ALPACA_CLERK_PRODUCTION_ACCOUNT_ID=${ALPACA_CLERK_PRODUCTION_ACCOUNT_ID:-}
+      # The no-network service still requires an explicit paper posture before
+      # the production fault registry can arm around its in-memory SDK transport.
+      - ALPACA_FAULT_INJECTION_ENABLED=true
+      - ALPACA_QUALIFICATION_API_KEY_ID=${ALPACA_QUALIFICATION_API_KEY_ID:-}
+      - ALPACA_QUALIFICATION_API_SECRET_KEY=${ALPACA_QUALIFICATION_API_SECRET_KEY:-}
+      - ALPACA_MODE=${ALPACA_MODE:-paper}
+      - POLYGON_API_KEY=${POLYGON_API_KEY:-}
+      - NUMBA_DISABLE_JIT=1
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      # Production authority is visible only for one-shot topology proof and
+      # diagnostics; the container cannot write it. Rehearsal state uses a
+      # distinct VM-local named volume with the same XFS/WAL characteristics.
+      - alpaca-clerk-data:/app/production-alpaca-clerk:ro
+      - alpaca-clerk-qualification-data:/app/artifacts/alpaca_clerk/qualification
+      # Test code and the pinned Polygon capture are evidence inputs only.
+      - ./PythonDataService/tests:/app/tests:ro,z
+      - ./PythonDataService/pytest.ini:/app/pytest.ini:ro,z
+      - ./PythonDataService/ruff.toml:/app/ruff.toml:ro,z
+      - ${ALPACA_CLERK_UI_EVIDENCE_PATH:-./docs/audits/alpaca-sqlite-clerk-synthetic-ui-evidence-2026-08-07.json}:/app/evidence/ui.json:ro,z
+      - ./Frontend/tests/e2e/alpaca-clerk-ui-correlation.spec.ts:/app/evidence/ui-spec.ts:ro,z
+      - ./contracts/alpaca-clerk-ui-correlation-campaign.v4.json:/app/contracts/alpaca-clerk-ui-correlation-campaign.v4.json:ro,z
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+      - /app/cache:size=256m,mode=1777
+      - /app/.pytest_cache:size=32m,mode=1777
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        : "$${ALPACA_CLERK_PRODUCTION_ACCOUNT_ID:?set ALPACA_CLERK_PRODUCTION_ACCOUNT_ID}"
+        case "$${GIT_SHA}" in ''|*[!0-9a-f]*) echo "GIT_SHA must be the tested 40-character commit" >&2; exit 1 ;; esac
+        test "$${#GIT_SHA}" -eq 40
+        : "$${ALPACA_QUALIFICATION_API_KEY_ID:?set ALPACA_QUALIFICATION_API_KEY_ID to a non-production qualification value}"
+        : "$${ALPACA_QUALIFICATION_API_SECRET_KEY:?set ALPACA_QUALIFICATION_API_SECRET_KEY to a non-production qualification value}"
+        : "$${POLYGON_API_KEY:?set POLYGON_API_KEY to a non-secret offline-fixture placeholder}"
+        test "$${ALPACA_MODE}" = "paper"
+        export ALPACA_API_KEY_ID="$${ALPACA_QUALIFICATION_API_KEY_ID}"
+        export ALPACA_API_SECRET_KEY="$${ALPACA_QUALIFICATION_API_SECRET_KEY}"
+        mkdir -p /app/artifacts/alpaca_clerk/qualification/evidence
+        exec python -m scripts.run_alpaca_sqlite_qualification \
+          --synthetic-rehearsal \
+          --artifacts-root /app/artifacts/alpaca_clerk/qualification \
+          --production-artifacts-root /app/production-alpaca-clerk \
+          --fixture-dir /app/tests/fixtures/polygon_capture/spy_minute_2025-01-13_2025-01-17 \
+          --production-account-id "$${ALPACA_CLERK_PRODUCTION_ACCOUNT_ID}" \
+          --preverified-ui-evidence /app/evidence/ui.json \
+          --json-output /app/artifacts/alpaca_clerk/qualification/evidence/rehearsal.json \
+          --markdown-output /app/artifacts/alpaca_clerk/qualification/evidence/rehearsal.md
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
   backend:
     image: mcr.microsoft.com/dotnet/sdk:10.0
     container_name: my-backend
@@ -373,6 +440,8 @@ volumes:
   alpaca-clerk-data:
     name: learn-ai-alpaca-clerk-data
     external: true
+  alpaca-clerk-qualification-data:
+    name: learn-ai-alpaca-clerk-qualification-data
 
 networks:
   app-network:

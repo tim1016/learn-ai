@@ -1,0 +1,31 @@
+{
+  "schema_version": 4,
+  "campaign_id": "frontend-browser-network-correlation-1413",
+  "component_campaign_id": "frontend-shell-network-correlation-1413",
+  "command": [
+    "npx",
+    "playwright",
+    "test",
+    "tests/e2e/alpaca-clerk-ui-correlation.spec.ts",
+    "--project=chromium",
+    "--reporter=json"
+  ],
+  "timeout_seconds": 600,
+  "max_receipt_bytes": 65536,
+  "max_evidence_refs": 32,
+  "page_load_count": 5,
+  "browser_reload_count": 4,
+  "revision_sequence": [41, 41, 42, 42, 43],
+  "bootstrap_revision": 40,
+  "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
+  "presented_action_id": "resume",
+  "evidence_click_target": "BROKER_ACK_RAW_EVIDENCE",
+  "evidence_button_name": "View raw evidence for Broker ack",
+  "hide_evidence_button_name": "Hide raw evidence for Broker ack",
+  "station_button_name": "Broker ack: Satisfied",
+  "account_id": "DUM284968",
+  "strategy_instance_id": "sid-001",
+  "transaction_ref": "tx-001",
+  "symbol": "QQQ",
+  "base_timestamp_ms": 1753800000000
+}

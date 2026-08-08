@@ -12,10 +12,10 @@ Safety is structural, not a promise:
   ``ALPACA_FAULT_INJECTION_ENABLED`` flag *and* a paper Alpaca posture. Arming
   is refused otherwise; every consume hook is inert otherwise. Any error
   resolving the posture fails closed.
-* **No abnormal order is ever placed.** A write fault simulates the *vendor
-  response* and short-circuits **before** the SDK call, so no order reaches
-  Alpaca. A frame fault simulates an *inbound frame*; it never constructs or
-  submits an order. The seam can only fabricate a response or a frame.
+* **No abnormal order is ever placed.** Legacy write faults simulate the vendor
+  response before the SDK call. ``POST_SDK_TIMEOUT`` allows one unchanged,
+  normal paper mutation to complete and then hides its response so lost-response
+  custody is reproducible. Frame faults never construct or submit an order.
 
 Two hooks consume this registry:
 
@@ -58,6 +58,7 @@ class WriteFaultKind(StrEnum):
     CONFLICT_409 = "conflict_409"
     THROTTLE_429 = "throttle_429"
     TIMEOUT = "timeout"
+    POST_SDK_TIMEOUT = "post_sdk_timeout"
 
 
 class FrameFaultKind(StrEnum):
@@ -67,6 +68,7 @@ class FrameFaultKind(StrEnum):
     HALT_SUSPENDED = "halt_suspended"
     HALT_STOPPED = "halt_stopped"
     PARTIAL_FILL = "partial_fill"
+    DISCONNECT = "disconnect"
 
 
 _WRITE_KINDS = frozenset(kind.value for kind in WriteFaultKind)
@@ -98,8 +100,10 @@ class ArmedFault:
     supplies the ``client_order_id`` the crafted frame is attributed to;
     ``None`` leaves the crafted frame unattributed (an "unexplained order").
 
-    ``params`` carries frame-shaping overrides (``symbol`` / ``qty`` / ``price``
-    / ``execution_id``); it is unused for write faults.
+    ``params`` carries frame-shaping overrides (``broker_order_id`` / ``symbol``
+    / ``qty`` / ``price`` / ``execution_id``); it is unused for write faults.
+    ``DISCONNECT`` is a source-level frame fault that ends the current stream
+    after the next frame.
     """
 
     kind: str
@@ -282,11 +286,15 @@ def craft_write_error(kind: str) -> BrokerError:
             broker=BROKER_ID,
             is_order_mutation=True,
         )
-    if kind == WriteFaultKind.TIMEOUT:
+    if kind in (WriteFaultKind.TIMEOUT, WriteFaultKind.POST_SDK_TIMEOUT):
         return BrokerUnavailable(
-            "Alpaca timed out while submitting the order (injected).",
+            "Alpaca timed out while completing the order mutation (injected).",
             broker=BROKER_ID,
-            detail="Injected submit timeout; the outcome is deliberately uncertain.",
+            detail=(
+                "Injected post-SDK response loss; the normal paper mutation landed but its response was hidden."
+                if kind == WriteFaultKind.POST_SDK_TIMEOUT
+                else "Injected pre-SDK timeout; the outcome is deliberately uncertain."
+            ),
         )
     raise ValueError(f"not a write fault kind: {kind!r}")
 
@@ -296,6 +304,7 @@ def craft_write_error(kind: str) -> BrokerError:
 _DEFAULT_SYMBOL = "SPY"
 _DEFAULT_QTY = "1"
 _DEFAULT_PRICE = "100.00"
+_DEFAULT_BROKER_ORDER_ID = "00000000-0000-0000-0000-0000000f1nj0"
 # A stable ET-anchored wire timestamp; frames carry vendor RFC3339 strings, and
 # the real parser converts to int64 ms UTC at ingestion.
 _INJECTED_AT = "2026-08-04T14:42:49.354133Z"
@@ -303,6 +312,7 @@ _INJECTED_AT = "2026-08-04T14:42:49.354133Z"
 
 def _base_order(
     *,
+    broker_order_id: str,
     client_order_id: str | None,
     symbol: str,
     status: str,
@@ -311,7 +321,7 @@ def _base_order(
     filled_avg_price: str | None,
 ) -> dict[str, Any]:
     return {
-        "id": "00000000-0000-0000-0000-0000000f1nj0",
+        "id": broker_order_id,
         "client_order_id": client_order_id,
         "created_at": _INJECTED_AT,
         "updated_at": _INJECTED_AT,
@@ -364,6 +374,7 @@ def craft_frame(fault: ArmedFault) -> str:
     symbol = params.get("symbol") or _DEFAULT_SYMBOL
     qty = params.get("qty") or _DEFAULT_QTY
     price = params.get("price") or _DEFAULT_PRICE
+    broker_order_id = params.get("broker_order_id") or _DEFAULT_BROKER_ORDER_ID
 
     data: dict[str, Any] = {
         "at": _INJECTED_AT,
@@ -371,6 +382,7 @@ def craft_frame(fault: ArmedFault) -> str:
         "event": event,
         "timestamp": _INJECTED_AT,
         "order": _base_order(
+            broker_order_id=broker_order_id,
             client_order_id=fault.target,
             symbol=symbol,
             status=order_status,

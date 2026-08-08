@@ -424,6 +424,31 @@ async def test_raw_stream_invalidates_a_bounded_stalled_subscription(
 
 
 @pytest.mark.asyncio
+async def test_minute_stream_one_print_then_silence_invalidates_without_a_closed_bar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1415 H1: one print cannot leave an unadvanced minute open forever."""
+    client = _FakeClient()
+    client.ib.bars = [_bar(0, "100", "101", "99", "100.5", 10)]
+    source_ms: list[int] = []
+    monkeypatch.setattr(bars_mod, "_bars_expected_now", lambda _use_rth: True)
+
+    stream = stream_minute_bars(
+        client,
+        "SPY",
+        use_rth=True,
+        on_source_bar=source_ms.append,
+        stall_timeout_s=0.01,
+    )
+
+    with pytest.raises(IBKRBarSubscriptionStalled, match="stalled"):
+        await stream.__anext__()
+
+    assert len(source_ms) == 1
+    assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
 async def test_fetch_historical_minute_bars_stamps_provenance() -> None:
     client = _FakeClient()
     client.ib.historical_bars = [

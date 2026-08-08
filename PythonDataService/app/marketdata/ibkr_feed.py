@@ -211,7 +211,7 @@ class IbkrMarketDataFeed:
                 for name, state in active_states
                 if (freshness_wall_ms := state.last_source_wall_ms or state.last_bar_wall_ms)
                 is not None
-                and now - freshness_wall_ms > self._stale_threshold_ms
+                and now - freshness_wall_ms >= self._stale_threshold_ms
             ]
             if stale_ages:
                 stale = True

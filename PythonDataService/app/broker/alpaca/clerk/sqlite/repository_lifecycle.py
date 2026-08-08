@@ -176,7 +176,7 @@ def _linux_filesystem_type(path: Path) -> str | None:
 def assert_wal_filesystem_supported(path: Path) -> None:
     from app.broker.alpaca.clerk.sqlite.repository import UnsupportedWalFilesystem
 
-    filesystem_type = _linux_filesystem_type(path)
+    filesystem_type = wal_filesystem_type(path)
     unsupported = filesystem_type in _UNSUPPORTED_WAL_FILESYSTEMS or (
         filesystem_type is not None and filesystem_type.startswith("fuse")
     )
@@ -187,6 +187,12 @@ def assert_wal_filesystem_supported(path: Path) -> None:
             "from a container-local named volume and run recovery tooling "
             "inside that same host boundary."
         )
+
+
+def wal_filesystem_type(path: Path) -> str | None:
+    """Return the mounted filesystem type used by the WAL storage guard."""
+
+    return _linux_filesystem_type(path)
 
 
 def initialize_repository(

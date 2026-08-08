@@ -33,6 +33,7 @@ from app.marketdata.feed import (
     MarketDataFeedError,
 )
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed, set_market_data_feed
+from tests._helpers.ibkr_feed_adversarial import NeverFirstBarFeedFixture
 
 # ---------------------------------------------------------------------------
 # Helpers and fakes
@@ -130,9 +131,7 @@ def test_market_data_bar_carries_no_ibkr_types() -> None:
     for attr in dir(feed_mod):
         obj = getattr(feed_mod, attr)
         mod = getattr(obj, "__module__", "") or ""
-        assert "broker.ibkr" not in mod, (
-            f"feed.py exports an IBKR type: {attr} from {mod}"
-        )
+        assert "broker.ibkr" not in mod, f"feed.py exports an IBKR type: {attr} from {mod}"
 
 
 def test_market_data_feed_error_is_not_ibkr_error() -> None:
@@ -431,17 +430,26 @@ def test_health_connected_no_bars() -> None:
     assert isinstance(h.observed_at_ms, int)
 
 
-def test_health_active_without_first_closed_bar_is_stale() -> None:
+@pytest.mark.asyncio
+async def test_health_active_without_first_closed_bar_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """#1411: an active never-advanced stream fails closed immediately."""
-    client = _fake_connected_client(connected=True, connection_lost=False)
-    feed = IbkrMarketDataFeed(client)
-    feed._state_for("SPY").active_count = 1
+    fixture = NeverFirstBarFeedFixture()
+    fixture.install(monkeypatch)
+    feed = IbkrMarketDataFeed(fixture.client)
+    stream = feed.stream_bars("SPY")
+    pending_bar = asyncio.create_task(anext(stream))
+    await fixture.wait_until_subscribed()
 
-    health = feed.health()
+    health = feed.health("SPY")
 
     assert health.stale is True
     assert health.last_bar_ms is None
     assert "first closed bar" in health.reason.lower()
+    pending_bar.cancel()
+    await asyncio.gather(pending_bar, return_exceptions=True)
+    await stream.aclose()
 
 
 def test_health_disconnected_reports_reason() -> None:
@@ -538,9 +546,7 @@ async def test_health_endpoint_returns_feed_health(monkeypatch: pytest.MonkeyPat
         test_app = FastAPI()
         test_app.include_router(router, prefix="/api/market-data-feed")
 
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=test_app), base_url="http://test"
-        ) as tc:
+        async with httpx.AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as tc:
             resp = await tc.get("/api/market-data-feed/health")
 
         assert resp.status_code == 200
@@ -565,9 +571,7 @@ async def test_health_endpoint_503_when_feed_not_installed() -> None:
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api/market-data-feed")
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=test_app), base_url="http://test"
-    ) as tc:
+    async with httpx.AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as tc:
         resp = await tc.get("/api/market-data-feed/health")
 
     assert resp.status_code == 503

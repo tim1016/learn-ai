@@ -17,6 +17,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -52,8 +53,24 @@ PRESERVED_DIRECTORY = "recovery-preserved"
 RECEIPT_DIRECTORY = "recovery-receipts"
 
 
+class RecoveryRefusalReason(StrEnum):
+    """Machine-readable reason for refusing a recovery operation."""
+
+    OPERATIONAL_PREREQUISITE = "OPERATIONAL_PREREQUISITE"
+    INTEGRITY_OR_IDENTITY_DISAGREEMENT = "INTEGRITY_OR_IDENTITY_DISAGREEMENT"
+
+
 class RecoveryRefused(Exception):
     """Recovery prerequisites are absent, stale, or identity-mismatched."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: RecoveryRefusalReason = RecoveryRefusalReason.OPERATIONAL_PREREQUISITE,
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -170,7 +187,10 @@ def _create_verified_backup_fenced(
             expected_db_identity=source_verification.db_identity_token,
         )
         if verification != source_verification:
-            raise RecoveryRefused("online backup does not match the verified source cut")
+            raise RecoveryRefused(
+                "online backup does not match the verified source cut",
+                reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+            )
         snapshot_sha256 = sha256_file(snapshot)
         manifest = {
             "schema_version": 1,
@@ -232,7 +252,10 @@ def verify_backup_bundle(
         raise RecoveryRefused("backup must be a published verified bundle")
     manifest_path = bundle / "manifest.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
-        raise RecoveryRefused("backup manifest must be a regular non-symbolic-link file")
+        raise RecoveryRefused(
+            "backup manifest must be a regular non-symbolic-link file",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -252,16 +275,31 @@ def verify_backup_bundle(
     if manifest["schema_version"] != 1 or manifest["snapshot_filename"] != DB_FILENAME:
         raise RecoveryRefused("backup manifest schema or snapshot filename is unsupported")
     if manifest["account_id"] != account_id:
-        raise RecoveryRefused("backup belongs to a different account")
+        raise RecoveryRefused(
+            "backup belongs to a different account",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     if manifest["authority_generation"] != established.authority_generation:
-        raise RecoveryRefused("backup belongs to a different authority generation")
+        raise RecoveryRefused(
+            "backup belongs to a different authority generation",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     if manifest["db_identity_token"] != established.db_identity_token:
-        raise RecoveryRefused("backup belongs to a different database identity")
+        raise RecoveryRefused(
+            "backup belongs to a different database identity",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     snapshot = bundle / DB_FILENAME
     if snapshot.is_symlink() or not snapshot.is_file():
-        raise RecoveryRefused("backup snapshot must be a regular non-symbolic-link file")
+        raise RecoveryRefused(
+            "backup snapshot must be a regular non-symbolic-link file",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     if sha256_file(snapshot) != manifest["snapshot_sha256"]:
-        raise RecoveryRefused("backup snapshot SHA-256 does not match its manifest")
+        raise RecoveryRefused(
+            "backup snapshot SHA-256 does not match its manifest",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     verification = verify_database(
         snapshot,
         expected_account_id=account_id,
@@ -269,7 +307,10 @@ def verify_backup_bundle(
         expected_db_identity=established.db_identity_token,
     )
     if asdict(verification) != manifest["verification"]:
-        raise RecoveryRefused("backup verification receipt does not match snapshot contents")
+        raise RecoveryRefused(
+            "backup verification receipt does not match snapshot contents",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     return BackupPublication(
         bundle_path=bundle,
         manifest_path=manifest_path,
@@ -474,7 +515,10 @@ def _preserve_and_rebuild_from_mirror_fenced(
     )
     rows = mirror.rebuild()
     if any(row.authority_generation != established.authority_generation for row in rows):
-        raise RecoveryRefused("mirror contains rows from a different generation")
+        raise RecoveryRefused(
+            "mirror contains rows from a different generation",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     recorded_at_ms = clock()
     process_stop_reference = _assert_no_live_lease(
         account_dir / DB_FILENAME,
@@ -728,7 +772,8 @@ def _verify_snapshot_matches_mirror_head(
         mirror_hash,
     ):
         raise RecoveryRefused(
-            "backup is not at the current finalized mirror head; refusing generation rollback"
+            "backup is not at the current finalized mirror head; refusing generation rollback",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
         )
 
 

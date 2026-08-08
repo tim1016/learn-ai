@@ -18,7 +18,6 @@ tests/**
 !tests/fixtures
 !tests/fixtures/golden
 !tests/fixtures/golden/manifest.json
-requirements-dev.txt
 requirements-lock.txt
 .venv
 venv
