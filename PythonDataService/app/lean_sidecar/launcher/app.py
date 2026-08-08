@@ -31,11 +31,13 @@ from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT
 from app.lean_sidecar.launcher.models import (
     ExtractMetadataRequest,
     ExtractMetadataResponse,
+    LauncherHealthResponse,
     LaunchRequest,
     LaunchResponse,
 )
 from app.lean_sidecar.launcher.service import (
     LaunchRejectedError,
+    check_pinned_image,
     extract_metadata,
     launch,
 )
@@ -96,9 +98,15 @@ app = FastAPI(
 )
 
 
-@app.get("/healthz")
-async def healthz() -> dict[str, str]:
-    return {"status": "ok", "version": LAUNCHER_VERSION}
+@app.get("/healthz", response_model=LauncherHealthResponse)
+async def healthz() -> LauncherHealthResponse:
+    """Report process reachability and local availability of the pinned image."""
+    image = await run_in_threadpool(check_pinned_image)
+    return LauncherHealthResponse(
+        status="ok" if image.available else "degraded",
+        version=LAUNCHER_VERSION,
+        image=image,
+    )
 
 
 @app.post("/launch", response_model=LaunchResponse)

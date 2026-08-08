@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import logging
 import shlex
+import subprocess
 from pathlib import Path
 
-from app.lean_sidecar.config import RunLimits
+from app.lean_sidecar.config import LEAN_IMAGE_REPO, PINNED_LEAN_IMAGE_DIGEST, RunLimits
 from app.lean_sidecar.launcher.models import (
     ExtractMetadataRequest,
     ExtractMetadataResponse,
+    LauncherImageReadiness,
     LaunchRequest,
     LaunchResponse,
 )
@@ -24,6 +26,7 @@ from app.lean_sidecar.runner import (
     RunnerConfigurationError,
     RunResult,
     _require_image_in_allowlist,
+    _require_podman,
     build_command,
     execute,
 )
@@ -52,6 +55,63 @@ class LaunchRejectedError(Exception):
         super().__init__(f"{reason}: {detail}")
         self.reason = reason
         self.detail = detail
+
+
+def check_pinned_image() -> LauncherImageReadiness:
+    """Verify that Podman can run the exact image the launcher is pinned to.
+
+    ``/healthz`` used to prove only that the FastAPI process was listening.
+    That let Engine Lab accept a LEAN run even when Podman would try to pull a
+    locally-built digest from ``localhost:443`` and fail with exit 125. This
+    inexpensive, read-only check makes image availability part of readiness
+    without launching a container or resolving a mutable tag.
+    """
+    if PINNED_LEAN_IMAGE_DIGEST is None:
+        return LauncherImageReadiness(
+            reference=None,
+            available=False,
+            detail="No default LEAN image digest is pinned in launcher configuration.",
+        )
+
+    reference = f"{LEAN_IMAGE_REPO}@{PINNED_LEAN_IMAGE_DIGEST}"
+    try:
+        podman = _require_podman()
+    except RunnerConfigurationError as exc:
+        return LauncherImageReadiness(reference=reference, available=False, detail=str(exc))
+
+    try:
+        completed = subprocess.run(
+            [podman, "image", "exists", reference],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return LauncherImageReadiness(
+            reference=reference,
+            available=False,
+            detail="Podman did not answer the local pinned-image check within 5 seconds.",
+        )
+    except OSError as exc:
+        logger.warning("LEAN pinned-image readiness check could not invoke Podman: %s", exc)
+        return LauncherImageReadiness(
+            reference=reference,
+            available=False,
+            detail=f"Podman could not check the local pinned image: {exc}",
+        )
+
+    if completed.returncode == 0:
+        return LauncherImageReadiness(
+            reference=reference,
+            available=True,
+            detail="Pinned LEAN image is present in Podman's local image store.",
+        )
+    return LauncherImageReadiness(
+        reference=reference,
+        available=False,
+        detail="Pinned LEAN image is not present in Podman's local image store.",
+    )
 
 
 def launch(request: LaunchRequest, *, artifacts_root: Path) -> LaunchResponse:

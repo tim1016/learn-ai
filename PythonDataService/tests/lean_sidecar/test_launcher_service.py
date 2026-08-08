@@ -8,6 +8,7 @@ the API contract is stable.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import time
 from pathlib import Path
 
@@ -19,10 +20,11 @@ from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.launcher.models import (
     ExtractMetadataRequest,
     ExtractMetadataResponse,
+    LauncherImageReadiness,
     LaunchRequest,
     LaunchResponse,
 )
-from app.lean_sidecar.launcher.service import LaunchRejectedError, launch
+from app.lean_sidecar.launcher.service import LaunchRejectedError, check_pinned_image, launch
 from app.lean_sidecar.workspace import resolve_workspace
 
 DUMMY_DIGEST = "sha256:0000000000000000000000000000000000000000000000000000000000000002"
@@ -99,6 +101,39 @@ class TestLaunchValidation:
         with pytest.raises(LaunchRejectedError) as ei:
             launch(req, artifacts_root=tmp_artifacts_root)
         assert ei.value.reason == "runner_configuration_error"
+
+
+class TestPinnedImageReadiness:
+    def test_reports_local_pinned_image_as_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.lean_sidecar.launcher import service as launcher_service
+
+        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
+        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
+        completed = subprocess.CompletedProcess([], 0)
+        monkeypatch.setattr(launcher_service.subprocess, "run", lambda *args, **kwargs: completed)
+
+        readiness = check_pinned_image()
+
+        assert readiness == LauncherImageReadiness(
+            reference=f"{sidecar_config.LEAN_IMAGE_REPO}@{DUMMY_DIGEST}",
+            available=True,
+            detail="Pinned LEAN image is present in Podman's local image store.",
+        )
+
+    def test_reports_missing_local_pinned_image_without_running_a_container(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.lean_sidecar.launcher import service as launcher_service
+
+        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
+        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
+        completed = subprocess.CompletedProcess([], 1)
+        monkeypatch.setattr(launcher_service.subprocess, "run", lambda *args, **kwargs: completed)
+        readiness = check_pinned_image()
+
+        assert readiness.reference == f"{sidecar_config.LEAN_IMAGE_REPO}@{DUMMY_DIGEST}"
+        assert readiness.available is False
+        assert readiness.detail == "Pinned LEAN image is not present in Podman's local image store."
 
 
 class TestLauncherAppConcurrency:

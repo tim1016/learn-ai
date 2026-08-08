@@ -665,7 +665,7 @@ export class LeanEngineComponent implements OnInit {
       case "checking":
         return "Checking launcher…";
       case "blocked":
-        return "Launcher not running";
+        return "Launcher unavailable";
       default:
         return "Launcher not checked";
     }
@@ -1206,13 +1206,16 @@ export class LeanEngineComponent implements OnInit {
 
   private applyLeanLauncherReport(report: LeanLauncherDiagnosticReport): void {
     const launcher = report.checks.find((check) => check.name === "launcher_healthz");
-    if (launcher?.status === "pass") {
+    const failure = report.checks.find((check) => check.status === "fail");
+    if (launcher?.status === "pass" && report.overall_status !== "fail" && failure === undefined) {
       this.leanLauncherStatus.set("ready");
       this.leanLauncherDetail.set(launcher.detail);
       return;
     }
     this.leanLauncherStatus.set("blocked");
-    this.leanLauncherDetail.set(launcher?.fix ?? launcher?.detail ?? "LEAN launcher is not reachable.");
+    this.leanLauncherDetail.set(
+      failure?.fix ?? failure?.detail ?? launcher?.fix ?? launcher?.detail ?? "LEAN launcher is not reachable.",
+    );
   }
 
   /**

@@ -75,7 +75,7 @@ LEAN_IMAGE_REPO = "localhost/learn-ai/lean-sandbox"
 # execution surface for it exists, the parity-against-Windows claim
 # can be re-validated end-to-end.
 PINNED_LEAN_IMAGE_DIGEST_AMD64: str | None = "sha256:bdb7c7aa3bd5f196905442706f9ebd6d22de08e21cf6ac5cc74b621690005a75"
-PINNED_LEAN_IMAGE_DIGEST_ARM64: str | None = "sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
+PINNED_LEAN_IMAGE_DIGEST_ARM64: str | None = "sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771"
 
 PINNED_LEAN_IMAGE_DIGEST: str | None = PINNED_LEAN_IMAGE_DIGEST_ARM64
 
