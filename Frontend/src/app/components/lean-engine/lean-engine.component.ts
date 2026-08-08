@@ -1024,15 +1024,36 @@ export class LeanEngineComponent implements OnInit {
   private leanJobId = signal<string | null>(null);
 
   async run(): Promise<void> {
-    if (this.engine() === "both") {
+    const engine = this.engine();
+    if (
+      (engine === "lean" || engine === "both") &&
+      this.leanValidationTemplate() !== null &&
+      !(await this.ensureLeanLauncherReady())
+    ) {
+      return;
+    }
+
+    if (engine === "both") {
       await Promise.all([this.runPython(), this.runLean()]);
       return;
     }
-    if (this.engine() === "lean") {
+    if (engine === "lean") {
       await this.runLean();
       return;
     }
     await this.runPython();
+  }
+
+  private async ensureLeanLauncherReady(): Promise<boolean> {
+    if (this.leanLauncherStatus() === "ready") return true;
+
+    await this.checkLeanLauncher();
+    if (this.leanLauncherStatus() === "ready") return true;
+
+    const message = this.leanLauncherDetail() || "Start the LEAN launcher before running.";
+    this.runError.set(message);
+    this.setRunStatus("failed", "LEAN launcher unavailable", message);
+    return false;
   }
 
   private async runPython(): Promise<void> {
@@ -1104,16 +1125,6 @@ export class LeanEngineComponent implements OnInit {
       this.runError.set(message);
       this.setRunStatus("failed", "LEAN validation template unavailable", message);
       return;
-    }
-
-    if (this.leanLauncherStatus() !== "ready") {
-      await this.checkLeanLauncher();
-      if (this.leanLauncherStatus() !== "ready") {
-        const message = this.leanLauncherDetail() || "Start the LEAN launcher before running.";
-        this.runError.set(message);
-        this.setRunStatus("failed", "LEAN launcher unavailable", message);
-        return;
-      }
     }
 
     this.running.set(true);

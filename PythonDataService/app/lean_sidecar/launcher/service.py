@@ -42,6 +42,8 @@ from app.lean_sidecar.workspace_poller import WorkspacePoller
 
 logger = logging.getLogger(__name__)
 
+_PINNED_IMAGE_CHECK_TIMEOUT_S = 1.0
+
 
 class LaunchRejectedError(Exception):
     """The launcher refused to invoke the container.
@@ -70,6 +72,7 @@ def check_pinned_image() -> LauncherImageReadiness:
         return LauncherImageReadiness(
             reference=None,
             available=False,
+            failure_reason="check_failed",
             detail="No default LEAN image digest is pinned in launcher configuration.",
         )
 
@@ -77,7 +80,12 @@ def check_pinned_image() -> LauncherImageReadiness:
     try:
         podman = _require_podman()
     except RunnerConfigurationError as exc:
-        return LauncherImageReadiness(reference=reference, available=False, detail=str(exc))
+        return LauncherImageReadiness(
+            reference=reference,
+            available=False,
+            failure_reason="check_failed",
+            detail=str(exc),
+        )
 
     try:
         completed = subprocess.run(
@@ -85,19 +93,24 @@ def check_pinned_image() -> LauncherImageReadiness:
             check=False,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=_PINNED_IMAGE_CHECK_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
         return LauncherImageReadiness(
             reference=reference,
             available=False,
-            detail="Podman did not answer the local pinned-image check within 5 seconds.",
+            failure_reason="check_failed",
+            detail=(
+                "Podman did not answer the local pinned-image check within "
+                f"{_PINNED_IMAGE_CHECK_TIMEOUT_S:.1f} seconds."
+            ),
         )
     except OSError as exc:
         logger.warning("LEAN pinned-image readiness check could not invoke Podman: %s", exc)
         return LauncherImageReadiness(
             reference=reference,
             available=False,
+            failure_reason="check_failed",
             detail=f"Podman could not check the local pinned image: {exc}",
         )
 
@@ -107,10 +120,20 @@ def check_pinned_image() -> LauncherImageReadiness:
             available=True,
             detail="Pinned LEAN image is present in Podman's local image store.",
         )
+    if completed.returncode == 1:
+        return LauncherImageReadiness(
+            reference=reference,
+            available=False,
+            failure_reason="missing",
+            detail="Pinned LEAN image is not present in Podman's local image store.",
+        )
+
+    logger.warning("LEAN pinned-image readiness check exited with status %s", completed.returncode)
     return LauncherImageReadiness(
         reference=reference,
         available=False,
-        detail="Pinned LEAN image is not present in Podman's local image store.",
+        failure_reason="check_failed",
+        detail=f"Podman could not determine pinned-image readiness (exit code {completed.returncode}).",
     )
 
 

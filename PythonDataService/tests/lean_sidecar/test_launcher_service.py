@@ -133,7 +133,47 @@ class TestPinnedImageReadiness:
 
         assert readiness.reference == f"{sidecar_config.LEAN_IMAGE_REPO}@{DUMMY_DIGEST}"
         assert readiness.available is False
+        assert readiness.failure_reason == "missing"
         assert readiness.detail == "Pinned LEAN image is not present in Podman's local image store."
+
+    def test_reports_podman_operational_failures_without_calling_them_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.lean_sidecar.launcher import service as launcher_service
+
+        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
+        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
+        completed = subprocess.CompletedProcess([], 125)
+        monkeypatch.setattr(launcher_service.subprocess, "run", lambda *args, **kwargs: completed)
+
+        readiness = check_pinned_image()
+
+        assert readiness.available is False
+        assert readiness.failure_reason == "check_failed"
+        assert "exit code 125" in readiness.detail
+
+    def test_bounds_image_probe_below_the_diagnostics_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.lean_sidecar.launcher import service as launcher_service
+
+        monkeypatch.setattr(launcher_service, "PINNED_LEAN_IMAGE_DIGEST", DUMMY_DIGEST)
+        monkeypatch.setattr(launcher_service, "_require_podman", lambda: "/usr/local/bin/podman")
+        observed_timeout: float | None = None
+
+        def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[object]:
+            nonlocal observed_timeout
+            timeout = kwargs["timeout"]
+            assert isinstance(timeout, float)
+            observed_timeout = timeout
+            return subprocess.CompletedProcess([], 0)
+
+        monkeypatch.setattr(launcher_service.subprocess, "run", run)
+
+        check_pinned_image()
+
+        assert observed_timeout is not None
+        assert observed_timeout < 2.0
 
 
 class TestLauncherAppConcurrency:
@@ -158,6 +198,37 @@ class TestLauncherAppConcurrency:
 
         async with launcher_app_module.app.router.lifespan_context(launcher_app_module.app):
             assert (tmp_path / ".launcher-token").is_file()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_healthz_requests_share_one_pinned_image_probe(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.lean_sidecar.launcher import app as launcher_app_module
+
+        calls = 0
+
+        def slow_check_pinned_image() -> LauncherImageReadiness:
+            nonlocal calls
+            calls += 1
+            time.sleep(0.05)
+            return LauncherImageReadiness(
+                reference="localhost/learn-ai/lean-sandbox@sha256:test",
+                available=True,
+                detail="Pinned LEAN image is present in Podman's local image store.",
+            )
+
+        monkeypatch.setattr(launcher_app_module, "check_pinned_image", slow_check_pinned_image)
+        monkeypatch.setattr(launcher_app_module, "_pinned_image_readiness", None)
+        monkeypatch.setattr(launcher_app_module, "_pinned_image_readiness_at", None)
+        monkeypatch.setattr(launcher_app_module, "_pinned_image_probe", None)
+
+        transport = ASGITransport(app=launcher_app_module.app)
+        async with AsyncClient(transport=transport, base_url="http://launcher") as client:
+            first, second = await asyncio.gather(client.get("/healthz"), client.get("/healthz"))
+
+        assert first.status_code == 200, first.text
+        assert second.status_code == 200, second.text
+        assert calls == 1
 
     @pytest.mark.asyncio
     async def test_extract_metadata_responds_while_launch_is_running(

@@ -18,8 +18,10 @@ auth in practice.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,6 +34,7 @@ from app.lean_sidecar.launcher.models import (
     ExtractMetadataRequest,
     ExtractMetadataResponse,
     LauncherHealthResponse,
+    LauncherImageReadiness,
     LaunchRequest,
     LaunchResponse,
 )
@@ -46,6 +49,10 @@ from app.lean_sidecar.launcher_auth import ensure_launcher_token
 logger = logging.getLogger(__name__)
 
 LAUNCHER_VERSION = "phase-1-spike-0"
+_PINNED_IMAGE_READINESS_CACHE_TTL_S = 1.0
+_pinned_image_readiness: LauncherImageReadiness | None = None
+_pinned_image_readiness_at: float | None = None
+_pinned_image_probe: asyncio.Task[LauncherImageReadiness] | None = None
 
 
 def _artifacts_root() -> Path:
@@ -98,10 +105,41 @@ app = FastAPI(
 )
 
 
+def _clear_completed_pinned_image_probe(probe: asyncio.Task[LauncherImageReadiness]) -> None:
+    global _pinned_image_probe
+    if _pinned_image_probe is probe:
+        _pinned_image_probe = None
+
+
+async def _refresh_pinned_image_readiness() -> LauncherImageReadiness:
+    global _pinned_image_readiness, _pinned_image_readiness_at
+    image = await run_in_threadpool(check_pinned_image)
+    _pinned_image_readiness = image
+    _pinned_image_readiness_at = time.monotonic()
+    return image
+
+
+async def _get_pinned_image_readiness() -> LauncherImageReadiness:
+    global _pinned_image_probe
+    if (
+        _pinned_image_readiness is not None
+        and _pinned_image_readiness_at is not None
+        and time.monotonic() - _pinned_image_readiness_at < _PINNED_IMAGE_READINESS_CACHE_TTL_S
+    ):
+        return _pinned_image_readiness
+
+    probe = _pinned_image_probe
+    if probe is None:
+        probe = asyncio.create_task(_refresh_pinned_image_readiness())
+        _pinned_image_probe = probe
+        probe.add_done_callback(_clear_completed_pinned_image_probe)
+    return await asyncio.shield(probe)
+
+
 @app.get("/healthz", response_model=LauncherHealthResponse)
 async def healthz() -> LauncherHealthResponse:
     """Report process reachability and local availability of the pinned image."""
-    image = await run_in_threadpool(check_pinned_image)
+    image = await _get_pinned_image_readiness()
     return LauncherHealthResponse(
         status="ok" if image.available else "degraded",
         version=LAUNCHER_VERSION,

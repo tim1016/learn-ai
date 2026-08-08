@@ -290,6 +290,7 @@ def _check_image_readiness(payload: object) -> LauncherDiagnosticCheck:
         )
     reference = image.get("reference")
     available = image.get("available")
+    failure_reason = image.get("failure_reason")
     detail = image.get("detail")
     if reference != expected_reference:
         return LauncherDiagnosticCheck(
@@ -303,6 +304,14 @@ def _check_image_readiness(payload: object) -> LauncherDiagnosticCheck:
             fix="Restart the launcher so it loads the same pinned-image configuration as the data plane.",
         )
     if available is not True:
+        if failure_reason != "missing":
+            return LauncherDiagnosticCheck(
+                name="launcher_image",
+                label="Pinned LEAN image",
+                status="fail",
+                detail=detail if isinstance(detail, str) else "Launcher could not verify the pinned LEAN image.",
+                fix="Resolve the launcher or Podman readiness-check failure, then retry the diagnostic.",
+            )
         return LauncherDiagnosticCheck(
             name="launcher_image",
             label="Pinned LEAN image",

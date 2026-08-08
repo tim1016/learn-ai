@@ -139,6 +139,7 @@ async def test_diagnose_missing_pinned_image_blocks_lean_run(client: AsyncClient
     image = healthz["image"]
     assert isinstance(image, dict)
     image["available"] = False
+    image["failure_reason"] = "missing"
     image["detail"] = "Pinned LEAN image is not present in Podman's local image store."
     async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
         mock.get("/healthz").mock(return_value=httpx.Response(200, json=healthz))
@@ -152,3 +153,25 @@ async def test_diagnose_missing_pinned_image_blocks_lean_run(client: AsyncClient
     image_check = next(c for c in body["checks"] if c["name"] == "launcher_image")
     assert image_check["status"] == "fail"
     assert "Build the configured local LEAN derivative" in image_check["fix"]
+
+
+async def test_diagnose_podman_readiness_failure_does_not_recommend_an_image_build(
+    client: AsyncClient,
+) -> None:
+    healthz = _healthy_healthz()
+    healthz["status"] = "degraded"
+    image = healthz["image"]
+    assert isinstance(image, dict)
+    image["available"] = False
+    image["failure_reason"] = "check_failed"
+    image["detail"] = "Podman could not determine pinned-image readiness (exit code 125)."
+    async with respx.mock(base_url=DEFAULT_LAUNCHER_URL) as mock:
+        mock.get("/healthz").mock(return_value=httpx.Response(200, json=healthz))
+
+        response = await client.get("/api/lean-sidecar/diagnose")
+
+    assert response.status_code == 200
+    image_check = next(c for c in response.json()["checks"] if c["name"] == "launcher_image")
+    assert image_check["status"] == "fail"
+    assert "Podman could not determine" in image_check["detail"]
+    assert "Build the configured local LEAN derivative" not in image_check["fix"]

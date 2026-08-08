@@ -28,6 +28,13 @@ class LauncherImageReadiness(BaseModel):
         ...,
         description="True only when Podman's local image store contains ``reference``.",
     )
+    failure_reason: Literal["missing", "check_failed"] | None = Field(
+        default=None,
+        description=(
+            "Why an unavailable image could not be used. ``missing`` means Podman "
+            "confirmed absence; ``check_failed`` means Podman could not determine readiness."
+        ),
+    )
     detail: str = Field(..., description="Operator-facing readiness detail.")
 
 
