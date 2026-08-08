@@ -14,7 +14,9 @@ from typing import Any
 
 from app.marketdata.feed import FeedHealth, MarketDataBar
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
-from app.schemas.account_custody_qualification import SyntheticPolygonReplayEvidence
+from app.schemas.account_custody_synthetic_qualification import (
+    SyntheticPolygonReplayEvidence,
+)
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy import strategy_evaluations
 from app.services.session_authority import session_state_at_ms

@@ -6,6 +6,7 @@ import json
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Never
 
 import pytest
 
@@ -25,6 +26,7 @@ from app.broker.alpaca.clerk.sqlite.qualification import (
     synthesize_polygon_5s_bars,
 )
 from app.broker.alpaca.clerk.sqlite.qualification_storage_recovery import (
+    _verify_production_authority_identity,
     prove_mount_topology,
 )
 from app.broker.alpaca.clerk.sqlite.qualification_synthetic_rehearsal import SyntheticTestFailureOrigin
@@ -32,40 +34,22 @@ from app.broker.alpaca.clerk.sqlite.recovery import (
     RecoveryRefusalReason,
     RecoveryRefused,
 )
-from app.schemas.account_custody_qualification import SyntheticUiCorrelationEvidence
+from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.schemas.account_custody_synthetic_qualification import (
+    SyntheticUiCorrelationEvidence,
+)
 from app.services.account_custody_synthetic_scenarios import (
     SYNTHETIC_REHEARSAL_SCENARIOS,
     SyntheticScenarioCategory,
     SyntheticScenarioId,
 )
+from tests._helpers.ui_correlation import ui_correlation_records
 
 _POLYGON_FIXTURE = Path(__file__).parents[4] / "fixtures" / "polygon_capture" / "spy_minute_2025-01-13_2025-01-17"
 
 
-def _ui_correlation_records() -> tuple[dict[str, object], ...]:
-    revisions = (41, 41, 42, 42, 43)
-    return tuple(
-        {
-            "page_load_index": page_load_index,
-            "event_index": event_index,
-            "browser_epoch": f"browser-reload-{page_load_index}",
-            "revision": revision,
-            "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
-            "presented_action_id": "resume",
-            "click_target": "BROKER_ACK_RAW_EVIDENCE",
-            "evidence_request_method": "GET",
-            "evidence_request_path": (
-                "/api/brokers/alpaca/accounts/DUM284968/bots/sid-001/evidence"
-                "?transaction_ref=tx-001&client_hint=operator-transaction-timeline"
-            ),
-            "operation_reference": f"receipt-{page_load_index}-{event_index}",
-            "proof_reference": f"receipt-{page_load_index}-{event_index}",
-            "dispatched_lifecycle_action_id": None,
-            "durable_lifecycle_receipt_id": None,
-        }
-        for page_load_index in range(5)
-        for event_index, revision in enumerate(revisions)
-    )
+def _raise(error: BaseException) -> Never:
+    raise error
 
 
 def test_full_profile_pins_required_scale_points() -> None:
@@ -117,6 +101,7 @@ def test_synthetic_5s_composition_preserves_exact_minute_ohlcv() -> None:
     assert sum(bar.volume for bar in raw) == aggregate.volume
 
 
+@pytest.mark.slow
 def test_polygon_fixture_replays_through_live_feed_path() -> None:
     evidence = run_polygon_replay(_POLYGON_FIXTURE, replayed_minute_count=3)
 
@@ -131,6 +116,7 @@ def test_polygon_fixture_replays_through_live_feed_path() -> None:
     assert evidence.decision_consumer_path == ("strategy_evaluations/DeploymentValidationDecisionKernel")
 
 
+@pytest.mark.slow
 def test_synthetic_rehearsal_uses_protected_generation_and_matches_recovery_heads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -162,7 +148,7 @@ def test_synthetic_rehearsal_uses_protected_generation_and_matches_recovery_head
                     native_event_source_connection_count=25,
                     observed_revision_count=25,
                     revision_sequence=(41, 41, 42, 42, 43),
-                    correlation_records=_ui_correlation_records(),
+                    correlation_records=ui_correlation_records(),
                     lifecycle_request_count=0,
                 )
                 if scenario.category is SyntheticScenarioCategory.UI
@@ -175,8 +161,8 @@ def test_synthetic_rehearsal_uses_protected_generation_and_matches_recovery_head
     production_root.mkdir()
     monkeypatch.setattr(
         qualification,
-        "_assert_qualification_storage_boundary",
-        lambda _qualification, _production: QualificationStorageBoundary(
+        "assert_qualification_storage_boundary",
+        lambda _qualification, _production, _account_id: QualificationStorageBoundary(
             filesystem_type="xfs",
             qualification_mount_id=1415,
             production_mount_id=1,
@@ -278,7 +264,7 @@ def test_polygon_core_failure_is_classified_as_feed_abort(
     monkeypatch.setattr(
         qualification,
         "run_polygon_replay",
-        lambda _fixture: (_ for _ in ()).throw(ValueError("bad fixture")),
+        lambda _fixture: _raise(ValueError("bad fixture")),
     )
 
     with pytest.raises(SyntheticRehearsalPhaseError) as captured:
@@ -321,7 +307,7 @@ def test_recovery_hash_failure_is_classified_as_custody_abort(
     monkeypatch.setattr(
         storage_recovery,
         "run_protected_generation",
-        lambda **_kwargs: (_ for _ in ()).throw(SyntheticRecoveryCustodyError("restore hash head disagreed")),
+        lambda **_kwargs: _raise(SyntheticRecoveryCustodyError("restore hash head disagreed")),
     )
 
     with pytest.raises(SyntheticRehearsalPhaseError) as captured:
@@ -348,7 +334,7 @@ def test_protected_generation_does_not_infer_custody_from_refusal_text(
     monkeypatch.setattr(
         storage_recovery,
         "create_verified_backup",
-        lambda **_kwargs: (_ for _ in ()).throw(RecoveryRefused("temporary hash tooling failure")),
+        lambda **_kwargs: _raise(RecoveryRefused("temporary hash tooling failure")),
     )
 
     with pytest.raises(RecoveryRefused, match="temporary hash tooling failure"):
@@ -357,7 +343,7 @@ def test_protected_generation_does_not_infer_custody_from_refusal_text(
             production_artifacts_root=production_root,
             production_account_id="PRODUCTION-G1",
             generated_at_ms=1_786_140_000_000,
-            storage_boundary_resolver=lambda _qualification, _production: QualificationStorageBoundary(
+            storage_boundary_resolver=lambda _qualification, _production, _account_id: QualificationStorageBoundary(
                 filesystem_type="xfs",
                 qualification_mount_id=1415,
                 production_mount_id=1,
@@ -380,7 +366,7 @@ def test_protected_generation_promotes_typed_integrity_refusal_to_custody(
     monkeypatch.setattr(
         storage_recovery,
         "create_verified_backup",
-        lambda **_kwargs: (_ for _ in ()).throw(
+        lambda **_kwargs: _raise(
             RecoveryRefused(
                 "opaque recovery refusal",
                 reason=(RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT),
@@ -397,7 +383,7 @@ def test_protected_generation_promotes_typed_integrity_refusal_to_custody(
             production_artifacts_root=production_root,
             production_account_id="PRODUCTION-G1",
             generated_at_ms=1_786_140_000_000,
-            storage_boundary_resolver=lambda _qualification, _production: QualificationStorageBoundary(
+            storage_boundary_resolver=lambda _qualification, _production, _account_id: QualificationStorageBoundary(
                 filesystem_type="xfs",
                 qualification_mount_id=1415,
                 production_mount_id=1,
@@ -446,7 +432,7 @@ def test_protected_generation_treats_invalid_backup_clock_as_infrastructure(
             production_artifacts_root=production_root,
             production_account_id="PRODUCTION-G1",
             generated_at_ms=1_786_140_000_000,
-            storage_boundary_resolver=lambda _qualification, _production: QualificationStorageBoundary(
+            storage_boundary_resolver=lambda _qualification, _production, _account_id: QualificationStorageBoundary(
                 filesystem_type="xfs",
                 qualification_mount_id=1415,
                 production_mount_id=1,
@@ -456,6 +442,22 @@ def test_protected_generation_treats_invalid_backup_clock_as_infrastructure(
                 production_authority_root=production_root,
             ),
         )
+
+
+def test_production_authority_identity_requires_the_claimed_established_account(
+    tmp_path: Path,
+) -> None:
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PRODUCTION-G1",
+        artifacts_root=tmp_path,
+        clock=lambda: 1_786_140_000_000,
+    )
+    repo.close()
+
+    _verify_production_authority_identity(tmp_path, "PRODUCTION-G1")
+
+    with pytest.raises(RuntimeError, match="does not establish"):
+        _verify_production_authority_identity(tmp_path, "MISTYPED-ACCOUNT")
 
 
 def test_mount_topology_proves_separate_rw_qualification_and_ro_production() -> None:

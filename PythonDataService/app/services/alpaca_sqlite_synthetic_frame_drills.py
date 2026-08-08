@@ -34,12 +34,16 @@ from app.services.alpaca_sqlite_synthetic_drill_support import (
     FaultSeamLimitation,
     SyntheticBroker,
     SyntheticScenarioObservation,
-    SyntheticScenarioStatus,
     TickClock,
+    fault_seam_permitted,
+    fault_seam_status,
     new_repo,
     seam_not_permitted,
     synthetic_leg,
     worksheet,
+)
+from app.services.alpaca_sqlite_synthetic_drill_support import (
+    require_invariant as _require,
 )
 
 _AUTHORIZATION_FRAME = '{"stream":"authorization","data":{"status":"authorized"}}'
@@ -140,14 +144,20 @@ async def duplicate_redelivery(artifacts_root: Path) -> SyntheticScenarioObserva
             leg=synthetic_leg(quantity=10),
             trade=broker,
         )
-        assert first.order_ref is not None
+        _require(first.order_ref is not None, "duplicate drill must mint an order_ref")
         initial_order = repo.order(first.order_ref)
-        assert initial_order is not None and initial_order.broker_order_id is not None
+        _require(
+            initial_order is not None and initial_order.broker_order_id is not None,
+            "duplicate drill requires the Clerk broker-order identity",
+        )
         initial_broker_order_id = broker.orders[first.order_ref].order_id
-        assert initial_order.broker_order_id == initial_broker_order_id
+        _require(
+            initial_order.broker_order_id == initial_broker_order_id,
+            "duplicate drill broker-order identities must agree",
+        )
         transitions_before = len(repo.custody_transitions())
         registry = get_fault_injection_registry()
-        seam_permitted = bool(registry.status()["permitted"])
+        seam_permitted = fault_seam_permitted(registry)
         seam_exercised = False
         limitations: tuple[FaultSeamLimitation, ...] = ()
         if seam_permitted:
@@ -165,7 +175,10 @@ async def duplicate_redelivery(artifacts_root: Path) -> SyntheticScenarioObserva
                 )
             )
             frame_order = json.loads(real_frame)["data"]["order"]
-            assert frame_order["id"] == initial_broker_order_id
+            _require(
+                frame_order["id"] == initial_broker_order_id,
+                "duplicate frame must preserve the broker-order identity",
+            )
             registry.arm(FrameFaultKind.REDELIVER_LAST.value)
             consumer, frame_broker_order_ids = await _run_injected_frames(
                 repo=repo,
@@ -238,13 +251,7 @@ async def duplicate_redelivery(artifacts_root: Path) -> SyntheticScenarioObserva
             )
         return SyntheticScenarioObservation(
             scenario_id=SyntheticScenarioId.DUPLICATE_TRADE_UPDATE,
-            status=(
-                SyntheticScenarioStatus.PASSED
-                if passed and seam_exercised
-                else SyntheticScenarioStatus.PARTIAL
-                if passed
-                else SyntheticScenarioStatus.FAILED
-            ),
+            status=fault_seam_status(passed=passed, seam_exercised=seam_exercised),
             assertion=(
                 "A registry redelivery crossed the production frame wrapper and SQLite "
                 "evidence sink without a second fill or broker intent."
@@ -280,15 +287,21 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
             leg=synthetic_leg(quantity=10),
             trade=broker,
         )
-        assert entry.order_ref is not None
+        _require(entry.order_ref is not None, "cancel-fill entry must mint an order_ref")
         initial_entry = repo.order(entry.order_ref)
-        assert initial_entry is not None and initial_entry.broker_order_id is not None
+        _require(
+            initial_entry is not None and initial_entry.broker_order_id is not None,
+            "cancel-fill drill requires the Clerk broker-order identity",
+        )
         initial_broker_order_id = broker.orders[entry.order_ref].order_id
-        assert initial_entry.broker_order_id == initial_broker_order_id
+        _require(
+            initial_entry.broker_order_id == initial_broker_order_id,
+            "cancel-fill broker-order identities must agree",
+        )
         revision = repo.control_meta_snapshot().control_revision
         before = broker.proof()
         registry = get_fault_injection_registry()
-        seam_permitted = bool(registry.status()["permitted"])
+        seam_permitted = fault_seam_permitted(registry)
         seam_exercised = False
         limitations: tuple[FaultSeamLimitation, ...] = ()
         frame_events_applied = 0
@@ -301,7 +314,10 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
             lifecycle_run_id=runs["spy-bot"],
             entry_order_ref=entry.order_ref,
         )
-        assert accepted.effect_operation_id is not None
+        _require(
+            accepted.effect_operation_id is not None,
+            "cancel-fill exit must mint an effect_operation_id",
+        )
         if seam_permitted:
             broker.cancel_started = asyncio.Event()
             broker.cancel_release = asyncio.Event()
@@ -399,13 +415,7 @@ async def cancel_fill_race(artifacts_root: Path) -> SyntheticScenarioObservation
         )
         return SyntheticScenarioObservation(
             scenario_id=SyntheticScenarioId.CANCEL_FILL_RACE,
-            status=(
-                SyntheticScenarioStatus.PASSED
-                if passed and seam_exercised
-                else SyntheticScenarioStatus.PARTIAL
-                if passed
-                else SyntheticScenarioStatus.FAILED
-            ),
+            status=fault_seam_status(passed=passed, seam_exercised=seam_exercised),
             assertion=(
                 "While cancel was in flight, a registry partial-fill crossed the "
                 "production consumer; EXIT then proved terminal state and reduced "
@@ -454,7 +464,7 @@ async def gap_reconcile(artifacts_root: Path) -> SyntheticScenarioObservation:
             lifecycle_run_id=runs["spy-bot"],
             leg=synthetic_leg(),
         )
-        assert accepted.order_ref is not None
+        _require(accepted.order_ref is not None, "gap drill must mint an order_ref")
         broker.seed_order(accepted.order_ref, status="filled", filled_quantity=1.0)
         now = clock()
         broker.positions = [
@@ -488,7 +498,7 @@ async def gap_reconcile(artifacts_root: Path) -> SyntheticScenarioObservation:
         revision = repo.control_meta_snapshot().control_revision
         before = broker.proof()
         registry = get_fault_injection_registry()
-        seam_permitted = bool(registry.status()["permitted"])
+        seam_permitted = fault_seam_permitted(registry)
         if seam_permitted:
             registry.arm(FrameFaultKind.DISCONNECT.value)
         sink = SqliteTradeUpdateEvidenceSink(
@@ -545,13 +555,7 @@ async def gap_reconcile(artifacts_root: Path) -> SyntheticScenarioObservation:
             limitations = (seam_not_permitted(FrameFaultKind.DISCONNECT.value),)
         return SyntheticScenarioObservation(
             scenario_id=SyntheticScenarioId.TRADE_UPDATE_GAP_RECONCILIATION,
-            status=(
-                SyntheticScenarioStatus.PASSED
-                if passed and seam_exercised
-                else SyntheticScenarioStatus.PARTIAL
-                if passed
-                else SyntheticScenarioStatus.FAILED
-            ),
+            status=fault_seam_status(passed=passed, seam_exercised=seam_exercised),
             assertion=(
                 "Admission remained closed until the production consumer's reconnect "
                 "path folded the missed fill and proved the REST snapshot clean."

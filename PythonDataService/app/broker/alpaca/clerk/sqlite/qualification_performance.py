@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import json
 import os
 import platform
 import sqlite3
 import sys
 import tempfile
 import time
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from app.broker.alpaca.clerk.sqlite import schema, writes
 from app.broker.alpaca.clerk.sqlite.hashchain import canonical_payload, compute_row_hash
+from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, PendingTransition
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.services.account_custody_qualification import nist_r6_percentile
@@ -151,6 +152,7 @@ def qualification_markdown(report: dict[str, Any]) -> str:
     )
     return "\n".join(lines)
 
+
 def _evaluate_performance_budgets(scales: list[dict[str, Any]]) -> dict[str, Any]:
     violations: list[dict[str, Any]] = []
     for scale in scales:
@@ -200,14 +202,13 @@ def _run_scale(root: Path, bot_count: int, transition_count: int) -> dict[str, A
         bot_count=bot_count,
         target_transition_count=transition_count,
     )
-    conn = sqlite3.connect(db_path)
-    schema.configure_connection(conn)
-    pragmas = {
-        name: conn.execute(f"PRAGMA {name}").fetchone()[0]
-        for name in ("journal_mode", "synchronous", "foreign_keys", "busy_timeout")
-    }
-    query_plans = _query_plans(conn, strategy_instance_id="bot-000")
-    conn.close()
+    with closing(sqlite3.connect(db_path)) as conn:
+        schema.configure_connection(conn)
+        pragmas = {
+            name: conn.execute(f"PRAGMA {name}").fetchone()[0]
+            for name in ("journal_mode", "synchronous", "foreign_keys", "busy_timeout")
+        }
+        query_plans = _query_plans(conn, strategy_instance_id="bot-000")
     reader = SqliteClerkProjectionReader(
         db_path=db_path,
         account_id=account_id,
@@ -236,9 +237,7 @@ def _run_scale(root: Path, bot_count: int, transition_count: int) -> dict[str, A
         },
         "pragmas": pragmas,
         "latencies": {
-            "capture_before_contact_registration": asdict(
-                _latency_summary(capture_samples_us)
-            ),
+            "capture_before_contact_registration": asdict(_latency_summary(capture_samples_us)),
             "account_snapshot": asdict(_latency_summary(account_samples)),
             "bot_snapshot": asdict(_latency_summary(bot_samples)),
             "timeline_page": asdict(_latency_summary(timeline_samples)),
@@ -248,26 +247,34 @@ def _run_scale(root: Path, bot_count: int, transition_count: int) -> dict[str, A
     }
 
 
-def _load_timeline_fixture(
-    *, db_path: Path, mirror_path: Path, bot_count: int, target_transition_count: int
-) -> None:
+def _load_timeline_fixture(*, db_path: Path, mirror_path: Path, bot_count: int, target_transition_count: int) -> None:
     if target_transition_count < bot_count:
         raise ValueError("transition scale cannot be smaller than bot count")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    last = conn.execute(
-        "SELECT sequence, row_hash FROM custody_transitions ORDER BY sequence DESC LIMIT 1"
-    ).fetchone()
-    sequence = int(last["sequence"]) if last is not None else 0
-    previous_hash = str(last["row_hash"]) if last is not None else "GENESIS"
-    with mirror_path.open("a", encoding="utf-8") as mirror:
+    mirror = MirrorFile(mirror_path)
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        last = conn.execute(
+            "SELECT sequence, row_hash FROM custody_transitions ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        sequence = int(last["sequence"]) if last is not None else 0
+        previous_hash = str(last["row_hash"]) if last is not None else "GENESIS"
         while sequence < target_transition_count:
+            prepared: list[PendingTransition] = []
             conn.execute("BEGIN")
             for _ in range(min(10_000, target_transition_count - sequence)):
                 sequence += 1
                 payload = _timeline_payload(sequence, bot_count)
                 payload_canonical = canonical_payload(payload)
                 row_hash = compute_row_hash(previous_hash, payload_canonical)
+                pending = PendingTransition(
+                    sequence=sequence,
+                    authority_generation=1,
+                    row_hash=row_hash,
+                    prev_hash=previous_hash,
+                    payload_canonical=payload_canonical,
+                    recorded_at_ms=FIXED_NOW_MS + sequence,
+                )
+                mirror.prepare(pending)
                 writes.insert_custody_transition_row(
                     conn,
                     sequence=sequence,
@@ -275,24 +282,22 @@ def _load_timeline_fixture(
                     row_hash=row_hash,
                     payload=payload,
                 )
-                _write_mirror_pair(
-                    mirror,
-                    sequence=sequence,
-                    previous_hash=previous_hash,
-                    row_hash=row_hash,
-                    payload_canonical=payload_canonical,
-                )
+                prepared.append(pending)
                 previous_hash = row_hash
             conn.commit()
+            for pending in prepared:
+                mirror.finalize(
+                    sequence=pending.sequence,
+                    authority_generation=pending.authority_generation,
+                    row_hash=pending.row_hash,
+                    recorded_at_ms=pending.recorded_at_ms,
+                )
         conn.execute(
             "UPDATE control_meta SET control_revision = ? WHERE id = 1",
             (target_transition_count,),
         )
         conn.commit()
-        mirror.flush()
-        os.fsync(mirror.fileno())
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    conn.close()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
 def _timeline_payload(sequence: int, bot_count: int) -> dict[str, Any]:
@@ -318,34 +323,6 @@ def _timeline_payload(sequence: int, bot_count: int) -> dict[str, Any]:
         "facts_schema_version": 1,
         "facts_json": "{}",
     }
-
-
-def _write_mirror_pair(
-    mirror: Any,
-    *,
-    sequence: int,
-    previous_hash: str,
-    row_hash: str,
-    payload_canonical: str,
-) -> None:
-    prepare = {
-        "phase": "PREPARE",
-        "sequence": sequence,
-        "authority_generation": 1,
-        "row_hash": row_hash,
-        "prev_hash": previous_hash,
-        "payload_canonical": payload_canonical,
-        "recorded_at_ms": FIXED_NOW_MS + sequence,
-    }
-    finalize = {
-        "phase": "FINALIZE",
-        "sequence": sequence,
-        "authority_generation": 1,
-        "row_hash": row_hash,
-        "recorded_at_ms": FIXED_NOW_MS + sequence,
-    }
-    mirror.write(json.dumps(prepare, sort_keys=True, separators=(",", ":")) + "\n")
-    mirror.write(json.dumps(finalize, sort_keys=True, separators=(",", ":")) + "\n")
 
 
 def _query_plans(conn: sqlite3.Connection, *, strategy_instance_id: str) -> dict[str, list[str]]:

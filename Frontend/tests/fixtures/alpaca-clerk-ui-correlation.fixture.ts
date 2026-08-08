@@ -3,6 +3,7 @@ import campaignContract from '@repo-contracts/alpaca-clerk-ui-correlation-campai
 import type {
   BotPanelLiveSnapshot,
   BotPanelView,
+  EvidencePage,
   PanelProfile,
 } from '../../src/app/components/broker/v2-panel/lib/broker-v2-panel.types';
 
@@ -202,7 +203,7 @@ export function evidenceReceipt(
   pageLoad: number,
   eventIndex: number,
   revision: number,
-) {
+): EvidencePage {
   const receiptRef = correlationReceiptRef(pageLoad, eventIndex, revision);
   return {
     strategy_instance_id: STRATEGY_INSTANCE_ID,

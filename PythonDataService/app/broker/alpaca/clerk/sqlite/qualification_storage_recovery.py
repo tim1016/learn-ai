@@ -23,12 +23,13 @@ from app.broker.alpaca.clerk.sqlite.recovery import (
     restore_verified_backup,
     verify_authority_head,
 )
+from app.broker.alpaca.clerk.sqlite.registry import EstablishedAccountsRegistry
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
     assert_wal_filesystem_supported,
     wal_filesystem_type,
 )
-from app.schemas.account_custody_qualification import (
+from app.schemas.account_custody_synthetic_qualification import (
     SyntheticProtectedGenerationEvidence,
     SyntheticRecoveryEvidence,
 )
@@ -81,7 +82,7 @@ def run_protected_generation(
     production_artifacts_root: Path,
     production_account_id: str,
     generated_at_ms: int,
-    storage_boundary_resolver: Callable[[Path, Path], QualificationStorageBoundary] | None = None,
+    storage_boundary_resolver: Callable[[Path, Path, str], QualificationStorageBoundary] | None = None,
 ) -> ProtectedGenerationRun:
     """Create an isolated authority and perform its complete recovery ceremony."""
 
@@ -91,6 +92,7 @@ def run_protected_generation(
     storage_boundary = (storage_boundary_resolver or assert_qualification_storage_boundary)(
         artifacts_root,
         production_artifacts_root,
+        production_account_id,
     )
     _accounts_root, account_directory = writes.account_paths(
         artifacts_root,
@@ -227,6 +229,7 @@ def run_protected_generation(
 def assert_qualification_storage_boundary(
     artifacts_root: Path,
     production_artifacts_root: Path,
+    production_account_id: str,
 ) -> QualificationStorageBoundary:
     """Prove the one-shot named-volume boundary before opening SQLite."""
 
@@ -244,6 +247,10 @@ def assert_qualification_storage_boundary(
         raise RuntimeError("production authority must use the protected read-only one-shot mount")
     if resolved_root == resolved_production_root:
         raise RuntimeError("qualification and production authority roots must differ")
+    _verify_production_authority_identity(
+        resolved_production_root,
+        production_account_id,
+    )
     assert_wal_filesystem_supported(resolved_root)
     filesystem_type = wal_filesystem_type(resolved_root)
     if filesystem_type != "xfs":
@@ -253,6 +260,30 @@ def assert_qualification_storage_boundary(
         production_root=resolved_production_root,
         mountinfo=Path("/proc/self/mountinfo").read_text(encoding="utf-8"),
     )
+
+
+def _verify_production_authority_identity(
+    production_artifacts_root: Path,
+    production_account_id: str,
+) -> None:
+    """Authenticate the claimed production account through read-only receipts."""
+
+    production_accounts_root, production_account_directory = writes.account_paths(
+        production_artifacts_root,
+        production_account_id,
+    )
+    established = EstablishedAccountsRegistry(production_accounts_root).latest(production_account_id)
+    if established is None:
+        raise RuntimeError("production authority mount does not establish the requested account")
+    try:
+        verify_database(
+            production_account_directory / "clerk.db",
+            expected_account_id=production_account_id,
+            expected_generation=established.authority_generation,
+            expected_db_identity=established.db_identity_token,
+        )
+    except (DatabaseVerificationFailed, OSError) as exc:
+        raise RuntimeError("production authority mount does not match the established account identity") from exc
 
 
 def prove_mount_topology(

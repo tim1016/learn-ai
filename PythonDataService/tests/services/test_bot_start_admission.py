@@ -249,7 +249,7 @@ async def test_one_print_stall_blocks_admission_then_replaces_subscription(
     feed = IbkrMarketDataFeed(fixture.client)
     stream = feed.stream_bars("SPY")
 
-    first_bar = await anext(stream)
+    first_bar = await asyncio.wait_for(anext(stream), timeout=1)
     assert fixture.subscription_count == 1
     assert feed.health("SPY").stale is False
     last_source_observed_ms = fixture.clock.now_ms()

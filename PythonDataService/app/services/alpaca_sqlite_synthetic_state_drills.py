@@ -27,6 +27,9 @@ from app.services.alpaca_sqlite_synthetic_drill_support import (
     synthetic_leg,
     worksheet,
 )
+from app.services.alpaca_sqlite_synthetic_drill_support import (
+    require_invariant as _require,
+)
 
 
 class _StartupSyntheticBroker(SyntheticBroker):
@@ -184,51 +187,56 @@ async def restart_in_flight(artifacts_root: Path) -> SyntheticScenarioObservatio
         bot_ids=("accepted-bot", "unknown-bot"),
     )
     broker = _StartupSyntheticBroker(clock, account_id=account_id)
-    accepted = accept_enter(
-        repo,
-        account_id=account_id,
-        strategy_instance_id="accepted-bot",
-        decision_id="restart-accepted",
-        lifecycle_run_id=runs["accepted-bot"],
-        leg=synthetic_leg(),
-    )
-    assert accepted.order_ref is not None
-    broker.seed_order(accepted.order_ref)
+    try:
+        accepted = accept_enter(
+            repo,
+            account_id=account_id,
+            strategy_instance_id="accepted-bot",
+            decision_id="restart-accepted",
+            lifecycle_run_id=runs["accepted-bot"],
+            leg=synthetic_leg(),
+        )
+        _require(accepted.order_ref is not None, "restart accepted work must mint an order_ref")
+        broker.seed_order(accepted.order_ref)
 
-    broker.submit_error = BrokerUnavailable(
-        "synthetic submit response lost before restart",
-        broker="alpaca",
-    )
-    unknown = await submit_enter(
-        repo,
-        account_id=account_id,
-        strategy_instance_id="unknown-bot",
-        decision_id="restart-unknown",
-        lifecycle_run_id=runs["unknown-bot"],
-        leg=synthetic_leg(),
-        trade=broker,
-    )
-    assert unknown.order_ref is not None
-    unknown_before = repo.effect_operation(unknown.effect_operation_id)
-    assert unknown_before is not None and unknown_before.state == "unknown"
-    broker.submit_error = None
-    broker.seed_order(unknown.order_ref)
+        broker.submit_error = BrokerUnavailable(
+            "synthetic submit response lost before restart",
+            broker="alpaca",
+        )
+        unknown = await submit_enter(
+            repo,
+            account_id=account_id,
+            strategy_instance_id="unknown-bot",
+            decision_id="restart-unknown",
+            lifecycle_run_id=runs["unknown-bot"],
+            leg=synthetic_leg(),
+            trade=broker,
+        )
+        _require(unknown.order_ref is not None, "restart unknown work must mint an order_ref")
+        unknown_before = repo.effect_operation(unknown.effect_operation_id)
+        _require(
+            unknown_before is not None and unknown_before.state == "unknown",
+            "restart drill must persist unknown work before recovery",
+        )
+        broker.submit_error = None
+        broker.seed_order(unknown.order_ref)
 
-    revision = repo.control_meta_snapshot().control_revision
-    before = broker.proof()
-    meta_before = repo.control_meta_snapshot()
-    activation = ActivationRecord.create(
-        account_id=account_id,
-        authority_generation=meta_before.authority_generation,
-        db_identity_token=meta_before.db_identity_token,
-        broker_proof_reference="synthetic-broker-proof.json",
-        broker_proof_sha256="0" * 64,
-        legacy_quarantine_manifest="synthetic-quarantine.json",
-        legacy_quarantine_manifest_sha256="1" * 64,
-        activated_at_ms=clock(),
-    )
-    restart_source_event_at_ms = clock()
-    repo.close()
+        revision = repo.control_meta_snapshot().control_revision
+        before = broker.proof()
+        meta_before = repo.control_meta_snapshot()
+        activation = ActivationRecord.create(
+            account_id=account_id,
+            authority_generation=meta_before.authority_generation,
+            db_identity_token=meta_before.db_identity_token,
+            broker_proof_reference="synthetic-broker-proof.json",
+            broker_proof_sha256="0" * 64,
+            legacy_quarantine_manifest="synthetic-quarantine.json",
+            legacy_quarantine_manifest_sha256="1" * 64,
+            activated_at_ms=clock(),
+        )
+        restart_source_event_at_ms = clock()
+    finally:
+        repo.close()
 
     runtime = await select_active_clerk_runtime(
         read=broker,
@@ -245,7 +253,10 @@ async def restart_in_flight(artifacts_root: Path) -> SyntheticScenarioObservatio
     )
     try:
         recovered = runtime.sqlite_repository
-        assert runtime.authority_kind == "sqlite" and recovered is not None
+        _require(
+            runtime.authority_kind == "sqlite" and recovered is not None,
+            "restart drill must recover the SQLite authority",
+        )
         meta_after = recovered.control_meta_snapshot()
         accepted_order = recovered.order(accepted.order_ref)
         unknown_order = recovered.order(unknown.order_ref)

@@ -87,8 +87,12 @@ class BoundedUiCampaignContract(BaseModel):
 def _canonical_contract_path() -> Path:
     """Locate the repository contract from source and qualification containers."""
 
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "contracts" / _CONTRACT_FILENAME
+    python_service_root = Path(__file__).resolve().parents[5]
+    candidates = (
+        python_service_root.parent / "contracts" / _CONTRACT_FILENAME,
+        python_service_root / "contracts" / _CONTRACT_FILENAME,
+    )
+    for candidate in candidates:
         if candidate.is_file():
             return candidate
     raise RuntimeError(f"canonical UI campaign contract is unavailable: {_CONTRACT_FILENAME}")

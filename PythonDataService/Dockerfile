@@ -80,6 +80,7 @@ FROM runtime AS qualification
 COPY requirements-heavy.txt requirements-light.txt requirements-dev.txt ./
 RUN pip install -r requirements-dev.txt
 RUN mkdir -p \
+    /app/contracts \
     /app/evidence \
     /app/artifacts/alpaca_clerk/qualification \
     /app/production-alpaca-clerk

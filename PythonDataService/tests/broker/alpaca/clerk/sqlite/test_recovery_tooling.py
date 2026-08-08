@@ -254,12 +254,16 @@ def test_backup_verification_rejects_symbolic_link_files(
     target.unlink()
     target.symlink_to(outside)
 
-    with pytest.raises(RecoveryRefused, match="non-symbolic-link file"):
+    with pytest.raises(RecoveryRefused, match="non-symbolic-link file") as captured:
         verify_backup_bundle(
             account_id=ACCOUNT_ID,
             artifacts_root=tmp_path,
             bundle_path=backup.bundle_path,
         )
+    assert (
+        captured.value.reason
+        is RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT
+    )
 
 
 def test_corrupt_wal_fails_closed_on_startup(tmp_path: Path) -> None:

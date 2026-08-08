@@ -264,8 +264,8 @@ services:
       # The no-network service still requires an explicit paper posture before
       # the production fault registry can arm around its in-memory SDK transport.
       - ALPACA_FAULT_INJECTION_ENABLED=true
-      - ALPACA_API_KEY_ID=${ALPACA_API_KEY_ID:-}
-      - ALPACA_API_SECRET_KEY=${ALPACA_API_SECRET_KEY:-}
+      - ALPACA_QUALIFICATION_API_KEY_ID=${ALPACA_QUALIFICATION_API_KEY_ID:-}
+      - ALPACA_QUALIFICATION_API_SECRET_KEY=${ALPACA_QUALIFICATION_API_SECRET_KEY:-}
       - ALPACA_MODE=${ALPACA_MODE:-paper}
       - POLYGON_API_KEY=${POLYGON_API_KEY:-}
       - NUMBA_DISABLE_JIT=1
@@ -280,7 +280,7 @@ services:
       - ./PythonDataService/tests:/app/tests:ro,z
       - ./PythonDataService/pytest.ini:/app/pytest.ini:ro,z
       - ./PythonDataService/ruff.toml:/app/ruff.toml:ro,z
-      - ./docs/audits/alpaca-sqlite-clerk-synthetic-ui-evidence-2026-08-07.json:/app/evidence/ui.json:ro,z
+      - ${ALPACA_CLERK_UI_EVIDENCE_PATH:-./docs/audits/alpaca-sqlite-clerk-synthetic-ui-evidence-2026-08-07.json}:/app/evidence/ui.json:ro,z
       - ./Frontend/tests/e2e/alpaca-clerk-ui-correlation.spec.ts:/app/evidence/ui-spec.ts:ro,z
       - ./contracts/alpaca-clerk-ui-correlation-campaign.v4.json:/app/contracts/alpaca-clerk-ui-correlation-campaign.v4.json:ro,z
     tmpfs:
@@ -292,10 +292,14 @@ services:
       - -ec
       - |
         : "$${ALPACA_CLERK_PRODUCTION_ACCOUNT_ID:?set ALPACA_CLERK_PRODUCTION_ACCOUNT_ID}"
-        : "$${ALPACA_API_KEY_ID:?set ALPACA_API_KEY_ID to a non-production qualification value}"
-        : "$${ALPACA_API_SECRET_KEY:?set ALPACA_API_SECRET_KEY to a non-production qualification value}"
+        case "$${GIT_SHA}" in ''|*[!0-9a-f]*) echo "GIT_SHA must be the tested 40-character commit" >&2; exit 1 ;; esac
+        test "$${#GIT_SHA}" -eq 40
+        : "$${ALPACA_QUALIFICATION_API_KEY_ID:?set ALPACA_QUALIFICATION_API_KEY_ID to a non-production qualification value}"
+        : "$${ALPACA_QUALIFICATION_API_SECRET_KEY:?set ALPACA_QUALIFICATION_API_SECRET_KEY to a non-production qualification value}"
         : "$${POLYGON_API_KEY:?set POLYGON_API_KEY to a non-secret offline-fixture placeholder}"
         test "$${ALPACA_MODE}" = "paper"
+        export ALPACA_API_KEY_ID="$${ALPACA_QUALIFICATION_API_KEY_ID}"
+        export ALPACA_API_SECRET_KEY="$${ALPACA_QUALIFICATION_API_SECRET_KEY}"
         mkdir -p /app/artifacts/alpaca_clerk/qualification/evidence
         exec python -m scripts.run_alpaca_sqlite_qualification \
           --synthetic-rehearsal \

@@ -18,7 +18,7 @@ from app.services.alpaca_sqlite_synthetic_drill_support import (
     FaultSeamLimitationCode,
     SimulatedBrokerProof,
     SyntheticCustodyDrillReport,
-    SyntheticEvidenceWorksheet,
+    SyntheticDrillWorksheet,
     SyntheticScenarioObservation,
     SyntheticScenarioStatus,
 )
@@ -71,7 +71,7 @@ __all__ = [
     "FaultSeamLimitationCode",
     "SimulatedBrokerProof",
     "SyntheticCustodyDrillReport",
-    "SyntheticEvidenceWorksheet",
+    "SyntheticDrillWorksheet",
     "SyntheticScenarioObservation",
     "SyntheticScenarioStatus",
     "run_synthetic_custody_drills",

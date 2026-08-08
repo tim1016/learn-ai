@@ -56,6 +56,12 @@ interface BrowserSseObservation {
   readonly revision: number;
 }
 
+interface AcceptanceContext {
+  readonly check: string;
+  readonly pageLoad: number;
+  readonly revision?: number;
+}
+
 function deferred(): Deferred {
   let resolvePromise: (() => void) | undefined;
   const promise = new Promise<void>((resolve) => {
@@ -129,13 +135,24 @@ async function observeVisible(locator: Locator): Promise<boolean> {
 
 async function acceptanceAssertion(
   testInfo: TestInfo,
+  context: AcceptanceContext,
   assertion: () => void,
 ): Promise<void> {
   try {
     assertion();
   } catch (error: unknown) {
     await testInfo.attach('qualification-acceptance-assertion-failed', {
-      body: JSON.stringify({ kind: 'acceptance_assertion_failure' }),
+      body: JSON.stringify({
+        kind: 'acceptance_assertion_failure',
+        message: error instanceof Error ? error.message : String(error),
+        check: context.check,
+        page_load: context.pageLoad,
+        revision: context.revision ?? null,
+        test_file: testInfo.file,
+        test_title: testInfo.title,
+        project: testInfo.project.name,
+        retry: testInfo.retry,
+      }),
       contentType: 'application/json',
     });
     throw error;
@@ -160,7 +177,7 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
     const observedSse: BrowserSseObservation[] = [];
     const lifecycleRequestActionIds: string[] = [];
     const unexpectedApiRequests: string[] = [];
-    let bootstrapCount = 0;
+    let plannedPageLoad = 0;
     let activeCorrelation: CorrelationContext | null = null;
 
     await page.route('**/*', async (route) => {
@@ -169,9 +186,9 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       const path = url.pathname;
 
       if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/live-snapshot`)) {
-        const pageLoad = bootstrapCount;
-        bootstrapCount += 1;
-        await route.fulfill({ json: snapshotAtRevision(pageLoad, BOOTSTRAP_REVISION) });
+        await route.fulfill({
+          json: snapshotAtRevision(plannedPageLoad, BOOTSTRAP_REVISION),
+        });
         return;
       }
       if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/live-stream`)) {
@@ -182,7 +199,20 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
           return;
         }
         const pageLoad = Number(match[1]);
-        const eventIndex = sseConnectionCount[pageLoad] ?? 0;
+        if (
+          !Number.isInteger(pageLoad)
+          || pageLoad < 0
+          || pageLoad >= PAGE_LOAD_COUNT
+          || pageLoad !== plannedPageLoad
+        ) {
+          await route.fulfill({ status: 400, body: 'Cursor page load is outside the planned campaign.' });
+          return;
+        }
+        const eventIndex = sseConnectionCount[pageLoad];
+        if (eventIndex === undefined) {
+          await route.fulfill({ status: 400, body: 'Cursor page load has no planned counter.' });
+          return;
+        }
         if (eventIndex >= REVISION_SEQUENCE.length) {
           await route.abort('blockedbyclient');
           return;
@@ -214,6 +244,9 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
           activeCorrelation.revision,
         );
         const entry = receipt.entries[0];
+        if (!entry?.operation_ref || !entry.proof_reference) {
+          throw new Error('Evidence receipt is missing required correlation references.');
+        }
         correlationLedger.push({
           browser_epoch: activeCorrelation.browserEpoch,
           page_load_index: activeCorrelation.pageLoad,
@@ -287,6 +320,7 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
     });
 
     for (let pageLoad = 0; pageLoad < PAGE_LOAD_COUNT; pageLoad += 1) {
+      plannedPageLoad = pageLoad;
       if (pageLoad === 0) {
         await page.goto(
           `/brokers/alpaca/accounts/${ACCOUNT_ID}/bots/${STRATEGY_INSTANCE_ID}?lens=operator`,
@@ -299,12 +333,12 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         () => operatorTab.getAttribute('aria-selected'),
         (value) => value === 'true',
       );
-      await acceptanceAssertion(testInfo, () => {
+      await acceptanceAssertion(testInfo, { check: 'operator tab selected', pageLoad }, () => {
         expect(operatorTabSelected).toBe('true');
       });
       const resumeButton = page.getByRole('button', { name: /^Resume$/ });
       const resumeButtonVisible = await observeVisible(resumeButton);
-      await acceptanceAssertion(testInfo, () => {
+      await acceptanceAssertion(testInfo, { check: 'resume button visible', pageLoad }, () => {
         expect(resumeButtonVisible).toBe(true);
       });
 
@@ -333,13 +367,21 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         const statusVisible = await observeVisible(page.getByRole('status', {
           name: `Revision ${adoptedRevision} stopped`,
         }));
-        await acceptanceAssertion(testInfo, () => {
+        await acceptanceAssertion(testInfo, {
+          check: 'SSE revision adopted',
+          pageLoad,
+          revision,
+        }, () => {
           expect(statusVisible).toBe(true);
         });
         const revisedResumeButtonVisible = await observeVisible(
           page.getByRole('button', { name: /^Resume$/ }),
         );
-        await acceptanceAssertion(testInfo, () => {
+        await acceptanceAssertion(testInfo, {
+          check: 'resume button remains visible after SSE update',
+          pageLoad,
+          revision,
+        }, () => {
           expect(revisedResumeButtonVisible).toBe(true);
         });
 
@@ -350,7 +392,11 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         const receiptRefVisible = await observeVisible(
           page.getByText(receiptRef, { exact: true }),
         );
-        await acceptanceAssertion(testInfo, () => {
+        await acceptanceAssertion(testInfo, {
+          check: 'evidence receipt is visible',
+          pageLoad,
+          revision,
+        }, () => {
           expect(receiptRefVisible).toBe(true);
         });
         await page.getByRole('button', { name: HIDE_EVIDENCE_BUTTON_NAME }).click();
@@ -382,7 +428,11 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       lifecycleRequestActionIds,
       revisionSequence: [...REVISION_SEQUENCE],
     };
-    await acceptanceAssertion(testInfo, () => {
+    await acceptanceAssertion(testInfo, {
+      check: 'campaign measurements match contract',
+      pageLoad: PAGE_LOAD_COUNT - 1,
+      revision: FINAL_REVISION,
+    }, () => {
       expect(measurements).toEqual({
         campaignId: UI_CORRELATION_CAMPAIGN.campaign_id,
         pageLoadCount: PAGE_LOAD_COUNT,
@@ -397,7 +447,11 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         revisionSequence: [...REVISION_SEQUENCE],
       });
     });
-    await acceptanceAssertion(testInfo, () => {
+    await acceptanceAssertion(testInfo, {
+      check: 'browser SSE observations match contract',
+      pageLoad: PAGE_LOAD_COUNT - 1,
+      revision: FINAL_REVISION,
+    }, () => {
       expect(observedSse).toEqual(
         Array.from({ length: PAGE_LOAD_COUNT }, (_, pageLoad) =>
           REVISION_SEQUENCE.map((revision) => ({
@@ -407,7 +461,11 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         ).flat(),
       );
     });
-    await acceptanceAssertion(testInfo, () => {
+    await acceptanceAssertion(testInfo, {
+      check: 'correlation ledger matches contract',
+      pageLoad: PAGE_LOAD_COUNT - 1,
+      revision: FINAL_REVISION,
+    }, () => {
       expect(correlationLedger).toEqual(
         Array.from({ length: PAGE_LOAD_COUNT }, (_, pageLoad) =>
           REVISION_SEQUENCE.map((revision, eventIndex) => {
@@ -431,10 +489,18 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         ).flat(),
       );
     });
-    await acceptanceAssertion(testInfo, () => {
+    await acceptanceAssertion(testInfo, {
+      check: 'no lifecycle actions were dispatched',
+      pageLoad: PAGE_LOAD_COUNT - 1,
+      revision: FINAL_REVISION,
+    }, () => {
       expect(lifecycleRequestActionIds).toEqual([]);
     });
-    await acceptanceAssertion(testInfo, () => {
+    await acceptanceAssertion(testInfo, {
+      check: 'no unexpected API requests occurred',
+      pageLoad: PAGE_LOAD_COUNT - 1,
+      revision: FINAL_REVISION,
+    }, () => {
       expect(unexpectedApiRequests).toEqual([]);
     });
     await testInfo.attach('alpaca-clerk-ui-correlation-ledger.json', {

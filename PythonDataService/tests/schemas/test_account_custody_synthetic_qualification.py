@@ -15,15 +15,17 @@ from app.models.account_custody_synthetic import (
 from app.models.account_custody_synthetic import (
     SyntheticScenarioCategory as DomainSyntheticScenarioCategory,
 )
-from app.models.account_custody_synthetic import SyntheticScenarioId
+from app.models.account_custody_synthetic import SyntheticScenarioId, synthetic_abort_cause_for_scenario
 from app.schemas.account_custody_qualification import (
+    account_custody_qualification_payload_sha256,
+)
+from app.schemas.account_custody_synthetic_qualification import (
     SyntheticAbortCause,
     SyntheticCustodyRehearsalReport,
     SyntheticEvidenceWorksheet,
     SyntheticHarnessAbortReport,
     SyntheticScenarioResult,
-    account_custody_qualification_payload_sha256,
-    synthetic_abort_cause_for_scenario,
+    SyntheticUiCorrelationEvidence,
     synthetic_abort_class_for_cause,
 )
 from app.services.account_custody_synthetic_scenarios import (
@@ -36,6 +38,7 @@ from app.services.account_custody_synthetic_scenarios import (
 from app.services.account_custody_synthetic_scenarios import (
     SyntheticAbortCause as RegistrySyntheticAbortCause,
 )
+from tests._helpers.ui_correlation import ui_correlation_records
 
 
 def _broker_proof(observed_at_ms: int) -> dict[str, Any]:
@@ -90,32 +93,6 @@ def _scenario_payload(scenario_id: str, index: int) -> dict[str, Any]:
         "fault_seam_exercised": False,
         "failure_detail": None,
     }
-
-
-def _ui_correlation_records() -> list[dict[str, Any]]:
-    revisions = (41, 41, 42, 42, 43)
-    return [
-        {
-            "page_load_index": page_load_index,
-            "event_index": event_index,
-            "browser_epoch": f"browser-reload-{page_load_index}",
-            "revision": revision,
-            "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
-            "presented_action_id": "resume",
-            "click_target": "BROKER_ACK_RAW_EVIDENCE",
-            "evidence_request_method": "GET",
-            "evidence_request_path": (
-                "/api/brokers/alpaca/accounts/DUM284968/bots/sid-001/evidence"
-                "?transaction_ref=tx-001&client_hint=operator-transaction-timeline"
-            ),
-            "operation_reference": f"receipt-{page_load_index}-{event_index}",
-            "proof_reference": f"receipt-{page_load_index}-{event_index}",
-            "dispatched_lifecycle_action_id": None,
-            "durable_lifecycle_receipt_id": None,
-        }
-        for page_load_index in range(5)
-        for event_index, revision in enumerate(revisions)
-    ]
 
 
 def _seal(payload: dict[str, Any]) -> dict[str, Any]:
@@ -195,7 +172,7 @@ def _report_payload() -> dict[str, Any]:
             "revision_sequence": [41, 41, 42, 42, 43],
             "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
             "presented_action_id": "resume",
-            "correlation_records": _ui_correlation_records(),
+            "correlation_records": list(ui_correlation_records()),
             "lifecycle_request_count": 0,
             "lifecycle_action_ids": [],
             "browser_reload_coverage": ("PLAYWRIGHT_NATIVE_EVENT_SOURCE_PAGE_RELOAD_CAMPAIGN"),
@@ -270,9 +247,17 @@ def test_schema_compatibility_exports_share_the_typed_scenario_registry() -> Non
 
 
 def test_schema_depends_on_neutral_synthetic_domain_not_execution_registry() -> None:
-    schema_source = (Path(__file__).parents[2] / "app/schemas/account_custody_qualification.py").read_text()
+    schema_source = (Path(__file__).parents[2] / "app/schemas/account_custody_synthetic_qualification.py").read_text()
 
     assert "app.services.account_custody_synthetic_scenarios" not in schema_source
+
+
+def test_read_only_ui_evidence_rejects_durable_lifecycle_receipts() -> None:
+    payload = _report_payload()["ui_correlation"]
+    payload["durable_lifecycle_receipt_ids"] = ["unexpected-lifecycle-receipt"]
+
+    with pytest.raises(ValidationError, match="at most 0 items"):
+        SyntheticUiCorrelationEvidence.model_validate(payload)
 
 
 def test_synthetic_report_validates_content_hash_over_semantic_payload() -> None:

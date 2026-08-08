@@ -35,6 +35,20 @@ def test_canonical_ui_campaign_contract_is_loaded_from_cross_stack_fixture() -> 
         ("revision_sequence", [41, 42, 43], "unchanged SSE revision"),
         ("revision_sequence", [41, 41, 41], "advancing SSE revision"),
         ("revision_sequence", [42, 41, 43], "nondecreasing"),
+        ("bootstrap_revision", 41, "bootstrap revision"),
+        ("bootstrap_revision", 42, "bootstrap revision"),
+        (
+            "command",
+            [
+                "npx",
+                "playwright",
+                "test",
+                "tests/e2e/alpaca-clerk-ui-correlation.spec.ts",
+                "--reporter=json",
+                "--project=chromium",
+            ],
+            "machine-readable",
+        ),
     ],
 )
 def test_ui_campaign_contract_rejects_weakened_measurement_bounds(

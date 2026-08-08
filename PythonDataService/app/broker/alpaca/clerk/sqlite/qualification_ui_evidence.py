@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -17,8 +18,8 @@ from app.broker.alpaca.clerk.sqlite.qualification_ui_campaign_contract import (
     UI_CAMPAIGN_CONTRACT_SHA256,
     BoundedUiCampaignContract,
 )
-from app.schemas.account_custody_qualification import (
-    INT64_MAX,
+from app.schemas.account_custody_qualification import INT64_MAX
+from app.schemas.account_custody_synthetic_qualification import (
     SyntheticUiCorrelationEvidence,
     SyntheticUiCorrelationRecord,
 )
@@ -143,12 +144,14 @@ def load_preverified_ui_outcome(
     path: Path,
     *,
     ui_source_path: Path,
+    checkout_root: Path | None = None,
+    expected_git_commit_sha: str | None = None,
 ) -> SyntheticTestOutcome:
     """Validate and authenticate one bounded UI receipt from disk."""
 
     encoded = path.read_bytes()
     if len(encoded) > BOUNDED_UI_CAMPAIGN.max_receipt_bytes:
-        raise ValueError("preverified UI evidence exceeds the 64 KiB bound")
+        raise ValueError(f"preverified UI evidence exceeds the {BOUNDED_UI_CAMPAIGN.max_receipt_bytes}-byte bound")
     try:
         payload = json.loads(encoded)
     except json.JSONDecodeError as exc:
@@ -168,6 +171,12 @@ def load_preverified_ui_outcome(
         raise ValueError("preverified UI test source is unavailable") from exc
     if observed_source_sha256 != receipt.test_source_sha256:
         raise ValueError("preverified UI evidence does not authenticate the mounted test source")
+    _verify_receipt_commit(
+        receipt,
+        ui_source_path=ui_source_path,
+        checkout_root=checkout_root,
+        expected_git_commit_sha=expected_git_commit_sha,
+    )
 
     receipt_sha256 = hashlib.sha256(encoded).hexdigest()
     try:
@@ -191,6 +200,55 @@ def load_preverified_ui_outcome(
         completed_at_ms=receipt.executed_at_ms + receipt.duration_ms,
         ui_correlation=ui_correlation,
     )
+
+
+def _verify_receipt_commit(
+    receipt: PreverifiedUiReceiptV5,
+    *,
+    ui_source_path: Path,
+    checkout_root: Path | None,
+    expected_git_commit_sha: str | None,
+) -> None:
+    """Bind the receipt commit to the tested source and a clean checkout."""
+
+    if checkout_root is None:
+        if expected_git_commit_sha != receipt.git_commit_sha:
+            raise ValueError("preverified UI evidence commit does not match the qualification image")
+        return
+    try:
+        relative_source = ui_source_path.resolve(strict=True).relative_to(checkout_root.resolve(strict=True))
+    except (OSError, ValueError) as exc:
+        raise ValueError("preverified UI source is outside the tested checkout") from exc
+    relative_text = relative_source.as_posix()
+    commands = (
+        ("merge-base", "--is-ancestor", receipt.git_commit_sha, "HEAD"),
+        ("diff", "--quiet", "HEAD", "--", relative_text),
+        ("diff", "--cached", "--quiet", "HEAD", "--", relative_text),
+    )
+    try:
+        for command in commands:
+            subprocess.run(
+                ["git", "-C", str(checkout_root), *command],
+                check=True,
+                capture_output=True,
+            )
+        committed_source = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(checkout_root),
+                "show",
+                f"{receipt.git_commit_sha}:{relative_text}",
+            ],
+            check=True,
+            capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ValueError(
+            "preverified UI evidence commit is unavailable, unrelated, or the test source is dirty"
+        ) from exc
+    if hashlib.sha256(committed_source).hexdigest() != receipt.test_source_sha256:
+        raise ValueError("preverified UI evidence commit does not contain the authenticated test source")
 
 
 __all__ = [

@@ -19,6 +19,7 @@ from app.broker.alpaca.fault_injection import (
     get_fault_injection_registry,
 )
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.broker.contract.ports import BrokerTradePort
 from app.services.account_custody_synthetic_scenarios import SyntheticScenarioId
 from app.services.alpaca_sqlite_synthetic_drill_support import (
     LOST_RESPONSE_LIMITATION,
@@ -27,11 +28,15 @@ from app.services.alpaca_sqlite_synthetic_drill_support import (
     SimulatedBrokerProof,
     SyntheticBroker,
     SyntheticScenarioObservation,
-    SyntheticScenarioStatus,
+    fault_seam_permitted,
+    fault_seam_status,
     new_repo,
     seam_not_permitted,
     synthetic_leg,
     worksheet,
+)
+from app.services.alpaca_sqlite_synthetic_drill_support import (
+    require_invariant as _require,
 )
 
 
@@ -150,7 +155,7 @@ async def lost_submit(artifacts_root: Path) -> SyntheticScenarioObservation:
         revision = repo.control_meta_snapshot().control_revision
         before = broker.proof()
         registry = get_fault_injection_registry()
-        seam_permitted = bool(registry.status()["permitted"])
+        seam_permitted = fault_seam_permitted(registry)
         raw: _NoNetworkAlpacaSdkClient | None = None
         if seam_permitted:
             seam_broker, raw = _no_network_alpaca_broker()
@@ -176,7 +181,7 @@ async def lost_submit(artifacts_root: Path) -> SyntheticScenarioObservation:
                 trade=broker,
             )
             broker.submit_error = None
-        assert first.order_ref is not None
+        _require(first.order_ref is not None, "lost-submit must mint an order_ref")
         if seam_permitted:
             result = first
             after = raw.proof() if raw is not None else broker.proof()
@@ -216,13 +221,7 @@ async def lost_submit(artifacts_root: Path) -> SyntheticScenarioObservation:
             )
         return SyntheticScenarioObservation(
             scenario_id=SyntheticScenarioId.LOST_SUBMIT_EXACT_IDENTITY,
-            status=(
-                SyntheticScenarioStatus.PASSED
-                if passed and seam_exercised
-                else SyntheticScenarioStatus.PARTIAL
-                if passed
-                else SyntheticScenarioStatus.FAILED
-            ),
+            status=fault_seam_status(passed=passed, seam_exercised=seam_exercised),
             assertion=(
                 "A production-hook response loss left accepted work unknown; recovery "
                 "used only the exact Clerk-minted client identity."
@@ -263,21 +262,24 @@ async def lost_cancel(artifacts_root: Path) -> SyntheticScenarioObservation:
             leg=synthetic_leg(quantity=10),
             trade=broker,
         )
-        assert entry.order_ref is not None
+        _require(entry.order_ref is not None, "lost-cancel entry must mint an order_ref")
         revision = repo.control_meta_snapshot().control_revision
         before = broker.proof()
         registry = get_fault_injection_registry()
-        seam_permitted = bool(registry.status()["permitted"])
+        seam_permitted = fault_seam_permitted(registry)
         raw: _NoNetworkAlpacaSdkClient | None = None
         if seam_permitted:
             current_entry = repo.order(entry.order_ref)
-            assert current_entry is not None and current_entry.broker_order_id is not None
+            _require(
+                current_entry is not None and current_entry.broker_order_id is not None,
+                "lost-cancel seam requires the established broker-order identity",
+            )
             seam_broker, raw = _no_network_alpaca_broker()
             registry.arm(
                 WriteFaultKind.POST_SDK_TIMEOUT.value,
                 target=current_entry.broker_order_id,
             )
-            trade = _CancelThroughSeamTradePort(
+            trade: BrokerTradePort = _CancelThroughSeamTradePort(
                 broker=broker,
                 seam_broker=seam_broker,
             )
@@ -292,7 +294,10 @@ async def lost_cancel(artifacts_root: Path) -> SyntheticScenarioObservation:
             lifecycle_run_id=runs["spy-bot"],
             entry_order_ref=entry.order_ref,
         )
-        assert accepted.effect_operation_id is not None
+        _require(
+            accepted.effect_operation_id is not None,
+            "lost-cancel exit must mint an effect_operation_id",
+        )
         cancel_source_event_at_ms = clock()
         result = await resolve_exit(
             repo,
@@ -324,13 +329,7 @@ async def lost_cancel(artifacts_root: Path) -> SyntheticScenarioObservation:
             )
         return SyntheticScenarioObservation(
             scenario_id=SyntheticScenarioId.LOST_CANCEL_RETAINS_CUSTODY,
-            status=(
-                SyntheticScenarioStatus.PASSED
-                if passed and seam_exercised
-                else SyntheticScenarioStatus.PARTIAL
-                if passed
-                else SyntheticScenarioStatus.FAILED
-            ),
+            status=fault_seam_status(passed=passed, seam_exercised=seam_exercised),
             assertion=(
                 "The production client seam hid a completed SDK cancel response, left "
                 "EXIT unknown, and submitted no reducing order."

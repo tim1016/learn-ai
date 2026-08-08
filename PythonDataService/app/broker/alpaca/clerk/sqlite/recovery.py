@@ -252,7 +252,10 @@ def verify_backup_bundle(
         raise RecoveryRefused("backup must be a published verified bundle")
     manifest_path = bundle / "manifest.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
-        raise RecoveryRefused("backup manifest must be a regular non-symbolic-link file")
+        raise RecoveryRefused(
+            "backup manifest must be a regular non-symbolic-link file",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -288,7 +291,10 @@ def verify_backup_bundle(
         )
     snapshot = bundle / DB_FILENAME
     if snapshot.is_symlink() or not snapshot.is_file():
-        raise RecoveryRefused("backup snapshot must be a regular non-symbolic-link file")
+        raise RecoveryRefused(
+            "backup snapshot must be a regular non-symbolic-link file",
+            reason=RecoveryRefusalReason.INTEGRITY_OR_IDENTITY_DISAGREEMENT,
+        )
     if sha256_file(snapshot) != manifest["snapshot_sha256"]:
         raise RecoveryRefused(
             "backup snapshot SHA-256 does not match its manifest",

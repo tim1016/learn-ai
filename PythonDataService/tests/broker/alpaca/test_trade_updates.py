@@ -206,9 +206,7 @@ class _FakeBroker:
         self.list_orders_calls.append({"status": status, "limit": limit, "after_ms": after_ms})
         return list(self.orders)
 
-    async def list_activities(
-        self, *, after_ms: int | None = None, limit: int = 100
-    ) -> list[BrokerActivity]:
+    async def list_activities(self, *, after_ms: int | None = None, limit: int = 100) -> list[BrokerActivity]:
         self.list_activities_calls.append({"after_ms": after_ms, "limit": limit})
         return list(self.activities)
 
@@ -1113,9 +1111,7 @@ async def _collect(agen) -> list[str]:
 async def test_inject_frame_faults_interleaves_after_real_frame(permit_frame_injection) -> None:
     from app.broker.alpaca.fault_injection import FrameFaultKind
 
-    real = json.dumps(
-        {"stream": "trade_updates", "data": {"event": "new", "order": {"client_order_id": "coid"}}}
-    )
+    real = json.dumps({"stream": "trade_updates", "data": {"event": "new", "order": {"client_order_id": "coid"}}})
     permit_frame_injection.get_fault_injection_registry().arm(
         FrameFaultKind.HALT_SUSPENDED, target="coid", params={"symbol": "AAPL"}
     )
@@ -1133,9 +1129,7 @@ async def test_inject_frame_faults_interleaves_after_real_frame(permit_frame_inj
 async def test_inject_frame_faults_redelivers_last_trade_update(permit_frame_injection) -> None:
     from app.broker.alpaca.fault_injection import FrameFaultKind
 
-    fill = json.dumps(
-        {"stream": "trade_updates", "data": {"event": "fill", "order": {"client_order_id": "coid"}}}
-    )
+    fill = json.dumps({"stream": "trade_updates", "data": {"event": "fill", "order": {"client_order_id": "coid"}}})
     permit_frame_injection.get_fault_injection_registry().arm(FrameFaultKind.REDELIVER_LAST)
 
     out = await _collect(_inject_frame_faults(_frame_source([fill])()))
@@ -1152,6 +1146,28 @@ async def test_injected_disconnect_enters_reconnect_path(permit_frame_injection)
     source = _inject_frame_faults(_frame_source([real])())
 
     assert await anext(source) == real
+    with pytest.raises(ConnectionError, match="injected trade_updates disconnect"):
+        await anext(source)
+
+
+async def test_injected_disconnect_preserves_prior_fault_frames(
+    permit_frame_injection,
+) -> None:
+    from app.broker.alpaca.fault_injection import FrameFaultKind
+
+    real = json.dumps({"stream": "trade_updates", "data": {"event": "new", "order": {"client_order_id": "coid"}}})
+    registry = permit_frame_injection.get_fault_injection_registry()
+    registry.arm(
+        FrameFaultKind.PARTIAL_FILL,
+        target="coid",
+        params={"broker_order_id": "broker-1", "qty": "1", "order_qty": "2"},
+    )
+    registry.arm(FrameFaultKind.DISCONNECT)
+    source = _inject_frame_faults(_frame_source([real])())
+
+    assert await anext(source) == real
+    injected = json.loads(await anext(source))
+    assert injected["data"]["event"] == "partial_fill"
     with pytest.raises(ConnectionError, match="injected trade_updates disconnect"):
         await anext(source)
 
@@ -1184,17 +1200,13 @@ async def test_inject_frame_faults_passthrough_when_not_permitted(
     assert out == [real]
 
 
-async def test_injected_frame_threads_through_the_real_consumer(
-    tmp_path: Path, permit_frame_injection
-) -> None:
+async def test_injected_frame_threads_through_the_real_consumer(tmp_path: Path, permit_frame_injection) -> None:
     # The injected frame must reach the SAME consumer path — verbatim capture
     # is step 1 of _handle_frame, so a captured injected frame proves it threaded
     # through the real consumer, not a stubbed shortcut.
     from app.broker.alpaca.fault_injection import FrameFaultKind
 
-    permit_frame_injection.get_fault_injection_registry().arm(
-        FrameFaultKind.HALT_SUSPENDED, target=_OWNED_COID
-    )
+    permit_frame_injection.get_fault_injection_registry().arm(FrameFaultKind.HALT_SUSPENDED, target=_OWNED_COID)
     broker = _FakeBroker()
     clerk = AlpacaClerk(read=broker, trade=broker)
     await _warm(clerk)

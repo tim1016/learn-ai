@@ -20,13 +20,17 @@ from app.broker.alpaca.clerk.sqlite.qualification_storage_recovery import (
     SyntheticRecoveryCustodyError,
 )
 from app.schemas.account_custody_qualification import (
+    account_custody_qualification_payload_sha256,
+)
+from app.schemas.account_custody_synthetic_qualification import (
+    SyntheticBrokerOrderProof,
+    SyntheticBrokerProof,
     SyntheticCustodyRehearsalReport,
     SyntheticEvidenceWorksheet,
     SyntheticPolygonReplayEvidence,
     SyntheticScenarioLimitation,
     SyntheticScenarioResult,
     SyntheticUiCorrelationEvidence,
-    account_custody_qualification_payload_sha256,
     synthetic_abort_class_for_cause,
 )
 from app.services.account_custody_synthetic_scenarios import (
@@ -36,6 +40,7 @@ from app.services.account_custody_synthetic_scenarios import (
     SyntheticScenarioId,
 )
 from app.services.alpaca_sqlite_synthetic_drills import (
+    SimulatedBrokerProof,
     SyntheticScenarioObservation,
     SyntheticScenarioStatus,
     run_synthetic_custody_drills,
@@ -120,7 +125,7 @@ def run_synthetic_custody_rehearsal(
     test_outcomes: dict[str, SyntheticTestOutcome],
     generated_at_ms: int | None = None,
     polygon_replay_runner: Callable[[Path], SyntheticPolygonReplayEvidence] | None = None,
-    storage_boundary_resolver: Callable[[Path, Path], QualificationStorageBoundary] | None = None,
+    storage_boundary_resolver: Callable[[Path, Path, str], QualificationStorageBoundary] | None = None,
 ) -> SyntheticCustodyRehearsalReport:
     """Build the content-addressed #1415 pre-live report on isolated authority."""
 
@@ -323,38 +328,30 @@ def _integrated_custody_worksheet(
 
     def broker_proof(
         phase: str,
-        proof: Any,
-    ) -> dict[str, Any]:
+        proof: SimulatedBrokerProof,
+    ) -> SyntheticBrokerProof:
         observed_at_ms = (
             evidence.recorded_at_ms
             if phase == "after"
             else evidence.source_event_at_ms or evidence.clerk_observed_at_ms
         )
-        return {
-            "proof_kind": "SIMULATED_BROKER_SNAPSHOT",
-            "proof_reference": f"{evidence.durable_transition_ref}:broker-{phase}",
-            "observed_at_ms": observed_at_ms,
-            "positions": {symbol: str(quantity) for symbol, quantity in proof.positions},
-            "open_order_ids": tuple(
+        return SyntheticBrokerProof(
+            proof_kind="SIMULATED_BROKER_SNAPSHOT",
+            proof_reference=f"{evidence.durable_transition_ref}:broker-{phase}",
+            observed_at_ms=observed_at_ms,
+            positions={symbol: str(quantity) for symbol, quantity in proof.positions},
+            open_order_ids=tuple(
                 order.broker_order_id
                 for order in proof.orders
                 if order.status in {"accepted", "new", "partially_filled"}
             ),
-            "orders": tuple(
-                {
-                    "client_order_id": order.client_order_id,
-                    "broker_order_id": order.broker_order_id,
-                    "side": order.side,
-                    "quantity": order.quantity,
-                    "status": order.status,
-                    "filled_quantity": order.filled_quantity,
-                }
-                for order in proof.orders
+            orders=tuple(
+                SyntheticBrokerOrderProof.model_validate(order, from_attributes=True) for order in proof.orders
             ),
-            "submit_calls": proof.submit_calls,
-            "cancel_calls": proof.cancel_calls,
-            "lookup_calls": proof.lookup_calls,
-        }
+            submit_calls=proof.submit_calls,
+            cancel_calls=proof.cancel_calls,
+            lookup_calls=proof.lookup_calls,
+        )
 
     receipt_ids = tuple(value for value in (evidence.receipt_id, evidence.durable_transition_ref) if value is not None)
     return SyntheticEvidenceWorksheet(
@@ -404,11 +401,7 @@ def _non_custody_worksheet(
         completed_at_ms = protected.recovery_recorded_at_ms
         observed_state = "Verified backup, restore, rebuild, integrity, and hash-head equality."
     else:
-        scope = (
-            "UI_CORRELATION_RECEIPT"
-            if category is SyntheticScenarioCategory.UI
-            else "FEED_REGRESSION_HARNESS"
-        )
+        scope = "UI_CORRELATION_RECEIPT" if category is SyntheticScenarioCategory.UI else "FEED_REGRESSION_HARNESS"
         participation = "CONTEXT_ONLY"
         command_ids = ()
         receipt_ids = outcome.evidence_refs

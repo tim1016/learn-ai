@@ -809,15 +809,17 @@ async def _inject_frame_faults(
     registry = get_fault_injection_registry()
     last_trade_update: str | None = None
 
-    def _drain() -> list[str]:
+    def _drain() -> tuple[list[str], bool]:
         frames: list[str] = []
+        disconnect = False
         for fault in registry.drain_frame_faults():
             if fault.kind == FrameFaultKind.DISCONNECT:
                 logger.warning(
                     "fault injection: trade_updates connection dropped",
                     extra={"action": "frame_fault_disconnect", "kind": fault.kind},
                 )
-                raise ConnectionError("injected trade_updates disconnect")
+                disconnect = True
+                break
             frame = frame_for_fault(fault, last_frame=last_trade_update)
             if frame is None:
                 logger.warning(
@@ -830,7 +832,7 @@ async def _inject_frame_faults(
                 extra={"action": "frame_fault_injected", "kind": fault.kind},
             )
             frames.append(frame)
-        return frames
+        return frames, disconnect
 
     async for frame in source:
         yield frame
@@ -841,8 +843,11 @@ async def _inject_frame_faults(
             message = None
         if isinstance(message, dict) and message.get("stream") == _STREAM_TRADE_UPDATES:
             last_trade_update = text
-        for injected in _drain():
+        injected_frames, disconnect = _drain()
+        for injected in injected_frames:
             yield injected
+        if disconnect:
+            raise ConnectionError("injected trade_updates disconnect")
 
 
 async def alpaca_socket_frames(settings: AlpacaSettings) -> AsyncIterator[bytes | str]:

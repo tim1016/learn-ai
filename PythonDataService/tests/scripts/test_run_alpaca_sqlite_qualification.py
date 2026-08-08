@@ -12,7 +12,12 @@ import pytest
 import yaml
 
 from app.broker.alpaca.clerk.sqlite.qualification import SyntheticRehearsalPhaseError
+from app.broker.alpaca.clerk.sqlite.qualification_storage_recovery import (
+    PRODUCTION_ARTIFACTS_ROOT,
+    QUALIFICATION_ARTIFACTS_ROOT,
+)
 from app.broker.alpaca.clerk.sqlite.qualification_ui_campaign_contract import (
+    BOUNDED_UI_CAMPAIGN,
     UI_CAMPAIGN_CONTRACT_SHA256,
 )
 from app.services.account_custody_synthetic_scenarios import (
@@ -24,7 +29,6 @@ from app.services.account_custody_synthetic_scenarios import (
 )
 from scripts import run_alpaca_sqlite_qualification as runner
 from scripts.run_alpaca_sqlite_qualification import (
-    _EXPECTED_UI_REVISIONS,
     _MAX_FAILURE_DETAIL_CHARS,
     _bounded_process_failure,
     _load_preverified_ui_outcome,
@@ -34,6 +38,7 @@ from scripts.run_alpaca_sqlite_qualification import (
     _run_synthetic_scenario,
     _ui_test_command,
 )
+from tests._helpers.ui_correlation import ui_correlation_records
 
 _UI_TEST_REF = synthetic_scenario(SyntheticScenarioId.EVIDENCE_CONTROLS_READ_ONLY).test_refs[0]
 _UI_SOURCE_BYTES = b"test('bounded qualification campaign', () => undefined);\n"
@@ -47,28 +52,7 @@ def _write_ui_source(tmp_path: Path) -> Path:
 
 
 def _valid_ui_receipt() -> dict[str, object]:
-    correlation_records = [
-        {
-            "page_load_index": page_load_index,
-            "event_index": event_index,
-            "browser_epoch": f"browser-reload-{page_load_index}",
-            "revision": revision,
-            "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
-            "presented_action_id": "resume",
-            "click_target": "BROKER_ACK_RAW_EVIDENCE",
-            "evidence_request_method": "GET",
-            "evidence_request_path": (
-                "/api/brokers/alpaca/accounts/DUM284968/bots/sid-001/evidence"
-                "?transaction_ref=tx-001&client_hint=operator-transaction-timeline"
-            ),
-            "operation_reference": f"receipt-{page_load_index}-{event_index}",
-            "proof_reference": f"receipt-{page_load_index}-{event_index}",
-            "dispatched_lifecycle_action_id": None,
-            "durable_lifecycle_receipt_id": None,
-        }
-        for page_load_index in range(5)
-        for event_index, revision in enumerate(_EXPECTED_UI_REVISIONS)
-    ]
+    correlation_records = list(ui_correlation_records())
     return {
         "schema_version": 5,
         "test_ref": _UI_TEST_REF,
@@ -92,7 +76,7 @@ def _valid_ui_receipt() -> dict[str, object]:
             "lifecycle_request_count": 0,
             "observed_revision_count": 25,
             "lifecycle_request_action_ids": [],
-            "revision_sequence": list(_EXPECTED_UI_REVISIONS),
+            "revision_sequence": list(BOUNDED_UI_CAMPAIGN.revision_sequence),
             "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
             "presented_action_id": "resume",
             "correlation_record_count": 25,
@@ -164,7 +148,11 @@ def test_preverified_ui_receipt_is_exact_bounded_and_content_addressed(
     receipt.write_bytes(encoded)
     source = _write_ui_source(tmp_path)
 
-    outcome = _load_preverified_ui_outcome(receipt, ui_source_path=source)
+    outcome = _load_preverified_ui_outcome(
+        receipt,
+        ui_source_path=source,
+        expected_git_commit_sha=str(_valid_ui_receipt()["git_commit_sha"]),
+    )
 
     assert outcome.status == "PASSED"
     assert outcome.evidence_refs == (
@@ -199,12 +187,31 @@ def test_preverified_ui_receipt_authenticates_the_exact_test_source(
     receipt = tmp_path / "ui-evidence.json"
     receipt.write_text(json.dumps(payload), encoding="utf-8")
 
-    outcome = _load_preverified_ui_outcome(receipt, ui_source_path=source)
+    outcome = _load_preverified_ui_outcome(
+        receipt,
+        ui_source_path=source,
+        expected_git_commit_sha=str(payload["git_commit_sha"]),
+    )
 
     assert outcome.status == "PASSED"
     source.write_text("test('changed campaign', () => undefined);\n", encoding="utf-8")
     with pytest.raises(ValueError, match="authenticate the mounted test source"):
         _load_preverified_ui_outcome(receipt, ui_source_path=source)
+
+
+def test_preverified_ui_receipt_rejects_a_different_image_commit(
+    tmp_path: Path,
+) -> None:
+    source = _write_ui_source(tmp_path)
+    receipt = tmp_path / "ui-evidence.json"
+    receipt.write_text(json.dumps(_valid_ui_receipt()), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="commit does not match"):
+        _load_preverified_ui_outcome(
+            receipt,
+            ui_source_path=source,
+            expected_git_commit_sha="f" * 40,
+        )
 
 
 @pytest.mark.parametrize(
@@ -254,7 +261,7 @@ def test_preverified_ui_receipt_rejects_unmeasured_or_mismatched_campaign(
         "lifecycle_request_count": 1,
         "observed_revision_count": 25,
         "lifecycle_request_action_ids": ["resume_bot"],
-        "revision_sequence": list(_EXPECTED_UI_REVISIONS),
+        "revision_sequence": list(BOUNDED_UI_CAMPAIGN.revision_sequence),
         "historical_snapshot_state": "OFF_DUTY_STOPPED_FLAT_POST_RESTART",
         "presented_action_id": "resume",
         "correlation_record_count": 25,
@@ -327,6 +334,22 @@ def test_recovery_scenario_is_pending_until_core_validates_the_ceremony(
 
     assert outcome.status == "PENDING_CORE_VALIDATION"
     assert outcome.log_refs == ("runner:pending-protected-generation-recovery-ceremony",)
+
+
+def test_ui_scenario_requires_authenticated_measured_evidence(tmp_path: Path) -> None:
+    ui_scenario = synthetic_scenario(SyntheticScenarioId.EVIDENCE_CONTROLS_READ_ONLY)
+
+    outcome = _run_synthetic_scenario(
+        ui_scenario,
+        repository_root=tmp_path,
+        service_root=tmp_path,
+        preverified_ui_evidence=None,
+    )
+
+    assert outcome.status == "FAILED"
+    assert outcome.failure_origin == "INFRASTRUCTURE_OR_TOOLING_FAILURE"
+    assert outcome.failure_detail is not None
+    assert "preverified-ui-evidence is required" in outcome.failure_detail
 
 
 def test_synthetic_subprocess_timeout_fails_closed(
@@ -422,30 +445,46 @@ def test_custody_scenario_runner_marks_execution_failures_as_infrastructure(
 
 
 @pytest.mark.parametrize(
-    ("return_code", "failure_origin"),
+    ("return_code", "report_element", "failure_origin"),
     (
-        (1, "OBSERVED_INVARIANT_FAILURE"),
-        (2, "INFRASTRUCTURE_OR_TOOLING_FAILURE"),
-        (3, "INFRASTRUCTURE_OR_TOOLING_FAILURE"),
-        (4, "INFRASTRUCTURE_OR_TOOLING_FAILURE"),
-        (5, "INFRASTRUCTURE_OR_TOOLING_FAILURE"),
+        (1, "failure", "OBSERVED_INVARIANT_FAILURE"),
+        (1, "error", "INFRASTRUCTURE_OR_TOOLING_FAILURE"),
+        (2, None, "INFRASTRUCTURE_OR_TOOLING_FAILURE"),
+        (3, None, "INFRASTRUCTURE_OR_TOOLING_FAILURE"),
+        (4, None, "INFRASTRUCTURE_OR_TOOLING_FAILURE"),
+        (5, None, "INFRASTRUCTURE_OR_TOOLING_FAILURE"),
     ),
 )
 def test_synthetic_process_distinguishes_assertions_from_collection_and_tooling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     return_code: int,
+    report_element: str | None,
     failure_origin: str,
 ) -> None:
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
+    def complete(
+        command: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        report_argument = next(argument for argument in command if argument.startswith("--junitxml="))
+        if report_element is not None:
+            report_path = Path(report_argument.partition("=")[2])
+            report_path.write_text(
+                f"<testsuites><testsuite><testcase><{report_element}>failed"
+                f"</{report_element}></testcase></testsuite></testsuites>",
+                encoding="utf-8",
+            )
+        return subprocess.CompletedProcess(
             args=["pytest"],
             returncode=return_code,
             stdout="",
             stderr="failed",
-        ),
+        )
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        complete,
     )
 
     outcome = _run_synthetic_command(
@@ -503,11 +542,13 @@ def test_ui_runner_treats_browser_launch_failure_as_infrastructure(
         ),
     )
 
-    outcome = _run_synthetic_scenario(
-        ui_scenario,
-        repository_root=tmp_path,
-        service_root=tmp_path / "PythonDataService",
-        preverified_ui_evidence=None,
+    outcome = _run_synthetic_command(
+        list(_ui_test_command()),
+        harness=runner._SyntheticHarness.PLAYWRIGHT,
+        cwd=frontend_root,
+        timeout_seconds=BOUNDED_UI_CAMPAIGN.timeout_seconds,
+        evidence_refs=ui_scenario.test_refs,
+        log_prefix="playwright:launch-failure",
     )
 
     assert outcome.status == "FAILED"
@@ -561,11 +602,13 @@ def test_ui_runner_treats_structured_test_assertion_as_observed_failure(
         ),
     )
 
-    outcome = _run_synthetic_scenario(
-        ui_scenario,
-        repository_root=tmp_path,
-        service_root=tmp_path / "PythonDataService",
-        preverified_ui_evidence=None,
+    outcome = _run_synthetic_command(
+        list(_ui_test_command()),
+        harness=runner._SyntheticHarness.PLAYWRIGHT,
+        cwd=frontend_root,
+        timeout_seconds=BOUNDED_UI_CAMPAIGN.timeout_seconds,
+        evidence_refs=ui_scenario.test_refs,
+        log_prefix="playwright:assertion-failure",
     )
 
     assert outcome.status == "FAILED"
@@ -592,11 +635,13 @@ def test_ui_runner_treats_missing_or_malformed_report_as_infrastructure(
         ),
     )
 
-    outcome = _run_synthetic_scenario(
-        ui_scenario,
-        repository_root=tmp_path,
-        service_root=tmp_path / "PythonDataService",
-        preverified_ui_evidence=None,
+    outcome = _run_synthetic_command(
+        list(_ui_test_command()),
+        harness=runner._SyntheticHarness.PLAYWRIGHT,
+        cwd=frontend_root,
+        timeout_seconds=BOUNDED_UI_CAMPAIGN.timeout_seconds,
+        evidence_refs=ui_scenario.test_refs,
+        log_prefix="playwright:malformed-report",
     )
 
     assert outcome.status == "FAILED"
@@ -687,14 +732,36 @@ def test_compose_qualification_cannot_write_production_authority() -> None:
     repository_root = Path(__file__).parents[3]
     compose = yaml.safe_load((repository_root / "compose.yaml").read_text(encoding="utf-8"))
     service = compose["services"]["alpaca-clerk-qualification"]
-    volumes = set(service["volumes"])
+    mounts = {
+        target: (source, frozenset(options.split(",")) if options else frozenset())
+        for source, target, options in ((*volume.rsplit(":", maxsplit=2), "")[:3] for volume in service["volumes"])
+    }
 
-    assert "alpaca-clerk-data:/app/production-alpaca-clerk:ro" in volumes
-    assert ("alpaca-clerk-qualification-data:/app/artifacts/alpaca_clerk/qualification") in volumes
-    assert (
-        "./contracts/alpaca-clerk-ui-correlation-campaign.v4.json:"
-        "/app/contracts/alpaca-clerk-ui-correlation-campaign.v4.json:ro,z"
-    ) in volumes
-    assert all(not volume.startswith("alpaca-clerk-data:/app/artifacts/alpaca_clerk") for volume in volumes)
+    assert mounts["/app/production-alpaca-clerk"] == (
+        "alpaca-clerk-data",
+        frozenset({"ro"}),
+    )
+    assert mounts["/app/artifacts/alpaca_clerk/qualification"][0] == ("alpaca-clerk-qualification-data")
+    assert Path("/app/production-alpaca-clerk") == PRODUCTION_ARTIFACTS_ROOT
+    assert Path("/app/artifacts/alpaca_clerk/qualification") == (QUALIFICATION_ARTIFACTS_ROOT)
+    assert mounts["/app/contracts/alpaca-clerk-ui-correlation-campaign.v4.json"] == (
+        "./contracts/alpaca-clerk-ui-correlation-campaign.v4.json",
+        frozenset({"ro", "z"}),
+    )
+    assert all(
+        not (source == "alpaca-clerk-data" and target.startswith("/app/artifacts/alpaca_clerk"))
+        for target, (source, _options) in mounts.items()
+    )
     assert "alpaca-clerk-qualification-data" in compose["volumes"]
     assert service["network_mode"] == "none"
+    environment = set(service["environment"])
+    assert any(item.startswith("ALPACA_QUALIFICATION_API_KEY_ID=") for item in environment)
+    assert any(item.startswith("ALPACA_QUALIFICATION_API_SECRET_KEY=") for item in environment)
+    assert not any(item.startswith("ALPACA_API_KEY_ID=") for item in environment)
+    assert not any(item.startswith("ALPACA_API_SECRET_KEY=") for item in environment)
+    assert any(
+        source.startswith("${ALPACA_CLERK_UI_EVIDENCE_PATH:-")
+        and target == "/app/evidence/ui.json"
+        and {"ro", "z"}.issubset(options)
+        for target, (source, options) in mounts.items()
+    )

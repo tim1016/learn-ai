@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import time
+import xml.etree.ElementTree as element_tree
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -34,8 +37,10 @@ from app.broker.alpaca.clerk.sqlite.qualification_ui_evidence import (
     load_preverified_ui_outcome as _load_preverified_ui_outcome,
 )
 from app.schemas.account_custody_qualification import (
-    SyntheticHarnessAbortReport,
     account_custody_qualification_payload_sha256,
+)
+from app.schemas.account_custody_synthetic_qualification import (
+    SyntheticHarnessAbortReport,
 )
 from app.services.account_custody_synthetic_scenarios import (
     SYNTHETIC_REHEARSAL_SCENARIOS,
@@ -48,8 +53,6 @@ _CONTAINER_UI_SOURCE = Path("/app/evidence/ui-spec.ts")
 _MAX_FAILURE_DETAIL_CHARS = 2_000
 _PROFILE_PYTEST_TIMEOUT_SECONDS = 900
 _SCENARIO_PYTEST_TIMEOUT_SECONDS = 300
-_UI_TEST_TIMEOUT_SECONDS = BOUNDED_UI_CAMPAIGN.timeout_seconds
-_EXPECTED_UI_REVISIONS = BOUNDED_UI_CAMPAIGN.revision_sequence
 _UI_ASSERTION_FAILURE_ATTACHMENT = "qualification-acceptance-assertion-failed"
 
 
@@ -152,10 +155,7 @@ def main(argv: list[str] | None = None) -> int:
                 "tests": list(tests),
                 "failure_detail": _bounded_process_exception(
                     exc,
-                    message=(
-                        "adversarial pytest exceeded the bounded "
-                        f"{_PROFILE_PYTEST_TIMEOUT_SECONDS}s timeout"
-                    ),
+                    message=(f"adversarial pytest exceeded the bounded {_PROFILE_PYTEST_TIMEOUT_SECONDS}s timeout"),
                 ),
             }
         except OSError as exc:
@@ -213,12 +213,9 @@ def _run_synthetic_rehearsal(args: argparse.Namespace) -> int:
             "abort_cause": exc.abort_cause,
             "phase": exc.phase,
             "failure_type": type(exc.cause).__name__,
-            "failure_detail": str(exc.cause)[:_MAX_FAILURE_DETAIL_CHARS]
-            or "core phase failed without a message",
+            "failure_detail": str(exc.cause)[:_MAX_FAILURE_DETAIL_CHARS] or "core phase failed without a message",
         }
-        abort_payload["report_sha256"] = account_custody_qualification_payload_sha256(
-            abort_payload
-        )
+        abort_payload["report_sha256"] = account_custody_qualification_payload_sha256(abort_payload)
         abort_report = SyntheticHarnessAbortReport.model_validate(abort_payload)
         file_sha256 = atomic_write_json(
             args.json_output,
@@ -300,6 +297,8 @@ def _run_synthetic_scenario(
                 return _load_preverified_ui_outcome(
                     preverified_ui_evidence,
                     ui_source_path=ui_source_path,
+                    checkout_root=(repository_root if (repository_root / ".git").exists() else None),
+                    expected_git_commit_sha=os.environ.get("GIT_SHA"),
                 )
             except (OSError, ValueError) as exc:
                 return SyntheticTestOutcome(
@@ -307,24 +306,17 @@ def _run_synthetic_scenario(
                     evidence_refs=scenario.test_refs,
                     log_refs=("runner:invalid-preverified-ui-evidence",),
                     failure_detail=str(exc)[:_MAX_FAILURE_DETAIL_CHARS],
-                    failure_origin=(
-                        SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE
-                    ),
+                    failure_origin=(SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE),
                 )
-        frontend_root = repository_root / "Frontend"
-        if frontend_root.is_dir():
-            return _run_ui_regression(frontend_root, scenario)
         return SyntheticTestOutcome(
             status="FAILED",
             evidence_refs=scenario.test_refs,
             log_refs=("runner:frontend-checkout-unavailable",),
             failure_detail=(
-                "Frontend checkout is unavailable and "
-                "--preverified-ui-evidence was not supplied"
+                "--preverified-ui-evidence is required so a successful browser "
+                "campaign includes authenticated correlation measurements"
             ),
-            failure_origin=(
-                SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE
-            ),
+            failure_origin=(SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE),
         )
 
     pytest_refs = tuple(ref for ref in scenario.test_refs if ref.startswith("tests/"))
@@ -340,9 +332,7 @@ def _run_synthetic_scenario(
             evidence_refs=scenario.test_refs,
             log_refs=(f"runner:{scenario.scenario_id}:invalid-test-reference",),
             failure_detail="scenario contains a test reference the Python runner cannot execute",
-            failure_origin=(
-                SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE
-            ),
+            failure_origin=(SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE),
         )
     return _run_synthetic_command(
         [sys.executable, "-m", "pytest", "-q", *pytest_refs],
@@ -351,20 +341,6 @@ def _run_synthetic_scenario(
         timeout_seconds=_SCENARIO_PYTEST_TIMEOUT_SECONDS,
         evidence_refs=pytest_refs,
         log_prefix=f"pytest:{scenario.scenario_id}",
-    )
-
-
-def _run_ui_regression(
-    frontend_root: Path,
-    scenario: SyntheticRehearsalScenario,
-) -> SyntheticTestOutcome:
-    return _run_synthetic_command(
-        list(_ui_test_command()),
-        harness=_SyntheticHarness.PLAYWRIGHT,
-        cwd=frontend_root,
-        timeout_seconds=_UI_TEST_TIMEOUT_SECONDS,
-        evidence_refs=scenario.test_refs,
-        log_prefix=f"angular:{scenario.scenario_id}",
     )
 
 
@@ -382,62 +358,64 @@ def _run_synthetic_command(
     log_prefix: str,
 ) -> SyntheticTestOutcome:
     started_at_ms = time.time_ns() // 1_000_000
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=cwd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired as exc:
-        completed_at_ms = time.time_ns() // 1_000_000
-        return SyntheticTestOutcome(
-            status="FAILED",
-            evidence_refs=evidence_refs,
-            log_refs=(f"{log_prefix}:timeout:{timeout_seconds}s",),
-            failure_detail=_bounded_process_exception(
-                exc,
-                message=f"command exceeded the bounded {timeout_seconds}s timeout",
-            ),
-            failure_origin=(
-                SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE
-            ),
-            started_at_ms=started_at_ms,
-            completed_at_ms=completed_at_ms,
-        )
-    except OSError as exc:
-        completed_at_ms = time.time_ns() // 1_000_000
-        return SyntheticTestOutcome(
-            status="FAILED",
-            evidence_refs=evidence_refs,
-            log_refs=(f"{log_prefix}:os-error:{type(exc).__name__}",),
-            failure_detail=_bounded_os_error(exc),
-            failure_origin=(
-                SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE
-            ),
-            started_at_ms=started_at_ms,
-            completed_at_ms=completed_at_ms,
-        )
-    completed_at_ms = time.time_ns() // 1_000_000
-    return SyntheticTestOutcome(
-        status="PASSED" if completed.returncode == 0 else "FAILED",
-        evidence_refs=evidence_refs,
-        log_refs=(f"{log_prefix}:return-code:{completed.returncode}",),
-        failure_detail=(None if completed.returncode == 0 else _bounded_process_failure(completed)),
-        failure_origin=(
-            None
-            if completed.returncode == 0
-            else _classify_synthetic_failure(
-                harness,
-                completed,
-                evidence_refs=evidence_refs,
+    with tempfile.TemporaryDirectory(prefix="qualification-test-report-") as report_dir:
+        pytest_report_path = Path(report_dir) / "pytest.xml" if harness is _SyntheticHarness.PYTEST else None
+        executed_command = list(command)
+        if pytest_report_path is not None:
+            executed_command.append(f"--junitxml={pytest_report_path}")
+        try:
+            completed = subprocess.run(
+                executed_command,
+                cwd=cwd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
             )
-        ),
-        started_at_ms=started_at_ms,
-        completed_at_ms=completed_at_ms,
-    )
+        except subprocess.TimeoutExpired as exc:
+            completed_at_ms = time.time_ns() // 1_000_000
+            return SyntheticTestOutcome(
+                status="FAILED",
+                evidence_refs=evidence_refs,
+                log_refs=(f"{log_prefix}:timeout:{timeout_seconds}s",),
+                failure_detail=_bounded_process_exception(
+                    exc,
+                    message=f"command exceeded the bounded {timeout_seconds}s timeout",
+                ),
+                failure_origin=(SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE),
+                started_at_ms=started_at_ms,
+                completed_at_ms=completed_at_ms,
+            )
+        except OSError as exc:
+            completed_at_ms = time.time_ns() // 1_000_000
+            return SyntheticTestOutcome(
+                status="FAILED",
+                evidence_refs=evidence_refs,
+                log_refs=(f"{log_prefix}:os-error:{type(exc).__name__}",),
+                failure_detail=_bounded_os_error(exc),
+                failure_origin=(SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE),
+                started_at_ms=started_at_ms,
+                completed_at_ms=completed_at_ms,
+            )
+        completed_at_ms = time.time_ns() // 1_000_000
+        return SyntheticTestOutcome(
+            status="PASSED" if completed.returncode == 0 else "FAILED",
+            evidence_refs=evidence_refs,
+            log_refs=(f"{log_prefix}:return-code:{completed.returncode}",),
+            failure_detail=(None if completed.returncode == 0 else _bounded_process_failure(completed)),
+            failure_origin=(
+                None
+                if completed.returncode == 0
+                else _classify_synthetic_failure(
+                    harness,
+                    completed,
+                    evidence_refs=evidence_refs,
+                    pytest_report_path=pytest_report_path,
+                )
+            ),
+            started_at_ms=started_at_ms,
+            completed_at_ms=completed_at_ms,
+        )
 
 
 def _classify_synthetic_failure(
@@ -445,14 +423,29 @@ def _classify_synthetic_failure(
     completed: subprocess.CompletedProcess[str],
     *,
     evidence_refs: tuple[str, ...],
+    pytest_report_path: Path | None,
 ) -> SyntheticTestFailureOrigin:
     if harness is _SyntheticHarness.PYTEST:
-        if completed.returncode == 1:
+        if _pytest_report_contains_call_failure(pytest_report_path):
             return SyntheticTestFailureOrigin.OBSERVED_INVARIANT_FAILURE
         return SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE
     if _playwright_report_has_observed_failure(completed.stdout, evidence_refs):
         return SyntheticTestFailureOrigin.OBSERVED_INVARIANT_FAILURE
     return SyntheticTestFailureOrigin.INFRASTRUCTURE_OR_TOOLING_FAILURE
+
+
+def _pytest_report_contains_call_failure(report_path: Path | None) -> bool:
+    """Return true only for executed-test failures, never setup/collection errors."""
+
+    if report_path is None or not report_path.is_file():
+        return False
+    try:
+        root = element_tree.parse(report_path).getroot()
+    except (element_tree.ParseError, OSError):
+        return False
+    if root.findall(".//error"):
+        return False
+    return bool(root.findall(".//failure"))
 
 
 def _playwright_report_has_observed_failure(
@@ -488,8 +481,7 @@ def _playwright_report_has_observed_failure(
                 if not isinstance(attachments, list):
                     continue
                 if any(
-                    isinstance(attachment, dict)
-                    and attachment.get("name") == _UI_ASSERTION_FAILURE_ATTACHMENT
+                    isinstance(attachment, dict) and attachment.get("name") == _UI_ASSERTION_FAILURE_ATTACHMENT
                     for attachment in attachments
                 ):
                     return True
@@ -528,10 +520,7 @@ def _bounded_process_exception(
 ) -> str:
     stdout_tail = _stream_tail(exc.stdout)
     stderr_tail = _stream_tail(exc.stderr)
-    detail = (
-        f"{message}; stdout tail: {stdout_tail or '<empty>'}; "
-        f"stderr tail: {stderr_tail or '<empty>'}"
-    )
+    detail = f"{message}; stdout tail: {stdout_tail or '<empty>'}; stderr tail: {stderr_tail or '<empty>'}"
     return detail[:_MAX_FAILURE_DETAIL_CHARS]
 
 
@@ -544,9 +533,7 @@ def _stream_tail(stream: str | bytes | None) -> str:
 
 
 def _bounded_os_error(exc: OSError) -> str:
-    return f"could not execute qualification command: {type(exc).__name__}: {exc}"[
-        :_MAX_FAILURE_DETAIL_CHARS
-    ]
+    return f"could not execute qualification command: {type(exc).__name__}: {exc}"[:_MAX_FAILURE_DETAIL_CHARS]
 
 
 def _adversarial_markdown(adversarial: dict[str, Any]) -> str:

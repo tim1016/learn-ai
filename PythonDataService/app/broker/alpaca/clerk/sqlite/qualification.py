@@ -36,7 +36,9 @@ from app.broker.alpaca.clerk.sqlite.qualification_synthetic_rehearsal import (
     SyntheticTestOutcome,
     synthetic_rehearsal_markdown,
 )
-from app.schemas.account_custody_qualification import SyntheticCustodyRehearsalReport
+from app.schemas.account_custody_synthetic_qualification import (
+    SyntheticCustodyRehearsalReport,
+)
 
 __all__ = (
     "FIXED_NOW_MS",
@@ -64,9 +66,6 @@ __all__ = (
     "synthetic_rehearsal_markdown",
 )
 
-_assert_qualification_storage_boundary = assert_qualification_storage_boundary
-
-
 def run_synthetic_custody_rehearsal(
     *,
     artifacts_root: Path,
@@ -86,5 +85,5 @@ def run_synthetic_custody_rehearsal(
         test_outcomes=test_outcomes,
         generated_at_ms=generated_at_ms,
         polygon_replay_runner=run_polygon_replay,
-        storage_boundary_resolver=_assert_qualification_storage_boundary,
+        storage_boundary_resolver=assert_qualification_storage_boundary,
     )

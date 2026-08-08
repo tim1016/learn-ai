@@ -199,11 +199,3 @@ def synthetic_scenario(
     """Return the one canonical descriptor for ``scenario_id``."""
 
     return SYNTHETIC_REHEARSAL_SCENARIOS_BY_ID[scenario_id]
-
-
-def synthetic_abort_cause_for_scenario(
-    scenario_id: SyntheticScenarioId,
-) -> SyntheticAbortCause:
-    """Compatibility re-export for the neutral abort-policy helper."""
-
-    return _synthetic_abort_cause_for_scenario(scenario_id)

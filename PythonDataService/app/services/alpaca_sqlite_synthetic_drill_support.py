@@ -10,7 +10,11 @@ from uuid import uuid4
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.alpaca.fault_injection import FrameFaultKind, WriteFaultKind
+from app.broker.alpaca.fault_injection import (
+    FaultInjectionRegistry,
+    FrameFaultKind,
+    WriteFaultKind,
+)
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, BrokerPosition
 from app.services.account_custody_synthetic_scenarios import SyntheticScenarioId
 
@@ -54,7 +58,7 @@ class SimulatedBrokerProof:
 
 
 @dataclass(frozen=True)
-class SyntheticEvidenceWorksheet:
+class SyntheticDrillWorksheet:
     authority_generation: int
     db_identity_token: str
     revision_before: int
@@ -87,7 +91,7 @@ class SyntheticScenarioObservation:
     scenario_id: SyntheticScenarioId
     status: SyntheticScenarioStatus
     assertion: str
-    evidence: SyntheticEvidenceWorksheet
+    evidence: SyntheticDrillWorksheet
     limitations: tuple[FaultSeamLimitation, ...] = ()
     fault_seam_required: bool = False
     fault_seam_exercised: bool = False
@@ -103,6 +107,33 @@ class SyntheticCustodyDrillReport:
     fault_registry_write_armed: tuple[str, ...]
     fault_registry_frame_armed: tuple[str, ...]
     observations: tuple[SyntheticScenarioObservation, ...]
+
+
+def require_invariant(condition: bool, message: str) -> None:
+    """Raise when a synthetic drill cannot prove a required audit invariant."""
+
+    if not condition:
+        raise RuntimeError(message)
+
+
+def fault_seam_permitted(registry: FaultInjectionRegistry) -> bool:
+    """Read the registry's paper-only permission through one typed helper."""
+
+    return bool(registry.status()["permitted"])
+
+
+def fault_seam_status(
+    *,
+    passed: bool,
+    seam_exercised: bool,
+) -> SyntheticScenarioStatus:
+    """Reduce a required-seam result to the canonical pass/partial/fail state."""
+
+    if not passed:
+        return SyntheticScenarioStatus.FAILED
+    if seam_exercised:
+        return SyntheticScenarioStatus.PASSED
+    return SyntheticScenarioStatus.PARTIAL
 
 
 LOST_RESPONSE_LIMITATION = FaultSeamLimitation(
@@ -247,12 +278,16 @@ class SyntheticBroker:
             self.cancel_started.set()
         if self.cancel_release is not None:
             await self.cancel_release.wait()
-        match = next((item for item in self.orders.values() if item.order_id == order_id), None)
-        if match is None:
+        matched = next(
+            ((key, item) for key, item in self.orders.items() if item.order_id == order_id),
+            None,
+        )
+        if matched is None:
             return
+        matched_key, match = matched
         now = self.clock()
         filled = self.fill_during_cancel_quantity or match.filled_quantity
-        self.orders[match.client_order_id or ""] = match.model_copy(
+        self.orders[matched_key] = match.model_copy(
             update={
                 "status": "canceled",
                 "filled_quantity": filled,
@@ -334,48 +369,28 @@ def worksheet(
     action: str,
     receipt_id: str | None = None,
     source_event_at_ms: int | None = None,
-) -> SyntheticEvidenceWorksheet:
+) -> SyntheticDrillWorksheet:
     transitions = repo.custody_transitions()
     transition = transitions[-1]
     meta = repo.control_meta_snapshot()
     durable_ref = f"transition:{transition['sequence']}:{transition['row_hash']}"
     db_log_ref = f"{repo.db_path}#custody_transitions/{transition['sequence']}"
     mirror_log_ref = f"{repo.mirror_path}#row_hash={transition['row_hash']}"
-    order_refs = tuple(
-        dict.fromkeys(
-            item["order_ref"]
-            for item in transitions
-            if item["order_ref"] is not None
-        )
-    )
-    command_ids = tuple(
-        dict.fromkeys(
-            item["command_id"]
-            for item in transitions
-            if item["command_id"] is not None
-        )
-    )
+    order_refs = tuple(dict.fromkeys(item["order_ref"] for item in transitions if item["order_ref"] is not None))
+    command_ids = tuple(dict.fromkeys(item["command_id"] for item in transitions if item["command_id"] is not None))
     effect_operation_ids = tuple(
-        dict.fromkeys(
-            item["effect_operation_id"]
-            for item in transitions
-            if item["effect_operation_id"] is not None
-        )
+        dict.fromkeys(item["effect_operation_id"] for item in transitions if item["effect_operation_id"] is not None)
     )
     broker_order_ids = tuple(
         dict.fromkeys(
             (
-                *(
-                    item["broker_order_id"]
-                    for item in transitions
-                    if item["broker_order_id"] is not None
-                ),
+                *(item["broker_order_id"] for item in transitions if item["broker_order_id"] is not None),
                 *(order.broker_order_id for order in broker_before.orders),
                 *(order.broker_order_id for order in broker_after.orders),
             )
         )
     )
-    return SyntheticEvidenceWorksheet(
+    return SyntheticDrillWorksheet(
         authority_generation=meta.authority_generation,
         db_identity_token=meta.db_identity_token,
         revision_before=revision_before,
@@ -389,11 +404,7 @@ def worksheet(
         order_refs=order_refs,
         broker_order_ids=broker_order_ids,
         receipt_id=receipt_id,
-        source_event_at_ms=(
-            source_event_at_ms
-            if source_event_at_ms is not None
-            else transition["source_event_at_ms"]
-        ),
+        source_event_at_ms=(source_event_at_ms if source_event_at_ms is not None else transition["source_event_at_ms"]),
         clerk_observed_at_ms=transition["clerk_observed_at_ms"],
         recorded_at_ms=transition["recorded_at_ms"],
         operation_state=transition["operation_state"],
