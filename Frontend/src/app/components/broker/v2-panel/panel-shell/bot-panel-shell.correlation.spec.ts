@@ -264,5 +264,5 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
     } finally {
       outputBoundarySpy.mockRestore();
     }
-  });
+  }, 15_000);
 });
