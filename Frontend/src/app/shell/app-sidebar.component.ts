@@ -19,7 +19,6 @@ import { BrokerBannerComponent } from './broker-banner.component';
 interface NavItem {
   label: string;
   route: string;
-  deprecated?: boolean;
 }
 
 interface NavGroup {
@@ -33,8 +32,8 @@ interface NavGroup {
 /**
  * Static information architecture.
  *
- * Reconciles the previous 7-group menubar into 5 sidebar groups per the
- * design bundle. All existing routes are preserved.
+ * Contains current product surfaces only. Retired broker navigation remains
+ * redirect-only in the route table and is intentionally absent from the UI.
  */
 const NAV: NavGroup[] = [
   {
@@ -75,20 +74,6 @@ const NAV: NavGroup[] = [
       { label: 'Realized vs IV', route: '/edge/realized-vs-iv' },
       { label: 'Cross-Asset', route: '/edge/cross-asset' },
       { label: 'Regimes', route: '/edge/regimes' },
-    ],
-  },
-  {
-    id: 'interactive-broker',
-    title: 'Interactive Broker',
-    icon: 'pi pi-link',
-    items: [
-      { label: 'Accounts', route: '/broker/accounts' },
-      { label: 'Orders', route: '/broker/orders' },
-      { label: 'Session Mirror', route: '/broker/session-mirror' },
-      { label: 'Deploy', route: '/broker/deploy' },
-      { label: 'Bots', route: '/brokers/alpaca/bots' },
-      { label: 'Offline Replay', route: '/broker/offline-replay' },
-      { label: 'Bot Manual', route: '/brokers/alpaca/manual' },
     ],
   },
   {
@@ -215,9 +200,6 @@ const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.route))
                       [routerLink]="item.route"
                     >
                       <span class="nav-link-label">{{ item.label }}</span>
-                      @if (item.deprecated) {
-                        <span class="nav-link-badge mono">deprecated</span>
-                      }
                     </a>
                   }
                 </div>

@@ -20,7 +20,11 @@
 #     PythonDataService/lean_sidecar
 #
 # After validation, capture the local digest and pin it in
-# app/lean_sidecar/config.py.
+# app/lean_sidecar/config.py. A pinned digest is a local runtime
+# prerequisite: the launcher verifies it with ``podman image exists``
+# before Engine Lab enables LEAN runs. A reachable launcher alone is
+# not enough — Podman otherwise tries to pull this local-only image
+# from localhost and the run exits 125.
 FROM mcr.microsoft.com/dotnet/runtime@sha256:62b592e657ceebbfd24203430542232559dcb7b73e45cc3ebb48c7bba8c2e2f0 AS dotnet-runtime
 
 FROM docker.io/quantconnect/lean@sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b

@@ -10,9 +10,33 @@ shape".
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.lean_sidecar.workspace import RUN_ID_PATTERN
+
+
+class LauncherImageReadiness(BaseModel):
+    """Whether the launcher's exact pinned LEAN image is available locally."""
+
+    reference: str | None = Field(
+        ...,
+        description="Exact local repository-and-digest reference the launcher requires.",
+    )
+    available: bool = Field(
+        ...,
+        description="True only when Podman's local image store contains ``reference``.",
+    )
+    detail: str = Field(..., description="Operator-facing readiness detail.")
+
+
+class LauncherHealthResponse(BaseModel):
+    """Read-only launcher health and pinned-image readiness response."""
+
+    status: Literal["ok", "degraded"]
+    version: str
+    image: LauncherImageReadiness
 
 
 class LaunchRequest(BaseModel):
