@@ -9,13 +9,13 @@
     "--project=chromium",
     "--reporter=json"
   ],
-  "git_commit_sha": "b66ffaebea5dc33c07d82a81ad8f818113b2f089",
-  "test_source_sha256": "8d6108b86a3d55c0bab1981842c0f6ba53607acf679ef80f16aa6d815edc9595",
+  "git_commit_sha": "0cf6e781a12f8f9c6a7f4a78d18240e34766af5d",
+  "test_source_sha256": "7ae8a23a81751e40ac489fc31c76efc8c67eb7db5b17aacabd764051d11de3b0",
   "campaign_contract_sha256": "544cbea3cebf202806972851c64d0da5136b2c44a444a10d07c4ade8bbe7ffb3",
-  "executed_at_ms": 1786148195887,
-  "duration_ms": 12557,
+  "executed_at_ms": 1786151336577,
+  "duration_ms": 12281,
   "return_code": 0,
-  "stdout_sha256": "015fa448bae95983e6470814c546877fb59a077e83e8db87c84148b8cae44075",
+  "stdout_sha256": "978d98e02d0e8819098642cd56bdf567afc33703a283ec386e90747056771852",
   "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "measurements": {
     "campaign_id": "frontend-browser-network-correlation-1413",
