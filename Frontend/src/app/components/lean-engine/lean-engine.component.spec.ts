@@ -479,6 +479,72 @@ describe('LeanEngineComponent engine selector', () => {
     expect(component.runError()).toContain('Build the configured local LEAN derivative');
   });
 
+  it('does not submit either engine when both mode has no LEAN validation template', async () => {
+    const { diagnose, startJob } = configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: null,
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
+
+    await component.run();
+
+    expect(diagnose).not.toHaveBeenCalled();
+    expect(startJob).not.toHaveBeenCalled();
+    expect(component.runError()).toBe('Select a strategy with an aligned LEAN validation template.');
+  });
+
+  it('refreshes a stale ready launcher state before submitting either engine', async () => {
+    const diagnose = vi.fn().mockResolvedValue({
+      overall_status: 'fail',
+      fetched_at_ms: 1_783_875_135_460,
+      checks: [
+        {
+          name: 'launcher_healthz',
+          label: 'GET launcher /healthz',
+          status: 'fail',
+          detail: 'connect failed',
+          fix: 'Start the launcher on port 8090.',
+        },
+      ],
+    } satisfies LeanLauncherDiagnosticReport);
+    const { startJob } = configureTestBed({ diagnose });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+    component.leanLauncherStatus.set('ready');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: 'ema_crossover_signal',
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
+
+    await component.run();
+
+    expect(diagnose).toHaveBeenCalledTimes(1);
+    expect(startJob).not.toHaveBeenCalled();
+    expect(component.leanLauncherStatus()).toBe('blocked');
+  });
+
   it('submits the EMA signal template for the EMA signal strategy', async () => {
     const { startJob, startTrustedRun, nextTradingDayOpen } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);

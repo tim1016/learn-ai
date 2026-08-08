@@ -1025,12 +1025,14 @@ export class LeanEngineComponent implements OnInit {
 
   async run(): Promise<void> {
     const engine = this.engine();
-    if (
-      (engine === "lean" || engine === "both") &&
-      this.leanValidationTemplate() !== null &&
-      !(await this.ensureLeanLauncherReady())
-    ) {
-      return;
+    if (engine === "lean" || engine === "both") {
+      if (this.leanValidationTemplate() === null) {
+        const message = "Select a strategy with an aligned LEAN validation template.";
+        this.runError.set(message);
+        this.setRunStatus("failed", "LEAN validation template unavailable", message);
+        return;
+      }
+      if (!(await this.ensureLeanLauncherReady())) return;
     }
 
     if (engine === "both") {
@@ -1045,8 +1047,6 @@ export class LeanEngineComponent implements OnInit {
   }
 
   private async ensureLeanLauncherReady(): Promise<boolean> {
-    if (this.leanLauncherStatus() === "ready") return true;
-
     await this.checkLeanLauncher();
     if (this.leanLauncherStatus() === "ready") return true;
 
