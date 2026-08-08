@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import scripts.manage_alpaca_sqlite_clerk as recovery_cli_module
 from app.broker.alpaca.clerk.sqlite.activation import ActivationStore
 from app.broker.alpaca.clerk.sqlite.catalog_quarantine import CatalogQuarantineRefused
 from app.broker.alpaca.clerk.sqlite.cutover import CutoverRefused
@@ -231,6 +233,39 @@ def test_read_reset_and_cutover_evidence_use_distinct_models(
     assert not hasattr(reset, "account_mode")
     with pytest.raises(ValueError, match="cutover broker evidence"):
         _read_cutover_evidence(evidence_path, ACCOUNT_ID)
+
+
+def test_dev_reset_cli_moves_paper_legacy_authority_without_broker_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    journal = account_dir / "order_journal.jsonl"
+    journal.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        recovery_cli_module,
+        "get_alpaca_settings",
+        lambda: SimpleNamespace(mode="paper"),
+    )
+
+    assert recovery_cli(
+        [
+            "--artifacts-root",
+            str(clerk_root),
+            "--account-id",
+            ACCOUNT_ID,
+            "dev-reset",
+            "--runner-artifacts-root",
+            str(runner_root),
+        ]
+    ) == 0
+
+    assert not journal.exists()
+    quarantine_root = account_dir / "dev-reset-quarantine"
+    assert len(tuple(quarantine_root.iterdir())) == 1
 
 
 def test_read_process_stop_evidence_requires_exact_account_bound_fields(

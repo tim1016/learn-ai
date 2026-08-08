@@ -229,13 +229,14 @@ class ClerkSqliteRepository:
         lease_ttl_ms: int = DEFAULT_LEASE_TTL_MS,
         fold_registry: FoldRegistry = DEFAULT_FOLD_REGISTRY,
     ) -> ClerkSqliteRepository:
-        """Create authority generation 1 for an account that has never had one.
+        """Create initial authority or a developer-reset-authorized next generation.
 
         Refuses if ``clerk.db`` already exists (use :meth:`open`), or if the
         established-accounts registry already has an entry for this account
-        with no matching database on disk — that combination is PRD §15.4's
-        "removed after authority was established" case, which needs the
-        explicit recovery/reset workflow (Slice 9), not a silent fresh init.
+        with no matching database on disk. The only exception is a verified
+        paper developer-reset authorization for that exact prior generation;
+        every other missing established database remains PRD §15.4's
+        fail-closed case.
         """
         from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
             initialize_repository,

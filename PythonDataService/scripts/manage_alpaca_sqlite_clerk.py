@@ -26,6 +26,7 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
     plan_cutover,
 )
 from app.broker.alpaca.clerk.sqlite.database_verification import DatabaseVerification
+from app.broker.alpaca.clerk.sqlite.dev_reset import developer_clean_slate_reset
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.clerk.sqlite.recovery import (
     ProcessStopProof,
@@ -36,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.recovery import (
     restore_verified_backup,
     verify_authority_head,
 )
+from app.broker.alpaca.config import get_alpaca_settings
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -57,6 +59,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     reset = subparsers.add_parser("reset")
     _add_reset_evidence_arguments(reset)
     _add_process_stop_evidence_arguments(reset)
+
+    dev_reset = subparsers.add_parser(
+        "dev-reset",
+        help="Move disposable paper authority aside for a clean development slate.",
+    )
+    dev_reset.add_argument(
+        "--runner-artifacts-root",
+        type=Path,
+        required=True,
+        help="Root containing this paper account's disposable runner catalogs.",
+    )
 
     initialize = subparsers.add_parser("cutover-initialize")
     _add_cutover_evidence_arguments(initialize)
@@ -146,6 +159,12 @@ def main(argv: list[str] | None = None) -> int:
                 args.account_id,
             ),
             max_process_stop_proof_age_ms=args.max_process_stop_evidence_age_ms,
+        )
+    elif args.operation == "dev-reset":
+        result = developer_clean_slate_reset(
+            **common,
+            runner_artifacts_root=args.runner_artifacts_root,
+            account_mode=get_alpaca_settings().mode,
         )
     elif args.operation == "cutover-initialize":
         result = initialize_cutover_authority(

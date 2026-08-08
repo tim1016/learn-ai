@@ -96,6 +96,77 @@ def test_partial_unique_indexes_allow_only_one_active_safety_cause() -> None:
     )
 
 
+def test_idempotency_indexes_reject_duplicate_rows_at_the_sql_boundary() -> None:
+    import pytest
+
+    conn = sqlite3.connect(":memory:")
+    schema.configure_connection(conn)
+    schema.apply_schema(conn)
+    conn.execute(
+        "INSERT INTO strategy_instances "
+        "(strategy_instance_id, symbol, config_hash, created_at_ms, retired_at_ms) "
+        "VALUES ('spy', 'SPY', 'hash', 1, NULL)"
+    )
+    conn.execute(
+        "INSERT INTO runs (run_id, strategy_instance_id, lifecycle_run_id, state, "
+        "started_at_ms, stopped_at_ms) VALUES ('run-1', 'spy', 'lifecycle-1', 'ACTIVE', 1, NULL)"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO runs (run_id, strategy_instance_id, lifecycle_run_id, state, "
+            "started_at_ms, stopped_at_ms) VALUES ('run-2', 'spy', 'lifecycle-2', 'ACTIVE', 2, NULL)"
+        )
+
+    command_values = (
+        "1, 'command-key', 'payload', 'strategy_decision', 'spy', NULL, 'ENTER', "
+        "NULL, 'accepted', NULL, NULL, 1, 1"
+    )
+    conn.execute(
+        "INSERT INTO commands (command_id, authority_generation, idempotency_key, payload_hash, "
+        "kind, strategy_instance_id, run_id, action, intended_end_state, state, "
+        "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
+        f"VALUES ('command-1', {command_values})"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO commands (command_id, authority_generation, idempotency_key, payload_hash, "
+            "kind, strategy_instance_id, run_id, action, intended_end_state, state, "
+            "effect_operation_id, receipt_id, created_at_ms, updated_at_ms) "
+            f"VALUES ('command-2', {command_values})"
+        )
+
+    effect_values = (
+        "1, 'effect-key', 'command-1', 'spy', NULL, 'ENTER', 'accepted', "
+        "'ACCOUNT_CLERK', 1, 1, NULL, NULL, NULL, NULL, NULL"
+    )
+    conn.execute(
+        "INSERT INTO effect_operations (effect_operation_id, authority_generation, idempotency_key, "
+        "command_id, strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, "
+        "updated_at_ms, terminal_receipt_id, claim_owner, claim_token, claimed_at_ms, claim_expires_at_ms) "
+        f"VALUES ('effect-1', {effect_values})"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO effect_operations (effect_operation_id, authority_generation, idempotency_key, "
+            "command_id, strategy_instance_id, run_id, kind, state, custody_owner, created_at_ms, "
+            "updated_at_ms, terminal_receipt_id, claim_owner, claim_token, claimed_at_ms, claim_expires_at_ms) "
+            f"VALUES ('effect-2', {effect_values})"
+        )
+
+    order_values = "'effect-1', 'client-order-key', NULL, 'ENTRY', NULL, NULL, 1"
+    conn.execute(
+        "INSERT INTO orders (order_ref, effect_operation_id, client_order_id, broker_order_id, role, "
+        "broker_state, submitted_at_ms, updated_at_ms) "
+        f"VALUES ('order-1', {order_values})"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO orders (order_ref, effect_operation_id, client_order_id, broker_order_id, role, "
+            "broker_state, submitted_at_ms, updated_at_ms) "
+            f"VALUES ('order-2', {order_values})"
+        )
+
+
 def test_immutability_triggers_block_custody_transitions_mutation() -> None:
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
