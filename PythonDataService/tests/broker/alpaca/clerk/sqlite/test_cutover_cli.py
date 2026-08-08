@@ -245,6 +245,7 @@ def test_dev_reset_cli_moves_paper_legacy_authority_without_broker_evidence(
     account_dir.mkdir(parents=True)
     journal = account_dir / "order_journal.jsonl"
     journal.write_text("{}\n", encoding="utf-8")
+    journal_bytes = journal.read_bytes()
     monkeypatch.setattr(
         recovery_cli_module,
         "get_alpaca_settings",
@@ -265,7 +266,22 @@ def test_dev_reset_cli_moves_paper_legacy_authority_without_broker_evidence(
 
     assert not journal.exists()
     quarantine_root = account_dir / "dev-reset-quarantine"
-    assert len(tuple(quarantine_root.iterdir())) == 1
+    quarantines = tuple(quarantine_root.iterdir())
+    assert len(quarantines) == 1
+    quarantine = quarantines[0]
+    moved_journals = tuple(quarantine.rglob("order_journal.jsonl"))
+    assert len(moved_journals) == 1
+    assert moved_journals[0].read_bytes() == journal_bytes
+    manifest = json.loads((quarantine / "manifest.json").read_text(encoding="utf-8"))
+    receipt = json.loads((quarantine / "receipt.json").read_text(encoding="utf-8"))
+    assert any(
+        artifact["source_reference"] == "order_journal.jsonl"
+        for artifact in manifest["moved_artifacts"]
+    )
+    assert any(
+        artifact["source_reference"] == "order_journal.jsonl"
+        for artifact in receipt["moved_artifacts"]
+    )
 
 
 def test_read_process_stop_evidence_requires_exact_account_bound_fields(

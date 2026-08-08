@@ -23,9 +23,13 @@ python scripts/manage_alpaca_sqlite_clerk.py \
 from the service environment and rejects a non-paper configuration. It requires
 a cleanly stopped authority, then moves the SQLite or legacy JSONL authority
 artifacts and the account's disposable runner catalogs into an account-local
-`dev-reset-quarantine/` directory. It writes a manifest and receipt there;
-it never contacts the broker, imports legacy data, or deletes authority data.
-Repeated runs after a clean reset report that there is nothing left to reset.
+`dev-reset-quarantine/` directory on each artifact filesystem. The Clerk-side
+quarantine contains the manifest and receipt, which also names the separate
+runner-side quarantine when runner artifacts were moved. It never contacts the
+broker, imports legacy data, or deletes authority data. If the account had
+already been activated, regenerate it and complete a new paper cutover to
+publish the successor activation generation. Repeated runs after a clean reset
+report that there is nothing left to reset.
 
 This developer shortcut is not the supervised live-account cutover or reset
 ceremony. That production workflow remains evidence-gated. The corresponding

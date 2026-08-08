@@ -8,10 +8,14 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite import dev_reset as dev_reset_module
 from app.broker.alpaca.clerk.sqlite.dev_reset import (
     DeveloperCleanSlateResetRefused,
     DevResetReceipt,
     developer_clean_slate_reset,
+)
+from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
+    DeveloperCleanSlateResetRegistry,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -84,7 +88,9 @@ def test_reset_moves_sqlite_authority_and_runner_catalog_then_allows_reinitializ
     receipt = _reset(clerk_root=clerk_root, runner_root=runner_root)
 
     assert receipt.quarantine_reference is not None
+    assert receipt.runner_quarantine_reference is not None
     quarantine = clerk_root / receipt.quarantine_reference
+    runner_quarantine = runner_root / receipt.runner_quarantine_reference
     assert not (account_dir / "clerk.db").exists()
     assert not (account_dir / "custody_transitions.mirror").exists()
     assert not catalog.exists()
@@ -92,7 +98,7 @@ def test_reset_moves_sqlite_authority_and_runner_catalog_then_allows_reinitializ
     assert (quarantine / "sqlite-authority" / "clerk.db-wal").is_file()
     assert (quarantine / "sqlite-authority" / "clerk.db-shm").is_file()
     assert (quarantine / "sqlite-authority" / "custody_transitions.mirror").is_file()
-    assert (quarantine / "runner-catalogs" / "spy-dev").is_dir()
+    assert (runner_quarantine / "runner-catalogs" / "spy-dev").is_dir()
     manifest = json.loads((quarantine / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["moved_artifacts"] == [
         {
@@ -104,6 +110,7 @@ def test_reset_moves_sqlite_authority_and_runner_catalog_then_allows_reinitializ
         }
         for artifact in receipt.moved_artifacts
     ]
+    assert manifest["runner_quarantine_reference"] == receipt.runner_quarantine_reference
     assert (quarantine / "receipt.json").is_file()
 
     regenerated = ClerkSqliteRepository.initialize(
@@ -163,6 +170,100 @@ def test_reinitialize_refuses_a_tampered_developer_reset_manifest(tmp_path: Path
             artifacts_root=clerk_root,
             clock=lambda: NOW_MS + 1,
         )
+
+
+def test_reset_resumes_authorization_after_every_artifact_was_moved(tmp_path: Path) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        clock=_clock,
+    )
+    repo.close()
+    receipt = _reset(clerk_root=clerk_root, runner_root=runner_root)
+    accounts_root = clerk_root / "accounts" / "alpaca"
+    DeveloperCleanSlateResetRegistry(accounts_root).path.write_text("", encoding="utf-8")
+
+    resumed = _reset(clerk_root=clerk_root, runner_root=runner_root)
+
+    assert resumed == receipt
+    regenerated = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        clock=lambda: NOW_MS + 1,
+    )
+    assert regenerated.control_meta_snapshot().authority_generation == 2
+    regenerated.close()
+
+
+def test_reset_collects_sidecars_created_by_the_lease_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID,
+        artifacts_root=clerk_root,
+        clock=_clock,
+    )
+    account_dir = repo.db_path.parent
+    repo.close()
+    original = dev_reset_module._assert_stopped_sqlite_authority
+
+    def probe_then_create_sidecars(path: Path, *, now_ms: int) -> None:
+        original(path, now_ms=now_ms)
+        (path / "clerk.db-wal").touch()
+        (path / "clerk.db-shm").touch()
+
+    monkeypatch.setattr(
+        dev_reset_module,
+        "_assert_stopped_sqlite_authority",
+        probe_then_create_sidecars,
+    )
+
+    receipt = _reset(clerk_root=clerk_root, runner_root=runner_root)
+
+    assert receipt.quarantine_reference is not None
+    quarantine = clerk_root / receipt.quarantine_reference
+    assert (quarantine / "sqlite-authority" / "clerk.db-wal").is_file()
+    assert (quarantine / "sqlite-authority" / "clerk.db-shm").is_file()
+    assert not (account_dir / "clerk.db-wal").exists()
+    assert not (account_dir / "clerk.db-shm").exists()
+
+
+def test_reset_refuses_unsafe_runner_catalog_ids_before_constructing_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clerk_root = tmp_path / "clerk"
+    runner_root = tmp_path / "runner"
+    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
+    account_dir.mkdir(parents=True)
+    journal = account_dir / "order_journal.jsonl"
+    journal.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        dev_reset_module,
+        "_runner_strategy_instance_ids",
+        lambda _root, _account_id: ("../../../victim",),
+    )
+
+    with pytest.raises(DeveloperCleanSlateResetRefused, match="unsafe strategy instance ID"):
+        _reset(clerk_root=clerk_root, runner_root=runner_root)
+
+    assert journal.is_file()
+
+
+def test_cleanup_keeps_nonempty_quarantine_for_inspection(tmp_path: Path) -> None:
+    quarantine = tmp_path / "quarantine"
+    quarantine.mkdir()
+    residue = quarantine / "unrestored-artifact"
+    residue.write_text("inspect me", encoding="utf-8")
+
+    dev_reset_module._remove_empty_quarantine(quarantine)
+
+    assert residue.read_text(encoding="utf-8") == "inspect me"
 
 
 def test_reset_refuses_non_paper_account_without_moving_authority(tmp_path: Path) -> None:

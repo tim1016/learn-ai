@@ -20,6 +20,9 @@ from app.broker.alpaca.clerk.sqlite.activation import (
     ActivationRecordInvalid,
     ActivationStore,
 )
+from app.broker.alpaca.clerk.sqlite.developer_reset_registry import (
+    DeveloperCleanSlateResetRegistry,
+)
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import (
     ReconciliationSweep as SqliteReconciliationSweep,
 )
@@ -185,6 +188,25 @@ async def select_active_clerk_runtime(
             account_id=account.account_id,
             recovery=str(exc),
             activation_detected=True,
+        )
+
+    if activation is not None and DeveloperCleanSlateResetRegistry(
+        artifacts_root / "accounts" / "alpaca"
+    ).authorizes_reinitialize(
+        account_id=account.account_id,
+        prior_authority_generation=activation.authority_generation,
+        artifacts_root=artifacts_root,
+    ):
+        return _unavailable(
+            "DEVELOPER_RESET_REACTIVATION_REQUIRED",
+            account_id=account.account_id,
+            recovery=(
+                "This activated authority was moved aside by a developer clean-slate "
+                "reset. Regenerate it, then complete a new paper cutover before startup."
+            ),
+            activation_detected=True,
+            authority_generation=activation.authority_generation,
+            db_identity_token=activation.db_identity_token,
         )
 
     if activation is None:

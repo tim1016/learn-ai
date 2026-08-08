@@ -63,6 +63,19 @@ class DeveloperCleanSlateResetRegistry:
                 latest = reset
         return latest
 
+    def contains(self, expected: DeveloperCleanSlateReset) -> bool:
+        """Return whether this exact reset authorization was already published."""
+        if not self._path.is_file():
+            return False
+        with self._path.open(encoding="utf-8") as handle:
+            for raw in handle:
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                if DeveloperCleanSlateReset(**json.loads(stripped)) == expected:
+                    return True
+        return False
+
     def authorizes_reinitialize(
         self,
         *,
